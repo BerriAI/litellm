@@ -14,6 +14,7 @@ Pattern Overview:
 
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -110,14 +111,10 @@ EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
 
 
 class AnthropicMessagesHandler(BaseTranslation):
-    """
-    Handler for processing Anthropic messages with guardrails.
+    """Process Anthropic messages with guardrails.
 
-    This class provides methods to:
-    1. Process input messages (pre-call hook)
-    2. Process output responses (post-call hook)
-
-    Methods can be overridden to customize behavior for different message formats.
+    In-sequence system entries are untrusted client input. This handler scans and preserves
+    them through guardrail rewrites; downstream provider handling is out of scope.
     """
 
     def __init__(self):
@@ -331,16 +328,30 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
-        chat_completion_compatible_request: Final = self._translate_to_openai(data)
+        # Exclude only the trusted top-level prompt. In-sequence system entries are untrusted
+        # and must stay aligned with texts_to_check for positional masking. When the top-level
+        # prompt is included, the pre-existing count mismatch disables positional masking.
+        translation_source: Final = {  # mutable-ok: API message payload
+            key: value for key, value in data.items() if key != "system"
+        }
+        chat_completion_compatible_request: Final = self._translate_to_openai(translation_source)
 
         full_structured_messages: Final = cast(
             list[AllMessageValues],
             chat_completion_compatible_request.get("messages", []),
         )
+        has_midturn_system_message: Final = any(
+            str(message.get("role") or "").lower() == "system" for message in full_structured_messages
+        )
+        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(data)
+        if hoisted_system_message is not None:
+            full_structured_messages.insert(0, hoisted_system_message)
+        # skip_system already excluded the trusted top-level prompt (it is simply not hoisted);
+        # in-sequence system entries are untrusted and always stay in scope.
         scoped_message_indices: Final = scoped_structured_message_indices(
             full_structured_messages,
             scan_only_tool_results=scan_only_tool_results,
-            skip_system=skip_system,
+            skip_system=False,
             skip_tool=skip_tool,
         )
         structured_messages: Final = [full_structured_messages[index] for index in scoped_message_indices]
@@ -422,6 +433,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                         scoped_indices=scoped_message_indices,
                         guardrailed_scoped=guardrailed_structured_messages,
                     ),
+                    hoisted_system_message=hoisted_system_message,
+                    preserve_system_messages=has_midturn_system_message,
                 )
             else:
                 # Step 3: Map guardrail responses back to original message structure
@@ -435,36 +448,150 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    @staticmethod
-    def _write_back_structured_messages(data: dict, structured_messages: list) -> None:
-        """Convert compressed structured_messages back to Anthropic format and write to data.
+    def _hoisted_top_level_system_message(
+        self, data: dict
+    ) -> AllMessageValues | None:  # mutable-ok: API message payload
+        """Return the system message produced by translating the top-level prompt."""
+        system: Final = data.get("system")
+        if not system:
+            return None
+        probe: Final = self._translate_to_openai(
+            {  # mutable-ok: API message payload
+                "model": data.get("model") or "",
+                "messages": [],  # mutable-ok: API message payload
+                "system": system,
+            }
+        )
+        hoisted: Final = probe.get("messages") or []  # mutable-ok: API message payload
+        return hoisted[0] if hoisted else None
 
-        ``anthropic_messages_pt`` merges every run of consecutive user/tool rows
-        into a single message, so a turn carrying only tool results and the user
-        turn that follows it come back fused, and the request the model sees no
-        longer has the boundaries the client sent. Converting a row at a time
-        would keep them apart but breaks tool pairing: an assistant row whose
-        tool results sit outside its own call reads as an orphaned tool call,
-        and under ``modify_params`` the sanitizer answers it with a synthetic
-        "tool execution skipped" result and drops the real one. Converting each
-        assistant row together with the tool rows that answer it, and every
-        other row on its own, satisfies both.
-        """
+    @staticmethod
+    def _openai_system_message_to_anthropic(
+        message: dict[str, Any],
+    ) -> dict[str, Any] | None:  # mutable-ok: API message payload
+        """Convert an OpenAI system message to the client's Anthropic-shaped entry."""
+        content: Final = message.get("content")
+        if isinstance(content, str):
+            return (
+                {"role": "system", "content": content} if content else None  # mutable-ok: API message payload
+            )  # mutable-ok: API message payload
+        if not isinstance(content, list):
+            return None
+        blocks: Final[list[dict[str, Any]]] = []  # mutable-ok: API message payload
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if not isinstance(text, str) or not text:
+                continue
+            anthropic_block: dict[str, Any] = {  # mutable-ok: API message payload
+                "type": "text",
+                "text": text,
+            }  # mutable-ok: API message payload
+            cache_control = block.get("cache_control")
+            if cache_control:
+                anthropic_block["cache_control"] = deepcopy(cache_control)
+            blocks.append(anthropic_block)
+        return (
+            {"role": "system", "content": blocks} if blocks else None  # mutable-ok: API message payload
+        )  # mutable-ok: API message payload
+
+    @staticmethod
+    def _is_hoisted_top_level_system(message: object, hoisted_system_message: object) -> bool:
+        """Match the hoisted prompt by identity, or by value after serialization."""
+        if hoisted_system_message is None:
+            return False
+        if message is hoisted_system_message:
+            return True
+        return (
+            isinstance(message, dict) and isinstance(hoisted_system_message, dict) and message == hoisted_system_message
+        )
+
+    @staticmethod
+    def _is_system(message: object) -> bool:
+        """Whether the row is an in-sequence system message."""
+        return isinstance(message, dict) and str(message.get("role") or "").lower() == "system"
+
+    @staticmethod
+    def _defer_systems_inside_tool_exchanges(
+        structured_messages: list,  # mutable-ok: API message payload
+    ) -> list:
+        """Hold a system row until the tool exchange around it completes so the call/result pair converts together."""
+        from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+        non_system_positions: Final[list[int]] = [
+            index
+            for index, message in enumerate(structured_messages)
+            if not AnthropicMessagesHandler._is_system(message)
+        ]
+        exchange_end_for_start: Final[dict[int, int]] = {
+            non_system_positions[group[0]]: non_system_positions[group[-1]]
+            for group in group_tool_exchanges([structured_messages[index] for index in non_system_positions])
+            if len(group) > 1
+        }
+        ordered: Final[list] = []  # mutable-ok: API message payload
+        deferred_systems: Final[list] = []  # mutable-ok: API message payload
+        open_exchange_end = -1  # rebind-ok: advances to the enclosing exchange's last index
+        for index, message in enumerate(structured_messages):
+            if AnthropicMessagesHandler._is_system(message) and index < open_exchange_end:
+                deferred_systems.append(message)
+                continue
+            open_exchange_end = exchange_end_for_start.get(index, open_exchange_end)
+            ordered.append(message)
+            if index >= open_exchange_end and deferred_systems:
+                ordered.extend(deferred_systems)
+                deferred_systems.clear()
+        ordered.extend(deferred_systems)
+        return ordered
+
+    @staticmethod
+    def _write_back_structured_messages(
+        data: dict,  # mutable-ok: API message payload
+        structured_messages: list,  # mutable-ok: API message payload
+        hoisted_system_message: object = None,
+        preserve_system_messages: bool = False,
+    ) -> None:
+        """Write a guardrail's structured-message rewrite back without losing corrections."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
             group_tool_exchanges,
         )
 
+        _is_system: Final = AnthropicMessagesHandler._is_system
         model: Final = str(data.get("model") or "")
-        non_system: Final = [m for m in structured_messages if m.get("role") != "system"]
-        groups: Final = tuple([non_system[index] for index in group] for group in group_tool_exchanges(non_system)) or (
-            non_system,
-        )
-        converted: Final = [
-            message
-            for group in groups
-            for message in anthropic_messages_pt(messages=group, model=model, llm_provider="anthropic")
-        ]
+        converted: Final[list] = []  # mutable-ok: API message payload
+
+        def _convert_run(run: list) -> None:  # mutable-ok: API message payload
+            for group in group_tool_exchanges(run):
+                converted.extend(
+                    anthropic_messages_pt(
+                        messages=[run[index] for index in group],  # mutable-ok: API message payload
+                        model=model,
+                        llm_provider="anthropic",
+                    )
+                )
+
+        ordered: Final = AnthropicMessagesHandler._defer_systems_inside_tool_exchanges(structured_messages)
+        run: Final[list] = []  # mutable-ok: API message payload
+        hoisted_dropped = False  # rebind-ok: flips once the hoisted prompt is dropped
+        for message in ordered:
+            if not _is_system(message):
+                run.append(message)
+                continue
+            _convert_run(run)
+            run.clear()
+            if not hoisted_dropped and AnthropicMessagesHandler._is_hoisted_top_level_system(
+                message, hoisted_system_message
+            ):
+                hoisted_dropped = True
+                continue
+            if preserve_system_messages:
+                anthropic_system = AnthropicMessagesHandler._openai_system_message_to_anthropic(message)
+                if anthropic_system is not None:
+                    converted.append(anthropic_system)
+        _convert_run(run)
+        if not any(not _is_system(message) for message in converted):
+            converted.extend(anthropic_messages_pt(messages=[], model=model, llm_provider="anthropic"))
         for msg in converted:
             content = msg.get("content")
             if isinstance(content, list):
@@ -472,6 +599,31 @@ class AnthropicMessagesHandler(BaseTranslation):
                     if isinstance(block, dict) and block.get("type") == "thinking":
                         block.pop("cache_control", None)
         data["messages"] = converted
+
+    @staticmethod
+    def _extract_midturn_system_text(
+        message: dict[str, Any],  # mutable-ok: API message payload
+        msg_idx: int,
+    ) -> ExtractedInput:
+        """Match the adapter's filtering so positional guardrail write-back stays aligned."""
+        content: Final = message.get("content")
+        if isinstance(content, str):
+            if not content:
+                return EMPTY_EXTRACTED_INPUT
+            return ExtractedInput(scanned=(ScannedText(content, MessageContentTarget(msg_idx)),), images=())
+        if not isinstance(content, list):
+            return EMPTY_EXTRACTED_INPUT
+        return ExtractedInput(
+            scanned=tuple(
+                ScannedText(text_str, ContentBlockTextTarget(msg_idx, content_idx))
+                for content_idx, content_item in enumerate(content)
+                if isinstance(content_item, dict)
+                and content_item.get("type") == "text"
+                and isinstance(text_str := content_item.get("text"), str)
+                and text_str
+            ),
+            images=(),
+        )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from Anthropic messages request (tools[].name)."""
@@ -490,11 +642,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
     ) -> ExtractedInput:
+        """Extract text content and images from a message.
+
+        In-sequence system entries are scanned even when ``skip_system_message`` is set:
+        that flag covers only the trusted top-level prompt, which never appears here.
         """
-        Extract text content and images from a message.
-        """
-        role: Final = str(message.get("role") or "").lower()
-        if (skip_system_message and role == "system") or (skip_tool_message and role == "tool"):
+        role: Final = str(message.get("role") or "")
+        if role == "system":
+            if scan_only_tool_results:
+                return EMPTY_EXTRACTED_INPUT
+            return cls._extract_midturn_system_text(message=message, msg_idx=msg_idx)
+        if skip_tool_message and role.lower() == "tool":
             return EMPTY_EXTRACTED_INPUT
 
         content: Final = message.get("content", None)

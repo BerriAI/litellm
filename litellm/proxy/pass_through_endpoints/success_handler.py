@@ -122,7 +122,7 @@ class PassThroughEndpointLogging:
     def normalize_llm_passthrough_logging_payload(
         self,
         httpx_response: httpx.Response,
-        response_body: dict | None,
+        response_body: dict | list[dict[str, object]] | None,
         request_body: dict,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
@@ -142,7 +142,7 @@ class PassThroughEndpointLogging:
         if self.is_gemini_route(url_route, custom_llm_provider):
             gemini_passthrough_logging_handler_result = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -172,7 +172,7 @@ class PassThroughEndpointLogging:
             anthropic_passthrough_logging_handler_result: Final = (
                 AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
                     httpx_response=httpx_response,
-                    response_body=response_body or {},
+                    response_body=response_body if isinstance(response_body, dict) else {},
                     logging_obj=logging_obj,
                     url_route=url_route,
                     result=result,
@@ -189,7 +189,7 @@ class PassThroughEndpointLogging:
         elif self.is_cohere_route(url_route):
             cohere_passthrough_logging_handler_result = cohere_passthrough_logging_handler.cohere_passthrough_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -208,7 +208,7 @@ class PassThroughEndpointLogging:
 
             openai_passthrough_logging_handler_result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -224,7 +224,7 @@ class PassThroughEndpointLogging:
         elif self.is_cursor_route(url_route, custom_llm_provider):
             cursor_passthrough_logging_handler_result = CursorPassthroughLoggingHandler.cursor_passthrough_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -266,7 +266,7 @@ class PassThroughEndpointLogging:
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
-        response_body: dict | None,
+        response_body: dict | list[dict[str, object]] | None,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
@@ -285,7 +285,7 @@ class PassThroughEndpointLogging:
                 return
             self.assemblyai_passthrough_logging_handler.assemblyai_passthrough_logging_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,

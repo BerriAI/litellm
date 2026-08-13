@@ -15,6 +15,7 @@ import datetime
 import json
 from collections.abc import Awaitable, Mapping, Sequence
 from json import JSONDecodeError
+from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -34,6 +35,7 @@ from litellm.proxy._types import (
     PrismaCompatibleUpdateDBModel,
     ProxyErrorTypes,
     ProxyException,
+    ReconcileOutcome,
     TeamModelAddRequest,
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
@@ -55,6 +57,10 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
+from litellm.proxy.spend_tracking.ptu_feature_flag import (
+    PTU_COST_ATTRIBUTION_ENV_VAR,
+    is_ptu_cost_attribution_enabled,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
@@ -79,6 +85,7 @@ from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     GenericLiteLLMParams,
+    ModelInfo,
     updateDeployment,
 )
 from litellm.utils import get_utc_datetime
@@ -233,7 +240,129 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+_PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
+
+
+def _explicitly_cleared_ptu_fields(model_info: ModelInfo | None) -> frozenset[str]:
+    """The PTU fields a patch sends as an explicit null, which update_db_model drops.
+
+    Empty while the feature is off, so disabling pauses PTU rather than letting a client
+    that round-trips a model_info blob erase a configuration set up during an earlier opt-in.
+    """
+    if model_info is None or not is_ptu_cost_attribution_enabled():
+        return frozenset()
+    return frozenset(
+        field
+        for field in _PTU_MODEL_INFO_FIELDS
+        if field in model_info.model_fields_set and getattr(model_info, field) is None
+    )
+
+
+def _merged_ptu_model_info(*, db_model: Deployment, patch_data: updateDeployment) -> Mapping[str, object]:
+    """The model_info a patch would store, which is the stored blob updated by the patch.
+
+    A PTU invariant holds over the deployment as it will exist, not over whichever subset
+    of fields a caller happened to send.
+    """
+    empty: Final[Mapping[str, object]] = MappingProxyType({})
+    stored: Final = db_model.model_info.model_dump(exclude_none=True) if db_model.model_info else empty
+    incoming: Final = patch_data.model_info.model_dump(exclude_none=True) if patch_data.model_info else empty
+    cleared: Final = _explicitly_cleared_ptu_fields(patch_data.model_info)
+    return MappingProxyType({k: v for k, v in {**stored, **incoming}.items() if k not in cleared})
+
+
+def _raise_if_ptu_cost_attribution_disabled(incoming_model_info: Mapping[str, object]) -> None:
+    """Reject PTU model_info fields unless the operator opted into PTU cost attribution.
+
+    Takes the incoming request's model_info rather than the merged deployment, so an
+    unrelated patch of a model that still stores PTU config from an earlier opt-in is
+    left alone. The fields are rejected rather than dropped so a caller never believes
+    a flat cost was configured while the rollup that would price it is not running.
+
+    Only a value is rejected. An explicit null reaches the clear loop, which is gated on
+    the same flag, so a disabled proxy neither writes PTU config nor erases what an
+    earlier opt-in stored. Disabling pauses the feature rather than discarding its setup.
+    """
+    if is_ptu_cost_attribution_enabled():
+        return
+    supplied: Final = tuple(field for field in _PTU_MODEL_INFO_FIELDS if incoming_model_info.get(field) is not None)
+    if not supplied:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"PTU cost attribution is disabled, so {', '.join(supplied)} cannot be set. "
+            f"Set {PTU_COST_ATTRIBUTION_ENV_VAR}=true to enable it."
+        ),
+    )
+
+
+def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
+    """Enforce the PTU cross-field invariant on the effective model_info.
+
+    ptu_count and cost_per_ptu_per_hour must be set together, and a team_id and a
+    ptu_effective_from are required when they are. The start is mandatory rather than
+    defaulted because flat cost accrues from it: inferring one would let a deployment
+    configured today be billed for days it did not exist. Per-field bounds (positive
+    count, non-negative rate) are enforced by ModelInfo itself.
+
+    Window ordering is checked before the count/rate gate. A patch that touches only one
+    end of the window carries no count or rate, and ModelInfo sees one field at a time, so
+    leaving it to either would let an inverted window reach the row; the next load then
+    fails to parse it and drops the deployment out of the router, where no further patch
+    can repair it because each one re-parses the stored value first.
+    """
+    effective_from: Final = _coerce_ptu_datetime(model_info.get("ptu_effective_from"))
+    effective_to: Final = _coerce_ptu_datetime(model_info.get("ptu_effective_to"))
+    if effective_from is not None and effective_to is not None and effective_to <= effective_from:
+        raise HTTPException(status_code=400, detail="ptu_effective_to must be after ptu_effective_from")
+
+    has_count: Final = model_info.get("ptu_count") is not None
+    has_rate: Final = model_info.get("cost_per_ptu_per_hour") is not None
+    if not has_count and not has_rate:
+        return
+    if has_count != has_rate:
+        raise HTTPException(status_code=400, detail="ptu_count and cost_per_ptu_per_hour must be set together")
+    if effective_from is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "ptu_effective_from is required when PTU fields are set. Flat cost accrues from that "
+                "instant, so without it the start would have to be inferred and a deployment configured "
+                "today could be billed for days it did not exist"
+            ),
+        )
+    if not model_info.get("team_id"):
+        raise HTTPException(
+            status_code=400, detail="team_id is required when PTU fields are set (one model maps to one team)"
+        )
+
+
+def _parse_ptu_datetime(value: object) -> datetime.datetime | None:
+    """``value`` as a datetime, parsing an ISO string, else None."""
+    if isinstance(value, datetime.datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _coerce_ptu_datetime(value: object) -> datetime.datetime | None:
+    """Coerce a model_info effective-window value (datetime or ISO string) to UTC, else None."""
+    parsed: Final = _parse_ptu_datetime(value)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(datetime.timezone.utc)
+
+
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
+    if updated_patch.model_info is not None:
+        _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
     merged_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
@@ -270,6 +399,10 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
                 merged_model_info.pop(field, None)
                 merged_litellm_params.pop(field, None)
+        for field in _explicitly_cleared_ptu_fields(updated_patch.model_info):
+            merged_model_info.pop(field, None)
+
+    _validate_ptu_model_info(merged_model_info)
 
     # convert to prisma compatible format
 
@@ -402,7 +535,7 @@ async def patch_model(
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         live_before_reload: Final = live_model_ids_snapshot()
-        still_desired_ids: Final = await clear_cache()
+        reload_outcome: Final = await clear_cache()
 
         ## CREATE AUDIT LOG ##
         asyncio.create_task(
@@ -422,7 +555,8 @@ async def patch_model(
             before=live_before_reload,
             written_models=[(model_id, getattr(updated_model, "model_info", None))],
             action="update",
-            still_desired=still_desired_ids,
+            still_desired=reload_outcome.still_desired,
+            live_after=reload_outcome.live_after,
         )
 
         return updated_model
@@ -508,7 +642,7 @@ async def _set_model_blocked_status(
         )
 
         live_before_reload: Final = live_model_ids_snapshot()
-        still_desired_ids: Final = await clear_cache()
+        reload_outcome: Final = await clear_cache()
 
         asyncio.create_task(
             create_object_audit_log(
@@ -529,7 +663,8 @@ async def _set_model_blocked_status(
             before=live_before_reload,
             written_models=[(data.model_id, getattr(updated_model, "model_info", None))],
             action=action,
-            still_desired=still_desired_ids,
+            still_desired=reload_outcome.still_desired,
+            live_after=reload_outcome.live_after,
         )
 
         return updated_model
@@ -716,6 +851,18 @@ async def _update_team_model_in_db(
         premium_user=premium_user,
     )
 
+    # Validated before any write, beside the premium check the create path already runs
+    # here. The team ACL is updated below and autocommits, so a validator that raises
+    # further down would leave the team mutated and the deployment row never written.
+    #
+    # The merged view is what gets stored, so that is what has to satisfy the invariants.
+    # Validating the patch alone rejected a partial edit of an already valid deployment:
+    # raising the rate on a configured model carries no ptu_effective_from, which the
+    # stored row supplies.
+    if patch_data.model_info is not None:
+        _raise_if_ptu_cost_attribution_disabled(patch_data.model_info.model_dump(exclude_none=True))
+        _validate_ptu_model_info(_merged_ptu_model_info(db_model=db_model, patch_data=patch_data))
+
     patch_team_id: Final = patch_data.model_info.team_id if patch_data.model_info else None
 
     # No team_id in patch, proceed with standard update
@@ -889,9 +1036,15 @@ async def delete_team_models(
     if deleted_model_ids:
         await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
 
+    # Under MODEL_RECONCILE_LOCK, for the same reason as delete_model: the rows are
+    # gone, but a reconcile holding a pre-delete snapshot would upsert these ids back
+    # onto this pod. The lock orders the eviction after any in-flight reconcile.
     if llm_router is not None:
-        for model_id in deleted_model_ids:
-            llm_router.delete_deployment(id=model_id)
+        from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK
+
+        async with MODEL_RECONCILE_LOCK:
+            for model_id in deleted_model_ids:
+                llm_router.delete_deployment(id=model_id)
 
     return deleted_model_ids
 
@@ -1211,6 +1364,7 @@ async def delete_model(
         """
 
         from litellm.proxy.proxy_server import (
+            MODEL_RECONCILE_LOCK,
             llm_router,
             premium_user,
             prisma_client,
@@ -1259,8 +1413,15 @@ async def delete_model(
                 )
 
             ## DELETE FROM ROUTER ##
+            # Under MODEL_RECONCILE_LOCK. The db row is already gone, but a reconcile
+            # that snapshotted the db BEFORE that delete still lists this id as desired,
+            # and its _add_deployment upserts the deployment straight back -- leaving
+            # this pod serving a model the database no longer has, until the next
+            # reconcile. Taking the lock orders this eviction after any such in-flight
+            # reconcile's re-add, so the eviction is the last word.
             if llm_router is not None:
-                llm_router.delete_deployment(id=model_info.id)
+                async with MODEL_RECONCILE_LOCK:
+                    llm_router.delete_deployment(id=model_info.id)
 
             # Runs after the row delete so the sibling check sees post-delete state.
             if model_params.model_info.team_id is not None:
@@ -1424,6 +1585,10 @@ async def add_new_model(
 
         model_response: LiteLLM_ProxyModelTable | None = None
         # update DB
+        incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
+        _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
+        _validate_ptu_model_info(incoming_model_info)
+
         if store_model_in_db is True:
             """
             - store model_list in db
@@ -1431,7 +1596,7 @@ async def add_new_model(
             """
 
             live_before_reload: Final = live_model_ids_snapshot()
-            still_desired_ids: frozenset[str] | None = None
+            reload_outcome: ReconcileOutcome = ReconcileOutcome(still_desired=None, live_after=None)
             try:
                 _original_litellm_model_name: Final = model_params.model_name
                 if model_params.model_info.team_id is None:
@@ -1446,7 +1611,7 @@ async def add_new_model(
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
                     )
-                still_desired_ids = await proxy_config.add_deployment(
+                reload_outcome = await proxy_config.add_deployment(
                     prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
                 )
                 # don't let failed slack alert block the /model/new response
@@ -1493,7 +1658,8 @@ async def add_new_model(
             before=live_before_reload,
             written_models=[(model_response.model_id, getattr(model_response, "model_info", None))],
             action="create",
-            still_desired=still_desired_ids,
+            still_desired=reload_outcome.still_desired,
+            live_after=reload_outcome.live_after,
         )
 
         return model_response
@@ -1620,7 +1786,7 @@ async def update_model(
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
             live_before_reload: Final = live_model_ids_snapshot()
-            still_desired_ids: Final = await clear_cache()
+            reload_outcome: Final = await clear_cache()
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
                 create_object_audit_log(
@@ -1647,7 +1813,8 @@ async def update_model(
                 before=live_before_reload,
                 written_models=[(_model_id, getattr(model_response, "model_info", None))],
                 action="update",
-                still_desired=still_desired_ids,
+                still_desired=reload_outcome.still_desired,
+                live_after=reload_outcome.live_after,
             )
 
             return model_response
@@ -1952,6 +2119,7 @@ def reload_serving_verdict(
     written_models: Sequence[tuple[str, object]],
     written_must_serve: bool,
     still_desired: frozenset[str] | None = None,
+    live_after: frozenset[str] | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Judge a write-triggered reload by diffing the router's serving state instead of
     trusting any layer of the reload stack to report its own failure.
@@ -1973,9 +2141,16 @@ def reload_serving_verdict(
     yet polled, so the reload dropping it is the reconcile working rather than damage.
     Without it (no reconcile ran) every drop is reported, which is the safe direction.
 
+    ``live_after`` is the router's serving state captured by the reload itself, while it
+    still held MODEL_RECONCILE_LOCK. Pass it whenever the caller has it: re-reading the
+    router here instead means sampling it after the lock was released, where the NEXT
+    reconcile's leading wipe (clear_cache un-serves every db model before reloading
+    them) shows up as this reload having dropped them. Falling back to a fresh read is
+    only correct when no reconcile ran and there is nothing to be concurrent with.
+
     Returns (written ids violating their obligation, collateral ids no longer served).
     """
-    now: Final = live_model_ids_snapshot()
+    now: Final = live_model_ids_snapshot() if live_after is None else live_after
     written_ids: Final = frozenset(model_id for model_id, _ in written_models)
     if written_must_serve:
         missing = tuple(
@@ -1995,16 +2170,23 @@ def raise_if_reload_degraded_serving(
     written_models: Sequence[tuple[str, object]],
     action: str,
     still_desired: frozenset[str] | None = None,
+    live_after: frozenset[str] | None = None,
 ) -> None:
     """The caller-visible error this pod's model-write endpoints owe their caller when
     the model they wrote is not being served after the reload they triggered. The DB
     write is durable either way and every other pod reloads on its own interval; this
-    speaks only for the handling pod."""
+    speaks only for the handling pod.
+
+    Callers hold a ReconcileOutcome from the reload; pass BOTH of its fields. Supplying
+    still_desired without live_after mixes a snapshot taken under the reconcile lock
+    with one taken after it was released, which is what makes a concurrent model write
+    look like collateral damage."""
     missing, collateral = reload_serving_verdict(
         before=before,
         written_models=written_models,
         written_must_serve=True,
         still_desired=still_desired,
+        live_after=live_after,
     )
     if not missing and not collateral:
         return
@@ -2031,14 +2213,20 @@ def raise_if_reload_degraded_serving(
     )
 
 
-async def clear_cache() -> frozenset[str] | None:
+async def clear_cache() -> ReconcileOutcome:
     """
     Clear router caches and reload models.
 
-    Returns the db + config id set the reload reconciled against, or None when no
-    reload ran, so callers can pass it to raise_if_reload_degraded_serving.
+    Returns what the reload saw (see ReconcileOutcome) so callers can pass it to
+    raise_if_reload_degraded_serving.
+
+    Runs under MODEL_RECONCILE_LOCK for its whole extent, not just the reload at the
+    end, so the auto-router reset and the reload that rebuilds those routers are atomic
+    to any other reconcile. The inner call is _add_deployment_locked because
+    add_deployment would re-acquire the same non-reentrant lock and deadlock.
     """
     from litellm.proxy.proxy_server import (
+        MODEL_RECONCILE_LOCK,
         llm_router,
         prisma_client,
         proxy_config,
@@ -2048,61 +2236,88 @@ async def clear_cache() -> frozenset[str] | None:
 
     if llm_router is None or prisma_client is None:
         verbose_proxy_logger.debug("llm_router or prisma_client is None, skipping cache clear")
-        return None
+        return ReconcileOutcome(still_desired=None, live_after=None)
 
-    try:
-        # Only clear DB models, preserve config models
-        verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
+    async with MODEL_RECONCILE_LOCK:
+        try:
+            # Only clear DB models, preserve config models
+            verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
 
-        # Get current models and filter out DB models
-        current_models: Final = llm_router.model_list.copy()
-        config_models: Final = []
-        db_model_ids: Final = []
+            # Get current models and filter out DB models
+            current_models: Final = llm_router.model_list.copy()
+            config_models: Final = []
+            db_model_ids: Final = []
 
-        for model in current_models:
-            model_info = model.get("model_info", {})
-            if model_info.get("db_model", False):
-                # This is a DB model, mark for deletion
-                db_model_ids.append(model_info.get("id"))
-            else:
-                # This is a config model, preserve it
-                config_models.append(model)
+            db_router_names: Final = set()
 
-        # Clear only DB models
-        for model_id in db_model_ids:
-            llm_router.delete_deployment(id=model_id)
+            for model in current_models:
+                model_info = model.get("model_info", {})
+                if model_info.get("db_model", False):
+                    db_model_ids.append(model_info.get("id"))
+                    # Auto-router deployments (and only those) are wiped here, in the
+                    # same pass, so the reload rebuilds them -- see the comment below.
+                    model_name = model.get("model_name")
+                    if model_name is not None and str(model.get("litellm_params", {}).get("model", "")).startswith(
+                        "auto_router/"
+                    ):
+                        db_router_names.add(model_name)
+                        router_model_id = model_info.get("id")
+                        if router_model_id is not None:
+                            llm_router.delete_deployment(id=router_model_id)
+                else:
+                    # This is a config model, preserved by the reconcile below
+                    config_models.append(model)
 
-        # Clear only DB-backed auto-router-family entries, keyed by model_name, so the
-        # reload below rebuilds them fresh. A blanket .clear() would also drop config-defined
-        # routers, which are never re-added below (add_deployment only reloads DB models),
-        # leaving them permanently unroutable until a full proxy restart for every tenant.
-        # Restrict to deployments whose model is actually an auto_router/* so a config
-        # router that merely shares a model_name with a regular DB model isn't evicted. The
-        # auto_router/ prefix also covers quality_router/ and adaptive_router/, so pop the
-        # name from every router registry (no-op where absent); missing quality/adaptive
-        # entries would otherwise make init raise "already exists" on reload and abort it.
-        db_router_names: Final = {
-            model.get("model_name")
-            for model in current_models
-            if model.get("model_name") is not None
-            and model.get("model_info", {}).get("db_model", False)
-            and str(model.get("litellm_params", {}).get("model", "")).startswith("auto_router/")
-        }
-        for model_name in db_router_names:
-            llm_router.auto_routers.pop(model_name, None)
-            llm_router.complexity_routers.pop(model_name, None)
-            llm_router.adaptive_routers.pop(model_name, None)
-            llm_router.quality_routers.pop(model_name, None)
+            # ORDINARY db deployments are deliberately NOT wiped. This used to
+            # delete_deployment() every db model before the reload put them back, which
+            # left the router serving ZERO db models for the whole width of the reload
+            # -- a real data-plane hole that every inference request landing in it fell
+            # into. It was also redundant for them: the reload's _delete_deployment
+            # evicts exactly the ids the db no longer lists, and upsert_deployment
+            # pops-and-re-adds a deployment whose params changed while no-opping one
+            # that did not, so the reconcile converges on its own. Every mutation is
+            # visible to that comparison -- `blocked` and (for premium) `updated_at`
+            # are written into model_info.
+            #
+            # AUTO-ROUTER db deployments are the exception and ARE wiped -- in the
+            # classification pass above, together with the strategy entries popped
+            # just below. Their strategy registries are keyed
+            # by model_name, which no deployment-id reconcile touches, so they have to
+            # be popped and rebuilt here. But the rebuild only happens on the ADD path:
+            # Router.upsert_deployment returns early when a deployment is unchanged and
+            # never reaches add_deployment -> _add_deployment ->
+            # init_auto_router_deployment, which is what repopulates the registries.
+            # Popping without deleting would therefore strip every db-backed auto,
+            # complexity, adaptive and quality router on this pod and never put it back,
+            # so ANY unrelated model write would leave them unroutable until a restart.
+            # Deleting the deployment forces upsert down the add path, which rebuilds
+            # both the deployment and its strategy entry.
+            #
+            # That pass restricts the wipe to deployments whose model is actually an
+            # auto_router/* so a config router that merely shares a model_name with a
+            # regular db model isn't evicted -- config routers are never re-added by the
+            # reload (it only reloads db models) and would be permanently unroutable.
+            # The auto_router/ prefix also covers quality_router/ and adaptive_router/,
+            # so pop the name from every registry (no-op where absent); a missing
+            # quality/adaptive entry would otherwise make init raise "already exists"
+            # on reload and abort it.
+            for model_name in db_router_names:
+                llm_router.auto_routers.pop(model_name, None)
+                llm_router.complexity_routers.pop(model_name, None)
+                llm_router.adaptive_routers.pop(model_name, None)
+                llm_router.quality_routers.pop(model_name, None)
 
-        # Reload only DB models
-        still_desired_ids: Final = await proxy_config.add_deployment(
-            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-        )
+            # Reload only DB models. _add_deployment_locked, not add_deployment: this
+            # coroutine already holds MODEL_RECONCILE_LOCK and asyncio.Lock is not
+            # reentrant, so the public wrapper would deadlock against itself.
+            outcome: Final = await proxy_config._add_deployment_locked(
+                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+            )
 
-        verbose_proxy_logger.debug(
-            "Cleared %s DB models, preserved %s config models", len(db_model_ids), len(config_models)
-        )
-        return still_desired_ids
-    except Exception as e:
-        verbose_proxy_logger.exception("Failed to clear cache and reload models. Due to error - %s", e)
-        return None
+            verbose_proxy_logger.debug(
+                "Reconciled %s DB models, preserved %s config models", len(db_model_ids), len(config_models)
+            )
+            return outcome
+        except Exception as e:
+            verbose_proxy_logger.exception("Failed to clear cache and reload models. Due to error - %s", e)
+            return ReconcileOutcome(still_desired=None, live_after=None)

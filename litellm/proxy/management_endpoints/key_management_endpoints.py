@@ -55,7 +55,10 @@ from litellm.proxy.auth.auth_checks import (
     get_project_object,
     get_team_object,
 )
-from litellm.proxy.auth.auth_utils import abbreviate_api_key
+from litellm.proxy.auth.auth_utils import (
+    abbreviate_api_key,
+    enforce_output_token_estimates_are_admin_only,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -79,11 +82,13 @@ from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _team_member_has_permission,
     _user_has_admin_view,
+    validate_budget_duration,
     validate_finite_spend,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
+from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
@@ -183,6 +188,16 @@ class _PrismaTableActions(Protocol[_PrismaRowT]):
         where: Mapping[str, object],
         data: Mapping[str, object],
     ) -> _PrismaRowT | None: ...
+
+
+class _UserRowLike(Protocol):
+    user_id: str | None
+    user_email: str | None
+    user_alias: str | None
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+    def dict(self) -> Mapping[str, object]: ...
 
 
 class _TxTables(Protocol):
@@ -841,11 +856,20 @@ async def _common_key_generation_helper(
         premium_user=premium_user,
     )
 
+    validate_budget_duration(data.budget_duration)
+
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(
             status_code=403,
             detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
         )
+
+    enforce_output_token_estimates_are_admin_only(
+        data=data,
+        existing_metadata=None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
 
     if data.metadata is not None and data.metadata.get("service_account_id") is not None and data.team_id is None:
         await validate_team_id_used_in_service_account_request(
@@ -1014,7 +1038,7 @@ async def _common_key_generation_helper(
 
     # Only set budget_duration on key when explicitly provided. Keys with budget_id
     # but no explicit budget_duration follow their linked budget tier's schedule;
-    # reset_budget_for_keys_linked_to_budgets() resets them when the tier resets.
+    # reset_budget_for_litellm_budget_table() resets them when the tier resets.
     # This avoids duplicating budget_duration on keys so tier updates apply automatically.
     if "budget_duration" in data_json:
         data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
@@ -1579,11 +1603,14 @@ async def generate_key_fn(
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
+    - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer. Falls back to the team setting, then to the built-in estimate.
+    - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above. Example - {"gpt-4": 4096, "gpt-3.5-turbo": 1024}. Takes precedence over the key-wide value.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
     - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
@@ -1793,6 +1820,8 @@ async def generate_service_account_key_fn(
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer. Falls back to the team setting, then to the built-in estimate.
+    - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above. Example - {"gpt-4": 4096, "gpt-3.5-turbo": 1024}. Takes precedence over the key-wide value.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
@@ -2387,6 +2416,7 @@ async def _validate_update_key_data(
     """Validate permissions and constraints for key update."""
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
+    validate_budget_duration(data.budget_duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
@@ -2472,6 +2502,13 @@ async def _validate_update_key_data(
             status_code=403,
             detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
         )
+
+    enforce_output_token_estimates_are_admin_only(
+        data=data,
+        existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
 
     # Personal-key bypass: the caller both created the key AND still owns it
     # (user_id == caller).  Checking only created_by would let a demoted admin
@@ -2655,6 +2692,8 @@ async def update_key_fn(
     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
     - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
+    - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer.
+    - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
@@ -2665,6 +2704,7 @@ async def update_key_fn(
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
+    - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -4195,7 +4235,7 @@ def _transform_verification_tokens_to_deleted_records(
         record = deleted_record.model_dump()
 
         # Map org_id to organization_id (model uses org_id, but schema expects organization_id)
-        org_id_value = record.pop("org_id", None)
+        org_id_value: object = record.pop("org_id", None)
         if org_id_value is not None:
             record["organization_id"] = org_id_value
 
@@ -4629,6 +4669,15 @@ async def _execute_virtual_key_regeneration(
                 prisma_client=prisma_client,
             )
 
+    if data is not None:
+        _existing_key_metadata: Final = getattr(key_in_db, "metadata", None)
+        enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="key",
+        )
+
     new_token: Final = await get_new_token(data=data)
     new_token_hash: Final = hash_token(new_token)
     new_token_key_name: Final = abbreviate_api_key(api_key=new_token)
@@ -4655,9 +4704,9 @@ async def _execute_virtual_key_regeneration(
         grace_period=data.grace_period if data else None,
     )
 
-    updated_token: Final = await VerificationTokenRepository(prisma_client).table.update(
+    updated_token: Final[Mapping[str, object] | None] = await VerificationTokenRepository(prisma_client).table.update(
         where={"token": hashed_api_key},
-        data=jsonified_update_data,
+        data=with_settings_updated_at(jsonified_update_data),
     )
     updated_token_dict: Final[dict[str, object]] = dict(updated_token) if updated_token is not None else {}
     updated_token_dict["key"] = new_token
@@ -5952,7 +6001,9 @@ async def _list_key_helper(
         created_by_ids: Final = [key.created_by for key in keys if key.created_by]
         all_ids: Final = list(set(user_ids + created_by_ids))  # Remove duplicates
         if all_ids:
-            users: Final = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": all_ids}})
+            users: Final[Sequence[_UserRowLike]] = await UserRepository(prisma_client).table.find_many(
+                where={"user_id": {"in": all_ids}}
+            )
             user_map = {user.user_id: user for user in users}
 
     # Prepare response
@@ -6167,7 +6218,7 @@ async def block_key(
 
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
-        data={"blocked": True},
+        data=with_settings_updated_at({"blocked": True}),
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
@@ -6280,7 +6331,7 @@ async def unblock_key(
 
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
-        data={"blocked": False},
+        data=with_settings_updated_at({"blocked": False}),
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
