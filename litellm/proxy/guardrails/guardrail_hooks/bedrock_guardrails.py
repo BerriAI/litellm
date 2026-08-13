@@ -2626,10 +2626,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
             except HTTPException as block_exc:
                 block_detail: Final = block_exc.detail
-                # Only a policy block carries a dict detail; every API/transport failure details a
-                # plain string (see _is_input_too_large_error). Re-raising those keeps their real
-                # status instead of reporting an outage as a guardrail decision
-                if not raw_sse or not isinstance(block_detail, Mapping):
+                # A policy block is the only 400 carrying a structured detail; a service failure
+                # either details a plain string or reports a non-400 status, and re-raising those
+                # keeps their real status instead of reporting an outage as a guardrail decision
+                if not raw_sse or block_exc.status_code != 400 or not isinstance(block_detail, Mapping):
                     raise
                 # past the keepalive ping the headers are already flushed, so a raise cannot reach
                 # the client; the block travels as a frame

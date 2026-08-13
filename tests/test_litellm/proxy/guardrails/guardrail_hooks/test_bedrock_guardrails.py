@@ -2958,13 +2958,29 @@ async def test_streaming_hook_block_stream_keeps_upstream_identity():
 async def test_streaming_hook_reraises_guardrail_service_failures():
     """A Bedrock outage must keep its status, not be reported to the caller as a guardrail decision.
 
-    Only a policy block details a Mapping; every API/transport failure details a plain string.
+    A policy block is the only 400 detailing a Mapping.
     """
     guardrail = _sse_guardrail()
 
     with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
         mock_api.side_effect = HTTPException(
             status_code=500, detail="Bedrock guardrail throttle retries exhausted"
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _drain_streaming_hook(guardrail)
+
+    assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_reraises_a_service_failure_that_details_a_mapping():
+    """InvokeGuardrailChecks details a Mapping on its 500, so detail shape alone cannot mean "block"."""
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = HTTPException(
+            status_code=500,
+            detail={"error": "Bedrock InvokeGuardrailChecks returned an unexpected response shape"},
         )
         with pytest.raises(HTTPException) as exc:
             await _drain_streaming_hook(guardrail)
