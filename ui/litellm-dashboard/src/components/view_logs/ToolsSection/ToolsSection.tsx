@@ -52,7 +52,7 @@ export function ToolsSection({ log }: ToolsSectionProps) {
             </span>
           </div>
         </CollapsibleTrigger>
-        <CollapsibleContent>
+        <CollapsibleContent keepMounted>
           <div className="flex flex-col gap-2 px-4 pb-4">
             {tools.map((tool) => (
               <ToolItem key={tool.name} tool={tool} />
