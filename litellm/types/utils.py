@@ -3347,6 +3347,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     annotation_cost_per_page: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
+    regional_endpoint_uplift_multiplier: float | None = None
 
     @classmethod
     def strip_custom_pricing_fields(cls, model_info: dict[str, Any]) -> dict[str, Any]:
