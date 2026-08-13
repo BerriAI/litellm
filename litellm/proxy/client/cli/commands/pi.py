@@ -156,9 +156,11 @@ def sync_models_json(
         **current,
         "providers": {**existing_providers, PI_PROVIDER_NAME: provider_block(base_url, model_ids, limits)},
     }
+    staging: Final = path.with_name(path.name + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(updated, indent=2) + "\n")
+        staging.write_text(json.dumps(updated, indent=2) + "\n")
+        staging.replace(path)
     except OSError as e:
         return PiSyncError(f"Could not write {path}: {e}")
     return None

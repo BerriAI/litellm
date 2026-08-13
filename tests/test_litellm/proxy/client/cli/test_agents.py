@@ -466,6 +466,10 @@ class TestAgentCommands:
     def test_one_command_per_known_agent(self):
         assert {c.name for c in agent_commands()} == {"claude", "codex", "opencode", "pi"}
 
+    def test_pi_is_hidden_from_help_but_still_registered(self):
+        hidden_by_name = {c.name: c.hidden for c in agent_commands()}
+        assert hidden_by_name == {"claude": False, "codex": False, "opencode": False, "pi": True}
+
     def test_claude_launches_with_stored_key_and_forwards_args(self):
         captured = {}
 
