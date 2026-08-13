@@ -1975,6 +1975,8 @@ class Router:
                 "client": model_client,
                 **kwargs,
             }
+            # Use the resolved deployment model name, not the alias
+            input_kwargs["model"] = model_name
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
@@ -2998,6 +3000,8 @@ class Router:
             }
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
+            # Use the resolved deployment model name, not the alias
+            input_kwargs["model"] = model_name
 
             _response: Final = litellm.acompletion(**input_kwargs)
 

@@ -2,8 +2,6 @@ import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
-from urllib.parse import urlparse
-
 import httpx
 
 if TYPE_CHECKING:
@@ -1120,14 +1118,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     def get_stream_options(self, stream_options: dict | None, api_base: str | None) -> dict:
         """
         Pass `stream_options` to the data dict for OpenAI requests
+
+        Always includes usage by default (even for non-OpenAI api_base
+        endpoints) so streaming token counts are available for cost tracking.
         """
         if stream_options is not None:
             return {"stream_options": stream_options}
-        else:
-            # by default litellm will include usage for openai endpoints
-            if api_base is None or urlparse(api_base).hostname == "api.openai.com":
-                return {"stream_options": {"include_usage": True}}
-        return {}
+        return {"stream_options": {"include_usage": True}}
 
     # Embedding
     @track_llm_api_timing()
