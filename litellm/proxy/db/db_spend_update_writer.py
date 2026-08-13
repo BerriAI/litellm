@@ -1107,20 +1107,12 @@ class DBSpendUpdateWriter:
             cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
         ):
             verbose_proxy_logger.debug("acquired lock for daily tag spend updates")
-            daily_tag_spend_update_transactions: dict[str, DailyTagSpendTransaction] | None = None
-            committed = False
             try:
-                daily_tag_spend_update_transactions: Final = (
-                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+                await self._drain_and_commit_daily_tag_spend_from_redis(
+                    prisma_client=prisma_client,
+                    n_retry_times=n_retry_times,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
-                if daily_tag_spend_update_transactions:
-                    await DBSpendUpdateWriter.update_daily_tag_spend(
-                        n_retry_times=n_retry_times,
-                        prisma_client=prisma_client,
-                        proxy_logging_obj=proxy_logging_obj,
-                        daily_spend_transactions=daily_tag_spend_update_transactions,
-                    )
-                committed = True
             except Exception as e:
                 spend_log_error(
                     "Spend tracking - failed to commit daily tag spend updates from Redis to DB. "
@@ -1129,13 +1121,40 @@ class DBSpendUpdateWriter:
                     exc=e,
                 )
             finally:
-                if not committed and daily_tag_spend_update_transactions:
-                    await self.redis_update_buffer.restore_transactions_to_redis(
-                        daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
-                    )
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
                 )
+
+    async def _drain_and_commit_daily_tag_spend_from_redis(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ) -> None:
+        """
+        Drain the Redis tag spend buffer and commit it, restoring the drained transactions if the commit fails.
+
+        The drain is destructive, so a failed commit must push the transactions back for the next tick
+        or their spend is lost permanently.
+        """
+        daily_tag_spend_update_transactions: Final = (
+            await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+        )
+        if not daily_tag_spend_update_transactions:
+            return
+
+        try:
+            await DBSpendUpdateWriter.update_daily_tag_spend(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                daily_spend_transactions=daily_tag_spend_update_transactions,
+            )
+        except Exception:
+            await self.redis_update_buffer.restore_transactions_to_redis(
+                daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
+            )
+            raise
 
     async def _flush_tool_discovery_queue(
         self,
