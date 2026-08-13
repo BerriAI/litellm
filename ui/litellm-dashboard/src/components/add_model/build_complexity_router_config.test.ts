@@ -26,6 +26,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierContextIncludeAssistantTurns: undefined,
   classifierFallback: undefined,
   sessionAffinity: false,
+  deploymentAffinity: true,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
@@ -46,6 +47,7 @@ describe("buildComplexityRouterConfig", () => {
       tiers,
       classifier_type: "heuristic",
       session_affinity: false,
+      deployment_affinity: true,
       escalation_keywords: ["LITELLM ESCALATE"],
     });
   });

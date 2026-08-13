@@ -485,6 +485,70 @@ def test_generic_cost_per_token_minimax_m3_above_512k_tokens():
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock_mantle/openai.gpt-5.6-sol",
+        "bedrock_mantle/openai.gpt-5.6-terra",
+        "bedrock_mantle/openai.gpt-5.6-luna",
+    ],
+)
+def test_generic_cost_per_token_bedrock_mantle_gpt56_long_context(model):
+    """Bedrock GPT-5.6 supports a 1M context window, billed at the long-context rates above 272K."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["max_input_tokens"] == 1000000
+
+    cached_tokens = 100000
+    completion_tokens = 1000
+
+    short_prompt_tokens = 272000
+    short_usage = Usage(
+        prompt_tokens=short_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=short_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    short_prompt_cost, short_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=short_usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert round(short_prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * (short_prompt_tokens - cached_tokens)
+        + model_cost_map["cache_read_input_token_cost"] * cached_tokens,
+        10,
+    )
+    assert round(short_completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * completion_tokens, 10
+    )
+
+    long_prompt_tokens = 900000
+    long_usage = Usage(
+        prompt_tokens=long_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=long_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    long_prompt_cost, long_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=long_usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert round(long_prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token_above_272k_tokens"]
+        * (long_prompt_tokens - cached_tokens)
+        + model_cost_map["cache_read_input_token_cost_above_272k_tokens"]
+        * cached_tokens,
+        10,
+    )
+    assert round(long_completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens, 10
+    )
+
+
 def test_generic_cost_per_token_honors_non_standard_above_threshold():
     """Regression for #30344: get_model_info must keep arbitrary
     input/output_cost_per_token_above_<N>_tokens thresholds, not only the hard-coded
@@ -2143,6 +2207,54 @@ def test_token_type_cost_breakdown_matches_real_gemini_numbers():
     assert breakdown.cache_creation_cost == 0.0
 
 
+def test_token_type_cost_breakdown_xai_at_exactly_200k_uses_higher_tier_rates():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=200_000,
+        completion_tokens=2_000,
+        total_tokens=202_000,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=1_500, text_tokens=500
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=50_000, text_tokens=150_000
+        ),
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model="grok-4.20-0309-reasoning", custom_llm_provider="xai", usage=usage
+    )
+
+    assert breakdown.reasoning_cost == pytest.approx(1_500 * 5e-06)
+    assert breakdown.cache_read_cost == pytest.approx(50_000 * 4e-07)
+
+
+def test_token_type_cost_breakdown_xai_just_below_200k_uses_base_tier_rates():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=199_999,
+        completion_tokens=2_000,
+        total_tokens=201_999,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=1_500, text_tokens=500
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=50_000, text_tokens=149_999
+        ),
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model="grok-4.20-0309-reasoning", custom_llm_provider="xai", usage=usage
+    )
+
+    assert breakdown.reasoning_cost == pytest.approx(1_500 * 2.5e-06)
+    assert breakdown.cache_read_cost == pytest.approx(50_000 * 2e-07)
+
+
 def test_token_type_cost_breakdown_includes_cache_creation_from_top_level_usage():
     """
     Bedrock/Anthropic report cache tokens as top-level usage fields; the Usage
@@ -2446,6 +2558,60 @@ def test_token_type_cost_breakdown_applies_regional_uplift():
     assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)
 
 
+@pytest.mark.parametrize("details_as_dict", [True, False])
+def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict):
+    """
+    Image input tokens must be priced at input_cost_per_image_token even when
+    input_tokens_details is a plain dict, as in OpenAI image edit responses.
+
+    Regression test: dict-shaped input_tokens_details was read with getattr(),
+    which returns None for dicts, so image input tokens silently fell back to
+    the text input rate (e.g. $5/M instead of $8/M for gpt-image-2).
+    """
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        calculate_image_response_cost_from_usage,
+    )
+    from litellm.types.utils import Usage
+
+    mock_model_info = {
+        "input_cost_per_token": 5e-6,
+        "input_cost_per_image_token": 8e-6,
+        "output_cost_per_image_token": 3e-5,
+    }
+
+    input_details = {"text_tokens": 19, "image_tokens": 512}
+    image_response = ImageResponse(data=[ImageObject(b64_json="x")])
+    # Mirror the usage shape of a real OpenAI images.edit response:
+    # a Usage object carrying input_tokens/output_tokens with detail dicts.
+    image_response.usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=689,
+        input_tokens=531,
+        input_tokens_details=(
+            input_details
+            if details_as_dict
+            else ImageUsageInputTokensDetails(**input_details)
+        ),
+        output_tokens=158,
+        output_tokens_details={"image_tokens": 158, "text_tokens": 0},
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        cost = calculate_image_response_cost_from_usage(
+            model="gpt-image-2",
+            image_response=image_response,
+            custom_llm_provider="openai",
+        )
+
+    expected = 19 * 5e-6 + 512 * 8e-6 + 158 * 3e-5
+    assert cost is not None
+    assert round(cost, 12) == round(expected, 12)
 GEMINI_DAY0_LAUNCH_PRICING = [
     ("gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
     ("gemini/gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
