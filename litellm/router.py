@@ -9976,6 +9976,35 @@ class Router:
         deployments: Final = self.get_model_list(model_name=model) or []
         return self._are_all_deployments_blocked(deployments=deployments)
 
+    def _model_group_has_unblocked_deployment(self, model_name: str, team_id: str | None) -> bool:
+        deployments: Final = self.get_model_list(model_name=model_name, team_id=team_id) or []
+        return any((deployment.get("model_info") or {}).get("blocked") is not True for deployment in deployments)
+
+    def _has_reachable_fallback(
+        self,
+        model_name: str,
+        request_fallbacks: list[dict[str, list[str]]] | None = None,
+        team_id: str | None = None,
+        visited: frozenset[str] = frozenset(),
+    ) -> bool:
+        """
+        True when `model_name`'s configured fallback chain reaches a model group with at
+        least one unblocked deployment. Follows per-request and router-level fallbacks and
+        skips already-visited groups so a self-referential chain terminates.
+        """
+        if model_name in visited:
+            return False
+        combined_fallbacks: Final[list[dict[str, list[str]]]] = [*(request_fallbacks or []), *(self.fallbacks or [])]
+        fallback_model_group, _ = get_fallback_model_group(fallbacks=combined_fallbacks, model_group=model_name)
+        if not fallback_model_group:
+            return False
+        next_visited: Final = visited | {model_name}
+        return any(
+            self._model_group_has_unblocked_deployment(group, team_id)
+            or self._has_reachable_fallback(group, request_fallbacks, team_id, next_visited)
+            for group in fallback_model_group
+        )
+
     async def async_get_fully_unhealthy_model_names(self) -> set[str]:
         """
         Returns the set of model names where every backing deployment is currently

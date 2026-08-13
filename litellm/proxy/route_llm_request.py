@@ -55,22 +55,34 @@ def _is_a2a_agent_model(model_name: Any) -> bool:
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
-def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, team_id: str | None) -> None:
+def _raise_if_model_fully_blocked(
+    llm_router: LitellmRouter,
+    model_name: Any,
+    team_id: str | None,
+    request_fallbacks: list[dict[str, list[str]]] | None = None,
+) -> None:
     if not isinstance(model_name, str) or not model_name:
         return
     if not isinstance(llm_router, litellm.Router):
         return
     deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
-    if llm_router._are_all_deployments_blocked(deployments):
-        raise litellm.PermissionDeniedError(
-            message="Model is blocked",
-            model=model_name,
-            llm_provider="",
-            response=httpx.Response(
-                status_code=403,
-                request=httpx.Request(method="POST", url="https://github.com/BerriAI/litellm"),
-            ),
-        )
+    if not llm_router._are_all_deployments_blocked(deployments):
+        return
+    if llm_router._has_reachable_fallback(
+        model_name=model_name,
+        request_fallbacks=request_fallbacks if isinstance(request_fallbacks, list) else None,
+        team_id=team_id,
+    ):
+        return
+    raise litellm.PermissionDeniedError(
+        message="Model is blocked",
+        model=model_name,
+        llm_provider="",
+        response=httpx.Response(
+            status_code=403,
+            request=httpx.Request(method="POST", url="https://github.com/BerriAI/litellm"),
+        ),
+    )
 
 
 ROUTE_ENDPOINT_MAPPING: Final = {
@@ -489,7 +501,12 @@ async def route_request(
         else:
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
-        _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
+        _raise_if_model_fully_blocked(
+            llm_router=llm_router,
+            model_name=data.get("model"),
+            team_id=team_id,
+            request_fallbacks=data.get("fallbacks"),
+        )
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
         if route_type in [
