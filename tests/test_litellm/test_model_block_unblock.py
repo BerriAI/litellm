@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -196,6 +197,76 @@ async def test_route_request_returns_403_when_model_is_fully_blocked(monkeypatch
     with pytest.raises(litellm.PermissionDeniedError) as exc_info:
         await route_request(
             data={"model": "gpt-4o"},
+            llm_router=router,
+            user_model=None,
+            route_type="acreate_eval",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Model is blocked" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_route_request_allows_fallback_when_primary_fully_blocked(monkeypatch):
+    from litellm.proxy.route_llm_request import route_request
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x"},
+                "model_info": {"id": "p0", "blocked": True},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "x"},
+                "model_info": {"id": "f0", "blocked": False},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.route_llm_request.add_shared_session_to_data",
+        AsyncMock(return_value=None),
+    )
+
+    result = await route_request(
+        data={"model": "primary"},
+        llm_router=router,
+        user_model=None,
+        route_type="acreate_eval",
+    )
+    if asyncio.iscoroutine(result):
+        result.close()
+
+
+@pytest.mark.asyncio
+async def test_route_request_blocks_when_primary_and_fallback_fully_blocked(monkeypatch):
+    from litellm.proxy.route_llm_request import route_request
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x"},
+                "model_info": {"id": "p0", "blocked": True},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "x"},
+                "model_info": {"id": "f0", "blocked": True},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.route_llm_request.add_shared_session_to_data",
+        AsyncMock(return_value=None),
+    )
+
+    with pytest.raises(litellm.PermissionDeniedError) as exc_info:
+        await route_request(
+            data={"model": "primary"},
             llm_router=router,
             user_model=None,
             route_type="acreate_eval",
