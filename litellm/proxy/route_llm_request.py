@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
@@ -26,6 +27,24 @@ GATED_MOCK_PARAM_NAMES: Final[tuple[str, ...]] = (
 )
 
 MOCK_TESTING_CONFIG_KEY: Final = "dangerously_allow_mock_testing_request_params"
+
+# Eval and run routes call litellm directly instead of going through the router, so a
+# fully blocked model on these paths never reaches a fallback chain.
+EVAL_ROUTE_TYPES: Final[tuple[str, ...]] = (
+    "acreate_eval",
+    "alist_evals",
+    "aget_eval",
+    "aupdate_eval",
+    "adelete_eval",
+    "acancel_eval",
+    "acreate_run",
+    "alist_runs",
+    "aget_run",
+    "acancel_run",
+    "adelete_run",
+)
+
+_BLOCK_GATE_FALLBACKS_ADAPTER: Final = TypeAdapter(list[dict[str, list[str]] | str])
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -55,11 +74,29 @@ def _is_a2a_agent_model(model_name: Any) -> bool:
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
+def _reachable_block_fallbacks(
+    llm_router: LitellmRouter, data: dict, route_type: str
+) -> list[dict[str, list[str]] | str] | None:
+    """Fallbacks the router would actually attempt for a blocked primary, or None when
+    none can run: eval routes bypass the router, disabled fallbacks skip the chain, and a
+    request-supplied list replaces the router-level one, matching what the router does."""
+    if route_type in EVAL_ROUTE_TYPES:
+        return None
+    if data.get("disable_fallbacks") is True:
+        return None
+    request_fallbacks: Final[object] = data.get("fallbacks")
+    raw_fallbacks: Final[object] = request_fallbacks if isinstance(request_fallbacks, list) else llm_router.fallbacks
+    try:
+        return _BLOCK_GATE_FALLBACKS_ADAPTER.validate_python(raw_fallbacks)
+    except ValidationError:
+        return None
+
+
 def _raise_if_model_fully_blocked(
     llm_router: LitellmRouter,
     model_name: Any,
     team_id: str | None,
-    request_fallbacks: list[dict[str, list[str]]] | None = None,
+    reachable_fallbacks: list[dict[str, list[str]] | str] | None,
 ) -> None:
     if not isinstance(model_name, str) or not model_name:
         return
@@ -68,9 +105,9 @@ def _raise_if_model_fully_blocked(
     deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
     if not llm_router._are_all_deployments_blocked(deployments):
         return
-    if llm_router._has_reachable_fallback(
+    if reachable_fallbacks is not None and llm_router._has_reachable_fallback(
         model_name=model_name,
-        request_fallbacks=request_fallbacks if isinstance(request_fallbacks, list) else None,
+        fallbacks=reachable_fallbacks,
         team_id=team_id,
     ):
         return
@@ -505,23 +542,11 @@ async def route_request(
             llm_router=llm_router,
             model_name=data.get("model"),
             team_id=team_id,
-            request_fallbacks=data.get("fallbacks"),
+            reachable_fallbacks=_reachable_block_fallbacks(llm_router=llm_router, data=data, route_type=route_type),
         )
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
-        if route_type in [
-            "acreate_eval",
-            "alist_evals",
-            "aget_eval",
-            "aupdate_eval",
-            "adelete_eval",
-            "acancel_eval",
-            "acreate_run",
-            "alist_runs",
-            "aget_run",
-            "acancel_run",
-            "adelete_run",
-        ]:
+        if route_type in EVAL_ROUTE_TYPES:
             # If a model is provided, get its credentials from the router
             model: Final = data.get("model")
             if model and llm_router:

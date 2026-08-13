@@ -9983,25 +9983,25 @@ class Router:
     def _has_reachable_fallback(
         self,
         model_name: str,
-        request_fallbacks: list[dict[str, list[str]]] | None = None,
+        fallbacks: list[dict[str, list[str]] | str],
         team_id: str | None = None,
         visited: frozenset[str] = frozenset(),
     ) -> bool:
         """
-        True when `model_name`'s configured fallback chain reaches a model group with at
-        least one unblocked deployment. Follows per-request and router-level fallbacks and
-        skips already-visited groups so a self-referential chain terminates.
+        True when `fallbacks` routes `model_name` to a model group with at least one
+        unblocked deployment. `fallbacks` must already reflect the precedence the router
+        applies at call time, so a request-supplied list replaces the router-level chain
+        rather than merging with it. Visited groups are skipped so a cycle terminates.
         """
         if model_name in visited:
             return False
-        combined_fallbacks: Final[list[dict[str, list[str]]]] = [*(request_fallbacks or []), *(self.fallbacks or [])]
-        fallback_model_group, _ = get_fallback_model_group(fallbacks=combined_fallbacks, model_group=model_name)
+        fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_name)
         if not fallback_model_group:
             return False
         next_visited: Final = visited | {model_name}
         return any(
             self._model_group_has_unblocked_deployment(group, team_id)
-            or self._has_reachable_fallback(group, request_fallbacks, team_id, next_visited)
+            or self._has_reachable_fallback(group, fallbacks, team_id, next_visited)
             for group in fallback_model_group
         )
 
