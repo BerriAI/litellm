@@ -1596,6 +1596,11 @@ TAG_REGISTRY_MAX_SIZE: Final = 5000
 # read per request. Deployments past this many restricted rows fall back to the per-id lookup
 # rather than holding an unbounded id set in every worker.
 END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
+# How long a failed registry load is remembered as "unusable". A degraded Postgres would
+# otherwise re-run the failing registry scan on every request, on top of the per-id lookups it
+# falls back to, doubling the load exactly when the database is least able to take it. Short
+# enough that enforcement returns promptly once the database recovers.
+REGISTRY_ERROR_NEGATIVE_CACHE_TTL: Final = 30
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST: Final = [

@@ -55,6 +55,7 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -2062,6 +2063,18 @@ async def test_get_tag_objects_batch():
     assert all("ttl" in call.kwargs for call in cache_calls)
 
 
+class _TtlRecordingCache(UserApiKeyCache):
+    """A real cache that also records the ttl each write carried, so tests can catch unbounded entries."""
+
+    def __init__(self):
+        super().__init__()
+        self.writes = []
+
+    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+        self.writes.append((key, kwargs.get("ttl")))
+        return await super().async_set_cache(key, value, local_only=local_only, **kwargs)
+
+
 def _tag_registry_row(tag_name: str):
     """A row as the names-only registry query sees it: only ``tag_name`` is read off it."""
     return SimpleNamespace(tag_name=tag_name)
@@ -2197,12 +2210,14 @@ async def test_get_tag_objects_batch_caches_empty_registry():
 
 
 @pytest.mark.asyncio
-async def test_get_tag_objects_batch_registry_db_error_falls_back_to_per_tag_fetch():
+async def test_get_tag_objects_batch_registry_db_error_negative_caches_and_keeps_per_tag_fetch():
     """
-    A registry query failure must not disable tag budgets for a whole TTL window.
+    A degraded database must not be re-asked for the registry on every request.
 
-    Nothing is cached, the per-tag fetch runs as it did before the registry existed, and the
-    next request retries the registry.
+    Without the negative cache the failing scan re-runs per request on top of the per-tag fallback
+    it triggers, doubling load exactly when Postgres is least able to take it. Tag budgets keep
+    being enforced through the per-tag path throughout, and the registry is retried once the
+    negative entry expires.
     """
     from litellm.proxy.auth.auth_checks import get_tag_objects_batch
 
@@ -2214,7 +2229,7 @@ async def test_get_tag_objects_batch_registry_db_error_falls_back_to_per_tag_fet
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
-    cache = UserApiKeyCache()
+    cache = _TtlRecordingCache()
 
     first = await get_tag_objects_batch(
         tag_names=["tag-a"],
@@ -2222,7 +2237,8 @@ async def test_get_tag_objects_batch_registry_db_error_falls_back_to_per_tag_fet
         user_api_key_cache=cache,
     )
     assert list(first) == ["tag-a"]
-    assert await cache.async_get_cache(key=tag_registry_cache_key()) is None
+    assert await cache.async_get_cache(key=tag_registry_cache_key()) == TAG_REGISTRY_OVERFLOW_SENTINEL
+    assert (tag_registry_cache_key(), REGISTRY_ERROR_NEGATIVE_CACHE_TTL) in cache.writes
 
     second = await get_tag_objects_batch(
         tag_names=["tag-b"],
@@ -2230,7 +2246,52 @@ async def test_get_tag_objects_batch_registry_db_error_falls_back_to_per_tag_fet
         user_api_key_cache=cache,
     )
     assert list(second) == ["tag-b"]
+    assert len(_registry_calls(mock_prisma.db.litellm_tagtable.find_many)) == 1
+
+    # The window closing (here: the entry expiring) puts the registry back in play.
+    await cache.async_delete_cache(key=tag_registry_cache_key())
+    third = await get_tag_objects_batch(
+        tag_names=["tag-c"],
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert list(third) == ["tag-c"]
     assert len(_registry_calls(mock_prisma.db.litellm_tagtable.find_many)) == 2
+
+
+@pytest.mark.asyncio
+async def test_tag_registry_load_is_single_flighted_across_concurrent_requests():
+    """
+    A cold registry under load must run one scan, not one per in-flight request.
+
+    The registry query is an unindexed table scan; a TTL expiry on a busy worker would otherwise
+    fan out into as many identical scans as there are concurrent requests.
+    """
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            await asyncio.sleep(0)
+            return [_tag_registry_row("registered-tag")]
+        return [_tag_db_row(name) for name in kwargs["where"]["tag_name"]["in"]]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    cache = UserApiKeyCache()
+
+    results = await asyncio.gather(
+        *(
+            get_tag_objects_batch(
+                tag_names=["registered-tag"],
+                prisma_client=mock_prisma,
+                user_api_key_cache=cache,
+            )
+            for _ in range(8)
+        )
+    )
+
+    assert all(list(result) == ["registered-tag"] for result in results)
+    assert len(_registry_calls(mock_prisma.db.litellm_tagtable.find_many)) == 1
 
 
 @pytest.mark.asyncio
@@ -5637,18 +5698,6 @@ _RESTRICTED_END_USER_WHERE = {
 }
 
 
-class _TtlRecordingCache(UserApiKeyCache):
-    """A real cache that also records the ttl each write carried, so tests can catch unbounded entries."""
-
-    def __init__(self):
-        super().__init__()
-        self.writes = []
-
-    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
-        self.writes.append((key, kwargs.get("ttl")))
-        return await super().async_set_cache(key, value, local_only=local_only, **kwargs)
-
-
 @pytest.fixture
 def end_user_registry_skip_enabled(monkeypatch):
     """Both bypass gates off: the default deployment, and the only state the registry skip runs in."""
@@ -5775,14 +5824,15 @@ async def test_get_end_user_object_caches_empty_restricted_registry(end_user_reg
 
 
 @pytest.mark.asyncio
-async def test_get_end_user_object_registry_db_error_falls_back_to_per_id_fetch(
+async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_per_id_fetch(
     end_user_registry_skip_enabled,
 ):
     """
-    A registry query failure must not blind auth to real restrictions for a whole TTL window.
+    A degraded database must not be re-asked for the registry on every request.
 
-    Nothing is cached, the per-id fetch runs exactly as it did before the registry existed, and the
-    next request retries the registry.
+    Restrictions keep being enforced through the per-id fetch, exactly as before the registry
+    existed, but the failing scan is suppressed for the negative-cache window instead of running
+    again on every request on top of that fetch. It is retried once the window closes.
     """
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
@@ -5791,7 +5841,7 @@ async def test_get_end_user_object_registry_db_error_falls_back_to_per_id_fetch(
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         side_effect=lambda **kwargs: _end_user_db_row(kwargs["where"]["user_id"], blocked=True)
     )
-    cache = UserApiKeyCache()
+    cache = _TtlRecordingCache()
 
     first = await get_end_user_object(
         end_user_id="eu-blocked-1",
@@ -5799,7 +5849,11 @@ async def test_get_end_user_object_registry_db_error_falls_back_to_per_id_fetch(
         user_api_key_cache=cache,
     )
     assert first is not None and first.blocked is True
-    assert await cache.async_get_cache(key=end_user_restricted_registry_cache_key()) is None
+    assert (
+        await cache.async_get_cache(key=end_user_restricted_registry_cache_key())
+        == END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL
+    )
+    assert (end_user_restricted_registry_cache_key(), REGISTRY_ERROR_NEGATIVE_CACHE_TTL) in cache.writes
 
     second = await get_end_user_object(
         end_user_id="eu-blocked-2",
@@ -5807,7 +5861,82 @@ async def test_get_end_user_object_registry_db_error_falls_back_to_per_id_fetch(
         user_api_key_cache=cache,
     )
     assert second is not None and second.blocked is True
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+
+    # The window closing (here: the entry expiring) puts the registry back in play.
+    await cache.async_delete_cache(key=end_user_restricted_registry_cache_key())
+    third = await get_end_user_object(
+        end_user_id="eu-blocked-3",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert third is not None and third.blocked is True
     assert mock_prisma.db.litellm_endusertable.find_many.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_registry_db_error_is_logged_at_warning(end_user_registry_skip_enabled):
+    """
+    A registry that stops loading is a silent enforcement degradation, so seeing it must not
+    require debug logging: per-id lookups still enforce restrictions, but an operator has no other
+    signal that the database is failing the scan and that every request is paying for it.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=Exception("registry query failed"))
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-1", blocked=True))
+
+    with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
+        await get_end_user_object(
+            end_user_id="eu-1",
+            prisma_client=mock_prisma,
+            user_api_key_cache=UserApiKeyCache(),
+        )
+
+    warnings = [_rendered_log_message(call) for call in mock_logger.warning.call_args_list]
+    assert any(
+        end_user_restricted_registry_cache_key() in message and "registry query failed" in message
+        for message in warnings
+    )
+
+
+@pytest.mark.asyncio
+async def test_end_user_registry_load_is_single_flighted_across_concurrent_requests(
+    end_user_registry_skip_enabled,
+):
+    """
+    A cold registry under load must run one scan, not one per in-flight request.
+
+    The registry query is an unindexed scan over the end-user table, which for the deployments this
+    exists for holds hundreds of thousands of rows; a TTL expiry on a busy worker would otherwise
+    fan it out across every concurrent request.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    async def fake_find_many(**kwargs):
+        await asyncio.sleep(0)
+        return [_end_user_registry_row("eu-blocked")]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=fake_find_many)
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
+    cache = UserApiKeyCache()
+
+    results = await asyncio.gather(
+        *(
+            get_end_user_object(
+                end_user_id="eu-anon-1",
+                prisma_client=mock_prisma,
+                user_api_key_cache=cache,
+            )
+            for _ in range(8)
+        )
+    )
+
+    assert all(result is None for result in results)
+    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+    mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
 @pytest.mark.asyncio

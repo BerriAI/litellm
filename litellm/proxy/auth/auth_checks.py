@@ -13,7 +13,7 @@ import asyncio
 import math
 import re
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException, Request, status
@@ -30,6 +30,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -1287,48 +1288,147 @@ def _restricted_end_user_where() -> Mapping[str, object]:
     return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}  # mutable-ok: prisma needs dict/list
 
 
+class _RegistryNotCached:
+    """No cached registry answer, as distinct from the cached answer ``None`` (registry unusable)."""
+
+
+_REGISTRY_NOT_CACHED: Final = _RegistryNotCached()
+
+#: One lock per registry, so a cold cache under load runs the scan once instead of once per
+#: concurrent request. Module-level because the stampede to collapse is worker-wide.
+_TAG_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
+_END_USER_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
+
+
+async def _cached_registry(
+    cache_key: str,
+    overflow_sentinel: str,
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None | _RegistryNotCached:
+    """The cached registry answer, or ``_REGISTRY_NOT_CACHED`` when the caller has to query."""
+    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
+    if cached == overflow_sentinel:
+        return None
+    # Memory hands back the tuple that was written; Redis round-trips it through JSON as a list.
+    if isinstance(cached, (list, tuple)):
+        return frozenset(entry for entry in cached if isinstance(entry, str))
+    return _REGISTRY_NOT_CACHED
+
+
+async def _cache_registry_answer(
+    cache_key: str,
+    value: tuple[str, ...] | str,
+    ttl: float,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Best-effort: a cache backend failure must not turn a registry load into a failed request."""
+    try:
+        await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
+    except Exception as e:  # noqa: BLE001  # best-effort cache write: auth must survive a cache backend error
+        verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key, e)
+
+
+async def _fetch_and_cache_registry(
+    cache_key: str,
+    overflow_sentinel: str,
+    max_size: int,
+    fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """The registry as the database has it, cached whole, or ``None`` when it is unusable."""
+    try:
+        registry_ids: Final = await fetch_ids()
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Registry %s could not be loaded from the database, so per-id lookups will run and the "
+            "registry query is suppressed for %ss: %s",
+            cache_key,
+            REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+            e,
+        )
+        await _cache_registry_answer(
+            cache_key=cache_key,
+            value=overflow_sentinel,
+            ttl=REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+            user_api_key_cache=user_api_key_cache,
+        )
+        return None
+
+    if len(registry_ids) > max_size:
+        await _cache_registry_answer(
+            cache_key=cache_key,
+            value=overflow_sentinel,
+            ttl=get_management_object_ttl(user_api_key_cache),
+            user_api_key_cache=user_api_key_cache,
+        )
+        return None
+
+    await _cache_registry_answer(
+        cache_key=cache_key,
+        value=registry_ids,
+        ttl=get_management_object_ttl(user_api_key_cache),
+        user_api_key_cache=user_api_key_cache,
+    )
+    return frozenset(registry_ids)
+
+
+async def _load_bounded_registry(
+    cache_key: str,
+    overflow_sentinel: str,
+    max_size: int,
+    load_lock: asyncio.Lock,
+    fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """
+    A bounded set of ids held under one cache key, so an id outside it costs no DB read.
+
+    ``None`` means the registry is unusable (more rows than ``max_size``, or a DB error inside the
+    negative-cache window) and callers must fall back to the per-id lookup. That is distinct from an
+    empty frozenset, which is the real answer when nothing is registered and is worth caching: it is
+    what makes the uncached-id path free. The load is single-flighted, because a TTL expiry under
+    load would otherwise let every concurrent request run the same unindexed scan.
+    """
+    cached: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
+    if not isinstance(cached, _RegistryNotCached):
+        return cached
+
+    async with load_lock:
+        # The request that held the lock has since cached an answer for everyone waiting on it.
+        cached_after_wait: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
+        if not isinstance(cached_after_wait, _RegistryNotCached):
+            return cached_after_wait
+
+        return await _fetch_and_cache_registry(
+            cache_key=cache_key,
+            overflow_sentinel=overflow_sentinel,
+            max_size=max_size,
+            fetch_ids=fetch_ids,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+
 async def _load_end_user_restricted_registry(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None:
-    """
-    The set of end-user ids whose ``LiteLLM_EndUserTable`` row carries a restriction, cached whole.
+    """The set of end-user ids whose ``LiteLLM_EndUserTable`` row carries a restriction."""
 
-    ``None`` means the registry is unusable (DB error, or more restricted rows than
-    ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``) and callers must not skip the per-id fetch. That is
-    distinct from an empty frozenset, which is the answer when no end user is restricted at all and
-    is worth caching: it is what lets a caller-supplied ``user`` id cost zero DB reads.
-    """
-    cache_key: Final = end_user_restricted_registry_cache_key()
-    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
-    if cached == END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL:
-        return None
-    # Memory hands back the tuple that was written; Redis round-trips it through JSON as a list.
-    if isinstance(cached, (list, tuple)):
-        return frozenset(user_id for user_id in cached if isinstance(user_id, str))
-
-    try:
+    async def fetch_ids() -> tuple[str, ...]:
         restricted_rows: Final = await _end_user_table(EndUserRepository(prisma_client)).find_many(
             where=_restricted_end_user_where(),
             take=END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1,
         )
-        if len(restricted_rows) > END_USER_RESTRICTED_REGISTRY_MAX_SIZE:
-            await user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
-                ttl=get_management_object_ttl(user_api_key_cache),
-            )
-            return None
-        restricted_ids: Final = tuple(row.user_id for row in restricted_rows)
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=restricted_ids,
-            ttl=get_management_object_ttl(user_api_key_cache),
-        )
-        return frozenset(restricted_ids)
-    except Exception as e:
-        verbose_proxy_logger.debug("Error loading restricted end-user registry from database: %s", e)
-        return None
+        return tuple(row.user_id for row in restricted_rows)
+
+    return await _load_bounded_registry(
+        cache_key=end_user_restricted_registry_cache_key(),
+        overflow_sentinel=END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+        max_size=END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+        load_lock=_END_USER_REGISTRY_LOAD_LOCK,
+        fetch_ids=fetch_ids,
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 async def _end_user_is_known_unrestricted(
@@ -1575,43 +1675,22 @@ async def _load_tag_registry(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None:
-    """
-    The set of tag names that have a row in ``LiteLLM_TagTable``, cached whole.
+    """The set of tag names that have a row in ``LiteLLM_TagTable``."""
 
-    ``None`` means the registry is unusable (DB error, or more rows than
-    ``TAG_REGISTRY_MAX_SIZE``) and callers must not filter against it. That is distinct from an
-    empty frozenset, which is the answer when no tags are registered at all and is worth caching:
-    it is what lets a request tagged with unregistered names cost zero DB reads.
-    """
-    cache_key: Final = tag_registry_cache_key()
-    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
-    if cached == TAG_REGISTRY_OVERFLOW_SENTINEL:
-        return None
-    # Memory hands back the tuple that was written; Redis round-trips it through JSON as a list.
-    if isinstance(cached, (list, tuple)):
-        return frozenset(name for name in cached if isinstance(name, str))
-
-    try:
+    async def fetch_ids() -> tuple[str, ...]:
         registry_rows: Final = await _tag_table(TagRepository(prisma_client)).find_many(
             take=TAG_REGISTRY_MAX_SIZE + 1,
         )
-        if len(registry_rows) > TAG_REGISTRY_MAX_SIZE:
-            await user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=TAG_REGISTRY_OVERFLOW_SENTINEL,
-                ttl=get_management_object_ttl(user_api_key_cache),
-            )
-            return None
-        registered_names: Final = tuple(row.tag_name for row in registry_rows)
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=registered_names,
-            ttl=get_management_object_ttl(user_api_key_cache),
-        )
-        return frozenset(registered_names)
-    except Exception as e:
-        verbose_proxy_logger.debug("Error loading tag registry from database: %s", e)
-        return None
+        return tuple(row.tag_name for row in registry_rows)
+
+    return await _load_bounded_registry(
+        cache_key=tag_registry_cache_key(),
+        overflow_sentinel=TAG_REGISTRY_OVERFLOW_SENTINEL,
+        max_size=TAG_REGISTRY_MAX_SIZE,
+        load_lock=_TAG_REGISTRY_LOAD_LOCK,
+        fetch_ids=fetch_ids,
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 async def _fetch_uncached_tags(
@@ -4641,25 +4720,15 @@ async def delete_cached_project_object(
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """
-    Every endpoint that mutates litellm_projecttable must call this: get_project_object
-    serves auth cache-first with no freshness check, so without invalidation a stale
-    project (e.g. a pre-update empty model allowlist) keeps being enforced until the
-    TTL expires (LIT-3803). Best-effort on both steps: the DB write has already
-    committed, so a cache backend error must not fail the endpoint; the stale entry
-    then expires via TTL.
+    Every endpoint that mutates litellm_projecttable must call this, or a stale project (e.g. a
+    pre-update empty model allowlist) keeps being enforced until the TTL expires (LIT-3803).
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
-    cache_key: Final = _project_cache_key(project_id)
-    try:
-        await user_api_key_cache.async_delete_cache(key=cache_key)
-    except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
-        verbose_proxy_logger.warning(
-            "Failed to evict cached project entry %s; a stale project may be served until its TTL expires: %s",
-            cache_key,
-            e,
-        )
-    await publish_auth_cache_invalidation(cache_key=cache_key)
+    await evict_and_broadcast(
+        cache_keys=(_project_cache_key(project_id),),
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 async def _organization_max_budget_check(

@@ -51,27 +51,16 @@ router: Final = APIRouter()
 
 async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
     """
-    Every endpoint that mutates an end-user row must call this: auth serves end users cache-first
-    with no freshness check, and the cached restricted-id registry decides whether the row is read
-    at all, so without invalidation a newly blocked or budgeted customer keeps being served
-    unrestricted until the TTL expires. Best-effort: the DB write has already committed, so a cache
-    backend error must not fail the endpoint.
+    Every endpoint that mutates an end-user row must call this, or a newly blocked or budgeted
+    customer keeps being served unrestricted until the TTL expires: auth reads end users
+    cache-first, and the cached restricted-id registry decides whether the row is read at all.
     """
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-        publish_auth_cache_invalidation,
+        evict_and_broadcast,
     )
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    for cache_key in cache_keys:
-        try:
-            await user_api_key_cache.async_delete_cache(key=cache_key)
-        except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
-            verbose_proxy_logger.warning(
-                "Failed to evict cached end-user entry %s; a stale customer may be served until its TTL expires: %s",
-                cache_key,
-                e,
-            )
-        await publish_auth_cache_invalidation(cache_key=cache_key)
+    await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
 
 
 def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
