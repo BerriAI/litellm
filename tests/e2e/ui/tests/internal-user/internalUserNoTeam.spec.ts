@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { dismissFeedbackPopup } from "../../helpers/navigation";
+import { navigateToPage } from "../../helpers/navigation";
+import { Page } from "../../fixtures/pages";
 
 /**
  * Logs in fresh inside the test rather than reusing a stored session because
@@ -16,9 +17,11 @@ test.describe("Internal User with no team memberships", () => {
     await page.getByPlaceholder("Enter your username").fill("noteam@test.local");
     await page.getByPlaceholder("Enter your password").fill("test");
     await page.getByRole("button", { name: "Login", exact: true }).click();
+    await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 30_000 });
+    expect(new URL(page.url()).pathname).not.toMatch(/\/connect$/);
+    await navigateToPage(page, Page.ApiKeys);
     // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
     await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
-    await dismissFeedbackPopup(page);
 
     // Open the Create Key modal.
     await page.getByRole("button", { name: /Create New Key/i }).click();

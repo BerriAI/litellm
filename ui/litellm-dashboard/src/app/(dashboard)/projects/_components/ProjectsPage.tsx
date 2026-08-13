@@ -1,6 +1,7 @@
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Plus, SearchIcon, X } from "lucide-react";
+import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,10 @@ export function ProjectsPage() {
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
 
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useQueryState(
+    "project",
+    parseAsString.withOptions({ history: "push" }),
+  );
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [searchText, setSearchText] = useState("");
 
@@ -41,7 +45,12 @@ export function ProjectsPage() {
   }, [projects, searchText, teamAliasMap]);
 
   if (selectedProjectId) {
-    return <ProjectDetail projectId={selectedProjectId} onBack={() => setSelectedProjectId(null)} />;
+    return (
+      <ProjectDetail
+        projectId={selectedProjectId}
+        onBack={() => void setSelectedProjectId(null, { history: "replace" })}
+      />
+    );
   }
 
   return (
@@ -83,7 +92,7 @@ export function ProjectsPage() {
         projects={filteredProjects}
         isLoading={isLoading}
         isFiltered={searchText.trim().length > 0}
-        onProjectClick={setSelectedProjectId}
+        onProjectClick={(id) => void setSelectedProjectId(id)}
         teamAliasMap={teamAliasMap}
         isTeamsLoading={isTeamsLoading}
       />

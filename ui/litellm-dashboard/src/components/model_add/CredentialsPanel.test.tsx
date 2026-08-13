@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { UploadProps } from "antd/es/upload";
+import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialItem, credentialCreateCall, credentialUpdateCall } from "@/components/networking";
@@ -9,7 +9,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 
 import CredentialsPanel from "./CredentialsPanel";
 
-const DEFAULT_UPLOAD_PROPS = {} as UploadProps;
+const DEFAULT_UPLOAD_PROPS = {} as ComponentProps<typeof CredentialsPanel>["uploadProps"];
 
 const mockUseAuthorized = vi.fn();
 const mockUseCredentials = vi.fn();

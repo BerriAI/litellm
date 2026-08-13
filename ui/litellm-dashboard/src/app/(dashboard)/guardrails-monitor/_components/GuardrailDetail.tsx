@@ -29,7 +29,7 @@ const STATUS_TONE: Record<string, StatusTone> = {
 export function GuardrailDetail({ guardrailId, onBack, accessToken = null, startDate, endDate }: GuardrailDetailProps) {
   const [activeTab, setActiveTab] = useState("overview");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
-  const [logsPage, setLogsPage] = useState(1);
+  const [logsPage] = useState(1);
   const logsPageSize = 50;
 
   const {

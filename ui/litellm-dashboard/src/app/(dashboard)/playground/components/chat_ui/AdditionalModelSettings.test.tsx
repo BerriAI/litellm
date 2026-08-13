@@ -48,6 +48,44 @@ describe("AdditionalModelSettings", () => {
     expect(maxTokensSlider).not.toBeDisabled();
   });
 
+  it("should not show Stream responses when onStreamingChange is not provided", () => {
+    render(<AdditionalModelSettings />);
+    expect(screen.queryByText(/Stream responses/i)).not.toBeInTheDocument();
+  });
+
+  it("should render Stream responses checked by default and report unchecking it", async () => {
+    const user = userEvent.setup();
+    const onStreamingChange = vi.fn();
+
+    render(<AdditionalModelSettings onStreamingChange={onStreamingChange} />);
+
+    const streamingCheckbox = screen.getByRole("checkbox", { name: /Stream responses/i });
+    expect(streamingCheckbox).toBeChecked();
+
+    await act(async () => {
+      await user.click(streamingCheckbox);
+    });
+
+    await waitFor(() => {
+      expect(onStreamingChange).toHaveBeenCalledWith(false);
+    });
+  });
+
+  it("should keep the streaming toggle but drop advanced params when showAdvancedParams is false", () => {
+    render(<AdditionalModelSettings showAdvancedParams={false} onStreamingChange={vi.fn()} />);
+
+    expect(screen.getByRole("checkbox", { name: /Stream responses/i })).toBeInTheDocument();
+    expect(screen.queryByText("Use Advanced Parameters")).not.toBeInTheDocument();
+    expect(screen.queryByText("Temperature")).not.toBeInTheDocument();
+    expect(screen.queryByText("Max Tokens")).not.toBeInTheDocument();
+  });
+
+  it("should reflect a disabled streaming setting from props", () => {
+    render(<AdditionalModelSettings streamingEnabled={false} onStreamingChange={vi.fn()} />);
+
+    expect(screen.getByRole("checkbox", { name: /Stream responses/i })).not.toBeChecked();
+  });
+
   it("should not show Simulate failure to test fallbacks when onMockTestFallbacksChange is not provided", () => {
     render(<AdditionalModelSettings />);
     expect(screen.queryByText(/Simulate failure to test fallbacks/i)).not.toBeInTheDocument();

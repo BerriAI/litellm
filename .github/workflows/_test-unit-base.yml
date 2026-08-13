@@ -18,10 +18,25 @@ on:
         type: number
         default: 2
       timeout-minutes:
-        description: "Job timeout in minutes"
+        description: >-
+          Timeout for the test step alone. Setup (checkout, dependency install,
+          Prisma client generation) gets its own allowance on top, so a slow
+          runner or a cold binary download can never cancel passing tests.
         required: false
         type: number
         default: 20
+      job-timeout-minutes:
+        description: >-
+          Backstop for the whole job. Keep it >= `timeout-minutes` plus 35: 30 for
+          the per-step ceilings on the setup steps below, and 5 for the runner
+          overhead the job clock charges but no step owns (job init, step
+          transitions, post-job cleanup). That headroom is what makes the test
+          budget a floor rather than a hope, since setup cannot overrun into it
+          without failing its own step first. GitHub expressions have no
+          arithmetic, so the sum is passed in rather than computed.
+        required: false
+        type: number
+        default: 55
       max-failures:
         description: "Stop after this many failures"
         required: false
@@ -44,30 +59,35 @@ jobs:
   run:
     name: Run tests
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.timeout-minutes }}
+    timeout-minutes: ${{ inputs.job-timeout-minutes }}
     outputs:
       decision: ${{ steps.changes.outputs.decision }}
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        timeout-minutes: 3
         with:
           persist-credentials: false
 
       - name: Detect backend-relevant changes
         id: changes
+        timeout-minutes: 2
         uses: ./.github/actions/detect-backend-changes
 
       - name: Set up Python
+        timeout-minutes: 3
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
       - name: Set up uv
+        timeout-minutes: 3
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache uv dependencies
+        timeout-minutes: 5
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -79,18 +99,24 @@ jobs:
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 8
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml
 
+      - name: Cache Prisma binaries
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 3
+        uses: ./.github/actions/cache-prisma-binaries
+
       - name: Generate Prisma client
         if: steps.changes.outputs.decision != 'skip'
-        env:
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        timeout-minutes: 3
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run tests
         if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: ${{ inputs.timeout-minutes }}
         env:
           TEST_PATH: ${{ inputs.test-path }}
           MAX_FAILURES: ${{ inputs.max-failures }}
@@ -154,6 +180,19 @@ jobs:
           merge-multiple: true
 
       - name: Upload to Codecov
+        id: codecov-upload
+        continue-on-error: true
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        with:
+          use_oidc: true
+          directory: coverage-reports
+          root_dir: ${{ github.workspace }}
+          flags: ${{ inputs.artifact-name }}
+          fail_ci_if_error: false
+
+      - name: Upload to Codecov (retry)
+        if: steps.codecov-upload.outcome == 'failure'
+        continue-on-error: true
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
         with:
           use_oidc: true

@@ -68,6 +68,14 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	baseModel := d.Get("base_model").(string)
 	modelName := fmt.Sprintf("%s/%s", customLLMProvider, baseModel)
 
+	// Pricing base_model, decoupled from routing. When pricing_base_model is
+	// set it feeds model_info.base_model (the cost-lookup key) WITHOUT changing
+	// the routing string above; otherwise base_model drives pricing as before.
+	pricingBaseModel := baseModel
+	if v, ok := d.GetOk("pricing_base_model"); ok && v.(string) != "" {
+		pricingBaseModel = v.(string)
+	}
+
 	// Generate a UUID for new models
 	modelID := d.Id()
 	if !isUpdate {
@@ -240,7 +248,7 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		ModelInfo: ModelInfo{
 			ID:        modelID,
 			DBModel:   true,
-			BaseModel: baseModel,
+			BaseModel: pricingBaseModel,
 			Tier:      d.Get("tier").(string),
 			Mode:      d.Get("mode").(string),
 			TeamID:    d.Get("team_id").(string),
@@ -306,7 +314,16 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("rpm", GetIntValue(modelResp.LiteLLMParams.RPM, d.Get("rpm").(int)))
 	d.Set("model_api_base", GetStringValue(modelResp.LiteLLMParams.APIBase, d.Get("model_api_base").(string)))
 	d.Set("api_version", GetStringValue(modelResp.LiteLLMParams.APIVersion, d.Get("api_version").(string)))
-	d.Set("base_model", GetStringValue(modelResp.ModelInfo.BaseModel, d.Get("base_model").(string)))
+	// base_model / pricing_base_model read-back. When pricing_base_model is
+	// configured, model_info.base_model holds the PRICING key, so recover the
+	// routing base_model from state (not returned by the API) and read
+	// pricing_base_model from model_info.
+	if pbm, ok := d.GetOk("pricing_base_model"); ok && pbm.(string) != "" {
+		d.Set("base_model", d.Get("base_model").(string))
+		d.Set("pricing_base_model", GetStringValue(modelResp.ModelInfo.BaseModel, pbm.(string)))
+	} else {
+		d.Set("base_model", GetStringValue(modelResp.ModelInfo.BaseModel, d.Get("base_model").(string)))
+	}
 	d.Set("tier", GetStringValue(modelResp.ModelInfo.Tier, d.Get("tier").(string)))
 	d.Set("mode", GetStringValue(modelResp.ModelInfo.Mode, d.Get("mode").(string)))
 	d.Set("team_id", GetStringValue(modelResp.ModelInfo.TeamID, d.Get("team_id").(string)))

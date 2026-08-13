@@ -1,4 +1,5 @@
 import { useState } from "react";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import AuditLogsPanel from "./AuditLogsPanel";
@@ -14,8 +15,22 @@ interface SpendLogsTableProps {
   premiumUser: boolean;
 }
 
+type LogsTabId = "request logs" | "audit logs" | "deleted keys" | "deleted teams";
+
+interface LogsTab {
+  id: LogsTabId;
+  label: string;
+}
+
+const REQUEST_LOGS_TAB: LogsTab = { id: "request logs", label: "Request Logs" };
+const AUDIT_LOGS_TAB: LogsTab = { id: "audit logs", label: "Audit Logs" };
+const DELETED_KEYS_TAB: LogsTab = { id: "deleted keys", label: "Deleted Keys" };
+const DELETED_TEAMS_TAB: LogsTab = { id: "deleted teams", label: "Deleted Teams" };
+
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
-  const [activeTab, setActiveTab] = useState("request logs");
+  const [activeTab, setActiveTab] = useState<LogsTabId>(REQUEST_LOGS_TAB.id);
+  const canViewAuditLogs = useCan("viewAuditLogs");
+  const canViewDeletedTeams = useCan("viewDeletedTeams");
 
   if (!accessToken || !token || !userRole || !userID) {
     return (
@@ -25,24 +40,17 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     );
   }
 
-  return (
-    <div className="box-border w-full overflow-x-hidden p-6">
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as string)}>
-        <TabsList variant="line">
-          <TabsTrigger value="request logs" className="flex-none">
-            Request Logs
-          </TabsTrigger>
-          <TabsTrigger value="audit logs" className="flex-none">
-            Audit Logs
-          </TabsTrigger>
-          <TabsTrigger value="deleted keys" className="flex-none">
-            Deleted Keys
-          </TabsTrigger>
-          <TabsTrigger value="deleted teams" className="flex-none">
-            Deleted Teams
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="request logs" keepMounted>
+  const tabs: LogsTab[] = [
+    REQUEST_LOGS_TAB,
+    ...(canViewAuditLogs ? [AUDIT_LOGS_TAB] : []),
+    DELETED_KEYS_TAB,
+    ...(canViewDeletedTeams ? [DELETED_TEAMS_TAB] : []),
+  ];
+
+  const renderPanel = (tabId: LogsTabId) => {
+    switch (tabId) {
+      case "request logs":
+        return (
           <RequestLogsPanel
             accessToken={accessToken}
             token={token}
@@ -50,8 +58,9 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
             userID={userID}
             isActive={activeTab === "request logs"}
           />
-        </TabsContent>
-        <TabsContent value="audit logs" keepMounted>
+        );
+      case "audit logs":
+        return (
           <AuditLogsPanel
             userID={userID}
             userRole={userRole}
@@ -60,13 +69,29 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
             isActive={activeTab === "audit logs"}
             premiumUser={premiumUser}
           />
-        </TabsContent>
-        <TabsContent value="deleted keys" keepMounted>
-          <DeletedKeysPage />
-        </TabsContent>
-        <TabsContent value="deleted teams" keepMounted>
-          <DeletedTeamsPage />
-        </TabsContent>
+        );
+      case "deleted keys":
+        return <DeletedKeysPage />;
+      case "deleted teams":
+        return <DeletedTeamsPage />;
+    }
+  };
+
+  return (
+    <div className="box-border w-full overflow-x-hidden p-6">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as LogsTabId)}>
+        <TabsList variant="line">
+          {tabs.map((tab) => (
+            <TabsTrigger key={tab.id} value={tab.id} className="flex-none">
+              {tab.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {tabs.map((tab) => (
+          <TabsContent key={tab.id} value={tab.id} keepMounted>
+            {renderPanel(tab.id)}
+          </TabsContent>
+        ))}
       </Tabs>
     </div>
   );

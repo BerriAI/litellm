@@ -1031,3 +1031,53 @@ class TestRouterQualityDeploymentMethods:
         )
         router.init_quality_router_deployment(deployment)
         assert "auto_router/quality_router/test-router" in router.quality_routers
+
+
+class TestRoutingDecisionProvenance:
+    """Every quality-router path must attach a routing_decision to its hook response,
+    including the no-user-message default path that previously recorded nothing."""
+
+    @pytest.mark.asyncio
+    async def test_quality_tier_decision(self, quality_router):
+        resp = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert resp is not None
+        decision = resp.routing_decision
+        assert decision is not None
+        assert decision["router_model_name"] == "quality-router-test"
+        assert decision["router_type"] == "quality"
+        assert decision["cause"] == "quality_tier"
+        assert decision["routed_model"] == "haiku"
+        assert decision["tier"] == "1"
+        assert isinstance(decision["score"], float)
+
+    @pytest.mark.asyncio
+    async def test_keyword_decision_carries_matched_keyword(self, keyword_router):
+        resp = await keyword_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "please write python for me"}],
+        )
+        assert resp is not None
+        decision = resp.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "keyword"
+        assert decision["matched_keyword"] == "python"
+        assert decision["routed_model"] == resp.model
+
+    @pytest.mark.asyncio
+    async def test_no_user_message_decision_is_default_fallback(self, quality_router):
+        resp = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs={},
+            messages=[{"role": "system", "content": "You are a helpful assistant."}],
+        )
+        assert resp is not None
+        decision = resp.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "default_fallback"
+        assert decision["routed_model"] == "haiku"
+        assert "tier" not in decision

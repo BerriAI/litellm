@@ -23,21 +23,34 @@ the base when behavior is genuinely different, and say so explicitly in the PR.
 
 ## Crates (exactly three — see AGENTS.md)
 
-`litellm-core` describes work; `litellm-ai-gateway` executes it; `litellm-python-bridge`
-exposes it to the Python SDK. A crate is a **layer**, not a route — add modules, not crates.
+`litellm-core` **is** the LiteLLM SDK in Rust: it makes the LLM call.
+`litellm-ai-gateway` is an HTTP/WebSocket server in front of it, and
+`litellm-python-bridge` exposes it to the Python SDK. A crate is a **layer**, not
+a route — add modules, not crates.
 
 ## Core Boundary
 
-`litellm-core` is the pure translation layer; the `litellm-ai-gateway` host executes work.
+`litellm-core` owns the whole call. The Rust equivalent of `litellm.messages()`
+is `litellm_core::messages::messages(request).await`: you call it, it does the
+provider call, and you get a typed non-streaming response back.
 
 Route-level Rust structure mirrors LiteLLM's Python responsibilities:
-- `core/src/<route>/` owns the route contract, shared types, and provider
-  template traits. For OCR, this means `core/src/ocr`.
+- `core/src/<route>/` owns the route end to end: the public entrypoint fn named
+  after the route in `mod.rs`, the request/response types (`types.rs`), the
+  provider template trait (`transformation.rs`), the provider/auth/URL
+  resolution (`prepare.rs`), the HTTP client (`client.rs`), and the handler that
+  performs the call (`handler.rs`). `core/src/messages` is the reference.
 - `core/src/providers/<provider>/<route>/transformation.rs` owns the
-  provider-specific transform. For Mistral OCR, this means
-  `core/src/providers/mistral/ocr/transformation.rs`.
-- Network execution lives in the host crate `ai-gateway` (`ai-gateway/src/io/`),
-  never inside `core`.
+  provider-specific transform. For Anthropic Messages, this means
+  `core/src/providers/anthropic/messages/transformation.rs`.
+- Handlers live in `core`, never in a host. `ai-gateway` must not contain a
+  route handler that talks to a provider; its axum route reads the HTTP request,
+  picks a deployment, and calls the `core` entrypoint. `python-bridge` marshals
+  Python objects and calls the same entrypoint.
+
+Streaming keeps the same shape: the route entrypoint has a `<route>_stream`
+variant in `core` that returns the upstream response so a host can splice it to
+its own caller; the host still owns no provider logic.
 
 Call-hook and lifecycle instrumentation, including phase timing, usage
 accumulation, and callback payload construction, always lives in `core`.
@@ -45,20 +58,30 @@ Hosts feed observed events into core and dispatch the completed payloads through
 their I/O logger; hosts must not own callback orchestration.
 
 Allowed in `core`:
-- Pure request transforms
-- Pure response transforms
-- Pure stream chunk normalization
+- The public entrypoint for a top-level LiteLLM call
+- Request/response transforms and stream chunk normalization
+- Provider resolution, auth header construction, and URL building
+- The provider HTTP call itself, through a shared reused client with connect and
+  request timeouts
 - Shared data types and validation errors
 - Deterministic token/cost helper logic
 
 Not allowed in `core`:
-- Network calls
-- Environment variable or secret reads
+- Serving HTTP: axum routes, extractors, and transport concerns stay in the host
 - Filesystem access
-- Database or cache access
-- Provider SDK signing or auth flows
+- Database access
+- Config file reading and rollout state
 - Logging callbacks, spend writes, or custom callbacks
 - Global mutable runtime state
+
+Env reads in `core` are limited to credential fallback inside a route's
+`prepare.rs` (the `env_lookup` closure), mirroring what the Python SDK does when
+no key is passed. Everything else config-shaped is resolved by the host and
+passed in.
+
+Routes still hosted in `ai-gateway` (`ocr`, `audio_transcription`, `realtime`)
+predate this rule and are being moved into `core` route modules; do not add new
+ones there, and prefer moving one when you touch it.
 
 Python owns rollout state and fallback while Rust is being introduced. Rust
 paths must be off by default until parity tests prove equivalence with Python.
@@ -93,10 +116,10 @@ the first PR:
 - Preserve Python output shape intentionally. If a field is always serialized as
   `null` for Python parity, leave a short comment explaining that parity choice.
 
-## Host I/O Rules
+## Network I/O Rules
 
-These rules apply when adding future crates or modules that execute network I/O,
-such as `ai-gateway`, router hosts, or standalone servers:
+These rules apply to every module that executes network I/O, whether it is a
+`core` route handler or a host such as `ai-gateway`:
 
 - Set connect and full-request timeouts. No unbounded waits.
 - Reuse HTTP clients; do not construct clients per request.
