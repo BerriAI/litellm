@@ -485,6 +485,70 @@ def test_generic_cost_per_token_minimax_m3_above_512k_tokens():
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock_mantle/openai.gpt-5.6-sol",
+        "bedrock_mantle/openai.gpt-5.6-terra",
+        "bedrock_mantle/openai.gpt-5.6-luna",
+    ],
+)
+def test_generic_cost_per_token_bedrock_mantle_gpt56_long_context(model):
+    """Bedrock GPT-5.6 supports a 1M context window, billed at the long-context rates above 272K."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["max_input_tokens"] == 1000000
+
+    cached_tokens = 100000
+    completion_tokens = 1000
+
+    short_prompt_tokens = 272000
+    short_usage = Usage(
+        prompt_tokens=short_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=short_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    short_prompt_cost, short_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=short_usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert round(short_prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * (short_prompt_tokens - cached_tokens)
+        + model_cost_map["cache_read_input_token_cost"] * cached_tokens,
+        10,
+    )
+    assert round(short_completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * completion_tokens, 10
+    )
+
+    long_prompt_tokens = 900000
+    long_usage = Usage(
+        prompt_tokens=long_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=long_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    long_prompt_cost, long_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=long_usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert round(long_prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token_above_272k_tokens"]
+        * (long_prompt_tokens - cached_tokens)
+        + model_cost_map["cache_read_input_token_cost_above_272k_tokens"]
+        * cached_tokens,
+        10,
+    )
+    assert round(long_completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens, 10
+    )
+
+
 def test_generic_cost_per_token_honors_non_standard_above_threshold():
     """Regression for #30344: get_model_info must keep arbitrary
     input/output_cost_per_token_above_<N>_tokens thresholds, not only the hard-coded
