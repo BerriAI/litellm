@@ -3848,11 +3848,6 @@
       "count": 1
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/SectionHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/SimpleMessageBlock.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -3889,11 +3884,6 @@
     }
   },
   "src/components/view_logs/ToolsSection/ToolItem.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/ToolsSection/ToolsSection.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
