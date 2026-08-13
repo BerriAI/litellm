@@ -1785,8 +1785,7 @@ class AmazonConverseConfig(BaseConfig):
         if not cache_details:
             return None
         tokens_by_ttl: Final = {
-            ttl: sum(detail["inputTokens"] for detail in cache_details if detail["ttl"] == ttl)
-            for ttl in ("5m", "1h")
+            ttl: sum(detail["inputTokens"] for detail in cache_details if detail["ttl"] == ttl) for ttl in ("5m", "1h")
         }
         if sum(tokens_by_ttl.values()) != cache_creation_input_tokens:
             return None
