@@ -3917,16 +3917,6 @@
       "count": 1
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/SimpleMessageBlock.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/SimpleToolCallBlock.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/TokenFlow.tsx": {
     "no-restricted-imports": {
       "count": 1
