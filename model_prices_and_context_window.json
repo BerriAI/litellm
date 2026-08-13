@@ -32799,42 +32799,6 @@
         "output_cost_per_token": 1.25e-07,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "parallel_ai/speed": {
-        "input_cost_per_request": 0.005,
-        "input_cost_per_token": 0.0,
-        "litellm_provider": "parallel_ai",
-        "mode": "chat",
-        "output_cost_per_token": 0.0,
-        "supports_response_schema": true,
-        "supports_system_messages": true
-    },
-    "parallel_ai/lite": {
-        "input_cost_per_request": 0.005,
-        "input_cost_per_token": 0.0,
-        "litellm_provider": "parallel_ai",
-        "mode": "chat",
-        "output_cost_per_token": 0.0,
-        "supports_response_schema": true,
-        "supports_system_messages": true
-    },
-    "parallel_ai/base": {
-        "input_cost_per_request": 0.01,
-        "input_cost_per_token": 0.0,
-        "litellm_provider": "parallel_ai",
-        "mode": "chat",
-        "output_cost_per_token": 0.0,
-        "supports_response_schema": true,
-        "supports_system_messages": true
-    },
-    "parallel_ai/core": {
-        "input_cost_per_request": 0.025,
-        "input_cost_per_token": 0.0,
-        "litellm_provider": "parallel_ai",
-        "mode": "chat",
-        "output_cost_per_token": 0.0,
-        "supports_response_schema": true,
-        "supports_system_messages": true
-    },
     "parallel_ai/parallel": {
         "input_cost_per_request": 0.05,
         "input_cost_per_token": 0.0,

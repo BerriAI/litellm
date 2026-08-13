@@ -234,11 +234,12 @@ def get_llm_provider(
                         custom_llm_provider = "perplexity"
                         dynamic_api_key = get_secret_str("PERPLEXITYAI_API_KEY")
                     elif endpoint == "api.parallel.ai":
+                        from litellm.llms.parallel_ai.common_utils import (
+                            resolve_parallel_ai_credentials,
+                        )
+
                         custom_llm_provider = "parallel_ai"
-                        (
-                            api_base,
-                            dynamic_api_key,
-                        ) = litellm.ParallelAIChatConfig()._get_openai_compatible_provider_info(api_base, None)
+                        api_base, dynamic_api_key = resolve_parallel_ai_credentials(api_base=api_base, api_key=None)
                     elif endpoint == "api.endpoints.anyscale.com/v1":
                         custom_llm_provider = "anyscale"
                         dynamic_api_key = get_secret_str("ANYSCALE_API_KEY")
@@ -554,11 +555,10 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.PerplexityChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "parallel_ai":
-        # parallel_ai is openai compatible, hosted at https://api.parallel.ai
-        (
-            api_base,
-            dynamic_api_key,
-        ) = litellm.ParallelAIChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        from litellm.llms.parallel_ai.common_utils import resolve_parallel_ai_credentials
+
+        # parallel_ai serves the OpenAI Responses-compatible API at https://api.parallel.ai/v1/responses
+        api_base, dynamic_api_key = resolve_parallel_ai_credentials(api_base=api_base, api_key=api_key)
     elif custom_llm_provider == "aiohttp_openai":
         return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":

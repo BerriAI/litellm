@@ -140,3 +140,50 @@ class TestParallelAIResponsesConfig:
             litellm_params=GenericLiteLLMParams(api_base="https://proxy.example.com", api_key="pk-caller"),
         )
         assert headers["Authorization"] == "Bearer pk-caller"
+
+
+class TestParallelAICompletionBridge:
+    @pytest.mark.respx()
+    def test_completion_routes_through_responses_api(self, respx_mock, monkeypatch):
+        """litellm.completion() on a mode=responses model must bridge to /v1/responses."""
+        monkeypatch.setenv("PARALLEL_API_KEY", "pk-test")
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        import litellm as litellm_module
+
+        litellm_module.model_cost = litellm_module.get_model_cost_map(url="")
+
+        respx_mock.post("https://api.parallel.ai/v1/responses").respond(
+            json={
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1700000000,
+                "model": "parallel",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "grounded answer", "annotations": []}],
+                    }
+                ],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "total_tokens": 15,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                },
+            }
+        )
+
+        response = litellm_module.completion(
+            model="parallel_ai/parallel",
+            messages=[{"role": "user", "content": "question"}],
+        )
+
+        assert response.choices[0].message.content == "grounded answer"

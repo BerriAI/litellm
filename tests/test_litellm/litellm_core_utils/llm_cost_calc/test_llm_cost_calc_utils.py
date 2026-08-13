@@ -2690,19 +2690,19 @@ def test_flat_per_request_cost_applies_once(_local_model_cost_map):
     large_usage = Usage(prompt_tokens=10_000, completion_tokens=5_000, total_tokens=15_000)
 
     small_prompt_cost, small_completion_cost = generic_cost_per_token(
-        model="parallel_ai/speed",
+        model="parallel_ai/parallel",
         usage=small_usage,
         custom_llm_provider="parallel_ai",
     )
     large_prompt_cost, large_completion_cost = generic_cost_per_token(
-        model="parallel_ai/speed",
+        model="parallel_ai/parallel",
         usage=large_usage,
         custom_llm_provider="parallel_ai",
     )
 
-    assert small_prompt_cost == pytest.approx(0.005)
+    assert small_prompt_cost == pytest.approx(0.05)
     assert small_completion_cost == 0.0
-    assert large_prompt_cost == pytest.approx(0.005)
+    assert large_prompt_cost == pytest.approx(0.05)
     assert large_completion_cost == 0.0
 
 
@@ -2715,9 +2715,9 @@ def test_flat_per_request_cost_routes_through_cost_per_token(_local_model_cost_m
     usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
 
     prompt_cost, completion_cost = cost_per_token(
-        model="parallel_ai/core",
+        model="parallel_ai/parallel",
         custom_llm_provider="parallel_ai",
         usage_object=usage,
     )
-    assert prompt_cost == pytest.approx(0.025)
+    assert prompt_cost == pytest.approx(0.05)
     assert completion_cost == 0.0

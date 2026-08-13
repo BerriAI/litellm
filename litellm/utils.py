@@ -7887,7 +7887,6 @@ class ProviderConfigManager:
             LlmProviders.OLLAMA_CHAT: (lambda: litellm.OllamaChatConfig(), False),
             LlmProviders.DEEPINFRA: (lambda: litellm.DeepInfraConfig(), False),
             LlmProviders.PERPLEXITY: (lambda: litellm.PerplexityChatConfig(), False),
-            LlmProviders.PARALLEL_AI: (lambda: litellm.ParallelAIChatConfig(), False),
             LlmProviders.MISTRAL: (lambda: litellm.MistralConfig(), False),
             LlmProviders.CODESTRAL: (lambda: litellm.MistralConfig(), False),
             LlmProviders.NVIDIA_NIM: (lambda: litellm.NvidiaNimConfig(), False),

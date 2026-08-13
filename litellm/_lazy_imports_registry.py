@@ -292,7 +292,6 @@ LLM_CONFIG_NAMES: Final = (
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
     "PerplexityChatConfig",
-    "ParallelAIChatConfig",
     "AzureOpenAIO1Config",
     "IBMWatsonXAIConfig",
     "IBMWatsonXChatConfig",
@@ -1115,10 +1114,6 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "PerplexityChatConfig": (
         ".llms.perplexity.chat.transformation",
         "PerplexityChatConfig",
-    ),
-    "ParallelAIChatConfig": (
-        ".llms.parallel_ai.chat.transformation",
-        "ParallelAIChatConfig",
     ),
     "AzureOpenAIO1Config": (
         ".llms.azure.chat.o_series_transformation",
