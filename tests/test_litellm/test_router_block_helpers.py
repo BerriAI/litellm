@@ -146,6 +146,17 @@ class TestHasReachableFallback:
         )
         assert router._has_reachable_fallback("primary", fallbacks=["fallback"]) is True
 
+    def test_chain_longer_than_max_fallbacks_fails_closed(self):
+        hops = 6
+        router = Router(
+            model_list=[_deployment("m0", "m0", blocked=True)]
+            + [_deployment(f"m{i}", f"m{i}", blocked=True) for i in range(1, hops)]
+            + [_deployment("healthy", "h0", blocked=False)],
+            max_fallbacks=hops - 2,
+        )
+        chain = [{f"m{i}": [f"m{i + 1}"]} for i in range(hops - 1)] + [{f"m{hops - 1}": ["healthy"]}]
+        assert router._has_reachable_fallback("m0", fallbacks=chain) is False
+
 
 class TestIsBlockedWithoutReachableFallback:
     def test_blocked_and_no_fallback_returns_true(self):
