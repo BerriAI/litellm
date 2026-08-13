@@ -211,7 +211,7 @@ export function GuardrailsOverview({
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-5 gap-4">
+      <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
         <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
         <MetricCard
           label="Blocked Requests"
