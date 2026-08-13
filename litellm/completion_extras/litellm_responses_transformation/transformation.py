@@ -63,6 +63,9 @@ if TYPE_CHECKING:
     from litellm.types.utils import Choices
 
 
+_REASONING_EFFORT_LEVELS: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
+
+
 class _ReasoningSummaryText(TypedDict):
     type: str
     text: str
@@ -1001,23 +1004,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         # If string is passed, map with optional summary based on flag/env var
-        if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")
-        elif reasoning_effort == "high":
-            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
-        elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")
-        elif reasoning_effort == "medium":
-            return (
-                Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
-            )
-        elif reasoning_effort == "low":
-            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
-        elif reasoning_effort == "minimal":
-            return (
-                Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
-            )
-        return None
+        if reasoning_effort not in _REASONING_EFFORT_LEVELS:
+            return None
+        if auto_summary_enabled:
+            return Reasoning(effort=reasoning_effort, summary="detailed")
+        return Reasoning(effort=reasoning_effort)
 
     def _add_web_search_tool(
         self,

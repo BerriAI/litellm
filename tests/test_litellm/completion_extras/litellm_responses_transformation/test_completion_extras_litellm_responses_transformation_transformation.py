@@ -1521,7 +1521,7 @@ def test_map_reasoning_effort_adds_summary_detailed():
     handler = LiteLLMResponsesTransformationHandler()
 
     # Test all string effort levels - DEFAULT BEHAVIOR (no summary)
-    effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
+    effort_levels = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
     # Save original flag value
     original_flag = litellm.reasoning_auto_summary
@@ -3400,3 +3400,14 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
     )
     assert chunk.choices[0].delta.tool_calls is None
     assert chunk.choices[0].finish_reason is None
+
+
+def test_map_reasoning_effort_rejects_unknown_level():
+    """An unrecognized effort must map to None so it is not forwarded upstream."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    assert handler._map_reasoning_effort("banana") is None
