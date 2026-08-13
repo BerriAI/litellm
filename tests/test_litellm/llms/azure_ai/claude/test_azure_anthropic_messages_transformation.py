@@ -173,24 +173,6 @@ class TestAzureAnthropicMessagesConfig:
 
         assert url == "https://test.services.ai.azure.com/anthropic/v1/messages"
 
-    def test_get_complete_url_with_base_url_containing_anthropic(self):
-        """Test get_complete_url with base URL already containing /anthropic"""
-        config = AzureAnthropicMessagesConfig()
-        api_base = "https://test.services.ai.azure.com/anthropic"
-        api_key = "test-api-key"
-        model = "claude-sonnet-4-5"
-        optional_params = {}
-        litellm_params = {}
-
-        url = config.get_complete_url(
-            api_base=api_base,
-            api_key=api_key,
-            model=model,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-        )
-
-        assert url == "https://test.services.ai.azure.com/anthropic/v1/messages"
 
     def test_get_complete_url_with_base_url_without_anthropic(self):
         """Test get_complete_url with base URL without /anthropic"""

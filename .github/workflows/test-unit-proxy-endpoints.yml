@@ -38,6 +38,8 @@ jobs:
         tests/test_litellm/proxy/google_endpoints
         tests/test_litellm/proxy/openai_files_endpoint
         tests/test_litellm/proxy/batches_endpoints
+        tests/test_litellm/proxy/fine_tuning_endpoints
+        tests/test_litellm/proxy/vector_store_files_endpoints
         tests/test_litellm/proxy/video_endpoints
         tests/test_litellm/proxy/response_api_endpoints
         tests/test_litellm/proxy/image_endpoints
@@ -74,4 +76,5 @@ jobs:
       workers: 4
       reruns: 2
       timeout-minutes: 60
+      job-timeout-minutes: 95
       artifact-name: proxy-server

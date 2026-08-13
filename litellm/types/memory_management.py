@@ -3,7 +3,6 @@ Pydantic models for Memory management endpoints.
 """
 
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +11,7 @@ class LiteLLM_MemoryRow(BaseModel):
     memory_id: str
     key: str
     value: str
-    metadata: Any | None = None
+    metadata: object | None = None
     user_id: str | None = None
     team_id: str | None = None
     created_at: datetime | None = None
@@ -24,7 +23,7 @@ class LiteLLM_MemoryRow(BaseModel):
 class MemoryCreateRequest(BaseModel):
     key: str = Field(..., description="Memory key (acts as the namespace in the URL).")
     value: str = Field(..., description="Memory content. Typically markdown/text for LLM context.")
-    metadata: Any | None = Field(
+    metadata: object | None = Field(
         default=None,
         description="Optional JSON metadata (tags, structured fields).",
     )
@@ -40,7 +39,7 @@ class MemoryCreateRequest(BaseModel):
 
 class MemoryUpdateRequest(BaseModel):
     value: str | None = None
-    metadata: Any | None = None
+    metadata: object | None = None
     # Only honored on create (when the row doesn't yet exist) and only for
     # PROXY_ADMIN callers — mirrors MemoryCreateRequest so admins can bootstrap
     # rows scoped to another user/team via PUT, not just POST.

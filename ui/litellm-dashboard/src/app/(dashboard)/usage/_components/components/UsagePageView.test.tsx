@@ -502,6 +502,8 @@ describe("UsagePage", () => {
     userId: "user-123",
     userEmail: "test@example.com",
     userRole: "Internal User",
+    userRoleLabel: "Internal User",
+    isViewOnly: false,
     premiumUser: true,
     disabledPersonalKeyCreation: false,
     showSSOBanner: false,
@@ -859,6 +861,27 @@ describe("UsagePage", () => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it.each(["organization", "agent"])("should not render the %s usage view for an internal user", async (usageView) => {
+    mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+    renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const usageSelect = screen.getByTestId("usage-view-select");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "team" } });
+    });
+    expect(screen.getAllByText("Entity Usage").length).toBeGreaterThan(0);
+
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: usageView } });
+    });
+    expect(screen.queryByText("Entity Usage")).not.toBeInTheDocument();
   });
 
   describe("admin user selector", () => {

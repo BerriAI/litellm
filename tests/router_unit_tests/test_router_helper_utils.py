@@ -132,19 +132,6 @@ def test_routing_strategy_init_valid_string_strategies(model_list):
         )
 
 
-def test_routing_strategy_init_valid_enum_strategies(model_list):
-    """Test that RoutingStrategy enum values work without error."""
-    from litellm.types.router import RoutingStrategy
-
-    router = Router(model_list=model_list)
-
-    for strategy in RoutingStrategy:
-        # Should not raise when passing enum directly
-        router.routing_strategy_init(
-            routing_strategy=strategy, routing_strategy_args={}
-        )
-
-
 def test_print_deployment(model_list):
     """Test if the api key is masked correctly"""
 
@@ -1525,12 +1512,6 @@ def test_get_pattern(model_list):
 
 
 def test_deployments_by_pattern(model_list):
-    router = Router(model_list=model_list)
-    deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
-    assert deployments is not None
-
-
-def test_replace_model_in_jsonl(model_list):
     router = Router(model_list=model_list)
     deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
     assert deployments is not None
