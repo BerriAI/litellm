@@ -5498,12 +5498,12 @@ class ProxyUpdateSpend:
     @staticmethod
     async def _requeue_spend_logs(
         prisma_client: PrismaClient,
-        logs_to_process: list[dict[str, object]],
+        logs_to_process: Sequence[Mapping[str, object]],
     ) -> None:
         async with prisma_client._spend_log_transactions_lock:
-            requeued: Final = logs_to_process + prisma_client.spend_log_transactions
+            requeued: Final = tuple(logs_to_process) + tuple(prisma_client.spend_log_transactions)
             dropped: Final = max(0, len(requeued) - SPEND_LOG_QUEUE_MAX_SIZE)
-            prisma_client.spend_log_transactions = requeued[dropped:]
+            prisma_client.spend_log_transactions[:] = requeued[dropped:]
         if dropped > 0:
             verbose_proxy_logger.error(
                 "Spend tracking - spend log queue is at its %d entry cap; dropped the %d oldest spend logs",
