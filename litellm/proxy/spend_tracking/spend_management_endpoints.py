@@ -2427,6 +2427,7 @@ async def ui_view_spend_logs(
                 request_id=request_id,
             )
         permitted_team_ids: list[str] | None = None
+        scope_to_caller_user = False
         if not is_request_id_lookup and not is_admin_view:
             if team_id is not None:
                 can_view_team: Final = await _can_team_member_view_log(
@@ -2440,7 +2441,6 @@ async def ui_view_spend_logs(
                         detail={"error": f"Not authorized to view team spend for team_id={team_id}"},
                     )
                 where_conditions["team_id"] = team_id
-                where_conditions.pop("user", None)
             else:
                 if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
                     try:
@@ -2451,13 +2451,20 @@ async def ui_view_spend_logs(
                     except Exception:
                         permitted_team_ids = []
                     if permitted_team_ids:
-                        where_conditions.pop("user", None)
+                        if user_id is None:
+                            where_conditions.pop("user", None)
                         where_conditions["OR"] = [
                             {"user": user_api_key_dict.user_id},
                             {"team_id": {"in": permitted_team_ids}},
                         ]
                     else:
-                        where_conditions["user"] = user_api_key_dict.user_id
+                        if user_id is None:
+                            where_conditions["user"] = user_api_key_dict.user_id
+                        else:
+                            where_conditions["AND"] = where_conditions.get("AND", []) + [
+                                {"user": user_api_key_dict.user_id}
+                            ]
+                            scope_to_caller_user = True
                     where_conditions.pop("team_id", None)
         # Calculate skip value for pagination
         skip: Final = (page - 1) * page_size
@@ -2508,6 +2515,10 @@ async def ui_view_spend_logs(
             sql_params.append(permitted_team_ids)
             p += 2
             sql_conditions.append(or_clause)
+        elif scope_to_caller_user:
+            sql_conditions.append(f'"user" = ${p}')
+            sql_params.append(user_api_key_dict.user_id)
+            p += 1
 
         if session_id is not None and isinstance(session_id, str):
             like_escaped_session_id: Final = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

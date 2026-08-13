@@ -679,6 +679,7 @@ class LiteLLMRoutes(enum.Enum):
         # permitted teams exactly like /spend/logs/ui — it belongs to the same
         # access tier, not to customer management.
         "/management/v1/spend_logs/end_users",
+        "/management/v1/spend_logs/users",
         "/cost/estimate",
     ]
 
@@ -871,12 +872,13 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session) and the end-user filter
-            # facet. The list endpoint `/spend/logs/ui` is covered via
+            # UI Logs page detail drawer (single + session) and the filter facets.
+            # The list endpoint `/spend/logs/ui` is covered via
             # spend_tracking_routes below.
             "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
             "/management/v1/spend_logs/end_users",
+            "/management/v1/spend_logs/users",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
             # Invitations).
