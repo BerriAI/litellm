@@ -1466,7 +1466,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             "gen_ai.operation.name": (
                 self._gen_ai_operation_name(kwargs) if self._gen_ai_semconv_latest_experimental else "chat"
             ),
-            "gen_ai.system": provider,
+            "gen_ai.system": self.cast_as_primitive_value_type(provider),
             "gen_ai.request.model": kwargs.get("model"),
             "gen_ai.framework": "litellm",
         }
@@ -1711,7 +1711,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             role = msg.get("role", "user")
             attrs = {
                 "event_name": "gen_ai.content.prompt",
-                "gen_ai.system": provider,
+                "gen_ai.system": self.cast_as_primitive_value_type(provider),
             }
             if role == "tool" and msg.get("id"):
                 attrs["id"] = msg["id"]
@@ -1739,7 +1739,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         for idx, choice in enumerate(response_obj.get("choices", [])):
             attrs = {
                 "event_name": "gen_ai.content.completion",
-                "gen_ai.system": provider,
+                "gen_ai.system": self.cast_as_primitive_value_type(provider),
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
             }
