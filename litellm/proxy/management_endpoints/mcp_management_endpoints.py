@@ -1099,7 +1099,9 @@ if MCP_AVAILABLE:
         """
         user_mcp_management_mode: Final = _get_user_mcp_management_mode()
 
-        def _health_entry(server: "LiteLLM_MCPServerTable") -> dict[str, Any]:
+        def _health_entry(
+            server: "LiteLLM_MCPServerTable",
+        ) -> dict[str, Any]:  # mutable-ok: the endpoint returns these entries as the JSON response body
             return {
                 "server_id": server.server_id,
                 "server_name": server.server_name,
@@ -1113,7 +1115,7 @@ if MCP_AVAILABLE:
 
         auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
 
-        server_health_map: Final[dict[str, dict[str, Any]]] = {}
+        server_health_map: Final[dict[str, dict[str, Any]]] = {}  # mutable-ok: response body
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
