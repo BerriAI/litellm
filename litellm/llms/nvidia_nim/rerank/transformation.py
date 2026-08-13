@@ -23,7 +23,7 @@ class NvidiaNimQueryObject(TypedDict):
 
 class NvidiaNimPassageObject(TypedDict, total=False):
     text: str
-    image: str
+    image: str  # writable-ok: assembled field-by-field in transform_rerank_request
 
 
 class NvidiaNimRerankRequest(TypedDict, total=False):
