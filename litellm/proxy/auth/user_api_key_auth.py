@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
+    TeamNotFoundError,
     _cache_key_object,
     _can_object_call_model,
     _check_end_user_budget,
@@ -85,6 +86,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import (
     PrismaClient,
@@ -2161,6 +2163,28 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     )
 
 
+def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseException) -> bool:
+    """Whether the token's own team fields may stand in for a team that failed to
+    resolve, without widening access.
+
+    A team that is provably gone is a definitive answer, not a degraded read, so
+    nothing may stand in for it and no setting may override that.
+
+    Otherwise the team's grant is merely unknown. A token carrying one may vouch,
+    since replaying a recorded grant cannot widen it and denying every team key
+    while the row is briefly unreadable would trade the widening for an outage. A
+    token carrying none may not: ``team_models=[]`` reads as every model and
+    ``team_blocked=False`` as unblocked. ``allow_requests_on_db_unavailable`` opts
+    back out, and is only consulted here because the failure is known by this
+    point to be a degraded read.
+    """
+    if isinstance(lookup_error, TeamNotFoundError):
+        return False
+    if valid_token.team_models:
+        return True
+    return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+
+
 @tracer.wrap()
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -2364,7 +2388,12 @@ async def _run_centralized_common_checks(
     if isinstance(team_result, BaseException):
         # Token-derived fallback only valid when a team_id is set;
         # _team_obj_from_token asserts that precondition.
-        team_object = _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id is not None else None
+        if user_api_key_auth_obj.team_id is None:
+            team_object = None
+        elif _token_can_vouch_for_team(user_api_key_auth_obj, team_result):
+            team_object = _team_obj_from_token(user_api_key_auth_obj)
+        else:
+            raise team_result
     else:
         team_object = team_result
 
