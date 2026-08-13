@@ -29,6 +29,7 @@ from litellm.constants import (
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
+    TAG_REGISTRY_MAX_SIZE,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -72,9 +73,12 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
+    TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
     get_management_object_ttl,
     object_permission_cache_key,
+    tag_cache_key,
+    tag_registry_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -161,7 +165,7 @@ class _PrismaAuthTable(Protocol[RowT_co]):
     async def find_many(
         self,
         *,
-        where: Mapping[str, object],
+        where: Mapping[str, object] | None = None,
         include: Mapping[str, object] | None = None,
         take: int | None = None,
     ) -> Sequence[RowT_co]: ...
@@ -1450,6 +1454,92 @@ async def _end_user_id_exists_in_db(
     return False
 
 
+async def _load_tag_registry(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """
+    The set of tag names that have a row in ``LiteLLM_TagTable``, cached whole.
+
+    ``None`` means the registry is unusable (DB error, or more rows than
+    ``TAG_REGISTRY_MAX_SIZE``) and callers must not filter against it. That is distinct from an
+    empty frozenset, which is the answer when no tags are registered at all and is worth caching:
+    it is what lets a request tagged with unregistered names cost zero DB reads.
+    """
+    cache_key: Final = tag_registry_cache_key()
+    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
+    if cached == TAG_REGISTRY_OVERFLOW_SENTINEL:
+        return None
+    # Memory hands back the tuple that was written; Redis round-trips it through JSON as a list.
+    if isinstance(cached, (list, tuple)):
+        return frozenset(name for name in cached if isinstance(name, str))
+
+    try:
+        registry_rows: Final = await _tag_table(TagRepository(prisma_client)).find_many(
+            take=TAG_REGISTRY_MAX_SIZE + 1,
+        )
+        if len(registry_rows) > TAG_REGISTRY_MAX_SIZE:
+            await user_api_key_cache.async_set_cache(
+                key=cache_key,
+                value=TAG_REGISTRY_OVERFLOW_SENTINEL,
+                ttl=get_management_object_ttl(user_api_key_cache),
+            )
+            return None
+        registered_names: Final = tuple(row.tag_name for row in registry_rows)
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=registered_names,
+            ttl=get_management_object_ttl(user_api_key_cache),
+        )
+        return frozenset(registered_names)
+    except Exception as e:
+        verbose_proxy_logger.debug("Error loading tag registry from database: %s", e)
+        return None
+
+
+async def _fetch_uncached_tags(
+    uncached_tags: Sequence[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
+    """
+    Rows for the tags a cache probe missed, and the cache write-back for them.
+
+    Names with no row in the registry never reach the DB, which is what keeps a request tagged
+    with free-form attribution labels from costing a query per request.
+    """
+    if not uncached_tags:
+        return ()
+
+    registry: Final = await _load_tag_registry(
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    tags_to_fetch: Final = (
+        tuple(uncached_tags) if registry is None else tuple(tag for tag in uncached_tags if tag in registry)
+    )
+    if not tags_to_fetch:
+        return ()
+
+    try:
+        db_tags: Final = await _tag_table(TagRepository(prisma_client)).find_many(
+            where={"tag_name": {"in": list(tags_to_fetch)}},
+            include={"litellm_budget_table": True},
+        )
+        fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
+        for fetched_name, fetched_obj in fetched:
+            await user_api_key_cache.async_set_cache(
+                key=tag_cache_key(fetched_name),
+                value=fetched_obj,
+                model_type=LiteLLM_TagTable,
+                ttl=get_management_object_ttl(user_api_key_cache),
+            )
+        return fetched
+    except Exception as e:
+        verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
+        return ()
+
+
 @log_db_metrics
 async def get_tag_objects_batch(
     tag_names: list[str],
@@ -1462,8 +1552,9 @@ async def get_tag_objects_batch(
     Batch fetch multiple tag objects from cache and db.
 
     Optimizes for latency by:
-    1. Fetching all cached tags in parallel
-    2. Batch fetching uncached tags in one DB query
+    1. Serving already-cached tags without touching the DB
+    2. Skipping tags that no ``LiteLLM_TagTable`` row exists for, via the cached name registry
+    3. Batch fetching the remaining uncached tags in one DB query
 
     Args:
         tag_names: List of tag names to fetch
@@ -1475,50 +1566,22 @@ async def get_tag_objects_batch(
     Returns:
         Dictionary mapping tag_name to LiteLLM_TagTable object
     """
-    if prisma_client is None:
+    if prisma_client is None or not tag_names:
         return {}
 
-    if not tag_names:
-        return {}
-
-    tag_objects: Final = dict[str, LiteLLM_TagTable]()
-    uncached_tags: Final = list[str]()
-
-    # Try to get all tags from cache first
-    for tag_name in tag_names:
-        cache_key = f"tag:{tag_name}"
-        cached_tag = await user_api_key_cache.async_get_cache(
-            key=cache_key,
-            model_type=LiteLLM_TagTable,
+    probed: Final = [
+        (
+            tag_name,
+            await user_api_key_cache.async_get_cache(key=tag_cache_key(tag_name), model_type=LiteLLM_TagTable),
         )
-        if cached_tag is not None:
-            tag_objects[tag_name] = cached_tag
-        else:
-            uncached_tags.append(tag_name)
-
-    # Batch fetch uncached tags from DB in one query
-    if uncached_tags:
-        try:
-            db_tags: Final = await _tag_table(TagRepository(prisma_client)).find_many(
-                where={"tag_name": {"in": uncached_tags}},
-                include={"litellm_budget_table": True},
-            )
-
-            # Cache and add to tag_objects
-            for db_tag in db_tags:
-                tag_name = db_tag.tag_name
-                cache_key = f"tag:{tag_name}"
-                _tag_obj = LiteLLM_TagTable.model_validate(db_tag.dict())
-                await user_api_key_cache.async_set_cache(
-                    key=cache_key,
-                    value=_tag_obj,
-                    model_type=LiteLLM_TagTable,
-                )
-                tag_objects[tag_name] = _tag_obj
-        except Exception as e:
-            verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
-
-    return tag_objects
+        for tag_name in tag_names
+    ]
+    fetched: Final = await _fetch_uncached_tags(
+        uncached_tags=tuple(tag_name for tag_name, tag_obj in probed if tag_obj is None),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return {tag_name: tag_obj for tag_name, tag_obj in (*probed, *fetched) if tag_obj is not None}
 
 
 @log_db_metrics

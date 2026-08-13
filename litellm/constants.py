@@ -1587,6 +1587,10 @@ DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL: Final = 10
 # in a single ``/{name1,name2,...}/mcp`` URL. Bounds the per-request DB / cache
 # fan-out an authenticated caller can trigger by stuffing the path with tokens.
 DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
+# Ceiling on the cached tag-name registry that keeps unregistered request tags from
+# costing a DB read per request. Deployments past this many tag rows fall back to the
+# per-request lookup rather than holding an unbounded name set in every worker.
+TAG_REGISTRY_MAX_SIZE: Final = 5000
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST: Final = [

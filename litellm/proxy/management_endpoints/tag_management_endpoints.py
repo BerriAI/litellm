@@ -21,6 +21,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    tag_cache_key,
+    tag_registry_cache_key,
+)
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
@@ -131,6 +135,30 @@ def _table(
 ) -> object:
     prisma_table: Final[object] = repository.table
     return prisma_table
+
+
+async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
+    """
+    Every endpoint that mutates a tag row must call this: auth serves tags cache-first with no
+    freshness check, so without invalidation a deleted tag keeps its budget enforced, and a newly
+    created one stays invisible to the cached name registry, until the TTL expires. Best-effort:
+    the DB write has already committed, so a cache backend error must not fail the endpoint.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+        publish_auth_cache_invalidation,
+    )
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    for cache_key in cache_keys:
+        try:
+            await user_api_key_cache.async_delete_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
+            verbose_proxy_logger.warning(
+                "Failed to evict cached tag entry %s; a stale tag may be served until its TTL expires: %s",
+                cache_key,
+                e,
+            )
+        await publish_auth_cache_invalidation(cache_key=cache_key)
 
 
 async def _get_internal_user_api_keys(
@@ -294,6 +322,8 @@ async def new_tag(
             }
         )
 
+        await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
+
         # Update models with new tag
         if tag.models:
             tasks: Final = []
@@ -439,6 +469,8 @@ async def update_tag(
             where={"tag_name": tag.name},
             data=update_data,
         )
+
+        await _evict_tag_cache_keys((tag_cache_key(tag.name),))
 
         # Build response
         tag_config: Final = TagConfig(
@@ -688,6 +720,8 @@ async def delete_tag(
 
         # Delete tag from database
         await _table(TagRepository(prisma_client)).delete(where={"tag_name": data.name})
+
+        await _evict_tag_cache_keys((tag_cache_key(data.name), tag_registry_cache_key()))
 
         return {"message": f"Tag {data.name} deleted successfully"}
     except Exception as e:

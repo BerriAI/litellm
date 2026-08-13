@@ -359,6 +359,7 @@ from litellm.proxy.common_utils.timezone_utils import (
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
+    tag_cache_key,
 )
 from litellm.proxy.config_resolvers import resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
@@ -2789,7 +2790,7 @@ async def _increment_end_user_and_tag_spend_counters(
         seen_tags.add(tag_name)
         await _init_and_increment_unreserved_spend_counter(
             counter_key=f"spend:tag:{tag_name}",
-            source_cache_key=f"tag:{tag_name}",
+            source_cache_key=tag_cache_key(tag_name),
             increment=response_cost,
             reserved_counter_keys=reserved_counter_keys,
         )
@@ -3220,7 +3221,7 @@ async def update_cache(
                 if not tag_name or not isinstance(tag_name, str):
                     continue
 
-                cache_key = f"tag:{tag_name}"
+                cache_key = tag_cache_key(tag_name)
                 # Fetch the existing tag object from cache
                 cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
                 if cached_tag is None:

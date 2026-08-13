@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(
@@ -51,9 +52,17 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+from litellm.constants import (
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    TAG_REGISTRY_MAX_SIZE,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    TAG_REGISTRY_OVERFLOW_SENTINEL,
+    UserApiKeyCache,
+    tag_cache_key,
+    tag_registry_cache_key,
+)
 from litellm.utils import get_utc_datetime
 
 
@@ -2026,22 +2035,282 @@ async def test_get_tag_objects_batch():
     assert tag_objects["uncached-2"].spend == 40.0
     assert tag_objects["uncached-3"].spend == 50.0
 
-    # Verify DB was called ONCE with all 3 uncached tags
-    mock_prisma.db.litellm_tagtable.find_many.assert_called_once()
-    call_args = mock_prisma.db.litellm_tagtable.find_many.call_args
-    assert call_args.kwargs["where"]["tag_name"]["in"] == [
+    # Verify the DB saw exactly the registry query plus ONE batch query for all 3 uncached tags
+    assert mock_prisma.db.litellm_tagtable.find_many.call_count == 2
+    registry_call, batch_call = mock_prisma.db.litellm_tagtable.find_many.call_args_list
+    assert "where" not in registry_call.kwargs
+    assert batch_call.kwargs["where"]["tag_name"]["in"] == [
         "uncached-1",
         "uncached-2",
         "uncached-3",
     ]
 
-    # Verify uncached tags were cached after fetching
-    assert mock_cache.async_set_cache.call_count == 3
+    # Verify uncached tags were cached after fetching, alongside the tag-name registry
     cache_calls = mock_cache.async_set_cache.call_args_list
     cached_keys = [call.kwargs["key"] for call in cache_calls]
-    assert "tag:uncached-1" in cached_keys
-    assert "tag:uncached-2" in cached_keys
-    assert "tag:uncached-3" in cached_keys
+    assert sorted(cached_keys) == [
+        "tag:uncached-1",
+        "tag:uncached-2",
+        "tag:uncached-3",
+        "tag_registry",
+    ]
+    # Every write is TTL-bounded; an unbounded tag entry would outlive budget updates.
+    assert all("ttl" in call.kwargs for call in cache_calls)
+
+
+def _tag_registry_row(tag_name: str):
+    """A row as the names-only registry query sees it: only ``tag_name`` is read off it."""
+    return SimpleNamespace(tag_name=tag_name)
+
+
+def _tag_db_row(tag_name: str, max_budget=None):
+    row = MagicMock()
+    row.tag_name = tag_name
+    budget = None if max_budget is None else {"max_budget": max_budget}
+    row.dict = MagicMock(
+        return_value={
+            "tag_name": tag_name,
+            "spend": 0.0,
+            "models": [],
+            "litellm_budget_table": budget,
+        }
+    )
+    return row
+
+
+def _registry_calls(find_many):
+    return [call for call in find_many.call_args_list if "where" not in call.kwargs]
+
+
+def _batch_calls(find_many):
+    return [call for call in find_many.call_args_list if "where" in call.kwargs]
+
+
+@pytest.mark.asyncio
+async def test_get_tag_objects_batch_never_queries_db_for_unregistered_tags():
+    """
+    Regression: a request tag with no LiteLLM_TagTable row must not cost a DB read per request.
+
+    Cost-attribution tags are free-form, so most carry no tag row. Before the cached name
+    registry, every request carrying one ran its own Postgres find_many, forever, which is what
+    saturated a customer's Prisma pool.
+    """
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(
+        return_value=[_tag_registry_row("some-other-tag")]
+    )
+    cache = UserApiKeyCache()
+
+    first = await get_tag_objects_batch(
+        tag_names=["unregistered-tag"],
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert first == {}
+
+    # The only query is the names-only registry fetch; the tag itself is never looked up.
+    mock_prisma.db.litellm_tagtable.find_many.assert_called_once_with(
+        take=TAG_REGISTRY_MAX_SIZE + 1
+    )
+
+    second = await get_tag_objects_batch(
+        tag_names=["unregistered-tag"],
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert second == {}
+    assert mock_prisma.db.litellm_tagtable.find_many.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_tag_objects_batch_fetches_only_registered_uncached_tags():
+    """Cached tags skip the DB, registered ones are batch-fetched, unregistered ones are dropped."""
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=tag_cache_key("cached-tag"),
+        value=LiteLLM_TagTable(tag_name="cached-tag", spend=7.0, models=[]),
+        model_type=LiteLLM_TagTable,
+    )
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            return [_tag_registry_row("cached-tag"), _tag_registry_row("registered-tag")]
+        requested = kwargs["where"]["tag_name"]["in"]
+        return [_tag_db_row(name) for name in requested if name == "registered-tag"]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+
+    tag_objects = await get_tag_objects_batch(
+        tag_names=["cached-tag", "registered-tag", "unregistered-tag"],
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+
+    assert sorted(tag_objects) == ["cached-tag", "registered-tag"]
+    assert tag_objects["cached-tag"].spend == 7.0
+
+    batch_calls = _batch_calls(mock_prisma.db.litellm_tagtable.find_many)
+    assert len(batch_calls) == 1
+    assert batch_calls[0].kwargs["where"]["tag_name"]["in"] == ["registered-tag"]
+
+
+@pytest.mark.asyncio
+async def test_get_tag_objects_batch_caches_empty_registry():
+    """An empty tag table is a valid registry answer and must be cached, not re-queried."""
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+    cache = UserApiKeyCache()
+
+    assert (
+        await get_tag_objects_batch(
+            tag_names=["tag-a", "tag-b"],
+            prisma_client=mock_prisma,
+            user_api_key_cache=cache,
+        )
+        == {}
+    )
+    # "No tags registered" is a cached answer, not a cache miss (which would be None).
+    cached_registry = await cache.async_get_cache(key=tag_registry_cache_key())
+    assert cached_registry is not None
+    assert tuple(cached_registry) == ()
+
+    assert (
+        await get_tag_objects_batch(
+            tag_names=["tag-a", "tag-b"],
+            prisma_client=mock_prisma,
+            user_api_key_cache=cache,
+        )
+        == {}
+    )
+    assert mock_prisma.db.litellm_tagtable.find_many.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_tag_objects_batch_registry_db_error_falls_back_to_per_tag_fetch():
+    """
+    A registry query failure must not disable tag budgets for a whole TTL window.
+
+    Nothing is cached, the per-tag fetch runs as it did before the registry existed, and the
+    next request retries the registry.
+    """
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            raise Exception("registry query failed")
+        requested = kwargs["where"]["tag_name"]["in"]
+        return [_tag_db_row(name) for name in requested]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    cache = UserApiKeyCache()
+
+    first = await get_tag_objects_batch(
+        tag_names=["tag-a"],
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert list(first) == ["tag-a"]
+    assert await cache.async_get_cache(key=tag_registry_cache_key()) is None
+
+    second = await get_tag_objects_batch(
+        tag_names=["tag-b"],
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert list(second) == ["tag-b"]
+    assert len(_registry_calls(mock_prisma.db.litellm_tagtable.find_many)) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_tag_objects_batch_oversized_registry_falls_back_and_stops_refetching():
+    """Past the cap the registry is unusable: keep the old per-tag path, but stop rebuilding it."""
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    oversized = [
+        _tag_registry_row(f"tag-{index}") for index in range(TAG_REGISTRY_MAX_SIZE + 1)
+    ]
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            return oversized
+        return [_tag_db_row(name) for name in kwargs["where"]["tag_name"]["in"]]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    cache = UserApiKeyCache()
+
+    first = await get_tag_objects_batch(
+        tag_names=["tag-a"],
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert list(first) == ["tag-a"]
+    assert (
+        await cache.async_get_cache(key=tag_registry_cache_key())
+        == TAG_REGISTRY_OVERFLOW_SENTINEL
+    )
+
+    second = await get_tag_objects_batch(
+        tag_names=["tag-b"],
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+    assert list(second) == ["tag-b"]
+
+    find_many = mock_prisma.db.litellm_tagtable.find_many
+    assert len(_registry_calls(find_many)) == 1
+    assert [call.kwargs["where"]["tag_name"]["in"] for call in _batch_calls(find_many)] == [
+        ["tag-a"],
+        ["tag-b"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tag_max_budget_check_still_enforces_registered_tag_over_budget():
+    """The registry filter must not swallow a real tag: an over-budget tag still raises."""
+    from litellm.proxy.utils import ProxyLogging
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            return [_tag_registry_row("paid-tag")]
+        return [
+            _tag_db_row(name, max_budget=1.0)
+            for name in kwargs["where"]["tag_name"]["in"]
+        ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+
+    async def mock_get_current_spend(
+        counter_key, fallback_spend, max_budget=None, **kwargs
+    ):
+        if counter_key == "spend:tag:paid-tag":
+            return 1.5
+        return fallback_spend
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _tag_max_budget_check(
+                request_body={"metadata": {"tags": ["paid-tag", "unregistered-tag"]}},
+                prisma_client=mock_prisma,
+                user_api_key_cache=UserApiKeyCache(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+        assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.entity_id == "paid-tag"
+
+    # The unregistered tag alongside it never reached the DB.
+    batch_calls = _batch_calls(mock_prisma.db.litellm_tagtable.find_many)
+    assert [call.kwargs["where"]["tag_name"]["in"] for call in batch_calls] == [["paid-tag"]]
 
 
 @pytest.mark.asyncio

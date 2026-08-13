@@ -24,6 +24,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.user_api_key_cache import tag_cache_key
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 
@@ -502,7 +503,7 @@ async def _get_tag_budget_counters(
         counters.append(
             _BudgetCounter(
                 counter_key=f"spend:tag:{tag_name}",
-                source_cache_key=f"tag:{tag_name}",
+                source_cache_key=tag_cache_key(tag_name),
                 max_budget=max_budget,
                 fallback_spend=_to_float(_get_value(tag_object, "spend")) or 0.0,
                 entity_type="Tag",

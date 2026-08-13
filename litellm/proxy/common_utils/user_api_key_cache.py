@@ -170,6 +170,32 @@ def object_permission_cache_key(object_permission_id: str) -> str:
     return f"object_permission_id:{object_permission_id}"
 
 
+#: Value cached under ``tag_registry_cache_key`` when the tag table holds more than
+#: ``TAG_REGISTRY_MAX_SIZE`` rows, so the name set is not worth holding per worker. Lives beside
+#: the key builder because it is part of the same cache protocol: a reader that knows the key
+#: must know this value means "registry unusable, fall back to the per-tag lookup".
+TAG_REGISTRY_OVERFLOW_SENTINEL: Final = "__tag_registry_overflow__"
+
+
+def tag_cache_key(tag_name: str) -> str:
+    """Cache key one tag row is stored under.
+
+    Lives here rather than next to any one owner because five modules read or write it: auth
+    reads it per request, spend tracking and the budget reset job write through it, and the
+    format drifting between them means a spend update that silently lands on nobody's key.
+    """
+    return f"tag:{tag_name}"
+
+
+def tag_registry_cache_key() -> str:
+    """Cache key for the set of tag names that exist in ``LiteLLM_TagTable``.
+
+    Request tags are free-form attribution labels, so most carry no tag row. Without this set a
+    request tagged with an unregistered name re-queries Postgres on every single request, forever.
+    """
+    return "tag_registry"
+
+
 def get_management_object_ttl(cache: DualCache) -> float:
     """
     In-memory TTL for management-object cache writes (keys, teams, users, budgets, ...).
