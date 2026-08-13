@@ -14,6 +14,10 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useInfiniteModelInfo: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
+  useInfiniteUsers: vi.fn(),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers", () => ({
   useInfiniteSpendLogEndUsers: vi.fn(),
 }));
@@ -21,6 +25,7 @@ vi.mock("@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers", () => ({
 import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 
 const emptyInfiniteQuery = {
   data: { pages: [], pageParams: [] },
@@ -32,10 +37,16 @@ const emptyInfiniteQuery = {
 
 const LOGS_WINDOW = { start_date: "2026-07-23 00:00:00", end_date: "2026-07-24 00:00:00" };
 
-function renderFilters(filters: Record<string, string> = {}) {
+function renderFilters(filters: Record<string, string> = {}, showUserIdFilter = true) {
   const set = vi.fn();
   renderWithProviders(
-    <RequestLogsFilters get={(id: string) => filters[id]} set={set} teams={[]} logsWindow={LOGS_WINDOW} />,
+    <RequestLogsFilters
+      get={(id: string) => filters[id]}
+      set={set}
+      teams={[]}
+      logsWindow={LOGS_WINDOW}
+      showUserIdFilter={showUserIdFilter}
+    />,
   );
   return { set };
 }
@@ -50,6 +61,9 @@ describe("RequestLogsFilters", () => {
     vi.mocked(useInfiniteModelInfo).mockReturnValue(
       emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteModelInfo>,
     );
+    vi.mocked(useInfiniteUsers).mockReturnValue(
+      emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteUsers>,
+    );
     vi.mocked(useInfiniteSpendLogEndUsers).mockReturnValue(
       emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteSpendLogEndUsers>,
     );
@@ -62,6 +76,7 @@ describe("RequestLogsFilters", () => {
       "Team ID",
       "Status",
       "Key Alias",
+      "User ID",
       "End User",
       "Error Code",
       "Error Message",
@@ -72,6 +87,59 @@ describe("RequestLogsFilters", () => {
     ]) {
       expect(await screen.findByText(label)).toBeInTheDocument();
     }
+  });
+
+  it("places User ID between Key Alias and End User", async () => {
+    renderFilters();
+
+    const labels = ["Key Alias", "User ID", "End User"].map((label) => screen.getByText(label));
+    expect(labels[0].compareDocumentPosition(labels[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(labels[1].compareDocumentPosition(labels[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("selects a user by display name while storing the user ID filter", async () => {
+    vi.mocked(useInfiniteUsers).mockReturnValue({
+      ...emptyInfiniteQuery,
+      data: {
+        pages: [
+          {
+            users: [{ user_id: "user-1", user_alias: "Alice", user_email: "alice@example.com" }],
+            page: 1,
+            page_size: 50,
+            total: 1,
+            total_pages: 1,
+          },
+        ],
+        pageParams: [1],
+      },
+    } as unknown as ReturnType<typeof useInfiniteUsers>);
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    await user.click(await screen.findByPlaceholderText("Search an internal user"));
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("alice@example.com | User ID: user-1")).toBeInTheDocument();
+    await user.click(screen.getByText("Alice"));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.USER_ID, "user-1");
+  });
+
+  it("pushes the User ID picker query to the paginated user lookup", async () => {
+    const user = userEvent.setup();
+    renderFilters();
+
+    const input = await screen.findByPlaceholderText("Search an internal user");
+    await user.click(input);
+    await user.type(input, "alice@example.com");
+
+    await waitFor(() => expect(useInfiniteUsers).toHaveBeenCalledWith(50, "alice@example.com"));
+  });
+
+  it("does not show or query the User ID filter for non-admin request logs", () => {
+    renderFilters({}, false);
+
+    expect(screen.queryByText("User ID")).not.toBeInTheDocument();
+    expect(useInfiniteUsers).not.toHaveBeenCalled();
   });
 
   it("scopes the Key Alias lookup to the selected team", async () => {
@@ -164,7 +232,15 @@ describe("RequestLogsFilters", () => {
 
   it("scopes the End User lookup to the window the logs table is showing", async () => {
     const otherWindow = { start_date: "2026-01-01 00:00:00", end_date: "2026-01-02 00:00:00" };
-    renderWithProviders(<RequestLogsFilters get={() => undefined} set={vi.fn()} teams={[]} logsWindow={otherWindow} />);
+    renderWithProviders(
+      <RequestLogsFilters
+        get={() => undefined}
+        set={vi.fn()}
+        teams={[]}
+        logsWindow={otherWindow}
+        showUserIdFilter
+      />,
+    );
 
     await waitFor(() => expect(useInfiniteSpendLogEndUsers).toHaveBeenCalledWith(otherWindow, 50, undefined));
   });

@@ -31,6 +31,7 @@ interface RequestLogsTableProps {
   onSessionClick: (sessionId: string) => void;
   teams: Team[];
   logsWindow: LogsWindow;
+  showUserIdFilter: boolean;
   toolbarChildren?: ReactNode;
 }
 
@@ -69,6 +70,7 @@ export function RequestLogsTable({
   onSessionClick,
   teams,
   logsWindow,
+  showUserIdFilter,
   toolbarChildren,
 }: RequestLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -122,7 +124,15 @@ export function RequestLogsTable({
             title="Filters"
             description="Narrow down request logs"
           >
-            {({ get, set }) => <RequestLogsFilters get={get} set={set} teams={teams} logsWindow={logsWindow} />}
+            {({ get, set }) => (
+              <RequestLogsFilters
+                get={get}
+                set={set}
+                teams={teams}
+                logsWindow={logsWindow}
+                showUserIdFilter={showUserIdFilter}
+              />
+            )}
           </DataTableFilterDrawer>
         </>
       )}
