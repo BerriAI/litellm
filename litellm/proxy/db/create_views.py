@@ -1,8 +1,19 @@
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from litellm import verbose_logger
 
 _db = Any
+
+
+class SupportsExecuteRaw(Protocol):
+    """The one database operation create_view_tolerating_race needs.
+
+    Narrower than the `_db = Any` the rest of this module still uses, so the
+    helper's contract is checkable at its call sites without retyping every
+    function here.
+    """
+
+    async def execute_raw(self, query: str, *args: object) -> int: ...
 
 # Markers that indicate a view/relation does not yet exist in the database.
 # Keeping these in one place avoids repeating the check across all view blocks
@@ -15,7 +26,9 @@ _VIEW_NOT_FOUND_MARKERS: Final = ("does not exist", "no such table", "undefined 
 _VIEW_ALREADY_EXISTS_MARKERS: Final = ("already exists", "duplicate object", "duplicate table")
 
 
-async def create_view_tolerating_race(db: _db, view_name: str, ddl: str) -> None:
+async def create_view_tolerating_race(
+    db: SupportsExecuteRaw, view_name: str, ddl: str
+) -> None:
     """
     Create a view, treating "a concurrent creator won" as success.
 
