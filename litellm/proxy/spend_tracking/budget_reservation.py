@@ -144,6 +144,16 @@ async def _apply_over_budget_reservation_policy(
     )
 
 
+_UNBILLED_ROUTES: Final[frozenset[str]] = frozenset({"/models", "/v1/models", "/utils/token_counter"})
+_UNBILLED_ROUTE_SUFFIXES: Final[tuple[str, ...]] = ("/v1/messages/count_tokens", ":countTokens")
+
+
+def _is_unbilled_route(route: str) -> bool:
+    """Routes that never emit a cost-tracking callback. Reserving budget for them
+    is a permanent leak: nothing ever reconciles or releases the reservation."""
+    return route in _UNBILLED_ROUTES or route.endswith(_UNBILLED_ROUTE_SUFFIXES)
+
+
 async def reserve_budget_for_request(
     request_body: dict,
     route: str,
@@ -161,7 +171,7 @@ async def reserve_budget_for_request(
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
-    if route in {"/models", "/v1/models", "/utils/token_counter"}:
+    if _is_unbilled_route(route):
         return None
     if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
