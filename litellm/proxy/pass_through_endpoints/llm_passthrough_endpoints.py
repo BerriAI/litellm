@@ -1598,23 +1598,35 @@ async def _prepare_vertex_auth_headers(
         else:
             raise ValueError("No vertex credentials found")
 
-        _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(
-            credentials=vertex_credentials_str,
-            project_id=vertex_project,
-            custom_llm_provider="vertex_ai_beta",
-        )
+        try:
+            _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(
+                credentials=vertex_credentials_str,
+                project_id=vertex_project,
+                custom_llm_provider="vertex_ai_beta",
+            )
 
-        auth_header, _ = vertex_llm_base._get_token_and_url(
-            model="",
-            auth_header=_auth_header,
-            gemini_api_key=None,
-            vertex_credentials=vertex_credentials_str,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            stream=False,
-            custom_llm_provider="vertex_ai_beta",
-            api_base="",
-        )
+            auth_header, _ = vertex_llm_base._get_token_and_url(
+                model="",
+                auth_header=_auth_header,
+                gemini_api_key=None,
+                vertex_credentials=vertex_credentials_str,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                stream=False,
+                custom_llm_provider="vertex_ai_beta",
+                api_base="",
+            )
+        except Exception as e:
+            raise ProxyException(
+                message=(
+                    f"Failed to get a Google access token for project={vertex_project} + location={vertex_location}: {e}. "
+                    "Set `vertex_credentials` on the deployment marked `use_in_pass_through: true`, or on "
+                    "`default_vertex_config` / `DEFAULT_GOOGLE_APPLICATION_CREDENTIALS`."
+                ),
+                type=ProxyErrorTypes.auth_error,
+                param="vertex_credentials",
+                code=401,
+            ) from e
 
         # Use allowlist approach - only forward specific safe headers
         headers = get_vertex_ai_allowed_incoming_headers(request)

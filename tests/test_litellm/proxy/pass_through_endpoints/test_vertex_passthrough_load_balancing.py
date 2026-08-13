@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from google.auth.exceptions import DefaultCredentialsError
 
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _base_vertex_proxy_route,
@@ -344,6 +345,55 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
 
         # Verify that headers_passed_through is False (since we have credentials)
         assert headers_passed_through is False
+
+
+@pytest.mark.asyncio
+async def test_vertex_passthrough_credential_failure_raises_auth_error():
+    """
+    A project/location configured for pass-through without usable Google credentials used to
+    bubble google.auth errors out of the route, so callers only saw an opaque 500
+    {"error": {"message": "Internal server error"}} with no hint about what to configure.
+    """
+    from starlette.datastructures import Headers
+
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _prepare_vertex_auth_headers,
+    )
+
+    mock_request = MagicMock()
+    mock_request.headers = Headers({"authorization": "Bearer sk-litellm-key"})
+    mock_request.state._cached_headers = None
+
+    mock_vertex_credentials = MagicMock()
+    mock_vertex_credentials.vertex_project = "test-project"
+    mock_vertex_credentials.vertex_location = "us-central1"
+    mock_vertex_credentials.vertex_credentials = None
+
+    with patch.object(
+        VertexBase,
+        "_ensure_access_token_async",
+        new_callable=AsyncMock,
+        side_effect=DefaultCredentialsError("Your default credentials were not found"),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await _prepare_vertex_auth_headers(
+                request=mock_request,
+                vertex_credentials=mock_vertex_credentials,
+                router_credentials=None,
+                vertex_project="test-project",
+                vertex_location="us-central1",
+                base_target_url="https://us-central1-aiplatform.googleapis.com",
+                get_vertex_pass_through_handler=MagicMock(),
+            )
+
+    assert exc_info.value.code == "401"
+    assert exc_info.value.type == ProxyErrorTypes.auth_error.value
+    assert "test-project" in exc_info.value.message
+    assert "us-central1" in exc_info.value.message
+    assert "vertex_credentials" in exc_info.value.message
+    assert "Your default credentials were not found" in exc_info.value.message
 
 
 @pytest.mark.asyncio
