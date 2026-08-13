@@ -171,6 +171,7 @@ try:
     import orjson
     import yaml
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -344,6 +345,12 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.proxy.common_utils.scheduled_job_stagger import (
+    apply_scheduled_job_stagger,
+    attach_job_timing_logger,
+    parse_stagger_settings,
+    stagger_trigger,
+)
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
@@ -460,6 +467,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
     _deduplicate_litellm_router_models,
+    live_model_ids_snapshot,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
@@ -835,6 +843,22 @@ def cleanup_router_config_variables():
     health_check_interval = None
     health_check_concurrency = None
     prisma_client = None
+
+
+async def _flush_spend_logs_queue_on_shutdown() -> None:
+    if prisma_client is None:
+        return
+
+    try:
+        from litellm.proxy.utils import drain_spend_logs_queue
+
+        await drain_spend_logs_queue(
+            prisma_client=prisma_client,
+            db_writer_client=db_writer_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
+        verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
 async def proxy_shutdown_event():
@@ -1246,6 +1270,8 @@ async def proxy_startup_event(app: FastAPI):
             await prisma_client.stop_db_health_watchdog_task()
         except Exception as e:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
+
+    await _flush_spend_logs_queue_on_shutdown()
 
     await proxy_config.stop_config_sync_subscriber()
 
@@ -2159,6 +2185,15 @@ experimental = False
 #### GLOBAL VARIABLES ####
 llm_router: Router | None = None
 llm_model_list: list | None = None
+# Serializes every model reconcile (ProxyConfig.add_deployment and clear_cache) so the
+# read-modify-write of llm_router above is atomic. Without it, two concurrent model
+# writes each reconcile the router against their OWN db snapshot, and the one holding
+# the older snapshot evicts the deployment the newer one just added -- the db keeps the
+# row, this pod stops serving it. Control-plane only (model create/update/delete and
+# the config-sync tick), never on a completion path, so the serialization is free.
+# Module-level rather than per-ProxyConfig because llm_router is a module global and a
+# second ProxyConfig instance must not get its own independent lock over it.
+MODEL_RECONCILE_LOCK: Final = asyncio.Lock()
 general_settings: dict = {}
 config_passthrough_endpoints: list[dict[str, Any]] | None = None
 log_file: Final = "api_log.json"
@@ -6142,10 +6177,17 @@ class ProxyConfig:
                 retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
                 try:
                     interval_seconds: Final = duration_in_seconds(retention_interval)
+                    # this runs against a started scheduler, which the startup stagger sweep
+                    # cannot reach, so the offset is applied here or the job reconverges across
+                    # replicas the first time an admin edits the retention settings
                     scheduler.add_job(
                         spend_log_cleanup.cleanup_old_spend_logs,
-                        "interval",
-                        seconds=interval_seconds + random.randint(0, 60),
+                        stagger_trigger(
+                            job_id="spend_log_cleanup_job",
+                            trigger=IntervalTrigger(seconds=interval_seconds),
+                            period_seconds=interval_seconds,
+                            settings=parse_stagger_settings(general_settings),
+                        ),
                         args=[prisma_client],
                         id="spend_log_cleanup_job",
                         replace_existing=True,
@@ -6442,16 +6484,37 @@ class ProxyConfig:
         self,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
-    ) -> frozenset[str] | None:
+    ) -> ReconcileOutcome:
         """
         - Check db for new models
         - Check if model id's in router already
         - If not, add to router
 
-        Returns the ids the db + config say should be served after the reconcile, or
-        None when no reconcile ran. Callers that judge their own reload need it to tell
-        a deliberate eviction from a deployment that went missing.
+        Serialized against every other model reconcile by MODEL_RECONCILE_LOCK, because
+        the work below is a read-modify-write of the shared ``llm_router`` global: it
+        reads the db into a snapshot and then makes the router match that snapshot. Two
+        of those interleaving is not a lost update but an eviction -- the request whose
+        snapshot predates the other's commit reconciles the newer model *out* of the
+        router, since _delete_deployment removes every live deployment absent from the
+        snapshot it was handed. The model stays in the db and this pod stops serving it
+        until some later reload puts it back.
+
+        Returns what the reconcile saw, captured before the lock is released so a
+        caller's verdict cannot be corrupted by the next reconcile's own in-flight
+        window. See ReconcileOutcome.
         """
+        async with MODEL_RECONCILE_LOCK:
+            return await self._add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+
+    async def _add_deployment_locked(
+        self,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+    ) -> ReconcileOutcome:
+        """add_deployment's body, minus the locking. MODEL_RECONCILE_LOCK MUST already
+        be held. Split out for the one caller that has to hold the lock across more than
+        this reconcile -- clear_cache, which un-serves every db model before calling it
+        and would deadlock on a re-acquire."""
         global llm_router, llm_model_list, master_key, general_settings
 
         still_desired_ids: frozenset[str] | None = None
@@ -6494,7 +6557,12 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
 
-        return still_desired_ids
+        # Read while the lock is still held: once it is released the next reconcile can
+        # begin, and clear_cache's leading wipe would make this look like a mass drop.
+        return ReconcileOutcome(
+            still_desired=still_desired_ids,
+            live_after=None if still_desired_ids is None else live_model_ids_snapshot(),
+        )
 
     def start_config_sync_subscriber(
         self,
@@ -7865,8 +7933,17 @@ def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response: object
     # keepalive_seconds is operator-only unless the deployment explicitly opts in:
     # a client can't unilaterally enable heartbeats (and the LB-idle-timeout
     # evasion that comes with them) for a deployment that never configured this.
+    # When neither the request nor the deployment sets a value, the operator's
+    # global `litellm_settings.sse_keepalive_ping_interval_seconds` applies; a
+    # deployment's explicit `keepalive_seconds: 0` above still hard-disables it.
     client_supplied: Final = request_data.get("keepalive_seconds") if allow_client_override else None
-    raw: Final = client_supplied if client_supplied is not None else deployment_raw
+    raw: Final = (
+        client_supplied
+        if client_supplied is not None
+        else deployment_raw
+        if deployment_raw is not None
+        else litellm.sse_keepalive_ping_interval_seconds
+    )
     try:
         value: Final = float(raw) if isinstance(raw, (int, float, str)) else 0.0
     except ValueError:
@@ -7977,18 +8054,19 @@ async def async_data_generator(
 
         # A stream can start on a deployment with keepalive off and fall back
         # mid-stream to one that enables it: only skip wrapping altogether when
-        # there's no router to ever fall back through in the first place (in
-        # which case _resolve_keepalive_seconds can never return non-zero for
-        # any chunk of this stream), not merely because the first chunk's
-        # deployment happens to start with it off.
+        # there's no router to ever fall back through AND the resolved interval
+        # (including the global sse_keepalive_ping_interval_seconds fallback)
+        # starts disabled, not merely because the first chunk's deployment
+        # happens to start with it off.
         resolve_keepalive_seconds: Final = _make_keepalive_resolver(request_data)
+        initial_keepalive_seconds: Final = resolve_keepalive_seconds(response)
         stream_source: Final = (
             _iter_with_keepalive(
                 stream_iterator.__aiter__(),
                 resolve_keepalive_seconds,
-                resolve_keepalive_seconds(response),
+                initial_keepalive_seconds,
             )
-            if llm_router is not None
+            if llm_router is not None or initial_keepalive_seconds > 0
             else stream_iterator
         )
 
@@ -8671,14 +8749,14 @@ class ProxyStartupEvent:
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
 
-            # Start background task to monitor spend logs queue size
-            asyncio.create_task(
+            monitor_task: Final = asyncio.create_task(
                 _monitor_spend_logs_queue(
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,
                     proxy_logging_obj=proxy_logging_obj,
                 )
             )
+            prisma_client.spend_logs_queue_monitor_task = monitor_task  # rebind-ok: the client owns its monitor handle
 
         ### ADD NEW MODELS ###
         store_model_in_db = get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
@@ -8930,6 +9008,14 @@ class ProxyStartupEvent:
         # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
         # Do NOT reset job times to "now" as this can trigger the memory leak
         # The misfire_grace_time and coalesce settings will handle any missed runs properly
+
+        # Every job above anchors on this process's start instant, so without a phase offset
+        # they all fire together, on every replica the rollout brought up at the same time
+        attach_job_timing_logger(scheduler)
+        apply_scheduled_job_stagger(
+            scheduler=scheduler,
+            settings=parse_stagger_settings(general_settings),
+        )
 
         # Start the scheduler immediately without processing backlogs
         scheduler.start(paused=False)
@@ -11858,6 +11944,8 @@ def _add_team_models_to_all_models(
     Add team models to all models
     """
     team_models: Final[dict[str, set[str]]] = {}
+    proxy_model_list: Final = llm_router.get_model_names()
+    model_access_groups: Final = llm_router.get_model_access_groups()
 
     for team_object in team_db_objects_typed:
         if (
@@ -11879,7 +11967,12 @@ def _add_team_models_to_all_models(
                     if can_add_model:
                         team_models.setdefault(model_id, set()).add(team_object.team_id)
         else:
-            for model_name in team_object.models:
+            resolved_model_names = get_team_models(
+                team_models=team_object.models,
+                proxy_model_list=proxy_model_list,
+                model_access_groups=model_access_groups,
+            )
+            for model_name in resolved_model_names:
                 _models = llm_router.get_model_list(model_name=model_name, team_id=team_object.team_id)
                 if _models is not None:
                     for model in _models:

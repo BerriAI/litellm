@@ -260,6 +260,7 @@ export {
   ComboboxChips,
   ComboboxChip,
   ComboboxChipsInput,
+  ComboboxClear,
   ComboboxTrigger,
   ComboboxValue,
   useComboboxAnchor,

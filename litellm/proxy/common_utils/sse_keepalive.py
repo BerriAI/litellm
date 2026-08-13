@@ -21,6 +21,17 @@ def _coerce_interval(ping_interval_seconds: float | str | None) -> float | None:
     return interval
 
 
+def keepalive_ping_has_fired(elapsed_seconds: float, ping_interval_seconds: float | str | None) -> bool:
+    """Whether a keepalive ping has already gone out, which flushes the response headers.
+
+    A caller that discovers a failure after that point cannot raise its way to the client, since
+    the status line is already on the wire. With pings disabled nothing flushes early, so a raise
+    still carries its real status.
+    """
+    interval: Final = _coerce_interval(ping_interval_seconds)
+    return interval is not None and elapsed_seconds >= interval
+
+
 def wrap_sse_stream_with_keepalive_pings(
     stream: AsyncGenerator[str, None],
     ping_interval_seconds: float | str | None,
