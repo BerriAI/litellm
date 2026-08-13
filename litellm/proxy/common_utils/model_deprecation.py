@@ -175,6 +175,11 @@ def collect_model_deprecations(
     )
 
 
+def _escape_slack_mrkdwn(value: str) -> str:
+    """Neutralize Slack control characters so a model name cannot forge a mention or link"""
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _format_entry(info: ModelDeprecationInfo) -> str:
     suffix: Final = (
         f"already deprecated {abs(info.days_until_deprecation)}d ago"
@@ -182,8 +187,8 @@ def _format_entry(info: ModelDeprecationInfo) -> str:
         else f"in {info.days_until_deprecation}d"
     )
     return (
-        f"• `{info.model_name}` "
-        f"(provider: {info.litellm_provider or 'unknown'}, "
+        f"• `{_escape_slack_mrkdwn(info.model_name)}` "
+        f"(provider: {_escape_slack_mrkdwn(info.litellm_provider) if info.litellm_provider else 'unknown'}, "
         f"deprecates {info.deprecation_date.isoformat()}, {suffix})"
     )
 
