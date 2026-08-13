@@ -495,8 +495,9 @@ describe("ChatUI", () => {
     expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("/v1/responses");
   });
 
-  it("should still switch endpoint when the picked model cannot be served by it", async () => {
+  it("should not offer a model the selected endpoint cannot serve", async () => {
     (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { model_group: "ChatModel", mode: "chat" },
       { model_group: "SpeechModel", mode: "audio_speech" },
     ]);
 
@@ -515,9 +516,12 @@ describe("ChatUI", () => {
     });
 
     await selectComboboxOption("Select an endpoint", "/v1/responses");
-    await selectComboboxOption("Select a Model", "SpeechModel");
+    await openComboboxByPlaceholder("Select a Model");
 
-    expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("/v1/audio/speech");
+    await waitFor(() => {
+      expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("SpeechModel")).toBeNull();
   });
 
   it("should attach an audio file dropped on the transcription upload area", async () => {

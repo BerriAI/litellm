@@ -53,7 +53,7 @@ import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatIma
 import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
-import { filterModelsForEndpoint } from "./EndpointUtils";
+import { filterModelsForEndpoint, isModelCompatibleWithEndpoint } from "./EndpointUtils";
 import FilePreviewCard from "./FilePreviewCard";
 import ChatMessageBubble from "./ChatMessageBubble";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
@@ -1150,27 +1150,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     NotificationsManager.success("Chat history cleared.");
   };
 
-  const currentEndpointServes = (mode: string): boolean => {
-    const modelEndpoint = getEndpointType(mode);
-    if (
-      endpointType === EndpointType.RESPONSES ||
-      endpointType === EndpointType.ANTHROPIC_MESSAGES ||
-      endpointType === EndpointType.INTERACTIONS
-    ) {
-      return modelEndpoint === endpointType || modelEndpoint === EndpointType.CHAT;
-    }
-    if (endpointType === EndpointType.IMAGE_EDITS) {
-      return modelEndpoint === endpointType || modelEndpoint === EndpointType.IMAGE;
-    }
-    return modelEndpoint === endpointType;
-  };
-
   const onModelChange = (value: string) => {
     setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
 
     const model = modelInfo.find((option) => option.model_group === value);
-    if (model?.mode && !currentEndpointServes(model.mode)) {
+    if (model?.mode && !isModelCompatibleWithEndpoint(model, endpointType as EndpointType)) {
       setEndpointType(getEndpointType(model.mode));
     }
   };
