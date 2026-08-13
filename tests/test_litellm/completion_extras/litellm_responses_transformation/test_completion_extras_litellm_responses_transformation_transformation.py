@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import unittest
-from typing import List, Optional, Tuple
+from typing import Final, List, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
@@ -3408,6 +3408,6 @@ def test_map_reasoning_effort_rejects_unknown_level():
         LiteLLMResponsesTransformationHandler,
     )
 
-    handler = LiteLLMResponsesTransformationHandler()
+    handler: Final = LiteLLMResponsesTransformationHandler()
 
     assert handler._map_reasoning_effort("banana") is None
