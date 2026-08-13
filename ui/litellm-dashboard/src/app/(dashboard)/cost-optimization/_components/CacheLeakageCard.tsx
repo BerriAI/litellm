@@ -105,21 +105,17 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
               <CardTitle>Cache leakage by {dimension === "model" ? "model" : "virtual key"}</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
                 {subject} sending large volumes of uncached input with a low cache hit rate are likely missing prompt
-                caching. Potential savings is approximate: uncached input priced at the realized cache-read discount.
-                {dimension === "model" ? " Limited to Anthropic (Claude) models, which support prompt caching." : ""}
+                caching. Potential savings is approximate: uncached input priced at what your cached traffic nets per
+                cached token, after cache-write premiums.
               </p>
             </div>
             <div className="shrink-0">
               <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
             </div>
           </div>
-          <Tabs
-            value={dimension}
-            onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}
-            className="mt-3"
-          >
+          <Tabs value={dimension} onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}>
             <TabsList>
               <TabsTrigger value="key">By virtual key</TabsTrigger>
               <TabsTrigger value="model">By model</TabsTrigger>
@@ -153,7 +149,7 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
                   <SortableHead
                     column="potentialSavings"
                     label="Potential savings"
-                    info="About how much you'd save if this uncached input used prompt caching. Estimated as uncached input tokens times the per-token discount your cached traffic already gets (realized cache savings ÷ cache-read tokens)."
+                    info="About how much you'd save if this uncached input used prompt caching. Estimated as uncached input tokens times what your cached traffic already nets per cached token (realized cache savings, after write premiums, ÷ cache read and write tokens). Blank when caching is not currently saving anything overall."
                     sort={sort}
                     onSort={onSort}
                   />

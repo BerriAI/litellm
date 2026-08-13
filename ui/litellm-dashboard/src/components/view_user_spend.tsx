@@ -5,11 +5,6 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 // Define the props type
-interface UserSpendData {
-  spend: number; // Adjust the type accordingly based on your data
-  max_budget?: number | null; // Optional property with a default of null
-  // Add other properties if needed
-}
 interface ViewUserSpendProps {
   userSpend: number | null;
   userMaxBudget: number | null;

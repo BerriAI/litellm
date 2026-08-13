@@ -8,7 +8,8 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
-from typing import Any, Callable, Dict, FrozenSet, Iterator, List
+from collections.abc import Callable, Iterator
+from typing import Any, Final
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -23,7 +24,7 @@ from typing import Any, Callable, Dict, FrozenSet, Iterator, List
 # ``pre_call_hook`` directly with the sync name. Embedding, moderation,
 # audio, and transcription endpoints are deliberately excluded — text
 # guardrails on those paths are a separate scope.
-TEXT_CONTENT_CALL_TYPES: FrozenSet[str] = frozenset({"completion", "acompletion", "aresponses"})
+TEXT_CONTENT_CALL_TYPES: Final[frozenset[str]] = frozenset({"completion", "acompletion", "aresponses"})
 
 
 def is_text_content_call_type(call_type: str) -> bool:
@@ -32,13 +33,13 @@ def is_text_content_call_type(call_type: str) -> bool:
     return call_type in TEXT_CONTENT_CALL_TYPES
 
 
-TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text"})
+TEXT_PART_TYPES: Final[frozenset[str]] = frozenset({"text", "input_text", "output_text"})
 
 # Responses-API item types whose ``output`` field carries user/tool text
 # that guardrails should inspect.  ``function_call_output`` is the
 # built-in shape; ``custom_tool_call_output`` is the custom-tool
 # counterpart (see ``ChatCompletionCustomToolCallOutput``).
-_OUTPUT_ITEM_TYPES: frozenset[str] = frozenset({"function_call_output", "custom_tool_call_output"})
+_OUTPUT_ITEM_TYPES: Final[frozenset[str]] = frozenset({"function_call_output", "custom_tool_call_output"})
 
 
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
@@ -63,13 +64,13 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
                     yield text
 
 
-def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
+def _coerce_input_to_messages(input_value: Any) -> list[dict[str, Any]]:
     """Coerce a Responses-API ``data["input"]`` value into chat-style messages."""
     if isinstance(input_value, str):
         return [{"role": "user", "content": input_value}]
     if not isinstance(input_value, list):
         return []
-    messages: List[Dict[str, Any]] = []
+    messages: Final[list[dict[str, Any]]] = []
     for item in input_value:
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
@@ -83,15 +84,15 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
     return messages
 
 
-def _iter_inspection_messages(data: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+def _iter_inspection_messages(data: dict[str, Any]) -> Iterator[dict[str, Any]]:
     """Yield every message-like dict, walking ``messages`` AND ``input``."""
-    messages = data.get("messages")
+    messages: Final = data.get("messages")
     if isinstance(messages, list):
         yield from messages
     yield from _coerce_input_to_messages(data.get("input"))
 
 
-def iter_message_text(data: Dict[str, Any]) -> Iterator[str]:
+def iter_message_text(data: dict[str, Any]) -> Iterator[str]:
     """Yield every text fragment from ``messages`` AND ``input``.
 
     Walks every role (user, assistant, system, …) — guardrails inspect
@@ -103,7 +104,7 @@ def iter_message_text(data: Dict[str, Any]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
-def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
+def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
     Mutates ``data["messages"]`` and ``data["input"]``. Returns the number
@@ -120,7 +121,7 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                 return visit(content)
             return content
         if isinstance(content, list):
-            new_parts: List[Any] = []
+            new_parts: Final[list[Any]] = []
             for part in content:
                 if isinstance(part, str) and part:
                     visited += 1
@@ -138,13 +139,13 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
             return new_parts
         return content
 
-    messages = data.get("messages")
+    messages: Final = data.get("messages")
     if isinstance(messages, list):
         for message in messages:
             if isinstance(message, dict) and "content" in message:
                 message["content"] = _rewrite_content(message["content"])
 
-    input_value = data.get("input")
+    input_value: Final = data.get("input")
     if isinstance(input_value, str):
         if input_value:
             visited += 1
@@ -170,7 +171,7 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
     return visited
 
 
-def apply_redacted_messages_back(data: Dict[str, Any], redacted_messages: List[Dict[str, Any]]) -> None:
+def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[dict[str, Any]]) -> None:
     """Write redacted messages back to whichever field(s) the caller used.
 
     Mask/anonymize paths take a synthesised messages list (from
@@ -184,7 +185,7 @@ def apply_redacted_messages_back(data: Dict[str, Any], redacted_messages: List[D
     if "messages" in data:
         data["messages"] = redacted_messages
     if isinstance(data.get("input"), str):
-        text_parts: List[str] = []
+        text_parts: Final[list[str]] = []
         for msg in redacted_messages:
             if not isinstance(msg, dict):
                 continue
@@ -192,7 +193,7 @@ def apply_redacted_messages_back(data: Dict[str, Any], redacted_messages: List[D
         data["input"] = "\n".join(text_parts)
 
 
-def has_non_string_content(data: Dict[str, Any]) -> bool:
+def has_non_string_content(data: dict[str, Any]) -> bool:
     """Return True if any inspected content is not a plain string.
 
     Used by hooks whose mask/redact path operates on string offsets and
@@ -200,19 +201,19 @@ def has_non_string_content(data: Dict[str, Any]) -> bool:
     degrade to block-on-detect when this returns True so image/audio parts
     are not silently stripped during in-place masking.
     """
-    messages = data.get("messages")
+    messages: Final = data.get("messages")
     if isinstance(messages, list):
         for message in messages:
             if isinstance(message, dict) and not isinstance(message.get("content"), str):
                 if message.get("content") is not None:
                     return True
-    input_value = data.get("input")
+    input_value: Final = data.get("input")
     if input_value is not None and not isinstance(input_value, str):
         return True
     return False
 
 
-def build_inspection_messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
+def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
     """Synthesize a chat-style messages list for posting to a guardrail API.
 
     Each returned message has a plain-string ``content`` — multimodal text
@@ -223,7 +224,7 @@ def build_inspection_messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
     call this instead of ``data.get("messages", [])`` so the Responses API
     and multimodal content are covered.
     """
-    flattened: List[Dict[str, str]] = []
+    flattened: Final[list[dict[str, str]]] = []
     for message in _iter_inspection_messages(data):
         if not isinstance(message, dict):
             continue
