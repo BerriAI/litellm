@@ -122,10 +122,14 @@ class RedisCircuitBreaker:
         failure_threshold: int,
         recovery_timeout: int,
         enabled: bool = True,
+        on_open: Callable[[], None] | None = None,
+        on_probe: Callable[[], None] | None = None,
     ) -> None:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.enabled = enabled
+        self._on_open = on_open
+        self._on_probe = on_probe
         self._failure_count = 0
         self._opened_at: float | None = None
         self._state = self.CLOSED
@@ -142,6 +146,10 @@ class RedisCircuitBreaker:
         if self._state == self.OPEN:
             if time.time() - (self._opened_at or 0) > self.recovery_timeout:
                 self._state = self.HALF_OPEN
+                # Drop the cached cluster client so the probe rediscovers
+                # CLUSTER SLOTS instead of reusing a wedged NodesManager.
+                if self._on_probe is not None:
+                    self._on_probe()
                 return False  # this caller is the designated probe
             return True
         return False
@@ -158,6 +166,8 @@ class RedisCircuitBreaker:
                     self._failure_count,
                     self.recovery_timeout,
                 )
+                if self._on_open is not None:
+                    self._on_open()
             self._state = self.OPEN
 
     def record_success(self) -> None:
@@ -338,6 +348,7 @@ class RedisCache(BaseCache):
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_async_client: async_redis_client | async_redis_cluster_client | None = None
+        self._async_client_generation = 0
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
 
@@ -360,6 +371,8 @@ class RedisCache(BaseCache):
             failure_threshold=REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
             enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
+            on_open=self._evict_redis_clients,
+            on_probe=self._evict_redis_clients,
         )
 
         self._setup_health_pings()
@@ -437,7 +450,29 @@ class RedisCache(BaseCache):
         sorted_kwargs: Final = sorted(self.redis_kwargs.items())
         kwargs_str: Final = json.dumps(sorted_kwargs, sort_keys=True)
         kwargs_hash: Final = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
-        return f"async-redis-client-{kwargs_hash}"
+        return f"async-redis-client-{kwargs_hash}-g{self._async_client_generation}"
+
+    def _evict_redis_clients(self) -> None:
+        """Drop cached clients so the next Redis call rebuilds them.
+
+        redis-py's cluster NodesManager keeps a dead CLUSTER SLOTS map after
+        ElastiCache becomes unreachable. Reusing that client on HALF_OPEN
+        would probe the same wedged connection and never recover. Bumping
+        generation also invalidates Lua script executors keyed off this
+        cache key. Do not disconnect here — that can block the request that
+        just tripped the breaker.
+        """
+        self._async_client_generation += 1
+        self.redis_async_client = None
+        try:
+            from .._redis import get_redis_client
+
+            self.redis_client = get_redis_client(**self.redis_kwargs)
+        except Exception:
+            verbose_logger.debug(
+                "Redis circuit breaker: sync client rebuild failed; next call will retry",
+                exc_info=True,
+            )
 
     def init_async_client(
         self,

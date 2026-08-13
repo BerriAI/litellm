@@ -704,3 +704,71 @@ async def test_cluster_connect_timeout_swallowed_set_opens_breaker():
 
     with pytest.raises(Exception, match="circuit breaker is open"):
         await _run_under_circuit_breaker(breaker, "async_set_cache", swallowed_cluster_timeout)
+
+
+def test_breaker_on_open_fires_once_on_transition():
+    """on_open drops the wedged cluster client; it must not fire on every later miss."""
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    opened = []
+    cb = RedisCircuitBreaker(
+        failure_threshold=3,
+        recovery_timeout=60,
+        on_open=lambda: opened.append("open"),
+    )
+    for _ in range(3):
+        cb.record_failure()
+    assert opened == ["open"]
+    cb.record_failure()
+    cb.record_failure()
+    assert opened == ["open"]
+
+
+def test_breaker_on_probe_fires_when_half_open_starts():
+    """HALF_OPEN rebuilds the client so CLUSTER SLOTS is rediscovered."""
+    import time as time_mod
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    probes = []
+    cb = RedisCircuitBreaker(
+        failure_threshold=3,
+        recovery_timeout=60,
+        on_probe=lambda: probes.append("probe"),
+    )
+    cb._state = cb.OPEN
+    cb._opened_at = time_mod.time() - 9999
+    assert cb.is_open() is False
+    assert cb._state == cb.HALF_OPEN
+    assert probes == ["probe"]
+    assert cb.is_open() is True
+    assert probes == ["probe"]
+
+
+def test_redis_cache_evicts_clients_when_breaker_opens(monkeypatch, redis_no_ping):
+    """A HALF_OPEN probe must not reuse the NodesManager that just hung."""
+    import time as time_mod
+
+    monkeypatch.setenv("REDIS_HOST", "127.0.0.1")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    cache = RedisCache(host="127.0.0.1", port=1, socket_timeout=0.1)
+    key_before = cache._get_async_client_cache_key()
+    gen_before = cache._async_client_generation
+    sentinel = object()
+    cache.redis_async_client = sentinel
+
+    for _ in range(cache._circuit_breaker.failure_threshold):
+        cache._circuit_breaker.record_failure()
+
+    assert cache._async_client_generation == gen_before + 1
+    assert cache.redis_async_client is None
+    assert cache._get_async_client_cache_key() != key_before
+
+    cache._circuit_breaker.record_failure()
+    assert cache._async_client_generation == gen_before + 1
+
+    cache.redis_async_client = sentinel
+    cache._circuit_breaker._opened_at = time_mod.time() - 9999
+    assert cache._circuit_breaker.is_open() is False
+    assert cache.redis_async_client is None
+    assert cache._async_client_generation == gen_before + 2
