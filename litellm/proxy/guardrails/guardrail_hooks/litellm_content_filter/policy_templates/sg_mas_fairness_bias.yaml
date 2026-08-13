@@ -1,0 +1,101 @@
+# Guidelines on Artificial Intelligence Risk Management (MAS) — Fairness & Bias
+# Blocks requests that would create discriminatory AI systems in
+# financial services (credit, lending, insurance, hiring) based on
+# protected attributes (race, religion, age, gender, nationality).
+# Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
+category_name: "sg_mas_fairness_bias"
+description: "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks discriminatory AI practices in financial services that score, deny, or price based on protected attributes"
+default_action: "BLOCK"
+
+identifier_words:
+  # Protected attributes
+  - "race"
+  - "ethnicity"
+  - "religion"
+  - "gender"
+  - "age"
+  - "nationality"
+  - "marital status"
+  - "disability"
+  - "pregnancy"
+  - "sexual orientation"
+
+  # Singapore-specific groups
+  - "Malay"
+  - "Indian"
+  - "Chinese"
+  - "Eurasian"
+  - "CMIO"
+  - "PR holder"
+  - "foreign worker"
+
+additional_block_words:
+  # Financial decisions
+  - "credit score"
+  - "credit rating"
+  - "loan approval"
+  - "loan denial"
+  - "loan pricing"
+  - "interest rate"
+  - "insurance premium"
+  - "insurance pricing"
+  - "insurance denial"
+  - "risk score"
+  - "risk premium"
+
+  # Discriminatory actions
+  - "deny"
+  - "reject"
+  - "penalize"
+  - "surcharge"
+  - "exclude"
+  - "discriminate"
+  - "higher rate"
+  - "lower limit"
+  - "restrict access"
+
+  # Profiling
+  - "profile by"
+  - "segment by"
+  - "price by"
+  - "score by"
+  - "weight by"
+  - "adjust by"
+
+always_block_keywords:
+  - keyword: "deny loan based on race"
+    severity: "high"
+  - keyword: "credit score by ethnicity"
+    severity: "high"
+  - keyword: "insurance premium based on religion"
+    severity: "high"
+  - keyword: "reject application based on nationality"
+    severity: "high"
+  - keyword: "higher interest rate for Malay"
+    severity: "high"
+  - keyword: "lower credit limit for Indian"
+    severity: "high"
+  - keyword: "penalize based on gender"
+    severity: "high"
+  - keyword: "discriminate by age in lending"
+    severity: "high"
+  - keyword: "price insurance by race Singapore"
+    severity: "high"
+  - keyword: "exclude foreign worker from financial service"
+    severity: "high"
+
+exceptions:
+  - "fairness audit"
+  - "bias detection"
+  - "bias mitigation"
+  - "anti-discrimination"
+  - "equal opportunity"
+  - "fairness metric"
+  - "disparate impact analysis"
+  - "compliance review"
+  - "explain"
+  - "what is"
+  - "research"
+  - "academic"
+  - "FEAT principles"
+  - "model validation"

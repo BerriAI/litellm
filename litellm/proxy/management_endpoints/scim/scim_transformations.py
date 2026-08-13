@@ -1,0 +1,221 @@
+from collections.abc import Callable
+from typing import Final, TypeVar
+
+from pydantic import ValidationError
+
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    Member,
+    NewUserResponse,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.types.proxy.management_endpoints.scim_v2 import *
+
+T = TypeVar("T")
+
+
+class ScimTransformations:
+    DEFAULT_SCIM_NAME = "Unknown User"
+    DEFAULT_SCIM_FAMILY_NAME = "Unknown Family Name"
+    DEFAULT_SCIM_DISPLAY_NAME = "Unknown Display Name"
+    DEFAULT_SCIM_MEMBER_VALUE = "Unknown Member Value"
+
+    @staticmethod
+    async def transform_litellm_user_to_scim_user(
+        user: LiteLLM_UserTable | NewUserResponse,
+    ) -> SCIMUser:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No database connected"})
+
+        # Get user's teams/groups
+        groups: Final = []
+        for team_id in user.teams or []:
+            team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+            if team:
+                team_alias = getattr(team, "team_alias", team.team_id)
+                groups.append(SCIMUserGroup(value=team.team_id, display=team_alias))
+
+        user_created_at: Final = user.created_at.isoformat() if user.created_at else None
+        user_updated_at: Final = user.updated_at.isoformat() if user.updated_at else None
+
+        emails: Final = []
+        # Only add email if it's a valid email address (contains @)
+        # user_email can be a UUID when users are created without an email
+        if user.user_email and "@" in user.user_email:
+            emails.append(SCIMUserEmail(value=user.user_email, primary=True))
+
+        metadata: Final = user.metadata or {}
+        scim_active: Final = metadata.get("scim_active")
+        active: Final = True if scim_active is None else bool(scim_active)
+
+        schemas: Final = ["urn:ietf:params:scim:schemas:core:2.0:User"]
+        enterprise_user: Final = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ENTERPRISE_METADATA_KEY, SCIMEnterpriseUser.model_validate
+        )
+        if enterprise_user is not None:
+            schemas.append(SCIM_ENTERPRISE_USER_SCHEMA)
+
+        entitlements: Final = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
+        )
+        roles: Final = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ROLES_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
+        )
+
+        return SCIMUser(
+            schemas=schemas,
+            id=user.user_id,
+            userName=ScimTransformations._get_scim_user_name(user),
+            displayName=ScimTransformations._get_scim_user_name(user),
+            name=SCIMUserName(
+                familyName=ScimTransformations._get_scim_family_name(user),
+                givenName=ScimTransformations._get_scim_given_name(user),
+            ),
+            emails=emails,
+            groups=groups,
+            active=active,
+            entitlements=entitlements,
+            roles=roles,
+            enterprise_user=enterprise_user,
+            meta={
+                "resourceType": "User",
+                "created": user_created_at,
+                "lastModified": user_updated_at,
+            },
+        )
+
+    @staticmethod
+    def _parse_directory_metadata(
+        user: LiteLLM_UserTable | NewUserResponse,
+        key: str,
+        validate: Callable[[object], T],
+    ) -> T | None:
+        """A SCIM directory attribute parsed from user metadata, or None when absent or malformed.
+
+        Metadata is writable outside the SCIM surface, so a malformed value on one user must not
+        fail the whole directory response; the attribute is omitted and the corruption logged.
+        """
+        metadata: Final = user.metadata or {}
+        raw: Final = metadata.get(key)
+        if not raw:
+            return None
+        try:
+            return validate(raw)
+        except ValidationError:
+            verbose_proxy_logger.warning(
+                "Skipping malformed %s metadata on user %s in SCIM response",
+                key,
+                user.user_id,
+            )
+            return None
+
+    @staticmethod
+    def _get_scim_user_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
+        """
+        SCIM requires a display name with length > 0
+
+        We use the same userName and displayName for SCIM users
+        """
+        if user.user_email and len(user.user_email) > 0:
+            return user.user_email
+        return ScimTransformations.DEFAULT_SCIM_DISPLAY_NAME
+
+    @staticmethod
+    def _get_scim_family_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
+        """
+        SCIM requires a family name with length > 0
+        """
+        metadata: Final = user.metadata or {}
+        if "scim_metadata" in metadata:
+            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
+            if scim_metadata.familyName and len(scim_metadata.familyName) > 0:
+                return scim_metadata.familyName
+
+        if user.user_alias and len(user.user_alias) > 0:
+            return user.user_alias
+        return ScimTransformations.DEFAULT_SCIM_FAMILY_NAME
+
+    @staticmethod
+    def _get_scim_given_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
+        """
+        SCIM requires a given name with length > 0
+        """
+        metadata: Final = user.metadata or {}
+        if "scim_metadata" in metadata:
+            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
+            if scim_metadata.givenName and len(scim_metadata.givenName) > 0:
+                return scim_metadata.givenName
+
+        if user.user_alias and len(user.user_alias) > 0:
+            return user.user_alias or ScimTransformations.DEFAULT_SCIM_NAME
+        return ScimTransformations.DEFAULT_SCIM_NAME
+
+    @staticmethod
+    async def transform_litellm_team_to_scim_group(
+        team: LiteLLM_TeamTable | dict,
+    ) -> SCIMGroup:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No database connected"})
+
+        if isinstance(team, dict):
+            team = LiteLLM_TeamTable(**team)
+
+        # Get team members with proper display names
+        scim_members: Final[list[SCIMMember]] = []
+        for member in team.members_with_roles or []:
+            if isinstance(member, dict):
+                member = Member(**member)
+
+            scim_members.append(
+                SCIMMember(
+                    value=ScimTransformations._get_scim_member_value(member),
+                    display=ScimTransformations._get_scim_member_display(member),
+                    type="User",
+                )
+            )
+
+        team_alias: Final = getattr(team, "team_alias", team.team_id)
+        team_created_at: Final = team.created_at.isoformat() if team.created_at else None
+        team_updated_at: Final = team.updated_at.isoformat() if team.updated_at else None
+
+        return SCIMGroup(
+            schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+            id=team.team_id,
+            displayName=team_alias,
+            members=scim_members,
+            meta={
+                "resourceType": "Group",
+                "created": team_created_at,
+                "lastModified": team_updated_at,
+            },
+        )
+
+    @staticmethod
+    def _get_scim_member_value(member: Member) -> str:
+        """
+        Get the SCIM member value. Use user_email if available, otherwise use user_id.
+        SCIM member value should be the unique identifier for the user.
+        """
+        if hasattr(member, "user_email") and member.user_email:
+            return member.user_email
+        elif hasattr(member, "user_id"):
+            return member.user_id or ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
+        return ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
+
+    @staticmethod
+    def _get_scim_member_display(member: Member) -> str:
+        """
+        Get the SCIM member display. Use user_email if available, otherwise use user_id.
+        SCIM member display should be the display name for the user.
+        """
+        if hasattr(member, "user_email") and member.user_email:
+            return member.user_email
+        elif hasattr(member, "user_id"):
+            return member.user_id or ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
+        return ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE

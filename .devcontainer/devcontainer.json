@@ -1,0 +1,57 @@
+{
+	"name": "Python 3.11",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	"image": "mcr.microsoft.com/devcontainers/python:3.11-bookworm",
+	// https://github.com/devcontainers/images/tree/main/src/python
+	// https://mcr.microsoft.com/en-us/product/devcontainers/python/tags
+
+	// "build": {
+	// 	"dockerfile": "Dockerfile",
+	// 	"context": ".."
+	// },
+
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	"features": {
+		"ghcr.io/devcontainers/features/node:1": {
+			"version": "lts"
+		},
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {}
+	},
+
+	// Configure tool-specific properties.
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+			"settings": {},
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"GitHub.copilot",
+				"GitHub.copilot-chat",
+				"ms-python.autopep8"
+			]
+		}
+	},
+	
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	"forwardPorts": [4000],
+	
+	"containerEnv": {
+		"LITELLM_LOG": "DEBUG"
+	},
+
+	// Use 'portsAttributes' to set default properties for specific forwarded ports. 
+	// More info: https://containers.dev/implementors/json_reference/#port-attributes
+	"portsAttributes": {
+		"4000": {
+			"label": "LiteLLM Server",
+			"onAutoForward": "notify"
+		}
+	},
+
+	// More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "litellm",
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	"postCreateCommand": "bash ./.devcontainer/post-create.sh"
+}

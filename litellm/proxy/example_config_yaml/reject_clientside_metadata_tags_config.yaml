@@ -1,0 +1,14 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: sk-1234
+  database_url: "postgresql://user:password@localhost:5432/litellm"
+  
+  # Reject requests that contain client-side metadata.tags
+  # This prevents users from influencing budgets by sending different tags
+  # Tags can only be inherited from the API key metadata
+  reject_clientside_metadata_tags: true

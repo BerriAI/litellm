@@ -1,0 +1,383 @@
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Final, Literal
+
+from pydantic import BaseModel, PrivateAttr
+from typing_extensions import Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
+
+if TYPE_CHECKING:
+    from a2a.types import SendMessageResponse
+
+
+# AgentProvider
+class AgentProvider(TypedDict, total=False):
+    """Represents the service provider of an agent."""
+
+    organization: str  # required
+    url: str  # required
+
+
+# AgentExtension
+class AgentExtension(TypedDict, total=False):
+    """A declaration of a protocol extension supported by an Agent."""
+
+    uri: str  # required
+    description: str | None
+    required: bool | None
+    params: dict[str, Any] | None
+
+
+# AgentCapabilities
+class AgentCapabilities(TypedDict, total=False):
+    """Defines optional capabilities supported by an agent."""
+
+    streaming: bool | None
+    pushNotifications: bool | None
+    stateTransitionHistory: bool | None
+    extensions: list[AgentExtension] | None
+
+
+# SecurityScheme types
+class SecuritySchemeBase(TypedDict, total=False):
+    """Base properties shared by all security scheme objects."""
+
+    description: str | None
+
+
+class APIKeySecurityScheme(SecuritySchemeBase, total=False):
+    """Defines a security scheme using an API key."""
+
+    type: Required[Literal["apiKey"]]
+    in_: Required[Literal["query", "header", "cookie"]]  # using in_ to avoid Python keyword
+    name: Required[str]
+
+
+class HTTPAuthSecurityScheme(SecuritySchemeBase, total=False):
+    """Defines a security scheme using HTTP authentication."""
+
+    type: Required[Literal["http"]]
+    scheme: Required[str]
+    bearerFormat: str | None
+
+
+class MutualTLSSecurityScheme(SecuritySchemeBase, total=False):
+    """Defines a security scheme using mTLS authentication."""
+
+    type: Required[Literal["mutualTLS"]]
+
+
+class OAuthFlows(TypedDict, total=False):
+    """Defines the configuration for the supported OAuth 2.0 flows."""
+
+    authorizationCode: dict[str, Any] | None
+    clientCredentials: dict[str, Any] | None
+    implicit: dict[str, Any] | None
+    password: dict[str, Any] | None
+
+
+class OAuth2SecurityScheme(SecuritySchemeBase, total=False):
+    """Defines a security scheme using OAuth 2.0."""
+
+    type: Required[Literal["oauth2"]]
+    flows: Required[OAuthFlows]
+    oauth2MetadataUrl: str | None
+
+
+class OpenIdConnectSecurityScheme(SecuritySchemeBase, total=False):
+    """Defines a security scheme using OpenID Connect."""
+
+    type: Required[Literal["openIdConnect"]]
+    openIdConnectUrl: Required[str]
+
+
+# Union of all security schemes
+SecurityScheme = (
+    APIKeySecurityScheme
+    | HTTPAuthSecurityScheme
+    | OAuth2SecurityScheme
+    | OpenIdConnectSecurityScheme
+    | MutualTLSSecurityScheme
+)
+
+
+# AgentSkill
+class AgentSkill(TypedDict, total=False):
+    """Represents a distinct capability or function that an agent can perform."""
+
+    id: str  # required
+    name: str  # required
+    description: str  # required
+    tags: list[str]  # required
+    examples: list[str] | None
+    inputModes: list[str] | None
+    outputModes: list[str] | None
+    security: list[dict[str, list[str]]] | None
+
+
+# AgentInterface
+class AgentInterface(TypedDict, total=False):
+    """Declares a combination of a target URL and a transport protocol."""
+
+    url: str  # required
+    transport: str  # required (TransportProtocol | string)
+
+
+# AgentCardSignature
+class AgentCardSignature(TypedDict, total=False):
+    """Represents a JWS signature of an AgentCard."""
+
+    protected: str  # required
+    signature: str  # required
+    header: dict[str, Any] | None
+
+
+# AgentCard
+class AgentCard(TypedDict, total=False):
+    """
+    The AgentCard is a self-describing manifest for an agent.
+    It provides essential metadata including the agent's identity, capabilities,
+    skills, supported communication methods, and security requirements.
+    """
+
+    # Required fields
+    protocolVersion: str
+    name: str
+    description: str
+    url: str
+    version: str
+    capabilities: AgentCapabilities
+    defaultInputModes: list[str]
+    defaultOutputModes: list[str]
+    skills: list[AgentSkill]
+
+    # Optional fields
+    preferredTransport: str | None
+    additionalInterfaces: list[AgentInterface] | None
+    iconUrl: str | None
+    provider: AgentProvider | None
+    documentationUrl: str | None
+    securitySchemes: dict[str, SecurityScheme] | None
+    security: list[dict[str, list[str]]] | None
+    supportsAuthenticatedExtendedCard: bool | None
+    signatures: list[AgentCardSignature] | None
+
+
+class AugmentedAgentCard(AgentCard):
+    is_public: bool
+
+
+# Object permission shape for agent MCP tool access (mirrors LiteLLM_ObjectPermissionBase)
+class AgentObjectPermission(TypedDict, total=False):
+    mcp_servers: list[str] | None
+    mcp_access_groups: list[str] | None
+    mcp_tool_permissions: dict[str, list[str]] | None
+    models: list[str] | None
+    agents: list[str] | None
+
+
+class AgentConfig(TypedDict, total=False):
+    agent_name: Required[str]
+    agent_card_params: Required[AgentCard]
+    litellm_params: dict[str, Any]  # allow for any future litellm params
+    object_permission: AgentObjectPermission
+    tpm_limit: int | None
+    rpm_limit: int | None
+    session_tpm_limit: int | None
+    session_rpm_limit: int | None
+    static_headers: dict[str, str] | None
+    extra_headers: list[str] | None
+
+
+class PatchAgentRequest(TypedDict, total=False):
+    agent_name: str
+    agent_card_params: AgentCard
+    litellm_params: dict[str, Any]
+    object_permission: AgentObjectPermission
+    tpm_limit: int | None
+    rpm_limit: int | None
+    session_tpm_limit: int | None
+    session_rpm_limit: int | None
+    static_headers: dict[str, str] | None
+    extra_headers: list[str] | None
+
+
+# Request/Response models for CRUD endpoints
+
+
+class AgentKeySummary(BaseModel):
+    token: str
+    key_alias: str | None = None
+    key_name: str | None = None
+
+
+class AgentResponse(BaseModel):
+    agent_id: str
+    agent_name: str
+    litellm_params: dict[str, Any] | None = None
+    agent_card_params: dict[str, Any]
+    object_permission: dict[str, Any] | None = None
+    spend: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    session_tpm_limit: int | None = None
+    session_rpm_limit: int | None = None
+    static_headers: dict[str, str] | None = None
+    extra_headers: list[str] | None = None
+    keys: list[AgentKeySummary] | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    created_by: str | None = None
+    updated_by: str | None = None
+
+
+class ListAgentsResponse(BaseModel):
+    agents: list[AgentResponse]
+
+
+class AgentCreateResponse(LiteLLMPydanticObjectBase):
+    """
+    Response from a provider-side agent creation or get call (e.g. Gemini v1beta/agents).
+
+    Gemini returns ``"id"`` as the agent identifier; we surface both ``id``
+    (Gemini's value) and ``name`` (the user-supplied name, equal to ``id`` for
+    Gemini) so callers can use either.  All extra fields returned by the
+    provider (e.g. ``base_agent``, ``system_instruction``, ``base_environment``)
+    are preserved via extra="allow".
+    """
+
+    id: str | None = None
+    name: str | None = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentDeleteResult(LiteLLMPydanticObjectBase):
+    """Result of a provider-side agent deletion (e.g. Gemini DELETE /v1beta/agents/{name}).
+
+    Gemini returns an empty body ``{}`` on success; we synthesise ``name`` and
+    ``deleted`` so callers always get a consistent response object.
+    """
+
+    name: str
+    deleted: bool = True
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentListResponse(LiteLLMPydanticObjectBase):
+    """Response from listing agents on the provider side (e.g. Gemini GET /v1beta/agents).
+
+    Gemini returns ``{"agents": [{"id": "..."}, ...]}``; each item is kept as
+    a plain dict so no fields are silently dropped.
+    """
+
+    agents: list[dict[str, Any]] = []
+    next_page_token: str | None = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentVersionsResponse(LiteLLMPydanticObjectBase):
+    """Response from listing versions of an agent (e.g. Gemini GET /v1beta/agents/{name}/versions).
+
+    Gemini returns ``{"agentVersions": [...]}``; each version has a ``name``
+    field of the form ``agents/{agent_id}/versions/{uuid}``.
+    """
+
+    agent_versions: list[dict[str, Any]] = []
+    next_page_token: str | None = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentMakePublicResponse(BaseModel):
+    message: str
+    public_agent_groups: list[str]
+    updated_by: str
+
+
+class MakeAgentsPublicRequest(BaseModel):
+    agent_ids: list[str]
+
+
+def _normalize_a2a_jsonrpc_response(
+    response_dict: dict[str, Any],
+    request_id: Any | None = None,
+) -> dict[str, Any]:
+    """
+    Ensure JSON-RPC responses include ``id`` when the caller supplied one.
+
+    The a2a SDK may omit ``id`` on error payloads even when the upstream agent
+    returned it. Backfill from the outbound request id so LiteLLM can surface the
+    agent error instead of failing Pydantic validation.
+    """
+    normalized: Final = dict(response_dict)
+    if normalized.get("id") is None and request_id is not None:
+        normalized["id"] = str(request_id)
+    return normalized
+
+
+class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
+    """
+    LiteLLM wrapper for A2A SendMessageResponse.
+
+    Wraps the a2a SDK's SendMessageResponse with LiteLLM's _hidden_params
+    for cost tracking and logging integration.
+    """
+
+    # A2A response fields
+    id: str
+    jsonrpc: str = "2.0"
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+
+    # LiteLLM usage tracking
+    usage: dict[str, Any] | None = None
+
+    model_config = {"extra": "allow"}
+
+    # LiteLLM private attributes for logging/cost tracking
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @classmethod
+    def from_a2a_response(
+        cls,
+        response: "SendMessageResponse",
+        request_id: Any | None = None,
+    ) -> "LiteLLMSendMessageResponse":
+        """
+        Create a LiteLLMSendMessageResponse from an a2a SDK SendMessageResponse.
+
+        Args:
+            response: The a2a SDK SendMessageResponse
+            request_id: JSON-RPC request id to backfill when the SDK omits it on errors
+
+        Returns:
+            LiteLLMSendMessageResponse with _hidden_params support
+        """
+        response_dict = response.model_dump(mode="json", exclude_none=True)
+        response_dict = _normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
+        return cls(**response_dict)
+
+    @classmethod
+    def from_dict(
+        cls,
+        response_dict: dict[str, Any],
+        request_id: Any | None = None,
+    ) -> "LiteLLMSendMessageResponse":
+        """
+        Create a LiteLLMSendMessageResponse from a dict.
+
+        Args:
+            response_dict: Dict with A2A response structure
+            request_id: JSON-RPC request id to backfill when missing on error payloads
+
+        Returns:
+            LiteLLMSendMessageResponse with _hidden_params support
+        """
+        return cls(**_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

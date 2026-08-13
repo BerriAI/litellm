@@ -1,0 +1,78 @@
+# Databricks Configuration Template for LiteLLM Testing
+# =====================================================
+#
+# Copy this file to your preferred location and fill in your credentials:
+#   cp databricks_config.template.txt /path/to/databricks_config.txt
+#
+# Then update the CONFIG_FILE path in test_databricks_integration.py
+#
+# Lines starting with # are comments and will be ignored
+# Only lines with KEY=VALUE format (where VALUE is not empty) will be read
+
+# ==============================================================================
+# DATABRICKS WORKSPACE CONFIGURATION (Required)
+# ==============================================================================
+
+# Your Databricks workspace URL (without /serving-endpoints suffix)
+# Example: https://adb-1234567890123456.7.azuredatabricks.net
+DATABRICKS_HOST=
+
+# API Base URL for serving endpoints (usually {host}/serving-endpoints)
+# Example: https://adb-1234567890123456.7.azuredatabricks.net/serving-endpoints
+DATABRICKS_API_BASE=
+
+# ==============================================================================
+# AUTHENTICATION METHOD 1: OAuth M2M (Recommended for Production)
+# Use Service Principal credentials
+# ==============================================================================
+
+# Service Principal Application/Client ID
+# Example: 12345678-1234-1234-1234-123456789012
+DATABRICKS_CLIENT_ID=
+
+# Service Principal Secret
+# Example: your-client-secret-value
+DATABRICKS_CLIENT_SECRET=
+
+# ==============================================================================
+# AUTHENTICATION METHOD 2: Personal Access Token (PAT)
+# For development and testing
+# ==============================================================================
+
+# Personal Access Token (starts with 'dapi')
+# Example: dapi_your_token_here
+DATABRICKS_API_KEY=
+
+# ==============================================================================
+# MODEL CONFIGURATION
+# ==============================================================================
+
+# Model to use for testing chat completions
+# Example: databricks-gpt-oss-120b, databricks-meta-llama-3-1-70b-instruct
+TEST_CHAT_MODEL=databricks-gpt-oss-120b
+
+# Model to use for testing embeddings (optional)
+# Example: databricks-bge-large-en
+TEST_EMBEDDING_MODEL=databricks-bge-large-en
+
+# ==============================================================================
+# OPTIONAL: Custom User-Agent for Partner Attribution Testing
+# ==============================================================================
+
+# Custom user agent string to test partner attribution
+# Example: mycompany/1.0.0
+# This will result in User-Agent: mycompany_litellm/{version}
+# Leave empty to use default: litellm/{version}
+CUSTOM_USER_AGENT=
+
+# ==============================================================================
+# TEST SETTINGS
+# ==============================================================================
+
+# Which authentication method to test: oauth, pat, sdk, or all
+# oauth = Use DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET
+# pat = Use DATABRICKS_API_KEY
+# sdk = Use Databricks SDK automatic authentication (~/.databrickscfg)
+# all = Test all three methods (oauth, pat, sdk) in sequence
+TEST_AUTH_METHOD=pat
+

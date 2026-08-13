@@ -1,0 +1,12 @@
+{
+    "1234": {
+        "total_budget": 10,
+        "current_cost": 7.3e-05,
+        "model_cost": {
+            "gpt-3.5-turbo": 7.3e-05
+        }
+    },
+    "12345": {
+        "total_budget": 0
+    }
+}
