@@ -13,6 +13,7 @@ from typing import Dict, Optional
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from prisma.errors import ClientNotConnectedError
 
 _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
@@ -20,7 +21,7 @@ _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
 )
 
 
-class StubClientNotConnectedError(Exception):
+class StubClientNotConnectedError(ClientNotConnectedError):
     pass
 
 
@@ -33,10 +34,7 @@ class DisconnectedPrisma:
 
     @property
     def _engine(self) -> None:
-        raise StubClientNotConnectedError(
-            "Client is not connected to the query engine, you must call `connect()` "
-            "before attempting to query data."
-        )
+        raise StubClientNotConnectedError()
 
 
 @pytest.fixture

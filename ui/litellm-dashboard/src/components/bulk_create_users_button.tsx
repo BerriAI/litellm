@@ -80,24 +80,6 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     setBaseUrl(base.toString());
   }, [accessToken]);
 
-  const downloadTemplate = () => {
-    const template = [
-      ["user_email", "user_role", "teams", "max_budget", "budget_duration", "models"],
-      ["user@example.com", "internal_user", "team-id-1,team-id-2", "100", "30d", "gpt-3.5-turbo,gpt-4"],
-    ];
-
-    const csv = Papa.unparse(template);
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "bulk_users_template.csv";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-  };
-
   const handleFileUpload = (file: File) => {
     // Reset all error states
     setParseError(null);

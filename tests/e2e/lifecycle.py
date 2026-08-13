@@ -1,13 +1,11 @@
-"""Lifecycle contract and resource cleanup for stateful e2e tests.
+"""Resource cleanup for stateful e2e tests.
 
 Shared by every e2e suite under tests/e2e/. The proxy under test is
 long-lived and never reset between tests, so anything a test creates (keys,
 customers, teams, orgs, users, guardrails, budgets, ...) persists unless
-explicitly deleted. Every check follows an init -> run -> teardown lifecycle;
-teardown releases each resource init() created, even when run() raises.
-
-In pytest terms (see conftest.py): the `resources` fixture's setup is init(),
-the test body is run(), and the fixture's teardown is teardown().
+explicitly deleted. The `resources` fixture (see conftest.py) hands each test a
+ResourceManager; the test registers a cleanup for every resource it creates, and
+the fixture's teardown releases them all even when the test body raises.
 """
 
 from dataclasses import dataclass, field
@@ -15,38 +13,6 @@ from typing import Callable, List, Protocol, runtime_checkable
 
 from proxy_client import ProxyClient
 from models import KeyGenerateBody
-
-
-@runtime_checkable
-class E2ECase(Protocol):
-    """A stateful e2e check run against a long-lived proxy.
-
-    init() acquires resources, run() exercises behaviour and asserts, teardown()
-    releases everything init() created. teardown() must run even if init() fails
-    partway or run() raises.
-    """
-
-    def init(self) -> None: ...
-
-    def run(self) -> None: ...
-
-    def teardown(self) -> None: ...
-
-
-def run_case(case: E2ECase) -> None:
-    """Drive a case through its lifecycle: init -> run -> teardown.
-
-    teardown always runs - even when init() fails partway or run() raises (or
-    skips) - so resources the case already registered on the long-lived proxy are
-    released. init() is inside the try because cases register cleanups
-    progressively (e.g. create team, then user, then key), and a failure after
-    the first creation must still release what came before.
-    """
-    try:
-        case.init()
-        case.run()
-    finally:
-        case.teardown()
 
 
 @runtime_checkable

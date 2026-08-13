@@ -4,10 +4,12 @@ Handler file for calls to Azure OpenAI's o1/o3 family of models
 Written separately to handle faking streaming for o1 and o3 models.
 """
 
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import ModelResponse
 
 from ...openai.openai import OpenAIChatCompletion
@@ -21,26 +23,26 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
     def completion(
         self,
         model_response: ModelResponse,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         optional_params: dict,
         litellm_params: dict,
-        logging_obj: Any,
-        model: Optional[str] = None,
-        messages: Optional[list] = None,
-        print_verbose: Optional[Callable] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        api_version: Optional[str] = None,
-        dynamic_params: Optional[bool] = None,
-        azure_ad_token: Optional[str] = None,
+        logging_obj: LiteLLMLoggingObj,
+        model: str | None = None,
+        messages: list | None = None,
+        print_verbose: Callable | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        api_version: str | None = None,
+        dynamic_params: bool | None = None,
+        azure_ad_token: str | None = None,
         acompletion: bool = False,
         logger_fn=None,
-        headers: Optional[dict] = None,
+        headers: dict | None = None,
         custom_prompt_dict: dict = {},
         client=None,
-        organization: Optional[str] = None,
-        custom_llm_provider: Optional[str] = None,
-        drop_params: Optional[bool] = None,
+        organization: str | None = None,
+        custom_llm_provider: str | None = None,
+        drop_params: bool | None = None,
         shared_session: Optional["ClientSession"] = None,
     ):
         client = self.get_azure_openai_client(

@@ -5,18 +5,18 @@ Computes cosine similarity between the query embedding and each message embeddin
 """
 
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 from litellm.caching.dual_cache import DualCache
 
 
 def _extract_content(message: dict) -> str:
     """Extract text content from a message dict."""
-    content = message.get("content", "")
+    content: Final = message.get("content", "")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = []
+        parts: Final = []
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
                 parts.append(part.get("text", ""))
@@ -30,15 +30,15 @@ def _truncate_text(text: str, max_chars: int = 30000) -> str:
     """Truncate long text, keeping first and last portions."""
     if len(text) <= max_chars:
         return text
-    half = max_chars // 2
+    half: Final = max_chars // 2
     return text[:half] + "\n...\n" + text[-half:]
 
 
-def _cosine_similarity(a: List[float], b: List[float]) -> float:
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
+    dot: Final = sum(x * y for x, y in zip(a, b))
+    norm_a: Final = math.sqrt(sum(x * x for x in a))
+    norm_b: Final = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
@@ -46,11 +46,11 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
 
 def embedding_score_messages(
     query: str,
-    messages: List[dict],
+    messages: list[dict],
     model: str,
-    cache: Optional[DualCache] = None,
-    embedding_model_params: Optional[Dict[str, Any]] = None,
-) -> List[float]:
+    cache: DualCache | None = None,
+    embedding_model_params: dict[str, Any] | None = None,
+) -> list[float]:
     """
     Score each message's semantic similarity to the query using embeddings.
 
@@ -67,14 +67,14 @@ def embedding_score_messages(
     """
     import litellm
 
-    texts = [_truncate_text(query)]
+    texts: Final = [_truncate_text(query)]
     for msg in messages:
         texts.append(_truncate_text(_extract_content(msg)))
 
     # Filter out empty texts — replace with a placeholder to maintain indexing
-    processed_texts = [t if t.strip() else "empty" for t in texts]
+    processed_texts: Final = [t if t.strip() else "empty" for t in texts]
 
-    kwargs: Dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "model": model,
         "input": processed_texts,
         "caching": cache is not None,
@@ -82,13 +82,13 @@ def embedding_score_messages(
     if embedding_model_params:
         kwargs = {**kwargs, **embedding_model_params}
 
-    response = litellm.embedding(**kwargs)
+    response: Final = litellm.embedding(**kwargs)
 
     # Extract embedding vectors
-    embeddings = [item["embedding"] for item in response.data]
+    embeddings: Final = [item["embedding"] for item in response.data]
 
-    query_embedding = embeddings[0]
-    scores: List[float] = []
+    query_embedding: Final = embeddings[0]
+    scores: Final[list[float]] = []
     for i in range(1, len(embeddings)):
         scores.append(_cosine_similarity(query_embedding, embeddings[i]))
 

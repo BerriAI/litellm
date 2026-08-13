@@ -6,7 +6,7 @@ import SidebarAccountMenu from "./SidebarAccountMenu";
 interface AuthMock {
   userId: string | null;
   userEmail: string | null;
-  userRole: string;
+  userRoleLabel: string;
   premiumUser: boolean;
   accessToken: string;
 }
@@ -14,7 +14,7 @@ interface AuthMock {
 let mockUseAuthorizedImpl: () => AuthMock = () => ({
   userId: "test-user-id",
   userEmail: "test@example.com",
-  userRole: "Admin",
+  userRoleLabel: "Admin",
   premiumUser: false,
   accessToken: "test-token",
 });
@@ -74,7 +74,7 @@ describe("SidebarAccountMenu", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: "test@example.com",
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
       accessToken: "test-token",
     });
@@ -127,7 +127,7 @@ describe("SidebarAccountMenu", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: "test@example.com",
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: true,
       accessToken: "test-token",
     });
@@ -273,7 +273,7 @@ describe("SidebarAccountMenu", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "default_user_id",
       userEmail: null,
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
       accessToken: "test-token",
     });
@@ -286,7 +286,7 @@ describe("SidebarAccountMenu", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: null,
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
       accessToken: "test-token",
     });

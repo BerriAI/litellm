@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from expression import case, tag, tagged_union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -184,7 +184,12 @@ class ClientCredentialsConfig(BaseModel):
 
     Fields are optional so the config can be built incomplete: a value may be supplied at
     runtime (`token_url` via RFC 8414 discovery, `client_id`/`secret` via DCR), and the
-    resolver arm raises `CredError.misconfigured` when a needed field is still absent.
+    resolver arm returns `CredError.misconfigured` when a needed field is still absent.
+
+    `audience` is the IdP-specific audience parameter some authorization servers require on
+    the client_credentials grant (sent as `audience` in the token request when set).
+    `token_endpoint_auth_method` selects how the client authenticates to the token endpoint
+    (RFC 6749 section 2.3.1); `None` defaults to `client_secret_post`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -193,6 +198,9 @@ class ClientCredentialsConfig(BaseModel):
     client_secret: SecretStr | None = None
     token_url: str | None = None
     scopes: tuple[str, ...] = ()
+    audience: str | None = None
+    upstream_resource: str | None = None
+    token_endpoint_auth_method: Literal["client_secret_post", "client_secret_basic"] | None = None
 
 
 class TokenExchangeConfig(BaseModel):
@@ -303,7 +311,7 @@ class ApiKeyConfig(BaseModel):
     key_source: ApiKeySource
 
     def header(self, value: str) -> tuple[str, str]:
-        formatted = f"{self.value_prefix} {value}" if self.value_prefix else value
+        formatted: Final = f"{self.value_prefix} {value}" if self.value_prefix else value
         return self.header_name, formatted
 
 
@@ -383,7 +391,8 @@ class Subject(BaseModel):
 
     tenant_id: str
     subject_id: str
-    # Opaque, already-validated inbound identity. Only `token_exchange` / `passthrough` read it.
+    # Opaque, already-validated inbound identity. Read by `token_exchange`, `passthrough`, and
+    # `id_jag` (which falls back to the user's stored SSO assertion when it is absent).
     inbound_token: SecretStr | None = None
 
 

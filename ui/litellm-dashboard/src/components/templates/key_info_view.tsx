@@ -6,19 +6,22 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Form, Modal, Tag } from "antd";
+import { Modal, Tag } from "antd";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
+import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
+import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlockedState";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useQueryClient } from "@tanstack/react-query";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -73,13 +76,13 @@ export default function KeyInfoView({
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const [isEditing, setIsEditing] = useState(false);
-  const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
   const [isResetSpendModalOpen, setIsResetSpendModalOpen] = useState(false);
+  const [isBlockModalOpen, setIsBlockModalOpen] = useState(false);
   const { mutate: resetKeySpend, isPending: resetSpendLoading } = useResetKeySpend();
+  const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
@@ -292,14 +295,15 @@ export default function KeyInfoView({
       }
       delete formValues.logging_settings;
 
-      // Convert budget_duration to API format
+      // Normalize any legacy word-form budget_duration to the canonical API format
       if (formValues.budget_duration) {
-        const durationMap: Record<string, string> = {
+        const wordToCanonical: Record<string, string> = {
+          hourly: "1h",
           daily: "24h",
           weekly: "7d",
           monthly: "30d",
         };
-        formValues.budget_duration = durationMap[formValues.budget_duration];
+        formValues.budget_duration = wordToCanonical[formValues.budget_duration] ?? formValues.budget_duration;
       }
 
       const newKeyValues = await keyUpdateCall(accessToken, formValues);
@@ -336,7 +340,6 @@ export default function KeyInfoView({
     } finally {
       setDeleteLoading(false);
       setIsDeleteModalOpen(false);
-      setDeleteConfirmInput("");
     }
   };
 
@@ -390,13 +393,18 @@ export default function KeyInfoView({
       )) ||
     (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
 
-  const canResetSpend =
+  const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      ));
+    Boolean(
+      teamsData &&
+        isUserTeamAdminForSingleTeam(
+          teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
+          userID || "",
+        ),
+    );
+
+  const canResetSpend = isKeyAdmin;
+  const canBlockKey = isKeyAdmin;
 
   const handleResetSpend = () => {
     resetKeySpend(currentKeyData.token || currentKeyData.token_id, {
@@ -414,6 +422,31 @@ export default function KeyInfoView({
       },
     });
   };
+
+  const isBlocked = currentKeyData.blocked === true;
+
+  const handleToggleBlocked = () => {
+    setKeyBlockedState(
+      { keyToken: currentKeyData.token || currentKeyData.token_id, blocked: !isBlocked },
+      {
+        onSuccess: (response) => {
+          const blocked = response.blocked === true;
+          setCurrentKeyData((prevData) => (prevData ? { ...prevData, blocked } : undefined));
+          if (onKeyDataUpdate) {
+            onKeyDataUpdate({ blocked });
+          }
+          NotificationManager.success(blocked ? "Key blocked" : "Key unblocked");
+          setIsBlockModalOpen(false);
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(parseErrorMessage(error));
+          console.error("Error updating key blocked state:", error);
+        },
+      },
+    );
+  };
+
+  const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
 
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
 
@@ -439,7 +472,7 @@ export default function KeyInfoView({
             currentKeyData.created_by ||
             "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
-          lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
+          lastUpdated: lastConfiguredAt ? formatTimestamp(lastConfiguredAt) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
           expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
@@ -447,6 +480,8 @@ export default function KeyInfoView({
         onRegenerate={() => setIsRegenerateModalOpen(true)}
         onDelete={() => setIsDeleteModalOpen(true)}
         onResetSpend={canResetSpend ? () => setIsResetSpendModalOpen(true) : undefined}
+        onToggleBlocked={canBlockKey ? () => setIsBlockModalOpen(true) : undefined}
+        isBlocked={isBlocked}
         canModifyKey={canModifyKey}
         backButtonText={backButtonText}
         regenerateDisabled={!premiumUser}
@@ -492,7 +527,6 @@ export default function KeyInfoView({
         ]}
         onCancel={() => {
           setIsDeleteModalOpen(false);
-          setDeleteConfirmInput("");
         }}
         onOk={handleDelete}
         confirmLoading={deleteLoading}
@@ -519,6 +553,26 @@ export default function KeyInfoView({
         </p>
       </Modal>
 
+      <Modal
+        title={isBlocked ? "Unblock Key" : "Block Key"}
+        open={isBlockModalOpen}
+        onOk={handleToggleBlocked}
+        onCancel={() => setIsBlockModalOpen(false)}
+        okText={isBlocked ? "Unblock" : "Block"}
+        okButtonProps={isBlocked ? undefined : { danger: true }}
+        confirmLoading={blockLoading}
+      >
+        <p>
+          {isBlocked ? "Unblock" : "Block"}{" "}
+          <strong>{currentKeyData?.key_alias || currentKeyData?.token_id || "this key"}</strong>?
+        </p>
+        <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
+          {isBlocked
+            ? "Requests using this key will be accepted again."
+            : "Requests using this key will be rejected with a 401 error until it is unblocked. The key is not deleted and can be unblocked at any time."}
+        </p>
+      </Modal>
+
       <TabGroup>
         <TabList className="mb-4">
           <Tab>Overview</Tab>
@@ -534,6 +588,9 @@ export default function KeyInfoView({
                 <div className="mt-2">
                   <Title>${formatNumberWithCommas(currentKeyData.spend, 4)}</Title>
                   <Text>of {budgetDisplay}</Text>
+                  {currentKeyData.budget_reset_at && (
+                    <Text>Resets {formatTimestamp(currentKeyData.budget_reset_at)}</Text>
+                  )}
                 </div>
               </Card>
 
@@ -727,6 +784,13 @@ export default function KeyInfoView({
                     <Text>{currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never"}</Text>
                   </div>
 
+                  {Boolean(currentKeyData.metadata?.enable_prompt_caching) && (
+                    <div>
+                      <Text className="font-medium">Prompt Caching</Text>
+                      <Text>Enabled (auto-injects cache_control markers on Anthropic and Bedrock Claude requests)</Text>
+                    </div>
+                  )}
+
                   <AutoRotationView
                     autoRotate={currentKeyData.auto_rotate}
                     rotationInterval={currentKeyData.rotation_interval}
@@ -751,6 +815,15 @@ export default function KeyInfoView({
                     </Text>
                   </div>
 
+                  <div>
+                    <Text className="font-medium">Budget Reset</Text>
+                    <Text>
+                      {currentKeyData.budget_reset_at
+                        ? `${currentKeyData.budget_duration ? `Every ${currentKeyData.budget_duration}, next ` : ""}${formatTimestamp(currentKeyData.budget_reset_at)}`
+                        : "Never"}
+                    </Text>
+                  </div>
+
                   {currentKeyData.budget_fallbacks && Object.keys(currentKeyData.budget_fallbacks).length > 0 && (
                     <div>
                       <Text className="font-medium">Budget Fallbacks</Text>
@@ -762,6 +835,15 @@ export default function KeyInfoView({
                             {fallbacks.join(", ")}
                           </div>
                         ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {hasRouterSettings(currentKeyData.router_settings) && (
+                    <div>
+                      <Text className="font-medium">Router Settings</Text>
+                      <div className="mt-1">
+                        <RouterSettingsSummary routerSettings={currentKeyData.router_settings} />
                       </div>
                     </div>
                   )}
@@ -875,6 +957,18 @@ export default function KeyInfoView({
                       Object.keys(currentKeyData.metadata.tag_rpm_limit).length > 0
                         ? JSON.stringify(currentKeyData.metadata.tag_rpm_limit)
                         : "Unlimited"}
+                    </Text>
+                    <Text>
+                      Estimated Output Tokens:{" "}
+                      {currentKeyData.metadata?.default_estimated_output_tokens != null
+                        ? String(currentKeyData.metadata.default_estimated_output_tokens)
+                        : "Default"}
+                    </Text>
+                    <Text>
+                      Estimated Output Tokens Per Model:{" "}
+                      {currentKeyData.metadata?.default_estimated_output_tokens_per_model
+                        ? JSON.stringify(currentKeyData.metadata.default_estimated_output_tokens_per_model)
+                        : "Default"}
                     </Text>
                   </div>
 

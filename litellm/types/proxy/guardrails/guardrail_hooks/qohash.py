@@ -1,12 +1,10 @@
-from typing import Optional
-
 from pydantic import Field
 
 from .base import GuardrailConfigModel
 
 
 class QostodianNexusConfigModel(GuardrailConfigModel):
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description="The API base URL for Qostodian Nexus. If not provided, the `QOSTODIAN_NEXUS_API_BASE` environment variable is checked. Defaults to http://nexus:8800.",
     )

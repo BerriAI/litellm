@@ -12,6 +12,9 @@ interface AdditionalModelSettingsProps {
   onUseAdvancedParamsChange?: (value: boolean) => void;
   mockTestFallbacks?: boolean;
   onMockTestFallbacksChange?: (value: boolean) => void;
+  streamingEnabled?: boolean;
+  onStreamingChange?: (value: boolean) => void;
+  showAdvancedParams?: boolean;
 }
 
 const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
@@ -23,6 +26,9 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
   onUseAdvancedParamsChange,
   mockTestFallbacks,
   onMockTestFallbacksChange,
+  streamingEnabled = true,
+  onStreamingChange,
+  showAdvancedParams = true,
 }) => {
   const [internalUseAdvancedParams, setInternalUseAdvancedParams] = useState(false);
   const useAdvancedParams =
@@ -64,9 +70,25 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
 
   return (
     <div className="space-y-4 p-4 w-80">
-      <Checkbox checked={useAdvancedParams} onChange={(e) => handleUseAdvancedParamsChange(e.target.checked)}>
-        <span className="font-medium">Use Advanced Parameters</span>
-      </Checkbox>
+      {onStreamingChange && (
+        <div className="flex items-center gap-1">
+          <Checkbox checked={streamingEnabled} onChange={(e) => onStreamingChange(e.target.checked)}>
+            <span className="font-medium">Stream responses</span>
+          </Checkbox>
+          <Tooltip title="Streams the answer token by token. Uncheck to send a non-streaming request and render the full response at once.">
+            <InfoCircleOutlined
+              className="text-xs text-gray-400 cursor-pointer shrink-0 hover:text-gray-600"
+              aria-label="Help: Stream responses"
+            />
+          </Tooltip>
+        </div>
+      )}
+
+      {showAdvancedParams && (
+        <Checkbox checked={useAdvancedParams} onChange={(e) => handleUseAdvancedParamsChange(e.target.checked)}>
+          <span className="font-medium">Use Advanced Parameters</span>
+        </Checkbox>
+      )}
 
       {onMockTestFallbacksChange && (
         <div className="flex items-center gap-1">
@@ -104,72 +126,74 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
         </div>
       )}
 
-      <div className="space-y-4 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-1">
-              <Text className={`text-sm ${disabledTextColor}`}>Temperature</Text>
-              <Tooltip title="Controls randomness. Lower values make output more deterministic, higher values more creative.">
-                <InfoCircleOutlined className={`text-xs ${disabledTextColor} cursor-help`} />
-              </Tooltip>
+      {showAdvancedParams && (
+        <div className="space-y-4 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1">
+                <Text className={`text-sm ${disabledTextColor}`}>Temperature</Text>
+                <Tooltip title="Controls randomness. Lower values make output more deterministic, higher values more creative.">
+                  <InfoCircleOutlined className={`text-xs ${disabledTextColor} cursor-help`} />
+                </Tooltip>
+              </div>
+              <InputNumber
+                min={0}
+                max={2}
+                step={0.1}
+                value={localTemperature}
+                onChange={handleTemperatureChange}
+                disabled={!useAdvancedParams}
+                precision={1}
+                className="w-20"
+              />
             </div>
-            <InputNumber
+            <Slider
               min={0}
               max={2}
               step={0.1}
               value={localTemperature}
               onChange={handleTemperatureChange}
               disabled={!useAdvancedParams}
-              precision={1}
-              className="w-20"
+              marks={{
+                0: "0",
+                1: "1.0",
+                2: "2.0",
+              }}
             />
           </div>
-          <Slider
-            min={0}
-            max={2}
-            step={0.1}
-            value={localTemperature}
-            onChange={handleTemperatureChange}
-            disabled={!useAdvancedParams}
-            marks={{
-              0: "0",
-              1: "1.0",
-              2: "2.0",
-            }}
-          />
-        </div>
 
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-1">
-              <Text className={`text-sm ${disabledTextColor}`}>Max Tokens</Text>
-              <Tooltip title="Maximum number of tokens to generate in the response.">
-                <InfoCircleOutlined className={`text-xs ${disabledTextColor} cursor-help`} />
-              </Tooltip>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1">
+                <Text className={`text-sm ${disabledTextColor}`}>Max Tokens</Text>
+                <Tooltip title="Maximum number of tokens to generate in the response.">
+                  <InfoCircleOutlined className={`text-xs ${disabledTextColor} cursor-help`} />
+                </Tooltip>
+              </div>
+              <InputNumber
+                min={1}
+                max={32768}
+                step={1}
+                value={localMaxTokens}
+                onChange={handleMaxTokensChange}
+                disabled={!useAdvancedParams}
+              />
             </div>
-            <InputNumber
+            <Slider
               min={1}
               max={32768}
               step={1}
               value={localMaxTokens}
               onChange={handleMaxTokensChange}
               disabled={!useAdvancedParams}
+              marks={{
+                1: "1",
+                32768: "32768",
+              }}
             />
           </div>
-          <Slider
-            min={1}
-            max={32768}
-            step={1}
-            value={localMaxTokens}
-            onChange={handleMaxTokensChange}
-            disabled={!useAdvancedParams}
-            marks={{
-              1: "1",
-              32768: "32768",
-            }}
-          />
         </div>
-      </div>
+      )}
     </div>
   );
 };

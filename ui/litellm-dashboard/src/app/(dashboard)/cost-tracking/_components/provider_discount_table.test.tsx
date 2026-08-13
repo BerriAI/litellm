@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import ProviderDiscountTable from "./provider_discount_table";
@@ -41,15 +41,6 @@ vi.mock("@tremor/react", () => ({
     const name = IconComponent?.displayName ?? IconComponent?.name ?? "icon";
     return <button onClick={onClick} aria-label={name} />;
   },
-}));
-
-vi.mock("./provider_display_helpers", () => ({
-  getProviderDisplayInfo: vi.fn((providerValue: string) => ({
-    displayName: providerValue === "openai" ? "OpenAI" : providerValue,
-    logo: providerValue === "openai" ? "https://example.com/openai.png" : "",
-    enumKey: providerValue === "openai" ? "OpenAI" : null,
-  })),
-  handleImageError: vi.fn(),
 }));
 
 const DEFAULT_DISCOUNT_CONFIG = {
