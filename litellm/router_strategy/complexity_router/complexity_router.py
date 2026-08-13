@@ -26,8 +26,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 from pydantic import BaseModel, create_model
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
@@ -204,40 +205,6 @@ def _append_custom_keywords(base_keywords: list[str], custom_keywords: list[str]
     base_lowered: Final = frozenset(keyword.lower() for keyword in base_keywords)
     deduped_custom = {keyword.lower(): keyword for keyword in custom_keywords if keyword.lower() not in base_lowered}
     return [*base_keywords, *deduped_custom.values()]
-
-
-# Metadata keys that carry only the parent request's budget reservation state. These
-# must not reach internal sub-calls (classifier, embedding): the reservation belongs to
-# the routed completion being decided on, not to the sub-call itself, and forwarding it
-# would let the sub-call's cost callback finalize the reservation, causing the routed
-# completion's callback to skip incrementing key/team budget counters.
-#
-# Note: user_api_key_auth itself is intentionally kept; it is required by
-# _filter_deployments_by_model_access_groups to scope embedding/classifier model
-# selection to the caller's authorized access groups. It is forwarded as a sanitized
-# copy with its budget_reservation sub-field removed, because the proxy cost callback
-# (_get_budget_reservation_from_metadata) falls back to reading the reservation from
-# inside the auth object when the top-level key is absent; forwarding it unsanitized
-# would re-create the exact double-finalization this stripping exists to prevent.
-_BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
-
-
-def _sanitize_user_api_key_auth(auth: Any) -> Any:
-    if isinstance(auth, dict):
-        return {k: v for k, v in auth.items() if k != "budget_reservation"}
-    if getattr(auth, "budget_reservation", None) is not None and hasattr(auth, "model_copy"):
-        return auth.model_copy(update={"budget_reservation": None})
-    return auth
-
-
-def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
-    if not metadata:
-        return {}
-    return {
-        k: _sanitize_user_api_key_auth(v) if k == "user_api_key_auth" else v
-        for k, v in metadata.items()
-        if k not in _BUDGET_RESERVATION_METADATA_KEYS
-    } | {INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN}
 
 
 def _parent_session_kwargs(request_kwargs: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -1069,7 +1036,7 @@ class ComplexityRouter(CustomLogger):
         )
 
         request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
-        metadata: Final = _classifier_call_metadata(request_metadata)
+        metadata: Final = forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN)
         turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
 
         labeled_tiers: Final = self.config.labeled_tiers()
@@ -1562,8 +1529,12 @@ class ComplexityRouter(CustomLogger):
         # embedding call. Forwarding it would let the embedding's cost callback finalize the
         # reservation, so the routed completion's own callback then skips incrementing the
         # key/team budget. Key/team attribution fields are preserved for spend logging.
-        metadata: Final = _classifier_call_metadata(request_kwargs.get("metadata"))
-        litellm_metadata: Final = _classifier_call_metadata(request_kwargs.get("litellm_metadata"))
+        metadata: Final = forwarded_internal_call_metadata(
+            request_kwargs.get("metadata"), AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+        )
+        litellm_metadata: Final = forwarded_internal_call_metadata(
+            request_kwargs.get("litellm_metadata"), AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+        )
         turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
         proxy_server_request: Final = {"body": {"model": self.config.embedding_model, "input": [user_message]}}
         query_vector: Final = (
