@@ -1,19 +1,17 @@
 import { AccessGroupResponse, useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup";
-import { PlusOutlined } from "@ant-design/icons";
-import { Button, Flex, Input, Layout, Space, theme, Typography } from "antd";
-import { SearchIcon } from "lucide-react";
+import { Plus, SearchIcon, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { Button } from "@/components/ui/button";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 import { AccessGroupCreateModal } from "./AccessGroupsModal/AccessGroupCreateModal";
 import { AccessGroupsTable } from "./AccessGroupsTable";
 import { AccessGroup } from "./types";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
-
-const { Title, Text } = Typography;
-const { Content } = Layout;
 
 function mapResponseToAccessGroup(r: AccessGroupResponse): AccessGroup {
   return {
@@ -33,7 +31,6 @@ function mapResponseToAccessGroup(r: AccessGroupResponse): AccessGroup {
 }
 
 export function AccessGroupsPage() {
-  const { token } = theme.useToken();
   const { userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see access groups, no writes.
   const canModify = isProxyAdminRole(userRole ?? "");
@@ -62,31 +59,41 @@ export function AccessGroupsPage() {
   }
 
   return (
-    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
-      <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" size={0}>
-          <Title level={2} style={{ margin: 0 }}>
-            Access Groups
-          </Title>
-          <Text type="secondary">Manage resource permissions for your organization</Text>
-        </Space>
-        {canModify && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateModalVisible(true)}>
-            Create Access Group
-          </Button>
-        )}
-      </Flex>
-
-      <Flex align="center" style={{ marginBottom: 12 }}>
-        <Input
-          prefix={<SearchIcon size={16} />}
-          placeholder="Search groups by name, ID, or description..."
-          style={{ maxWidth: 400 }}
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          allowClear
+    <div className="p-6 px-12">
+      <div className="mb-4">
+        <PageHeader
+          title="Access Groups"
+          subtitle="Manage resource permissions for your organization"
+          actions={
+            canModify ? (
+              <Button onClick={() => setIsCreateModalVisible(true)}>
+                <Plus className="size-4" />
+                Create Access Group
+              </Button>
+            ) : undefined
+          }
         />
-      </Flex>
+      </div>
+
+      <div className="mb-3 flex items-center">
+        <InputGroup className="max-w-[400px]">
+          <InputGroupAddon>
+            <SearchIcon className="size-4 text-muted-foreground" />
+          </InputGroupAddon>
+          <InputGroupInput
+            placeholder="Search groups by name, ID, or description..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+          />
+          {searchText && (
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
+                <X />
+              </InputGroupButton>
+            </InputGroupAddon>
+          )}
+        </InputGroup>
+      </div>
 
       <AccessGroupsTable
         groups={filteredGroups}
@@ -120,6 +127,6 @@ export function AccessGroupsPage() {
         }}
         confirmLoading={deleteMutation.isPending}
       />
-    </Content>
+    </div>
   );
 }

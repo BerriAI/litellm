@@ -4,11 +4,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/access-groups/_components/AccessGroupsDetailsPage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/access-groups/_components/AccessGroupsModal/AccessGroupBaseForm.tsx": {
     "no-restricted-imports": {
       "count": 2
@@ -24,26 +19,11 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/access-groups/_components/AccessGroupsPage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/admin-panel/_components/AdminPanel.tsx": {
     "no-restricted-imports": {
       "count": 2
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/agents/_components/AgentsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/agents/_components/AgentsTable.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -62,16 +42,10 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/agents/_components/agent_card_discovery.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/refs": {
@@ -84,9 +58,6 @@
   "src/app/(dashboard)/agents/_components/agent_cost_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/agents/_components/agent_form_fields.tsx": {
@@ -123,9 +94,6 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/agents/_components/cost_config_fields.tsx": {
@@ -155,16 +123,8 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/budgets/_components/budget_panel.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/budgets/_components/budget_panel.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -183,30 +143,19 @@
     "no-restricted-imports": {
       "count": 1
     },
-    "prefer-const": {
-      "count": 3
-    },
     "react-hooks/purity": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/caching/_components/cache_health.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/caching/_components/cache_settings/CacheFormField.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/caching/_components/cache_settings/RedisTypeSelector.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -232,11 +181,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/caching/_components/coordination_redis_settings/CoordinationRedisTypeSelector.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/caching/_components/coordination_redis_settings/coordinationRedisFields.ts": {
     "no-restricted-imports": {
       "count": 1
@@ -255,22 +199,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-optimization/_components/AutorouterTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/cost-optimization/_components/CostOptimizationView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-optimization/_components/PromptCompressionTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/cost-optimization/_components/UsageTab.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -305,9 +234,6 @@
   "src/app/(dashboard)/cost-tracking/_components/how_it_works.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/index.tsx": {
@@ -331,16 +257,8 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_export_dropdown.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_export_dropdown.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -381,9 +299,6 @@
     }
   },
   "src/app/(dashboard)/guardrails-monitor/_components/EvaluationSettingsModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -396,9 +311,6 @@
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailDetail.tsx": {
     "no-nested-ternary": {
       "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailsMonitorView.tsx": {
@@ -842,6 +754,25 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/AwsSigV4Fields.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/CreateMCPServer.tsx": {
+    "max-lines": {
+      "count": 1
+    },
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 4
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/DcrBridgeToggle.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -852,20 +783,17 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/IdJagFormFields.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/immutability": {
       "count": 2
     }
@@ -878,11 +806,6 @@
   "src/app/(dashboard)/mcp-servers/_components/MCPPermissionManagement.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPServerCard.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/MCPSubmissionsTab.tsx": {
@@ -923,10 +846,12 @@
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/OpenAPIQuickPicker.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/OpenApiByokFields.tsx": {
+    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -966,34 +891,12 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/mcp-servers/_components/TruePassthroughWarning.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/mcp-servers/_components/UserEnvVarsModal.tsx": {
     "no-nested-ternary": {
       "count": 2
     },
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/create_mcp_server.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "max-lines": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/index.tsx": {
@@ -1018,9 +921,6 @@
     },
     "no-nested-ternary": {
       "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_discovery.tsx": {
@@ -1030,9 +930,6 @@
     "local/no-complex-jsx-arrow": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1040,16 +937,10 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_config.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_display.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1058,9 +949,6 @@
       "count": 1
     },
     "max-lines": {
-      "count": 1
-    },
-    "no-nested-ternary": {
       "count": 1
     },
     "no-restricted-imports": {
@@ -1076,9 +964,6 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_servers.tsx": {
@@ -1091,9 +976,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1101,9 +983,6 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_tools.tsx": {
@@ -1116,9 +995,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1128,35 +1004,22 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/memory/_components/MemoryDetailDrawer.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/memory/_components/MemoryEditModal.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/memory/_components/MemoryView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.test.tsx": {
-    "react/display-name": {
       "count": 1
     }
   },
   "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab.tsx": {
+  "src/app/(dashboard)/models-and-endpoints/panels/AddModelPanel.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1180,11 +1043,6 @@
       "count": 1
     },
     "react-hooks/purity": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/organizations/_components/OrganizationsPanel.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1483,9 +1341,6 @@
     "no-nested-ternary": {
       "count": 10
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/immutability": {
       "count": 1
     }
@@ -1495,9 +1350,6 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -1515,16 +1367,10 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/policies/_components/impact_preview_alert.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1540,9 +1386,6 @@
     "local/no-complex-jsx-arrow": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1557,9 +1400,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1568,18 +1408,12 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/app/(dashboard)/policies/_components/policy_templates.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1598,9 +1432,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/immutability": {
       "count": 1
     },
@@ -1610,16 +1441,10 @@
   },
   "src/app/(dashboard)/projects/_components/ProjectDetailsPage.tsx": {
     "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
+      "count": 2
     }
   },
   "src/app/(dashboard)/projects/_components/ProjectKeysSection.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1650,11 +1475,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/projects/_components/ProjectsPage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/prompts/_components/add_prompt_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1679,86 +1499,24 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/DeveloperMessageCard.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/ModelConfigCard.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/prompts/_components/prompt_editor_view/PromptCodeSnippets.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/PromptEditorHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/PromptMessagesCard.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/PublishModal.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/ToolsCard.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/VersionHistorySidePanel.test.tsx": {
-    "max-nested-callbacks": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/prompts/_components/prompt_editor_view/VersionHistorySidePanel.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/immutability": {
       "count": 1
     }
   },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/conversation_panel/MessageInput.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/conversation_panel/MessageList.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/prompts/_components/prompt_editor_view/conversation_panel/VariableInput.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/prompts/_components/prompt_editor_view/conversation_panel/index.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1797,16 +1555,10 @@
   "src/app/(dashboard)/prompts/_components/tool_modal.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/prompts/_components/variable_textarea.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1818,7 +1570,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     },
     "prefer-const": {
       "count": 2
@@ -1854,9 +1606,6 @@
     }
   },
   "src/app/(dashboard)/skills/_components/ClaudeCodePluginsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1876,9 +1625,6 @@
   },
   "src/app/(dashboard)/tag-management/_components/index.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -1902,9 +1648,6 @@
     }
   },
   "src/app/(dashboard)/ui-theme/UIThemeSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "no-restricted-syntax": {
       "count": 3
     },
@@ -1993,11 +1736,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/users/_components/DefaultUserSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/users/_components/edit_user.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2034,9 +1772,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 3
-    },
     "prefer-const": {
       "count": 1
     },
@@ -2068,11 +1803,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/TestVectorStoreTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/VectorStoreForm.tsx": {
     "no-nested-ternary": {
       "count": 2
@@ -2084,16 +1814,8 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/VectorStoreTester.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/index.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -2232,22 +1954,7 @@
       "count": 1
     }
   },
-  "src/components/CloudZeroCostTracking/CloudZeroCostTracking.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/CloudZeroCostTracking/CloudZeroCreateModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/CloudZeroCostTracking/CloudZeroEmptyPlaceholder.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/CloudZeroCostTracking/CloudZeroIntegrationSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2266,16 +1973,6 @@
     }
   },
   "src/components/DebugWarningBanner.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/DeletedKeysPage/DeletedKeysPage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/DeletedTeamsPage/DeletedTeamsPage.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2330,9 +2027,6 @@
   },
   "src/components/GuardrailSettingsView.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2423,14 +2117,6 @@
   "src/components/Settings/AdminSettings/HashicorpVault/HashicorpVault.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/HashicorpVault/HashicorpVaultEmptyPlaceholder.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/Settings/AdminSettings/LoggingSettings/LoggingSettings.tsx": {
@@ -2446,11 +2132,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterTestPanel.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2487,9 +2168,6 @@
   "src/components/Settings/AdminSettings/SSOSettings/RedactableField.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/Settings/AdminSettings/SSOSettings/RoleMappings.tsx": {
@@ -2497,39 +2175,13 @@
       "count": 1
     }
   },
-  "src/components/Settings/AdminSettings/SSOSettings/SSOSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/SSOSettings/SSOSettingsEmptyPlaceholder.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/SSOSettings/SSOSettingsLoadingSkeleton.test.tsx": {
-    "max-nested-callbacks": {
-      "count": 4
-    }
-  },
-  "src/components/Settings/AdminSettings/SSOSettings/SSOSettingsLoadingSkeleton.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/Settings/AdminSettings/UISettings/PageVisibilitySettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-render": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/Settings/AdminSettings/UISettings/UISettings.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2575,16 +2227,6 @@
       "count": 2
     }
   },
-  "src/components/TeamSSOSettings.test.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/TeamSSOSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/Teams.test.tsx": {
     "max-nested-callbacks": {
       "count": 4
@@ -2610,29 +2252,11 @@
       "count": 2
     },
     "react-hooks/set-state-in-effect": {
-      "count": 3
+      "count": 1
     }
   },
   "src/components/TeamsPage/teamTableColumns.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/ToolDetail.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 2
-    }
-  },
-  "src/components/ToolPolicies/PolicySelect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/ToolPolicies/ToolPoliciesTableColumns.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2717,12 +2341,6 @@
     }
   },
   "src/components/add_model/RouterConfigBuilder.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/purity": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -2732,35 +2350,17 @@
       "count": 1
     }
   },
-  "src/components/add_model/add_auto_router_tab.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/add_model/add_auto_router_tab.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/components/add_model/add_model_modes.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    }
-  },
-  "src/components/add_model/add_model_tab.test.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/add_model/add_model_tab.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 4
     }
   },
   "src/components/add_model/advanced_settings.tsx": {
@@ -2776,9 +2376,6 @@
   },
   "src/components/add_model/auto_router_connection_test.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2844,9 +2441,6 @@
     },
     "no-nested-ternary": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/add_model/provider_specific_fields.test.tsx": {
@@ -2937,7 +2531,7 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 6
+      "count": 4
     }
   },
   "src/components/chat/MCPConnectPicker.tsx": {
@@ -3025,26 +2619,8 @@
       "count": 1
     }
   },
-  "src/components/common_components/DurationSelect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/common_components/Filters/FilterInput.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/Filters/FiltersButton.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/Filters/ResetFiltersButton.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -3074,6 +2650,16 @@
   "src/components/common_components/MemberTable.tsx": {
     "no-restricted-imports": {
       "count": 2
+    }
+  },
+  "src/components/common_components/MetadataKeyValueFields.test.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/common_components/MetadataKeyValueFields.tsx": {
+    "no-restricted-imports": {
+      "count": 1
     }
   },
   "src/components/common_components/ModelAliasManager.tsx": {
@@ -3147,11 +2733,6 @@
     }
   },
   "src/components/common_components/RouterSettingsAccordion.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/TableHeaderSortDropdown/TableHeaderSortDropdown.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -3254,9 +2835,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/immutability": {
       "count": 1
     }
@@ -3264,9 +2842,6 @@
   "src/components/email_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     },
     "prefer-const": {
       "count": 1
@@ -3321,9 +2896,6 @@
   "src/components/key_value_input.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/leftnav.tsx": {
@@ -3413,35 +2985,10 @@
       "count": 3
     }
   },
-  "src/components/model_add/CredentialsPanel.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/CredentialsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/credential_form_helpers.test.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/credential_form_helpers.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/model_add/reuse_credentials.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/model_dashboard/HealthCheckComponent.tsx": {
     "no-restricted-imports": {
       "count": 2
     }
@@ -3549,10 +3096,10 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 154
+      "count": 152
     },
     "prefer-const": {
-      "count": 33
+      "count": 32
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -3598,7 +3145,7 @@
       "count": 2
     },
     "prefer-const": {
-      "count": 4
+      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 4
@@ -3609,7 +3156,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 1
     }
   },
   "src/components/page_utils.test.ts": {
@@ -3665,12 +3212,6 @@
   "src/components/price_data_reload.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 2
     }
   },
   "src/components/provider_info_helpers.tsx": {
@@ -3695,16 +3236,10 @@
   "src/components/query_param_input.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/route_preview.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -3747,11 +3282,6 @@
       "count": 1
     }
   },
-  "src/components/routing_groups/RoutingGroupsTable.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/components/routing_groups/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -3765,9 +3295,6 @@
   },
   "src/components/search_tools/SearchToolSelector.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -3938,11 +3465,6 @@
       "count": 2
     }
   },
-  "src/components/team/MyUserTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/team/TeamInfo.tsx": {
     "max-lines": {
       "count": 1
@@ -3960,17 +3482,11 @@
   "src/components/team/TeamMemberTab.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/team/TeamVirtualKeysTable.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/team/member_permissions.tsx": {
@@ -4032,11 +3548,6 @@
       "count": 2
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/ui/AntDLoadingSpinner.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -4126,6 +3637,11 @@
     }
   },
   "src/components/ui/popover.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/ui/radio-group.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }
@@ -4220,7 +3736,7 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/vector_store_management/VectorStoreSelector.test.tsx": {
@@ -4240,11 +3756,6 @@
   },
   "src/components/vector_store_providers.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/AuditLogDrawer/AuditLogDrawer.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -4318,7 +3829,7 @@
   },
   "src/components/view_logs/LogDetailsDrawer/LogDetailsDrawer.tsx": {
     "no-nested-ternary": {
-      "count": 3
+      "count": 2
     },
     "no-restricted-imports": {
       "count": 1
@@ -4367,11 +3878,6 @@
       "count": 1
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/prettyMessagesUtils.ts": {
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/useKeyboardNavigation.ts": {
     "react-hooks/immutability": {
       "count": 2
@@ -4409,9 +3915,6 @@
   },
   "src/components/view_logs/index.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -4514,11 +4017,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/lib/http/client.ts": {
-    "no-nested-ternary": {
       "count": 1
     }
   },

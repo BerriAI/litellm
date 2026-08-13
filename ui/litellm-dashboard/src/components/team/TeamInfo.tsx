@@ -1,4 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
@@ -17,6 +18,7 @@ import {
 import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
 import {
   EditOutlined,
@@ -34,6 +36,17 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import {
+  computeTeamModelBadges,
+  normalizeTeamModelSelection,
+  TeamAccessGroupModelGrant,
+  TeamModelBadgeKind,
+} from "./teamModelAccess";
+import MetadataKeyValueFields, {
+  metadataObjectToPairs,
+  metadataPairsToObject,
+} from "../common_components/MetadataKeyValueFields";
+import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -46,7 +59,7 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
-import { fetchMCPAccessGroups } from "../networking";
+import { estimateRules, estimateTooltips } from "../templates/estimatedOutputTokens";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -64,6 +77,27 @@ import {
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+
+const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "logging",
+  "secret_manager_settings",
+  "soft_budget_alerting_emails",
+  "model_tpm_limit",
+  "model_rpm_limit",
+  "default_estimated_output_tokens",
+  "default_estimated_output_tokens_per_model",
+  "allowed_passthrough_routes",
+  "guardrails",
+  "opted_out_global_guardrails",
+  "disable_global_guardrails",
+]);
+
+const TEAM_MODEL_BADGE_COLORS: Record<TeamModelBadgeKind, "red" | "gray" | "blue" | "green"> = {
+  "all-proxy": "red",
+  "no-default": "gray",
+  direct: "blue",
+  "access-group": "green",
+};
 
 export interface TeamMembership {
   user_id: string;
@@ -115,20 +149,11 @@ export interface TeamData {
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
+    access_group_details?: TeamAccessGroupModelGrant[];
     router_settings?: Record<string, any>;
     guardrails?: string[];
     policies?: string[];
-    object_permission?: {
-      object_permission_id: string;
-      mcp_servers: string[];
-      mcp_access_groups?: string[];
-      mcp_tool_permissions?: Record<string, string[]>;
-      mcp_toolsets?: string[];
-      vector_stores: string[];
-      agents?: string[];
-      agent_access_groups?: string[];
-      search_tools?: string[];
-    };
+    object_permission?: ObjectPermission | null;
     team_member_budget_table: {
       max_budget: number;
       budget_duration: string;
@@ -153,29 +178,6 @@ export interface TeamInfoProps {
   premiumUser?: boolean;
 }
 
-const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
-  let tempModelsToPick = [];
-
-  if (organization) {
-    // Check if organization has "all-proxy-models" in its models array
-    if (organization.models.includes("all-proxy-models")) {
-      // Treat as all-proxy-models (use userModels)
-      tempModelsToPick = userModels;
-    } else if (organization.models.length > 0) {
-      // Organization has specific models
-      tempModelsToPick = organization.models;
-    } else {
-      // Empty array [] is treated as all-proxy-models
-      tempModelsToPick = userModels;
-    }
-  } else {
-    // No organization, show all available models
-    tempModelsToPick = userModels;
-  }
-
-  return unfurlWildcardModelsInList(tempModelsToPick, userModels);
-};
-
 const TeamInfoView: React.FC<TeamInfoProps> = ({
   teamId,
   onClose,
@@ -195,11 +197,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
+  const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
@@ -211,7 +212,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
+  const canEditTeamEstimates = isProxyAdminRole(userRole);
+  const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
   const { data: userOrganizations = [] } = useOrganizations();
+  const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
 
   // Check if user is org admin for this team's organization
@@ -234,7 +238,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     return unfurlWildcardModelsInList(selected, userModels);
   }, [selectedModelsInForm, teamData, userModels]);
 
-  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
+  const isTeamAdminFromTeamData = useMemo(
+    () =>
+      teamData?.team_info?.members_with_roles?.some(
+        (member) => member.user_id != null && member.user_id === userId && member.role === "admin",
+      ) ?? false,
+    [teamData, userId],
+  );
+
+  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
 
@@ -276,23 +288,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     fetchOrganization();
   }, [accessToken, teamData?.team_info?.organization_id]);
 
-  // Compute modelsToPick based on organization and userModels
-  const modelsToPick = useMemo(() => {
-    return getOrganizationModels(organization, userModels);
-  }, [organization, userModels]);
-
-  const fetchMcpAccessGroups = async () => {
-    if (!accessToken) return;
-    if (mcpAccessGroupsLoaded) return;
-    try {
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-      setMcpAccessGroupsLoaded(true);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
-
   useEffect(() => {
     const fetchPolicies = async () => {
       try {
@@ -305,8 +300,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
     };
 
-    fetchPolicies();
-  }, [accessToken]);
+    if (canViewPolicies) fetchPolicies();
+  }, [accessToken, canViewPolicies]);
 
   // Fetch resolved guardrails for all policies
   useEffect(() => {
@@ -462,16 +457,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (!accessToken) return;
       setIsTeamSaving(true);
 
-      let parsedMetadata = {};
-      try {
-        const rawMetadata = values.metadata ? JSON.parse(values.metadata) : {};
-        // Exclude soft_budget_alerting_emails from parsed metadata since it's handled separately
-        const { soft_budget_alerting_emails, ...rest } = rawMetadata;
-        parsedMetadata = rest;
-      } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in metadata field");
-        return;
-      }
+      const parsedMetadata = metadataPairsToObject(values.metadata);
 
       let secretManagerSettings: Record<string, any> | undefined;
       if (typeof values.secret_manager_settings === "string") {
@@ -492,6 +478,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         if (typeof v === "number" && Number.isNaN(v)) return null;
         return v;
       };
+
+      const estimatedOutputTokens = sanitizeNumeric(values.default_estimated_output_tokens);
+
+      let estimatedOutputTokensPerModel: Record<string, number> | undefined;
+      if (typeof values.default_estimated_output_tokens_per_model === "string") {
+        const trimmedEstimates = values.default_estimated_output_tokens_per_model.trim();
+        if (trimmedEstimates.length > 0) {
+          try {
+            estimatedOutputTokensPerModel = JSON.parse(trimmedEstimates);
+          } catch (e) {
+            NotificationsManager.fromBackend("Invalid JSON in estimated output tokens per model");
+            return;
+          }
+        }
+      }
 
       const modelTpmLimit: Record<string, number> = {};
       const modelRpmLimit: Record<string, number> = {};
@@ -518,7 +519,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
-        models: values.models,
+        models: normalizeTeamModelSelection(values.models),
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
         model_tpm_limit: modelTpmLimit,
@@ -533,6 +534,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
           disable_global_guardrails: killSwitchOnAtSave,
+          ...(estimatedOutputTokens !== null ? { default_estimated_output_tokens: Number(estimatedOutputTokens) } : {}),
+          ...(estimatedOutputTokensPerModel !== undefined
+            ? { default_estimated_output_tokens_per_model: estimatedOutputTokensPerModel }
+            : {}),
           soft_budget_alerting_emails:
             typeof values.soft_budget_alerting_emails === "string"
               ? values.soft_budget_alerting_emails
@@ -645,7 +650,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const response = await teamUpdateCall(accessToken, updateData);
+      await teamUpdateCall(accessToken, updateData);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
       NotificationsManager.success("Team settings updated successfully");
@@ -757,15 +762,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <Text>Budget Status</Text>
                   <div className="mt-2">
-                    <Title>${formatNumberWithCommas(info.spend, 4)}</Title>
+                    <Title>${formatNumberWithCommas(info.spend, 2)}</Title>
                     <Text>
-                      of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 4)}`}
+                      of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}
                     </Text>
                     {info.budget_duration && <Text className="text-gray-500">Reset: {info.budget_duration}</Text>}
                     <br />
                     {info.team_member_budget_table && (
                       <Text className="text-gray-500">
-                        Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}
+                        Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
                       </Text>
                     )}
                   </div>
@@ -793,27 +798,27 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </div>
                       );
                     })()}
+                    <Text>Estimated Output Tokens: {info.metadata?.default_estimated_output_tokens ?? "Default"}</Text>
+                    <Text>
+                      Estimated Output Tokens Per Model:{" "}
+                      {info.metadata?.default_estimated_output_tokens_per_model
+                        ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
+                        : "Default"}
+                    </Text>
                   </div>
                 </Card>
 
                 <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {info.models.length === 0 || info.models.includes("all-proxy-models") ? (
-                      <Badge color="red">All proxy models</Badge>
-                    ) : (
-                      <>
-                        {info.models.map((model: string, index: number) => (
-                          <Badge key={`direct-${index}`} color="blue">
-                            {model}
-                          </Badge>
-                        ))}
-                        {(info.access_group_models || []).map((model: string, index: number) => (
-                          <Badge key={`ag-${index}`} color="green" title="From access group">
-                            {model}
-                          </Badge>
-                        ))}
-                      </>
+                    {computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details).map(
+                      (badge, index) => (
+                        <Tooltip key={`${badge.kind}-${badge.label}-${index}`} title={badge.tooltip}>
+                          <span>
+                            <Badge color={TEAM_MODEL_BADGE_COLORS[badge.kind]}>{badge.label}</Badge>
+                          </span>
+                        </Tooltip>
+                      ),
                     )}
                   </div>
                 </Card>
@@ -981,21 +986,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
                         ? info.metadata.soft_budget_alerting_emails.join(", ")
                         : "",
-                      metadata: info.metadata
-                        ? JSON.stringify(
-                            (({
-                              logging,
-                              secret_manager_settings,
-                              soft_budget_alerting_emails,
-                              model_tpm_limit,
-                              model_rpm_limit,
-                              allowed_passthrough_routes,
-                              ...rest
-                            }) => rest)(info.metadata),
-                            null,
-                            2,
-                          )
+                      default_estimated_output_tokens: info.metadata?.default_estimated_output_tokens,
+                      default_estimated_output_tokens_per_model: info.metadata
+                        ?.default_estimated_output_tokens_per_model
+                        ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
                         : "",
+                      metadata: metadataObjectToPairs(info.metadata, UI_MANAGED_METADATA_KEYS),
                       logging_settings: info.metadata?.logging || [],
                       secret_manager_settings: info.metadata?.secret_manager_settings
                         ? JSON.stringify(info.metadata.secret_manager_settings, null, 2)
@@ -1031,7 +1027,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Form.Item
                       label="Models"
                       name="models"
-                      rules={[{ required: true, message: "Please select at least one model" }]}
+                      extra="Leave empty to grant no models directly. The team keeps any models granted through its access groups"
                     >
                       <ModelSelect
                         value={form.getFieldValue("models") || []}
@@ -1172,6 +1168,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item
+                      label="Metadata"
+                      help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
+                    >
+                      <MetadataKeyValueFields
+                        form={form}
+                        schemaFields={teamMetadataSchemaFields}
+                        schemaLoading={isTeamMetadataSchemaLoading}
+                      />
+                    </Form.Item>
+
+                    <Form.Item
                       label="Model-Specific Rate Limits"
                       tooltip="Set per-model TPM/RPM limits that apply across the whole team."
                     >
@@ -1242,10 +1249,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </Form.List>
                     </Form.Item>
 
+                    <Form.Item
+                      label="Estimated Output Tokens"
+                      name="default_estimated_output_tokens"
+                      tooltip={teamEstimateTooltip.estimate}
+                      rules={[estimateRules.positive]}
+                    >
+                      <NumericalInput min={1} step={1} style={{ width: "100%" }} disabled={!canEditTeamEstimates} />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Estimated Output Tokens Per Model"
+                      name="default_estimated_output_tokens_per_model"
+                      tooltip={teamEstimateTooltip.perModel}
+                      rules={[estimateRules.perModel]}
+                    >
+                      <Input.TextArea rows={4} placeholder='{"gpt-4": 4096}' disabled={!canEditTeamEstimates} />
+                    </Form.Item>
+
                     <Form.Item label="Router Settings">
                       <RouterSettingsAccordion
                         ref={routerSettingsRef}
                         accessToken={accessToken || ""}
+                        teamId={teamId}
                         value={info.router_settings ? { router_settings: info.router_settings } : undefined}
                       />
                     </Form.Item>
@@ -1314,30 +1340,32 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Switch checkedChildren="Yes" unCheckedChildren="No" />
                     </Form.Item>
 
-                    <Form.Item
-                      label={
-                        <span>
-                          Policies{" "}
-                          <Tooltip title="Apply policies to this team to control guardrails and other settings">
-                            <a
-                              href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                            </a>
-                          </Tooltip>
-                        </span>
-                      }
-                      name="policies"
-                    >
-                      <Select
-                        mode="tags"
-                        placeholder="Select or enter policies"
-                        options={policiesList.map((name) => ({ value: name, label: name }))}
-                      />
-                    </Form.Item>
+                    {canViewPolicies && (
+                      <Form.Item
+                        label={
+                          <span>
+                            Policies{" "}
+                            <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                              <a
+                                href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              </a>
+                            </Tooltip>
+                          </span>
+                        }
+                        name="policies"
+                      >
+                        <Select
+                          mode="tags"
+                          placeholder="Select or enter policies"
+                          options={policiesList.map((name) => ({ value: name, label: name }))}
+                        />
+                      </Form.Item>
+                    )}
 
                     <Form.Item
                       label={
@@ -1362,25 +1390,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-                      <Tooltip
-                        title={
-                          !premiumUser
-                            ? "Premium feature - Upgrade to set allowed pass through routes"
-                            : !is_proxy_admin
-                              ? "Only proxy admins can set allowed pass through routes"
-                              : ""
-                        }
-                        placement="top"
-                      >
-                        <PassThroughRoutesSelector
-                          onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-                          value={form.getFieldValue("allowed_passthrough_routes")}
-                          accessToken={accessToken || ""}
-                          placeholder="Select pass through routes"
-                          disabled={!premiumUser || !is_proxy_admin}
-                        />
-                      </Tooltip>
+                    <Form.Item
+                      label="Allowed Pass Through Routes"
+                      name="allowed_passthrough_routes"
+                      tooltip={
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set allowed pass through routes"
+                          : !is_proxy_admin
+                            ? "Only proxy admins can set allowed pass through routes"
+                            : undefined
+                      }
+                    >
+                      <PassThroughRoutesSelector
+                        accessToken={accessToken || ""}
+                        placeholder="Select pass through routes"
+                        disabled={!premiumUser || !is_proxy_admin}
+                      />
                     </Form.Item>
 
                     <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
@@ -1497,10 +1522,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item label="Metadata" name="metadata">
-                      <Input.TextArea rows={10} />
-                    </Form.Item>
-
                     <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 -bottom-6 -inset-x-6">
                       <div className="flex justify-end items-center gap-2">
                         <Button onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
@@ -1593,6 +1614,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           </div>
                         );
                       })()}
+                      <div>Estimated Output Tokens: {info.metadata?.default_estimated_output_tokens ?? "Default"}</div>
+                      <div>
+                        Estimated Output Tokens Per Model:{" "}
+                        {info.metadata?.default_estimated_output_tokens_per_model
+                          ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
+                          : "Default"}
+                      </div>
                     </div>
                     <div>
                       <Text className="font-medium">Team Budget</Text>

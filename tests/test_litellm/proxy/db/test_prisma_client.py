@@ -193,3 +193,25 @@ async def test_recreate_prisma_client_recovers_from_disconnected_client(
     mock_kill.assert_not_called()
     assert wrapper._original_prisma is mock_new_prisma
     mock_new_prisma.connect.assert_awaited_once()
+
+
+def test_db_push_applies_replica_identity_full_when_requested(monkeypatch):
+    """`prisma db push` bypasses litellm-proxy-extras, so it needs its own call
+    into the opt-in REPLICA IDENTITY FULL step."""
+    from litellm.proxy.db.prisma_client import PrismaManager
+    from litellm_proxy_extras.replica_identity import REPLICA_IDENTITY_FULL_ENV_VAR
+    from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+    monkeypatch.setenv(REPLICA_IDENTITY_FULL_ENV_VAR, "true")
+    applied = []
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "apply_replica_identity_full_if_requested",
+        staticmethod(lambda: applied.append(True)),
+    )
+
+    with patch("litellm.proxy.db.prisma_client.subprocess.run") as mock_run:
+        assert PrismaManager.setup_database(use_migrate=False) is True
+
+    assert mock_run.call_args[0][0][:3] == ["prisma", "db", "push"]
+    assert applied == [True]
