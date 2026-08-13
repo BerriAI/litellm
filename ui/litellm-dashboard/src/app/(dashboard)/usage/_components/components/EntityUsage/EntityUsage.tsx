@@ -1,11 +1,13 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { BarChart, DonutChart } from "@/components/shared/charts";
+import { DataTable } from "@/components/shared/DataTable";
 import {
   getProviderSpend,
   getTopAgents,
   getTopAPIKeys,
   getTopModels,
   type ExtendedDailyData,
+  type ProviderSpendRow,
 } from "./entityUsageAggregations";
 import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost, type SummaryTile } from "./entityUsageSummary";
 import { MoneyCell } from "@/components/shared/table_cells";
@@ -20,12 +22,6 @@ import {
   Subtitle,
   Tab,
   TabGroup,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
   TabList,
   TabPanel,
   TabPanels,
@@ -33,6 +29,7 @@ import {
   Title,
 } from "@tremor/react";
 import { DownOutlined, ExportOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
+import type { ColumnDef } from "@tanstack/react-table";
 import { Alert, Button, Tooltip } from "antd";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
@@ -269,6 +266,80 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
+  const providerSpend = useMemo(() => getProviderSpend(spendData.results), [spendData.results]);
+  const entityBreakdownColumns = useMemo<ColumnDef<EntityMetricWithMetadata>[]>(
+    () => [
+      {
+        header: capitalizedEntityLabel,
+        accessorKey: "metadata.alias",
+        cell: ({ row }) => row.original.metadata.alias,
+      },
+      {
+        header: "Spend",
+        accessorKey: "metrics.spend",
+        meta: { numeric: true },
+        cell: ({ row }) => <MoneyCell value={row.original.metrics.spend} decimals={4} />,
+      },
+      {
+        header: "Successful",
+        accessorKey: "metrics.successful_requests",
+        meta: { numeric: true, className: "text-green-600" },
+        cell: ({ row }) => row.original.metrics.successful_requests.toLocaleString(),
+      },
+      {
+        header: "Failed",
+        accessorKey: "metrics.failed_requests",
+        meta: { numeric: true, className: "text-red-600" },
+        cell: ({ row }) => row.original.metrics.failed_requests.toLocaleString(),
+      },
+      {
+        header: "Tokens",
+        accessorKey: "metrics.total_tokens",
+        meta: { numeric: true },
+        cell: ({ row }) => row.original.metrics.total_tokens.toLocaleString(),
+      },
+    ],
+    [capitalizedEntityLabel],
+  );
+  const providerSpendColumns = useMemo<ColumnDef<ProviderSpendRow>[]>(
+    () => [
+      {
+        header: "Provider",
+        accessorKey: "provider",
+        cell: ({ row }) => (
+          <div className="flex items-center space-x-2">
+            {row.original.provider && <Logo provider={row.original.provider} className="size-4" />}
+            <span>{row.original.provider}</span>
+          </div>
+        ),
+      },
+      {
+        header: "Spend",
+        accessorKey: "spend",
+        meta: { numeric: true },
+        cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
+      },
+      {
+        header: "Successful",
+        accessorKey: "successful_requests",
+        meta: { numeric: true, className: "text-green-600" },
+        cell: ({ row }) => row.original.successful_requests.toLocaleString(),
+      },
+      {
+        header: "Failed",
+        accessorKey: "failed_requests",
+        meta: { numeric: true, className: "text-red-600" },
+        cell: ({ row }) => row.original.failed_requests.toLocaleString(),
+      },
+      {
+        header: "Tokens",
+        accessorKey: "tokens",
+        meta: { numeric: true },
+        cell: ({ row }) => row.original.tokens.toLocaleString(),
+      },
+    ],
+    [],
+  );
 
   const chev = "text-gray-400 text-xs";
   const expandIcon = showCostBreakdown ? <DownOutlined className={chev} /> : <RightOutlined className={chev} />;
@@ -430,38 +501,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                 />
               </Col>
               <Col numColSpan={1}>
-                <div className="h-52 overflow-y-auto">
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableHeaderCell>{capitalizedEntityLabel}</TableHeaderCell>
-                        <TableHeaderCell>Spend</TableHeaderCell>
-                        <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                        <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                        <TableHeaderCell>Tokens</TableHeaderCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {getEntityBreakdown()
-                        .filter((entity) => entity.metrics.spend > 0)
-                        .map((entity) => (
-                          <TableRow key={entity.metadata.id}>
-                            <TableCell>{entity.metadata.alias}</TableCell>
-                            <TableCell>
-                              <MoneyCell value={entity.metrics.spend} decimals={4} />
-                            </TableCell>
-                            <TableCell className="text-green-600">
-                              {entity.metrics.successful_requests.toLocaleString()}
-                            </TableCell>
-                            <TableCell className="text-red-600">
-                              {entity.metrics.failed_requests.toLocaleString()}
-                            </TableCell>
-                            <TableCell>{entity.metrics.total_tokens.toLocaleString()}</TableCell>
-                          </TableRow>
-                        ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                <DataTable
+                  columns={entityBreakdownColumns}
+                  data={getEntityBreakdown().filter((entity) => entity.metrics.spend > 0)}
+                  getRowId={(row) => row.metadata.id}
+                  maxBodyHeight={208}
+                  noDataMessage={`No ${entityType} spend data`}
+                  size="compact"
+                />
               </Col>
             </Grid>
           </div>
@@ -519,7 +566,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               <Col numColSpan={1}>
                 <DonutChart
                   className="mt-4 h-40"
-                  data={getProviderSpend(spendData.results)}
+                  data={providerSpend}
                   index="provider"
                   category="spend"
                   valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
@@ -530,37 +577,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                 />
               </Col>
               <Col numColSpan={1}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>Provider</TableHeaderCell>
-                      <TableHeaderCell>Spend</TableHeaderCell>
-                      <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                      <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                      <TableHeaderCell>Tokens</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {getProviderSpend(spendData.results).map((provider) => (
-                      <TableRow key={provider.provider}>
-                        <TableCell>
-                          <div className="flex items-center space-x-2">
-                            {provider.provider && <Logo provider={provider.provider} className="w-4 h-4" />}
-                            <span>{provider.provider}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <MoneyCell value={provider.spend} decimals={2} />
-                        </TableCell>
-                        <TableCell className="text-green-600">
-                          {provider.successful_requests.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-red-600">{provider.failed_requests.toLocaleString()}</TableCell>
-                        <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <DataTable
+                  columns={providerSpendColumns}
+                  data={providerSpend}
+                  getRowId={(row) => row.provider}
+                  noDataMessage="No provider usage data"
+                  size="compact"
+                />
               </Col>
             </Grid>
           </div>
