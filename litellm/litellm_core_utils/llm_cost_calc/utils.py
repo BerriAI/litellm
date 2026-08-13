@@ -8,6 +8,10 @@ from typing import Any, Final, Literal, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
+    select_tier_for_input,
+    tier_rate,
+)
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -207,6 +211,33 @@ def _parse_above_token_threshold(key: str) -> float:
     return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
 
 
+def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, float, float, float, float] | None:
+    """
+    Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
+
+    Tiered pricing is all-or-nothing: one tier is picked from the request's input tokens
+    and every token of the request is billed at that tier's rate. Rates the tier does not
+    declare fall back to the tier's input rate, so a request never mixes tiers.
+    """
+    tiered_pricing: Final = model_info.get("tiered_pricing")
+    if not isinstance(tiered_pricing, list) or not tiered_pricing:
+        return None
+
+    tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=usage.prompt_tokens)
+    if tier is None or "input_cost_per_token" not in tier:
+        return None
+
+    cache_creation_cost: Final = tier_rate(tier, "cache_creation_input_token_cost", "input_cost_per_token")
+    return (
+        tier_rate(tier, "input_cost_per_token"),
+        tier_rate(tier, "output_cost_per_token"),
+        cache_creation_cost,
+        tier_rate(tier, "cache_creation_input_token_cost_above_1hr", "cache_creation_input_token_cost")
+        or cache_creation_cost,
+        tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
+    )
+
+
 def _get_token_base_cost(
     model_info: ModelInfo,
     usage: Usage,
@@ -226,6 +257,10 @@ def _get_token_base_cost(
     Returns:
         Tuple[float, float, float, float] - (prompt_cost, completion_cost, cache_creation_cost, cache_read_cost)
     """
+    tiered_base_costs: Final = _get_tiered_base_costs(model_info=model_info, usage=usage)
+    if tiered_base_costs is not None:
+        return tiered_base_costs
+
     # Get service tier aware cost keys
     input_cost_key: Final = _get_service_tier_cost_key("input_cost_per_token", service_tier)
     output_cost_key: Final = _get_service_tier_cost_key("output_cost_per_token", service_tier)
