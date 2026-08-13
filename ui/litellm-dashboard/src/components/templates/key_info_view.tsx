@@ -13,6 +13,8 @@ import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } 
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
+import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
@@ -833,6 +835,15 @@ export default function KeyInfoView({
                             {fallbacks.join(", ")}
                           </div>
                         ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {hasRouterSettings(currentKeyData.router_settings) && (
+                    <div>
+                      <Text className="font-medium">Router Settings</Text>
+                      <div className="mt-1">
+                        <RouterSettingsSummary routerSettings={currentKeyData.router_settings} />
                       </div>
                     </div>
                   )}
