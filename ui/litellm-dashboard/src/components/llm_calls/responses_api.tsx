@@ -297,6 +297,10 @@ export async function makeOpenAIResponsesRequest(
               usageData.reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
             }
 
+            if (usage.cost !== undefined && usage.cost !== null) {
+              usageData.cost = Number(usage.cost);
+            }
+
             onUsageData(usageData, mcpToolUsed);
           }
         }
