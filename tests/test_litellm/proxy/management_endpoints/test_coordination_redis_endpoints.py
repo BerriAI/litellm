@@ -59,11 +59,15 @@ def _prisma_with_general_settings(general_settings: dict | None) -> MagicMock:
     return mock_prisma
 
 
-def _proxy_config(file_general_settings: dict | None = None) -> MagicMock:
+def _proxy_config(
+    file_general_settings: dict | None = None,
+    config_file_authoritative: bool = False,
+) -> MagicMock:
     proxy_config = MagicMock()
     proxy_config.get_config_state = MagicMock(
         return_value={"general_settings": file_general_settings or {}},
     )
+    proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=config_file_authoritative)
     return proxy_config
 
 
@@ -134,6 +138,29 @@ async def test_get_source_reads_block_from_yaml_config_when_db_row_absent(monkey
 
     assert response.source == "coordination_redis"
     assert response.values["host"] == "yaml-redis"
+
+
+@pytest.mark.asyncio
+async def test_get_source_prefers_config_file_block_when_authoritative(monkeypatch):
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            _prisma_with_general_settings({"coordination_redis": {"host": "database-redis"}}),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_config",
+            _proxy_config(
+                {"coordination_redis": {"host": "deployed-redis"}},
+                config_file_authoritative=True,
+            ),
+        ),
+    ):
+        response = await get_coordination_redis_settings(user_api_key_dict=_admin_auth())
+
+    assert response.values["host"] == "deployed-redis"
 
 
 @pytest.mark.parametrize("cache_backend_cls", [RedisCache, RedisClusterCache])

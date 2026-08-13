@@ -115,6 +115,11 @@ class SupportedDBObjectType(str, enum.Enum):
         return str(self.value)
 
 
+class ConfigSourceOfTruth(str, enum.Enum):
+    DATABASE = "database"
+    CONFIG_FILE = "config_file"
+
+
 class LiteLLMTeamRoles(enum.Enum):
     # team admin
     TEAM_ADMIN = "admin"
@@ -2531,6 +2536,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_model_in_db: bool | None = Field(
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
+    )
+    config_source_of_truth: ConfigSourceOfTruth = Field(
+        ConfigSourceOfTruth.DATABASE,
+        description=(
+            "Controls precedence between the deployed config and settings stored in the LiteLLM_Config table. "
+            "'database' preserves the default behavior where LiteLLM_Config values override the deployed config. "
+            "'config_file' makes explicit deployed config values override LiteLLM_Config values while still loading "
+            "database-only settings. Models and objects stored in other database tables retain their existing behavior. "
+            "Set this in the deployed config file."
+        ),
     )
     forward_client_headers_to_llm_api: bool | None = Field(
         None,

@@ -187,23 +187,25 @@ async def get_persisted_coordination_redis_settings() -> dict[str, object] | Non
 async def _current_coordination_redis_settings() -> dict[str, object] | None:
     """The coordination_redis block the proxy would boot with.
 
-    The persisted row wins over the yaml-loaded config state because startup
-    applies the DB `general_settings` row over the file config.
+    The configured source-of-truth mode determines whether an explicit file
+    value or the persisted row wins.
     """
     from litellm.proxy.proxy_server import proxy_config
+
+    config_state: Final = _SETTINGS_ADAPTER.validate_python(proxy_config.get_config_state())
+    general_settings_value: Final = config_state.get(_GENERAL_SETTINGS_PARAM_NAME)
+    from_file_value: Final = (
+        general_settings_value.get(_COORDINATION_REDIS_KEY) if isinstance(general_settings_value, Mapping) else None
+    )
+    from_file: Final = _SETTINGS_ADAPTER.validate_python(from_file_value) if isinstance(from_file_value, dict) else None
+    if proxy_config.config_file_general_setting_is_authoritative(_COORDINATION_REDIS_KEY):
+        return from_file
 
     persisted: Final = await get_persisted_coordination_redis_settings()
     if persisted is not None:
         return persisted
 
-    config_state: Final = _SETTINGS_ADAPTER.validate_python(proxy_config.get_config_state())
-    general_settings: Final = config_state.get(_GENERAL_SETTINGS_PARAM_NAME)
-    if not isinstance(general_settings, dict):
-        return None
-    from_file: Final = general_settings.get(_COORDINATION_REDIS_KEY)
-    if isinstance(from_file, dict):
-        return _SETTINGS_ADAPTER.validate_python(from_file)
-    return None
+    return from_file
 
 
 def _coordination_redis_source(settings: Mapping[str, object] | None) -> CoordinationRedisSource | None:

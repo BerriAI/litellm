@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
+from litellm.proxy._types import ConfigGeneralSettings, ConfigSourceOfTruth
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -2168,6 +2169,38 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__add_router_settings_config_file_wins_conflicts():
+    pc = ProxyConfig()
+    pc._record_deployed_config({"general_settings": {"config_source_of_truth": "config_file"}})
+    fake_router = MagicMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_config.find_first = AsyncMock(
+        return_value=SimpleNamespace(
+            param_value={
+                "timeout": 30,
+                "retry_policy": {"database": True, "conflict": "database"},
+            }
+        )
+    )
+
+    await pc._add_router_settings_from_db_config(
+        config_data={
+            "router_settings": {
+                "timeout": 10,
+                "retry_policy": {"deployed": True, "conflict": "deployed"},
+            }
+        },
+        llm_router=fake_router,
+        prisma_client=fake_prisma,
+    )
+
+    fake_router.update_settings.assert_called_once_with(
+        timeout=10,
+        retry_policy={"database": True, "deployed": True, "conflict": "deployed"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__add_router_settings_from_db_config_none_router_noop():
     pc = ProxyConfig()
     # No router and no prisma — should silently return.
@@ -2347,6 +2380,173 @@ def test_ProxyConfig__update_config_fields_merges_dict():
         db_param_value={"b": 3, "c": 4, "d": 5},
     )
     assert out == {"general_settings": {"a": 1, "b": 3, "c": 4, "d": 5}}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [ConfigSourceOfTruth.DATABASE, ConfigSourceOfTruth.CONFIG_FILE],
+)
+def test_ConfigGeneralSettings_validates_config_source_of_truth(source):
+    settings = ConfigGeneralSettings(config_source_of_truth=source)
+
+    assert settings.config_source_of_truth is source
+
+
+def test_ConfigGeneralSettings_config_source_of_truth_defaults_to_database():
+    assert ConfigGeneralSettings().config_source_of_truth is ConfigSourceOfTruth.DATABASE
+
+
+def test_ConfigGeneralSettings_rejects_invalid_config_source_of_truth():
+    with pytest.raises(ValueError):
+        ConfigGeneralSettings.model_validate({"config_source_of_truth": "invalid"})
+
+
+def test_ProxyConfig__record_deployed_config_accepts_enum_source():
+    pc = ProxyConfig()
+
+    pc._record_deployed_config(
+        {"general_settings": {"config_source_of_truth": ConfigSourceOfTruth.CONFIG_FILE}}
+    )
+
+    assert pc._config_source_of_truth is ConfigSourceOfTruth.CONFIG_FILE
+
+
+def test_ProxyConfig__record_deployed_config_rejects_non_string_source():
+    pc = ProxyConfig()
+
+    with pytest.raises(ValueError, match="config_source_of_truth"):
+        pc._record_deployed_config({"general_settings": {"config_source_of_truth": 1}})
+
+
+def test_ProxyConfig__update_config_fields_config_file_wins_conflicts():
+    pc = ProxyConfig()
+    pc._record_deployed_config({"general_settings": {"config_source_of_truth": "config_file"}})
+    current = {
+        "general_settings": {
+            "max_parallel_requests": 10,
+            "allowed_models": [],
+            "nested": {"deployed": True, "conflict": None},
+        }
+    }
+
+    out = pc._update_config_fields(
+        current_config=current,
+        param_name="general_settings",
+        db_param_value={
+            "max_parallel_requests": 20,
+            "allowed_models": ["db-model"],
+            "db_only": True,
+            "nested": {"database": True, "conflict": "database"},
+        },
+    )
+
+    assert out["general_settings"] == {
+        "max_parallel_requests": 10,
+        "allowed_models": [],
+        "db_only": True,
+        "nested": {"database": True, "deployed": True, "conflict": None},
+    }
+
+
+def test_ProxyConfig__update_config_fields_config_file_env_wins_case_insensitively(monkeypatch):
+    pc = ProxyConfig()
+    pc._record_deployed_config({"general_settings": {"config_source_of_truth": "config_file"}})
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("DB_ONLY", raising=False)
+
+    out = pc._update_config_fields(
+        current_config={"environment_variables": {"api_key": "deployed"}},
+        param_name="environment_variables",
+        db_param_value={"API_KEY": "database", "DB_ONLY": "database-only"},
+    )
+
+    assert out["environment_variables"]["api_key"] == "deployed"
+    assert out["environment_variables"]["DB_ONLY"] == "database-only"
+    assert "API_KEY" not in os.environ
+    assert os.environ["DB_ONLY"] == "database-only"
+
+
+def test_ProxyConfig__update_config_fields_config_file_applies_safe_litellm_settings(monkeypatch):
+    pc = ProxyConfig()
+    pc._record_deployed_config({"general_settings": {"config_source_of_truth": "config_file"}})
+    monkeypatch.setattr(litellm, "max_ui_session_budget", 0.0)
+
+    out = pc._update_config_fields(
+        current_config={"litellm_settings": {"max_ui_session_budget": 10.0}},
+        param_name="litellm_settings",
+        db_param_value={"max_ui_session_budget": 20.0, "db_only": True},
+    )
+
+    assert out["litellm_settings"] == {"max_ui_session_budget": 10.0, "db_only": True}
+    assert litellm.max_ui_session_budget == 10.0
+
+
+def test_ProxyConfig__update_config_fields_database_replaces_mismatched_value_types():
+    pc = ProxyConfig()
+
+    out = pc._update_config_fields(
+        current_config={"router_settings": {"timeout": 10}},
+        param_name="router_settings",
+        db_param_value=["database-value"],
+    )
+
+    assert out["router_settings"] == ["database-value"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_reads_source_before_database_merge(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    deployed = {
+        "general_settings": {
+            "config_source_of_truth": "config_file",
+            "max_parallel_requests": 10,
+        }
+    }
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(pc, "_get_config_from_file", AsyncMock(return_value=deployed))
+
+    async def merge_after_source_is_recorded(**kwargs):
+        assert pc._config_source_of_truth is ConfigSourceOfTruth.CONFIG_FILE
+        assert pc._yaml_general_settings_keys == {
+            "config_source_of_truth",
+            "max_parallel_requests",
+        }
+        return kwargs["config"]
+
+    monkeypatch.setattr(pc, "_update_config_from_db", merge_after_source_is_recorded)
+
+    await pc.get_config(config_file_path="config.yaml")
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_respects_config_file_source(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    pc._record_deployed_config(
+        {
+            "general_settings": {
+                "config_source_of_truth": "config_file",
+                "max_parallel_requests": 10,
+            }
+        }
+    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"max_parallel_requests": 10})
+
+    await pc._update_general_settings(
+        db_general_settings={
+            "max_parallel_requests": 20,
+            "global_max_parallel_requests": 30,
+        }
+    )
+
+    assert proxy_server.general_settings == {
+        "max_parallel_requests": 10,
+        "global_max_parallel_requests": 30,
+    }
 
 
 def test_ProxyConfig__update_config_fields_invalid_param_raises():

@@ -76,6 +76,7 @@ from litellm.proxy._types import (
     ConfigFieldUpdate,
     ConfigGeneralSettings,
     ConfigList,
+    ConfigSourceOfTruth,
     ConfigYAML,
     CoordinationRedisParams,
     EnterpriseLicenseData,
@@ -4066,6 +4067,7 @@ class ProxyConfig:
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
         self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
+        self._config_source_of_truth: ConfigSourceOfTruth = ConfigSourceOfTruth.DATABASE
         from litellm.litellm_core_utils.get_model_cost_map import (
             get_model_cost_map_loaded_at,
         )
@@ -4075,10 +4077,45 @@ class ProxyConfig:
         # whether an existing request predates the prices it just fetched, and re-serving one
         # costs a single fetch where skipping one leaves it priced wrong indefinitely
         self.model_cost_map_applied_revision: int = 0
-        # Keys explicitly set in the YAML config file. Used to give YAML
-        # precedence over stale DB-cached values for these specific keys
-        # during periodic config reloads (_update_general_settings).
-        self._yaml_general_settings_keys: set[str] = set()  # mutable-ok: populated once at startup, read-only thereafter  # fmt: skip
+        self._yaml_general_settings_keys: frozenset[str] = frozenset()
+
+    def _record_deployed_config(self, config: Mapping[str, object]) -> None:
+        deployed_general_settings: Final = config.get("general_settings")
+        if not isinstance(deployed_general_settings, Mapping):
+            self._yaml_general_settings_keys = frozenset()
+            self._config_source_of_truth = ConfigSourceOfTruth.DATABASE
+            return
+
+        self._yaml_general_settings_keys = frozenset(deployed_general_settings)
+        configured_source: Final = deployed_general_settings.get("config_source_of_truth")
+        if configured_source is None:
+            self._config_source_of_truth = ConfigSourceOfTruth.DATABASE
+        elif isinstance(configured_source, ConfigSourceOfTruth):
+            self._config_source_of_truth = configured_source
+        elif isinstance(configured_source, str):
+            self._config_source_of_truth = ConfigSourceOfTruth(configured_source)
+        else:
+            raise ValueError("general_settings.config_source_of_truth must be 'database' or 'config_file'")
+
+    def config_file_general_setting_is_authoritative(self, key: str) -> bool:
+        return (
+            self._config_source_of_truth is ConfigSourceOfTruth.CONFIG_FILE and key in self._yaml_general_settings_keys
+        )
+
+    @classmethod
+    def _merge_deployed_over_database(cls, database_value: object, deployed_value: object) -> object:
+        if not isinstance(database_value, Mapping) or not isinstance(deployed_value, Mapping):
+            return copy.deepcopy(deployed_value)
+        database_snapshot: Final = MappingProxyType(
+            {key: copy.deepcopy(value) for key, value in database_value.items()}
+        )
+        deployed_snapshot: Final = MappingProxyType(
+            {
+                key: cls._merge_deployed_over_database(database_value.get(key), value)
+                for key, value in deployed_value.items()
+            }
+        )
+        return database_snapshot | deployed_snapshot
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -4439,6 +4476,8 @@ class ProxyConfig:
             # default to file
 
             config = await self._get_config_from_file(config_file_path=config_file_path)
+
+        self._record_deployed_config(config)
 
         ## UPDATE CONFIG WITH DB
         if prisma_client is not None and store_model_in_db is True:
@@ -5011,11 +5050,6 @@ class ProxyConfig:
         _hc_staleness = None
         _hc_ignore_transient = False
         if general_settings:
-            # Record which keys were explicitly set in the YAML config file.
-            # These keys take precedence over DB-cached values during periodic
-            # reloads (see _update_general_settings).
-            self._yaml_general_settings_keys = set(general_settings.keys())  # mutable-ok: snapshot of YAML keys at load time  # fmt: skip
-
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings: Final = general_settings.get("key_management_settings", None)
             if key_management_settings is not None:
@@ -5891,7 +5925,7 @@ class ProxyConfig:
         return encrypted_env_vars
 
     def _decrypt_and_set_db_env_variables(
-        self, environment_variables: dict, return_original_value: bool = False
+        self, environment_variables: Mapping[str, object], return_original_value: bool = False
     ) -> dict:
         """
         Decrypts a dictionary of environment variables and then sets them in the environment
@@ -6044,9 +6078,16 @@ class ProxyConfig:
                 and db_router_settings is not None
                 and isinstance(db_router_settings.param_value, dict)
             ):
-                from litellm.utils import _update_dictionary
+                if self._config_source_of_truth is ConfigSourceOfTruth.CONFIG_FILE:
+                    combined_router_settings = self._merge_deployed_over_database(
+                        db_router_settings.param_value, config_router_settings
+                    )
+                else:
+                    from litellm.utils import _update_dictionary
 
-                combined_router_settings = _update_dictionary(config_router_settings, db_router_settings.param_value)
+                    combined_router_settings = _update_dictionary(
+                        config_router_settings, db_router_settings.param_value
+                    )
             elif config_router_settings is not None and isinstance(config_router_settings, dict):
                 combined_router_settings = config_router_settings
             elif db_router_settings is not None and isinstance(db_router_settings.param_value, dict):
@@ -6200,14 +6241,20 @@ class ProxyConfig:
                 except ValueError:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
 
-    async def _update_general_settings(self, db_general_settings: Json | None):
+    async def _update_general_settings(self, db_general_settings: Mapping[str, JsonValue] | None):
         """
         Pull from DB, read general settings value
         """
         global general_settings, store_model_in_db
         if db_general_settings is None:
             return
-        _general_settings: Final = dict(db_general_settings)
+        _general_settings: Final[Mapping[str, JsonValue]] = MappingProxyType(
+            {
+                key: value
+                for key, value in db_general_settings.items()
+                if not self.config_file_general_setting_is_authoritative(key)
+            }
+        )
         ## MAX PARALLEL REQUESTS ##
         if "max_parallel_requests" in _general_settings:
             general_settings["max_parallel_requests"] = _general_settings["max_parallel_requests"]
@@ -6356,38 +6403,79 @@ class ProxyConfig:
         # DB-sourced ``s3://`` value would otherwise reach
         # ``_load_instance_from_remote_storage`` without going through
         # the runtime gate.
-        db_param_value = _scrub_db_overlay_remote_module_loads(section=param_name, db_value=db_param_value)
+        scrubbed_db_param_value: Final = _scrub_db_overlay_remote_module_loads(
+            section=param_name, db_value=db_param_value
+        )
 
         if param_name == "environment_variables":
-            decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value, return_original_value=True)
+            deployed_env_vars_value: Final = current_config.get("environment_variables")
+            deployed_env_vars: Final[Mapping[object, object]] = (
+                deployed_env_vars_value if isinstance(deployed_env_vars_value, Mapping) else MappingProxyType({})
+            )
+            deployed_env_keys: Final = frozenset(str(key).upper() for key in deployed_env_vars)
+            db_env_vars: Final = (
+                MappingProxyType(
+                    {
+                        key: value
+                        for key, value in scrubbed_db_param_value.items()
+                        if str(key).upper() not in deployed_env_keys
+                    }
+                )
+                if self._config_source_of_truth is ConfigSourceOfTruth.CONFIG_FILE
+                and isinstance(scrubbed_db_param_value, Mapping)
+                else scrubbed_db_param_value
+            )
+            decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_env_vars, return_original_value=True)
             # Normalize keys when loading from DB so services expecting uppercase
             # (e.g. Datadog) can read them even if stored in lowercase.
-            merged_env_vars: Final[dict] = {}
             for key, value in decrypted_env_vars.items():
-                merged_env_vars[key] = value
-                upper_key = key.upper()
-                merged_env_vars[upper_key] = value
-                os.environ[upper_key] = value
+                os.environ[key.upper()] = value
+            merged_env_vars: Final[Mapping[str, str]] = MappingProxyType(
+                {
+                    normalized_key: value
+                    for key, value in decrypted_env_vars.items()
+                    for normalized_key in (key, key.upper())
+                }
+            )
 
-            current_config.setdefault("environment_variables", {}).update(merged_env_vars)
+            if self._config_source_of_truth is ConfigSourceOfTruth.CONFIG_FILE:
+                current_config["environment_variables"] = self._merge_deployed_over_database(
+                    merged_env_vars, deployed_env_vars
+                )
+            else:
+                current_config.setdefault("environment_variables", {}).update(merged_env_vars)
             return current_config
-        elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
-            for key, value in db_param_value.items():
+        elif (
+            param_name == "litellm_settings"
+            and self._config_source_of_truth is ConfigSourceOfTruth.DATABASE
+            and isinstance(scrubbed_db_param_value, dict)
+        ):
+            for key, value in scrubbed_db_param_value.items():
                 if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:  # params that are safe to override with db values
                     setattr(litellm, key, value)
 
+        if self._config_source_of_truth is ConfigSourceOfTruth.CONFIG_FILE and param_name in current_config:
+            current_config[param_name] = self._merge_deployed_over_database(
+                scrubbed_db_param_value, current_config[param_name]
+            )
+            if param_name == "litellm_settings" and isinstance(current_config[param_name], dict):
+                for key, value in current_config[param_name].items():
+                    if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
+                        setattr(litellm, key, value)
+            return current_config
+
         # If param doesn't exist in config, add it
         if param_name not in current_config:
-            current_config[param_name] = db_param_value
+            current_config[param_name] = scrubbed_db_param_value
 
             return current_config
 
         # For dictionary values, update only non-none values
-        if isinstance(current_config[param_name], dict) and isinstance(db_param_value, dict):
-            _deep_merge_dicts(current_config[param_name], db_param_value)
+        if isinstance(current_config[param_name], dict) and isinstance(scrubbed_db_param_value, dict):
+            _deep_merge_dicts(current_config[param_name], scrubbed_db_param_value)
         else:
             # Non-dict or mismatched types: DB value replaces config (unchanged behavior)
-            current_config[param_name] = db_param_value
+            current_config[param_name] = scrubbed_db_param_value
 
         return current_config
 
@@ -8395,6 +8483,8 @@ class ProxyStartupEvent:
         Returns None when nothing is persisted or the persisted block names no
         connection target, leaving the file/env resolution untouched.
         """
+        if proxy_config.config_file_general_setting_is_authoritative("coordination_redis"):
+            return None
         try:
             persisted: Final = await get_persisted_coordination_redis_settings()
         except Exception as e:  # noqa: BLE001  # a config-row read failure must not block proxy startup
@@ -8767,7 +8857,11 @@ class ProxyStartupEvent:
         # If store_model_in_db is still False, check DB for override.
         # This breaks the chicken-and-egg where DB has store_model_in_db=True
         # but YAML config has False.
-        if store_model_in_db is not True and prisma_client is not None:
+        if (
+            store_model_in_db is not True
+            and prisma_client is not None
+            and not proxy_config.config_file_general_setting_is_authoritative("store_model_in_db")
+        ):
             try:
                 _db_gs_record: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
                     where={"param_name": "general_settings"}

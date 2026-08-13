@@ -702,6 +702,7 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=False)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -762,6 +763,7 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=False)
     scheduler = AsyncIOScheduler()
 
     try:
@@ -803,6 +805,7 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=False)
     mock_scheduler = MagicMock()
 
     configured_interval = 47
@@ -852,6 +855,7 @@ async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_inte
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=False)
     mock_scheduler = MagicMock()
 
     with (
@@ -899,6 +903,7 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=False)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -7005,6 +7010,7 @@ async def test_store_model_in_db_db_override_when_config_false():
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=False)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -7048,6 +7054,7 @@ async def test_store_model_in_db_db_check_skipped_when_already_true(monkeypatch)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=False)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -7091,6 +7098,7 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=False)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -10527,6 +10535,11 @@ async def test_startup_applies_coordination_redis_saved_in_database():
         patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
         patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
         patch.object(
+            proxy_server_module.proxy_config,
+            "config_file_general_setting_is_authoritative",
+            return_value=False,
+        ),
+        patch.object(
             proxy_server_module,
             "get_persisted_coordination_redis_settings",
             AsyncMock(return_value={"host": "db-host", "port": 6381}),
@@ -10552,6 +10565,11 @@ async def test_startup_ignores_database_coordination_redis_without_connection_ta
         patch.object(proxy_server_module, "litellm_config_cache", types.SimpleNamespace(redis_cache=None)),
         patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
         patch.object(
+            proxy_server_module.proxy_config,
+            "config_file_general_setting_is_authoritative",
+            return_value=False,
+        ),
+        patch.object(
             proxy_server_module,
             "get_persisted_coordination_redis_settings",
             AsyncMock(return_value={"ssl": True}),
@@ -10569,6 +10587,11 @@ async def test_startup_ignores_database_coordination_redis_without_connection_ta
 async def test_startup_survives_database_read_failure_for_coordination_redis():
     """A config-row read failure must not block proxy startup."""
     with (
+        patch.object(
+            proxy_server_module.proxy_config,
+            "config_file_general_setting_is_authoritative",
+            return_value=False,
+        ),
         patch.object(
             proxy_server_module,
             "get_persisted_coordination_redis_settings",
@@ -10888,6 +10911,7 @@ async def _run_scheduled_background_jobs():
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
     mock_proxy_config = AsyncMock()
+    mock_proxy_config.config_file_general_setting_is_authoritative = MagicMock(return_value=False)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
