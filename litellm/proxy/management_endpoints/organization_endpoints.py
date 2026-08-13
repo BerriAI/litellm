@@ -35,6 +35,9 @@ from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _user_has_admin_view,
 )
+from litellm.proxy.management_endpoints.logging_exporter_access import (
+    resolved_logging_exporter_names,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
@@ -379,7 +382,6 @@ async def new_organization(
     }'
     ```
     """
-
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         llm_router,
@@ -1102,6 +1104,10 @@ async def info_organization(
         raise HTTPException(status_code=404, detail={"error": "Organization not found"})
 
     response_pydantic_obj: Final = LiteLLM_OrganizationTableWithMembers.model_validate(response.model_dump())
+    response_pydantic_obj.resolved_logging_exporters = resolved_logging_exporter_names(
+        None,
+        organization_id,
+    )
 
     return response_pydantic_obj
 

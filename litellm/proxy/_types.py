@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -2933,6 +2933,7 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
     litellm_budget_table: LiteLLM_BudgetTable | None = None
     created_at: datetime
     updated_at: datetime
+    resolved_logging_exporters: Sequence[str] | None = None
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
@@ -3956,6 +3957,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
+    resolved_logging_exporters: Sequence[str] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):

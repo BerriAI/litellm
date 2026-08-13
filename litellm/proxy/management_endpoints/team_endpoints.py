@@ -98,6 +98,9 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
     validate_budget_duration,
 )
+from litellm.proxy.management_endpoints.logging_exporter_access import (
+    resolved_logging_exporter_names,
+)
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
@@ -1963,8 +1966,9 @@ async def update_team(
             )
 
         # Verify caller has access to manage this team
+        team_for_auth: Final = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
         await _verify_team_access(
-            team_obj=LiteLLM_TeamTable.model_validate(existing_team_row.model_dump()),
+            team_obj=team_for_auth,
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -4057,6 +4061,15 @@ async def team_info(
 
         # Resolve resources inherited from access groups
         resolved_team_info: Final = await _resolve_team_access_group_resources(_team_info)
+
+        # Set on the object that is actually returned: the helper above hands back
+        # ``_team_info`` itself only when the team has no access groups, and a
+        # ``model_copy`` when it does, so mutating ``_team_info`` here would be
+        # discarded for every team that inherits from an access group.
+        resolved_team_info.resolved_logging_exporters = resolved_logging_exporter_names(
+            team_id,
+            _team_info.organization_id,
+        )
 
         response_object: Final = TeamInfoResponseObject(
             team_id=team_id,
