@@ -5734,7 +5734,7 @@ async def update_spend_logs_job(
         )
     except asyncio.CancelledError:
         async with prisma_client._spend_log_transactions_lock:
-            prisma_client.spend_log_transactions = logs_to_process + prisma_client.spend_log_transactions
+            prisma_client.spend_log_transactions[:0] = logs_to_process
         verbose_proxy_logger.warning(
             "Spend tracking - spend log write cancelled, requeued %d rows for the next flush",
             len(logs_to_process),
@@ -5798,15 +5798,7 @@ async def update_spend_logs_job(
         )
 
 
-MAX_SPEND_LOG_DRAIN_ITERATIONS = 20
-
-
-async def _queued_spend_row_count(prisma_client: PrismaClient) -> int:
-    async with prisma_client._spend_log_transactions_lock:
-        spend_rows = len(prisma_client.spend_log_transactions)
-    async with prisma_client._tool_usage_transactions_lock:
-        tool_rows = len(prisma_client.tool_usage_transactions)
-    return spend_rows + tool_rows
+MAX_SPEND_LOG_DRAIN_ITERATIONS: Final = 20
 
 
 async def drain_spend_logs_queue(
@@ -5814,16 +5806,15 @@ async def drain_spend_logs_queue(
     db_writer_client: "AsyncHTTPHandler | None",
     proxy_logging_obj: ProxyLogging,
 ) -> None:
-    """Stop the queue monitor and write every queued spend log row, e.g. before the DB engine is torn down."""
-    monitor_task = prisma_client.spend_logs_queue_monitor_task
+    monitor_task: Final = prisma_client.spend_logs_queue_monitor_task
     if monitor_task is not None:
         monitor_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await monitor_task
-        prisma_client.spend_logs_queue_monitor_task = None
+        prisma_client.spend_logs_queue_monitor_task = None  # rebind-ok: the client owns its monitor handle
 
     for _ in range(MAX_SPEND_LOG_DRAIN_ITERATIONS):
-        if await _queued_spend_row_count(prisma_client) == 0:
+        if await _total_queued_spend_transactions(prisma_client) == 0:
             return
         await update_spend_logs_job(
             prisma_client=prisma_client,
@@ -5831,7 +5822,7 @@ async def drain_spend_logs_queue(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    remaining = await _queued_spend_row_count(prisma_client)
+    remaining: Final = await _total_queued_spend_transactions(prisma_client)
     if remaining > 0:
         spend_log_error(
             "Spend tracking - %d spend log rows still queued after %d drain passes",

@@ -212,9 +212,6 @@ async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_flush_spend_logs_queue_on_shutdown_drains_before_disconnect(monkeypatch):
-    """The queue is written out while the DB engine is still up, so a restart
-    doesn't drop the pending spend rows.
-    """
     fake_prisma = MagicMock()
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)

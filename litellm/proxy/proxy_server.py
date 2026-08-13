@@ -845,8 +845,7 @@ def cleanup_router_config_variables():
     prisma_client = None
 
 
-async def _flush_spend_logs_queue_on_shutdown():
-    """Write anything still queued in the spend logs queue before the DB engine goes away."""
+async def _flush_spend_logs_queue_on_shutdown() -> None:
     if prisma_client is None:
         return
 
@@ -8750,7 +8749,7 @@ class ProxyStartupEvent:
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
 
-            prisma_client.spend_logs_queue_monitor_task = asyncio.create_task(
+            prisma_client.spend_logs_queue_monitor_task = asyncio.create_task(  # rebind-ok: the client owns its monitor handle
                 _monitor_spend_logs_queue(
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,

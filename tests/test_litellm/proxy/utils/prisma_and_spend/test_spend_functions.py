@@ -269,7 +269,6 @@ async def test_update_spend_logs_job_processes_and_clears_queue(
 async def test_update_spend_logs_job_requeues_popped_rows_when_write_cancelled(
     mock_prisma_client: Any, make_spend_log_row: Any
 ) -> None:
-    """A cancelled flush must not silently drop the batch it popped."""
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
     mock_prisma_client.spend_log_transactions = [
@@ -348,7 +347,7 @@ async def test_drain_spend_logs_queue_flushes_rows_queued_while_draining(
     proxy_logging.failure_handler = AsyncMock()
     mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
 
-    written: List[str] = []
+    written: list[str] = []
 
     async def _write(*args: Any, **kwargs: Any) -> None:
         written.extend(row["request_id"] for row in kwargs["data"])
@@ -373,9 +372,6 @@ async def test_drain_spend_logs_queue_flushes_rows_queued_while_draining(
 async def test_drain_spend_logs_queue_stops_monitor_and_keeps_its_popped_rows(
     mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Cancelling the monitor is only safe because the batch it already popped
-    is requeued; the drain must then write it.
-    """
     import litellm.proxy.db.spend_log_tool_index as tool_mod
     import litellm.proxy.guardrails.usage_tracking as guard_mod
 
@@ -391,7 +387,7 @@ async def test_drain_spend_logs_queue_stops_monitor_and_keeps_its_popped_rows(
     mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
 
     write_started = asyncio.Event()
-    written: List[str] = []
+    written: list[str] = []
     write_calls = {"n": 0}
 
     async def _write(*args: Any, **kwargs: Any) -> None:
@@ -428,7 +424,6 @@ async def test_drain_spend_logs_queue_stops_monitor_and_keeps_its_popped_rows(
 async def test_drain_spend_logs_queue_gives_up_after_max_passes(
     mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A queue that keeps refilling must not trap shutdown in an endless drain."""
     import litellm.proxy.db.spend_log_tool_index as tool_mod
     import litellm.proxy.guardrails.usage_tracking as guard_mod
 
