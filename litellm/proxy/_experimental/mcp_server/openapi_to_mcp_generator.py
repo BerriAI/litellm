@@ -266,6 +266,8 @@ def resolve_operation_params(
 
 _SCHEMA_REF_PREFIX: Final = "#/components/schemas/"
 _EMPTY_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_JSON_OBJECT: Final[Mapping[str, Any]] = {}  # mutable-ok: MCP validates the raw schema; only real dicts pass
+_EMPTY_JSON_ARRAY: Final[Sequence[str]] = []  # mutable-ok: MCP validates the raw schema; only real lists pass
 
 
 def _inline_schema_refs(
@@ -300,7 +302,8 @@ def _inlined_schema_value(
     if isinstance(value, Mapping):
         return _inline_schema_refs(value, component_schemas, seen)
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return tuple(_inlined_schema_value(item, component_schemas, seen) for item in value)
+        # mutable-ok: MCP validates the raw schema against the JSON Schema metaschema, where a tuple is not an array
+        return [_inlined_schema_value(item, component_schemas, seen) for item in value]
     return value
 
 
@@ -368,8 +371,8 @@ def build_input_schema(operation: Mapping[str, Any], components: _OpenAPICompone
             properties["body"] = {
                 "type": "object",
                 "description": request_body.get("description", "Request body"),
-                "properties": schema.get("properties", _EMPTY_SCHEMA),
-                "required": tuple(schema.get("required", ())),
+                "properties": schema.get("properties", _EMPTY_JSON_OBJECT),
+                "required": schema.get("required", _EMPTY_JSON_ARRAY),
             }
             if request_body.get("required", False):
                 required.append("body")
