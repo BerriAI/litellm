@@ -4823,12 +4823,13 @@ class TestRoutingDecisionContents:
 
 class TestSignalsNeverQuoteTheSystemPrompt:
     """Signals are persisted to the caller-readable spend log, so they may name a matched
-    term only when the caller supplied it. A term matched solely in the system prompt is
-    reported as a count, which still explains the score without letting a caller recover
-    configured terms from a prompt it cannot see."""
+    term only when the caller supplied it. Scoring reads the caller's own text only (the
+    system prompt is a per-session constant and carries no information about how requests
+    within a session differ), so a term that appears solely in the system prompt is never
+    counted at all -- there is nothing left to redact, because there is nothing scored."""
 
     @pytest.mark.asyncio
-    async def test_system_prompt_only_terms_are_reported_as_a_count(self, complexity_router):
+    async def test_system_prompt_only_terms_produce_no_signal(self, complexity_router):
         response = await complexity_router.async_pre_routing_hook(
             model="test-complexity-router",
             request_kwargs={},
@@ -4840,11 +4841,13 @@ class TestSignalsNeverQuoteTheSystemPrompt:
         assert response is not None
         signals = response.routing_decision["signals"]
         joined = " ".join(signals)
-        # The system prompt drove these matches, so no signal may name them.
+        # None of the system-prompt-only terms may appear, named or otherwise --
+        # they were never scored.
         for term in ("kubernetes", "database", "api", "deployment"):
             assert term not in joined
-        # The match is still reported, as a count, so the score stays explainable.
-        assert any("matches" in signal for signal in signals)
+        # No dimension fired from them either: a "matches" count only appears when a
+        # dimension actually crossed its threshold, and none did here.
+        assert not any("matches" in signal for signal in signals)
 
     @pytest.mark.asyncio
     async def test_terms_the_caller_supplied_are_still_named(self, complexity_router):
@@ -4863,14 +4866,18 @@ class TestSignalsNeverQuoteTheSystemPrompt:
         # It did not type this one.
         assert "kubernetes" not in signals
 
-    def test_scoring_still_reads_the_system_prompt(self, complexity_router):
-        """Redaction is a disclosure rule, not a scoring change: the system prompt must
-        still count toward the tier exactly as before."""
+    def test_system_prompt_never_changes_the_score(self, complexity_router):
+        """The system prompt is a per-session constant: it doesn't vary between requests,
+        so it carries no signal about how requests differ. Scoring it anyway saturates
+        keyword thresholds identically for every request in the session, collapsing the
+        scorer's discriminative range (a trivial "say hi" and a genuinely complex ask
+        become indistinguishable once a real agent-harness system prompt is added). The
+        score and tier must be identical with or without any system prompt."""
         with_system = complexity_router.classify(
             "say hi", "You operate the kubernetes database api for the deployment pipeline."
         )
         without_system = complexity_router.classify("say hi")
-        assert with_system[1] > without_system[1]
+        assert with_system == without_system
 
 
 class TestRoutingDecisionSurvivesToSpendLogOnEveryMetadataShape:
