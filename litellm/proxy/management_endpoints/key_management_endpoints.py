@@ -93,6 +93,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    invalidate_cached_object_permissions,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -2339,6 +2340,13 @@ async def _process_single_key_update(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await invalidate_cached_object_permissions(
+        object_permission_ids=(
+            existing_key_row.object_permission_id,
+            non_default_values.get("object_permission_id"),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
 
     # Trigger async hook
     asyncio.create_task(
@@ -2819,6 +2827,13 @@ async def update_key_fn(
             hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+        )
+        await invalidate_cached_object_permissions(
+            object_permission_ids=(
+                existing_key_row.object_permission_id,
+                non_default_values.get("object_permission_id"),
+            ),
+            user_api_key_cache=user_api_key_cache,
         )
 
         if data.spend is not None:

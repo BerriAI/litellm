@@ -15600,3 +15600,89 @@ async def test_unblock_key_stamps_settings_updated_at(monkeypatch):
     sent = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
     assert sent["blocked"] is False
     assert before <= sent["settings_updated_at"] <= after
+
+@pytest.mark.asyncio
+async def test_key_update_invalidates_cached_object_permission(monkeypatch):
+    """Regression: /key/update must drop the cached permission row, not just the cached key.
+
+    The permission row is cached under its own id and the upsert keeps that id, so a key read
+    after the update re-attached the OLD grants until the management-object TTL expired, which
+    served revoked MCP tools and withheld newly granted ones.
+    """
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase
+    from litellm.proxy.auth.auth_checks import get_object_permission
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    permission_id = "objperm-lit5479"
+    grants = {"old": ["tool_a"], "new": ["tool_a", "tool_b"]}
+
+    def _row(tools):
+        row = MagicMock()
+        row.dict.return_value = {
+            "object_permission_id": permission_id,
+            "mcp_tool_permissions": {"server-1": tools},
+        }
+        return row
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        side_effect=lambda **kwargs: _row(grants["old"])
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
+        return_value=MagicMock(object_permission_id=permission_id)
+    )
+    existing_key_row = LiteLLM_VerificationToken(
+        token="hashed-sk-lit5479",
+        user_id="user-123",
+        object_permission_id=permission_id,
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=existing_key_row
+    )
+    updated_key = MagicMock()
+    updated_key.model_dump.return_value = {"user_id": "user-123"}
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": updated_key})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    user_api_key_cache = UserApiKeyCache()
+    assert (
+        await get_object_permission(
+            object_permission_id=permission_id,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+    ).mcp_tool_permissions == {"server-1": grants["old"]}
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
+    ):
+        await _process_single_key_update(
+            update_key_request=UpdateKeyRequest(
+                key="sk-lit5479",
+                object_permission=LiteLLM_ObjectPermissionBase(
+                    mcp_tool_permissions={"server-1": grants["new"]}
+                ),
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin-user",
+            ),
+            litellm_changed_by=None,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=AsyncMock(),
+            llm_router=None,
+            existing_key_row=existing_key_row,
+        )
+
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique.side_effect = (
+        lambda **kwargs: _row(grants["new"])
+    )
+    reread = await get_object_permission(
+        object_permission_id=permission_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    assert reread is not None
+    assert reread.mcp_tool_permissions == {"server-1": grants["new"]}
