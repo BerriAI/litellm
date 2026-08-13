@@ -1773,17 +1773,17 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _parse_cache_details(usage: ConverseTokenUsageBlock) -> "CacheCreationTokenDetails | None":
-        """
-        Split Converse's aggregate cacheWriteInputTokens into the 5m/1h TTL
-        breakdown from `cacheDetails`, so cost calc can bill each tier
-        correctly instead of defaulting the whole write to the 5m rate.
-        https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html
-        """
-        cache_details = usage.get("cacheDetails")
+        """https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html"""
+        cache_details: Final = usage.get("cacheDetails")
         if not cache_details:
             return None
-        tokens_5m = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "5m")
-        tokens_1h = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "1h")
+        tokens_5m: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "5m")
+        tokens_1h: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "1h")
+        # An unrecognized ttl or a partial breakdown would silently understate
+        # the cache-write cost, so only use the split when it fully accounts
+        # for the aggregate; otherwise fall back to the aggregate-only (5m) cost.
+        if tokens_5m + tokens_1h != usage.get("cacheWriteInputTokens", 0):
+            return None
         return CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=tokens_5m,
             ephemeral_1h_input_tokens=tokens_1h,

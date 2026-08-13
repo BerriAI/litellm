@@ -2,7 +2,7 @@ import json
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from typing_extensions import Required, TypedDict, override
+from typing_extensions import ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -217,21 +217,21 @@ class ConverseResponseOutputBlock(TypedDict):
 
 
 class CacheDetailBlock(TypedDict):
-    """Per-TTL cache-write breakdown. https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html"""
+    """Per-TTL cache-write breakdown, read-only AWS response data. https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html"""
 
-    inputTokens: int
-    ttl: Literal["5m", "1h"]
+    inputTokens: ReadOnly[int]
+    ttl: ReadOnly[Literal["5m", "1h"]]
 
 
 class ConverseTokenUsageBlock(TypedDict, total=False):
-    inputTokens: Required[int]
-    outputTokens: Required[int]
-    totalTokens: Required[int]
-    cacheReadInputTokenCount: int
-    cacheReadInputTokens: int
-    cacheWriteInputTokenCount: int
-    cacheWriteInputTokens: int
-    cacheDetails: list[CacheDetailBlock]
+    inputTokens: Required[ReadOnly[int]]
+    outputTokens: Required[ReadOnly[int]]
+    totalTokens: Required[ReadOnly[int]]
+    cacheReadInputTokenCount: ReadOnly[int]
+    cacheReadInputTokens: ReadOnly[int]
+    cacheWriteInputTokenCount: ReadOnly[int]
+    cacheWriteInputTokens: ReadOnly[int]
+    cacheDetails: ReadOnly[list[CacheDetailBlock]]  # mutable-ok: AWS response array, never mutated after parsing
 
 
 class ServiceTierBlock(TypedDict):

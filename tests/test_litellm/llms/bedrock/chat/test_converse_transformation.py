@@ -75,6 +75,27 @@ def test_transform_usage_with_cache_details():
     assert details.ephemeral_5m_input_tokens == 288
 
 
+def test_transform_usage_with_mismatched_cache_details_falls_back():
+    """An unrecognized ttl or partial breakdown must not silently understate
+    cache-write cost, so the split is only used when it fully accounts for
+    cacheWriteInputTokens."""
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 76,
+            "outputTokens": 259,
+            "totalTokens": 335,
+            "cacheWriteInputTokens": 362,
+            "cacheDetails": [{"inputTokens": 74, "ttl": "1h"}],  # missing the 5m entry
+        }
+    )
+    config = AmazonConverseConfig()
+    openai_usage = config._transform_usage(usage)
+    assert (
+        getattr(openai_usage.prompt_tokens_details, "cache_creation_token_details", None)
+        is None
+    )
+
+
 def test_transform_usage_without_cache_details_stays_none():
     """No cacheDetails in the response (older models/regions) should leave
     cache_creation_token_details unset, same as before this field existed."""
