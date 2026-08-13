@@ -582,9 +582,12 @@ async def test_concurrent_success_is_not_cancelled_by_another_calls_failure():
         pytest.param("ConnectionError", True, id="connection_refused_is_unhealthy"),
         pytest.param("TimeoutError", True, id="timeout_is_unhealthy"),
         pytest.param("BusyLoadingError", True, id="loading_is_unhealthy"),
-        pytest.param("RedisClusterException", True, id="cluster_unreachable_is_unhealthy"),
         pytest.param("ResponseError", False, id="wrong_type_command_is_not"),
         pytest.param("DataError", False, id="bad_data_is_not"),
+        pytest.param("SlotNotCoveredError", False, id="slot_layout_is_not_unhealthy"),
+        pytest.param("CrossSlotTransactionError", False, id="cross_slot_is_not_unhealthy"),
+        pytest.param("InvalidPipelineStack", False, id="pipeline_stack_is_not_unhealthy"),
+        pytest.param("RedisClusterException", False, id="generic_cluster_command_error_is_not"),
     ],
 )
 async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker):
@@ -599,7 +602,10 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
     from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
 
     breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
-    raised = getattr(redis.exceptions, error)("boom")
+    error_cls = getattr(redis.exceptions, error, None)
+    if error_cls is None:
+        pytest.skip(f"{error} is not in this redis-py")
+    raised = error_cls("boom")
 
     async def failing_call():
         raise raised
@@ -609,6 +615,41 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
             await _run_under_circuit_breaker(breaker, "op", failing_call)
 
     assert breaker.is_open() is opens_breaker
+
+
+@pytest.mark.asyncio
+async def test_redis_cluster_exception_subclasses_do_not_open_the_breaker():
+    """Slot/pipeline/command errors share the RedisClusterException base.
+
+    Matching that base (isinstance) would let a covered-slot miss or a
+    cross-slot pipeline trip the shared breaker and degrade rate limits to
+    per-process counters while Redis is still answering.
+    """
+    from redis.exceptions import RedisClusterException
+
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _is_redis_health_failure,
+        _run_under_circuit_breaker,
+    )
+
+    class SlotLayoutError(RedisClusterException):
+        pass
+
+    class PipelineStackError(RedisClusterException):
+        pass
+
+    for raised in (SlotLayoutError("slot"), PipelineStackError("pipeline")):
+        assert _is_redis_health_failure(raised) is False
+        breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+
+        async def failing_call(exc=raised):
+            raise exc
+
+        for _ in range(breaker.failure_threshold + 1):
+            with pytest.raises(RedisClusterException):
+                await _run_under_circuit_breaker(breaker, "op", failing_call)
+        assert breaker.is_open() is False
 
 
 @pytest.mark.asyncio
@@ -629,16 +670,31 @@ async def test_cluster_connect_timeout_swallowed_set_opens_breaker():
         _run_under_circuit_breaker,
     )
 
-    production = RedisClusterException(
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    timeout = RedisTimeoutError("Timeout connecting to server")
+    try:
+        raise RedisClusterException(
+            "Redis Cluster cannot be connected. Please provide at least one reachable node: "
+            "Timeout connecting to server"
+        ) from timeout
+    except RedisClusterException as production:
+        wrapped = production
+
+    # Cause lost (message only) still counts — redis-py stringifies the timeout
+    # into the RedisClusterException text even if __cause__ is stripped.
+    message_only = RedisClusterException(
         "Redis Cluster cannot be connected. Please provide at least one reachable node: "
         "Timeout connecting to server"
     )
-    assert _is_redis_health_failure(production) is True
+    assert _is_redis_health_failure(wrapped) is True
+    assert _is_redis_health_failure(message_only) is True
+    assert _is_redis_health_failure(RedisClusterException("Argument 'db' must be 0")) is False
 
     breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
 
     async def swallowed_cluster_timeout():
-        _record_swallowed_redis_failure(breaker, production)
+        _record_swallowed_redis_failure(breaker, wrapped)
         return None
 
     for _ in range(breaker.failure_threshold):

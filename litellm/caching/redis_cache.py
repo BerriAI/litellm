@@ -184,16 +184,20 @@ def _redis_health_error_types() -> tuple[type, ...]:
     a caller trip the shared breaker on demand, dropping rate limiting to per-process
     counters that spreading traffic across replicas can outrun.
 
-    RedisClusterException is the wrapper redis-py raises when CLUSTER SLOTS / startup
-    nodes are unreachable (``Redis Cluster cannot be connected ... Timeout connecting
-    to server``). It subclasses ``Exception`` directly, not TimeoutError/ConnectionError,
-    so omitting it leaves every cache write retrying a dead cluster and blocking the
-    request for the connect timeout — the 2026-08-13 staging e2e hang.
+    RedisClusterException is *not* in this tuple. redis-py uses that base for
+    command, slot-layout, and pipeline errors (SlotNotCoveredError,
+    CrossSlotTransactionError, InvalidPipelineStack, "db must be 0", …) against
+    a cluster that is still answering. Matching the base would open the breaker
+    and drop shared cache / rate-limit state to per-process counters.
+
+    The CLUSTER SLOTS / startup-node hang is detected in ``_is_redis_health_failure``
+    by walking ``__cause__`` (redis-py does ``raise RedisClusterException(...) from
+    TimeoutError``) and by the unreachable-node message when the cause was lost.
 
     Imported lazily because this module is reachable from a base ``import litellm`` while
     redis is not a base dependency.
     """
-    from redis.exceptions import BusyLoadingError, ClusterDownError, RedisClusterException
+    from redis.exceptions import BusyLoadingError, ClusterDownError
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
@@ -202,16 +206,31 @@ def _redis_health_error_types() -> tuple[type, ...]:
         RedisTimeoutError,
         BusyLoadingError,
         ClusterDownError,
-        RedisClusterException,
         OSError,
         asyncio.TimeoutError,
     )
 
 
+# redis-py NodesManager.initialize: raise RedisClusterException(
+#   "Redis Cluster cannot be connected. Please provide at least one reachable node: …"
+# ) from exception
+_CLUSTER_UNREACHABLE_MARKER: Final = "redis cluster cannot be connected"
+
+
 def _is_redis_health_failure(exc: BaseException) -> bool:
     """True when ``exc`` indicates Redis is unreachable rather than the request being bad."""
     try:
-        return isinstance(exc, _redis_health_error_types())
+        types: Final = _redis_health_error_types()
+        seen: set[int] = set()
+        current: BaseException | None = exc
+        while current is not None and id(current) not in seen:
+            if isinstance(current, types):
+                return True
+            if _CLUSTER_UNREACHABLE_MARKER in str(current).lower():
+                return True
+            seen.add(id(current))
+            current = current.__cause__ if current.__cause__ is not None else current.__context__
+        return False
     except ImportError:
         return True
 
