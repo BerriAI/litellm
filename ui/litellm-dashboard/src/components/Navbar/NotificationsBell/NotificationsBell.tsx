@@ -25,7 +25,7 @@ export const NotificationsBell: React.FC = () => {
   const content = (
     <div className="max-w-[280px]">
       <Typography.Title level={5} className="mt-0! mb-2!">
-        Auto Router
+        LiteLLM Auto Router
       </Typography.Title>
       <Typography.Paragraph type="secondary" className="mb-3! text-sm leading-snug">
         Route every request to the cheapest model that can handle it, no prompt changes needed.

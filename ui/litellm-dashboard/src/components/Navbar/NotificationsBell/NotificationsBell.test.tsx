@@ -12,7 +12,7 @@ describe("NotificationsBell", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBell />);
     await user.click(screen.getByRole("button", { name: /^notifications$/i }));
-    expect(screen.getByText(/^Auto Router$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^LiteLLM Auto Router$/i)).toBeInTheDocument();
     const docsBtn = screen.getByRole("link", { name: /^read the docs$/i });
     expect(docsBtn).toHaveAttribute("href", AUTO_ROUTER_DOCS_URL);
     expect(docsBtn).toHaveAttribute("target", "_blank");
