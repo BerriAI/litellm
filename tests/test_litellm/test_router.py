@@ -1374,6 +1374,21 @@ async def test_ageneric_api_call_does_not_add_session_model():
     assert captured["session"] == {"type": "realtime"}
 
 
+@pytest.mark.parametrize(
+    "session, expected",
+    [
+        ({"type": "realtime", "model": "my-realtime-group"}, {"session": {"type": "realtime", "model": "resolved"}}),
+        ({"type": "realtime"}, {}),
+        (None, {}),
+        ("not-a-session", {}),
+    ],
+)
+def test_with_router_resolved_session_model(session, expected):
+    from litellm.router import _with_router_resolved_session_model
+
+    assert dict(_with_router_resolved_session_model(session, "resolved")) == expected
+
+
 def test_router_get_model_access_groups_team_only_models():
     """
     Test that Router.get_model_access_groups returns the correct response for team-only models
