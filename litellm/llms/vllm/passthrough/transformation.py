@@ -39,10 +39,10 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
         model: str,
         custom_llm_provider: str,
         httpx_response: "Response",
-        request_data: dict,
+        request_data: dict,  # mutable-ok: base class signature
         logging_obj: "LiteLLMLoggingObj",
         endpoint: str,
-    ) -> Optional["CostResponseTypes"]:
+    ) -> "CostResponseTypes | None":
         from litellm import encoding
         from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
         from litellm.types.utils import EmbeddingResponse, ModelResponse, Usage
