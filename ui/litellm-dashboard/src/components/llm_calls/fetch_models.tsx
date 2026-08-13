@@ -1,4 +1,5 @@
-import { apiClient } from "@/components/networking";
+import { excludeProxyWideSentinel } from "@/components/key_team_helpers/fetch_available_models_team_key";
+import { apiClient, modelAvailableCall } from "@/components/networking";
 
 export interface ModelGroup {
   model_group: string;
@@ -23,6 +24,15 @@ const dedupeAndSort = (models: ModelGroup[]): ModelGroup[] => {
   const unique = Array.from(new Map(models.map((model) => [model.model_group, model])).values());
   unique.sort((a, b) => a.model_group.localeCompare(b.model_group));
   return unique;
+};
+
+export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
+  const response = await modelAvailableCall(accessToken, "", "", false, teamId);
+  const modelNames: string[] = (response?.data ?? []).map((model: { id: string }) => model.id);
+
+  return excludeProxyWideSentinel(Array.from(new Set(modelNames)))
+    .sort((a, b) => a.localeCompare(b))
+    .map((model) => ({ model_group: model }));
 };
 
 export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
