@@ -142,6 +142,47 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText(/prompt tokens \+ .* completion tokens/)).not.toBeInTheDocument();
   });
 
+  describe("provider prompt cache token split (issue #32045)", () => {
+    it("splits the Tokens summary into cache-miss, cache-hit and completion", () => {
+      render(
+        <LogDetailContent
+          logEntry={createLogEntry({
+            cache_hit: "false",
+            prompt_tokens: 430798,
+            completion_tokens: 47,
+            total_tokens: 430845,
+            metadata: {
+              status: "success",
+              usage_object: { prompt_tokens_details: { cached_tokens: 430464 } },
+            },
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          /430,845 \[334 cache miss prompt tokens \+ 430,464 cache hit prompt tokens \+ 47 completion tokens\]/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("shows the plain Tokens summary for a request with no provider prompt cache hit", () => {
+      render(
+        <LogDetailContent
+          logEntry={createLogEntry({
+            cache_hit: "false",
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            metadata: { status: "success" },
+          })}
+        />,
+      );
+
+      expect(screen.queryByText(/cache miss prompt tokens/)).not.toBeInTheDocument();
+    });
+  });
+
   it("should display ConfigInfoMessage when no messages, response, or error and not loading", () => {
     render(
       <LogDetailContent
