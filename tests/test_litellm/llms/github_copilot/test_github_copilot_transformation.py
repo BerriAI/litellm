@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Final
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
@@ -985,24 +985,13 @@ def test_openai_handler_repairs_github_copilot_empty_choices(
 
 
 def test_map_openai_params_forwards_reasoning_effort_for_claude():
-    """Claude reasoning params must survive map_openai_params, not just be advertised.
+    """Claude reasoning params must survive mapping, not just be advertised (#25666)."""
+    config: Final = GithubCopilotConfig()
+    model: Final = "claude-sonnet-4-20250514"
 
-    Regression test for the gap behind #25666: GithubCopilotConfig overrode
-    get_supported_openai_params() to advertise ``thinking``/``reasoning_effort``
-    for extended-thinking Claude models, but never overrode map_openai_params().
-    Mapping therefore fell through to OpenAIConfig -> OpenAIGPTConfig, whose
-    supported-param whitelist has neither key, so both were silently discarded
-    and never reached the Copilot API. The advertise-only assertions in
-    test_get_supported_openai_params_claude_model passed the whole time, because
-    they never inspect the mapped output.
-    """
-    config = GithubCopilotConfig()
-    model = "claude-sonnet-4-20250514"
-
-    # Guard the premise: the param is advertised as supported for this model.
     assert "reasoning_effort" in config.get_supported_openai_params(model)
 
-    mapped = config.map_openai_params(
+    mapped: Final = config.map_openai_params(
         non_default_params={"reasoning_effort": "high"},
         optional_params={},
         model=model,
@@ -1010,7 +999,7 @@ def test_map_openai_params_forwards_reasoning_effort_for_claude():
     )
     assert mapped.get("reasoning_effort") == "high"
 
-    mapped_thinking = config.map_openai_params(
+    mapped_thinking: Final = config.map_openai_params(
         non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
         optional_params={},
         model=model,
@@ -1024,12 +1013,12 @@ def test_map_openai_params_forwards_reasoning_effort_for_claude():
 
 def test_map_openai_params_does_not_forward_reasoning_for_unsupported_claude():
     """A Claude model without extended thinking must not gain reasoning params."""
-    config = GithubCopilotConfig()
-    model = "claude-3.5-sonnet"
+    config: Final = GithubCopilotConfig()
+    model: Final = "claude-3.5-sonnet"
 
     assert "reasoning_effort" not in config.get_supported_openai_params(model)
 
-    mapped = config.map_openai_params(
+    mapped: Final = config.map_openai_params(
         non_default_params={"reasoning_effort": "high"},
         optional_params={},
         model=model,
@@ -1040,9 +1029,9 @@ def test_map_openai_params_does_not_forward_reasoning_for_unsupported_claude():
 
 def test_map_openai_params_preserves_standard_openai_params_for_claude():
     """The Claude passthrough must not regress ordinary OpenAI param mapping."""
-    config = GithubCopilotConfig()
+    config: Final = GithubCopilotConfig()
 
-    mapped = config.map_openai_params(
+    mapped: Final = config.map_openai_params(
         non_default_params={"temperature": 0.5, "max_tokens": 128},
         optional_params={},
         model="claude-sonnet-4-20250514",
@@ -1053,26 +1042,20 @@ def test_map_openai_params_preserves_standard_openai_params_for_claude():
 
 
 def test_non_claude_reasoning_model_forwards_reasoning_effort():
-    """Reasoning-capable non-Claude Copilot models must also keep reasoning_effort.
-
-    Copilot serves Gemini, Grok and MAI models that advertise reasoning_effort in
-    its own model catalog, but the provider previously gated the param on the
-    model id containing "claude", so every other family had it dropped while the
-    upstream API would have accepted it.
-    """
-    config = GithubCopilotConfig()
-    model = "gemini-2.5-pro"
+    """Reasoning-capable non-Claude Copilot models must also keep reasoning_effort."""
+    config: Final = GithubCopilotConfig()
+    model: Final = "gemini-2.5-pro"
 
     with patch(
         "litellm.utils.supports_reasoning",
         return_value=True,
     ):
-        supported = config.get_supported_openai_params(model)
+        supported: Final = config.get_supported_openai_params(model)
         assert "reasoning_effort" in supported
         # thinking is Anthropic-native and must stay Claude-only
         assert "thinking" not in supported
 
-        mapped = config.map_openai_params(
+        mapped: Final = config.map_openai_params(
             non_default_params={"reasoning_effort": "high"},
             optional_params={},
             model=model,
@@ -1083,12 +1066,12 @@ def test_non_claude_reasoning_model_forwards_reasoning_effort():
 
 def test_non_reasoning_model_keeps_reasoning_effort_out():
     """A model the catalog reports as non-reasoning must not gain the param."""
-    config = GithubCopilotConfig()
+    config: Final = GithubCopilotConfig()
 
     with patch(
         "litellm.utils.supports_reasoning",
         return_value=False,
     ):
-        supported = config.get_supported_openai_params("gpt-4o")
+        supported: Final = config.get_supported_openai_params("gpt-4o")
         assert "reasoning_effort" not in supported
         assert "thinking" not in supported
