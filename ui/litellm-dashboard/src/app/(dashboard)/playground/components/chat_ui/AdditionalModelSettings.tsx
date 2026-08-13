@@ -42,6 +42,8 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
     externalUseAdvancedParams !== undefined ? externalUseAdvancedParams : internalUseAdvancedParams;
   const [localTemperature, setLocalTemperature] = useState(temperature);
   const [localMaxTokens, setLocalMaxTokens] = useState(maxTokens);
+  const [temperatureText, setTemperatureText] = useState(String(temperature));
+  const [maxTokensText, setMaxTokensText] = useState(String(maxTokens));
 
   const streamingId = useId();
   const advancedId = useId();
@@ -51,22 +53,44 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
 
   useEffect(() => {
     setLocalTemperature(temperature);
+    setTemperatureText(String(temperature));
   }, [temperature]);
 
   useEffect(() => {
     setLocalMaxTokens(maxTokens);
+    setMaxTokensText(String(maxTokens));
   }, [maxTokens]);
 
   const handleTemperatureChange = (value: number) => {
     const newValue = clamp(Number.isFinite(value) ? value : 1.0, 0, 2);
     setLocalTemperature(newValue);
+    setTemperatureText(String(newValue));
     onTemperatureChange?.(newValue);
   };
 
   const handleMaxTokensChange = (value: number) => {
     const newValue = clamp(Number.isFinite(value) ? Math.round(value) : 1000, 1, 32768);
     setLocalMaxTokens(newValue);
+    setMaxTokensText(String(newValue));
     onMaxTokensChange?.(newValue);
+  };
+
+  const handleTemperatureTyped = (raw: string) => {
+    setTemperatureText(raw);
+    const parsed = Number(raw);
+    if (raw.trim() !== "" && Number.isFinite(parsed) && parsed >= 0 && parsed <= 2) {
+      setLocalTemperature(parsed);
+      onTemperatureChange?.(parsed);
+    }
+  };
+
+  const handleMaxTokensTyped = (raw: string) => {
+    setMaxTokensText(raw);
+    const parsed = Number(raw);
+    if (raw.trim() !== "" && Number.isInteger(parsed) && parsed >= 1 && parsed <= 32768) {
+      setLocalMaxTokens(parsed);
+      onMaxTokensChange?.(parsed);
+    }
   };
 
   const handleUseAdvancedParamsChange = (checked: boolean) => {
@@ -175,14 +199,14 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
               </div>
               <Input
                 id={`${temperatureId}-number`}
-                type="number"
-                min={0}
-                max={2}
-                step={0.1}
-                value={localTemperature}
+                type="text"
+                inputMode="decimal"
+                aria-label="Temperature value"
+                value={temperatureText}
                 disabled={!useAdvancedParams}
                 className="h-8 w-20"
-                onChange={(event) => handleTemperatureChange(Number(event.target.value))}
+                onChange={(event) => handleTemperatureTyped(event.target.value)}
+                onBlur={() => handleTemperatureChange(Number(temperatureText))}
               />
             </div>
             <input
@@ -221,14 +245,14 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
               </div>
               <Input
                 id={`${maxTokensId}-number`}
-                type="number"
-                min={1}
-                max={32768}
-                step={1}
-                value={localMaxTokens}
+                type="text"
+                inputMode="numeric"
+                aria-label="Max tokens value"
+                value={maxTokensText}
                 disabled={!useAdvancedParams}
                 className="h-8 w-24"
-                onChange={(event) => handleMaxTokensChange(Number(event.target.value))}
+                onChange={(event) => handleMaxTokensTyped(event.target.value)}
+                onBlur={() => handleMaxTokensChange(Number(maxTokensText))}
               />
             </div>
             <input
