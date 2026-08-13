@@ -24,6 +24,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     apply_team_provider_credentials,
+    batch_cost_poller_is_active,
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
@@ -495,6 +496,12 @@ async def retrieve_batch(
             verbose_proxy_logger.debug(
                 "Batch %s is in non-terminal state %s, syncing with provider", batch_id, response.status
             )
+
+        if unified_batch_id and batch_cost_poller_is_active():
+            data["litellm_metadata"] = {
+                **(data.get("litellm_metadata") or {}),
+                "batch_ignore_default_logging": True,
+            }
 
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info

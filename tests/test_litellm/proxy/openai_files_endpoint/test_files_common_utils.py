@@ -95,3 +95,114 @@ def test_apply_unified_file_ids_swaps_all_three_ids():
         "unified-out",
         "unified-err",
     )
+
+
+class _FakeScheduler:
+    def __init__(self, job):
+        self._job = job
+
+    def get_job(self, job_id):
+        assert job_id == "check_batch_cost_job"
+        return self._job
+
+
+@pytest.mark.parametrize(
+    "polling_enabled, job, expected",
+    [
+        (True, object(), True),
+        (True, None, False),
+        (False, object(), False),
+    ],
+    ids=["poller-running", "job-absent-enterprise-import-failed", "polling-disabled-by-config"],
+)
+def test_batch_cost_poller_is_active(monkeypatch, polling_enabled, job, expected):
+    """The predicate must only claim the poller when it can actually be relied on, so a
+    proxy with polling switched off or without the enterprise job keeps accounting for
+    batch cost on the retrieve path."""
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", polling_enabled, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", _FakeScheduler(job), raising=False)
+
+    assert batch_cost_poller_is_active() is expected
+
+
+def test_batch_cost_poller_is_active_is_false_when_no_scheduler_exists(monkeypatch):
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", True, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", None, raising=False)
+
+    assert batch_cost_poller_is_active() is False
+
+
+def _completed_batch() -> LiteLLMBatch:
+    return LiteLLMBatch(
+        id="batch-done",
+        completion_window="24h",
+        created_at=1234567890,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status="completed",
+        output_file_id="file-out",
+    )
+
+
+async def _run_update(monkeypatch, poller_active: bool) -> dict:
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: poller_active)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+
+    db_batch_object = MagicMock()
+    db_batch_object.status = "in_progress"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+    )
+
+    assert update_mock.await_count == 1
+    return update_mock.await_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_retrieving_a_completed_batch_leaves_batch_processed_to_the_cost_poller(monkeypatch):
+    """batch_processed is what removes a batch from CheckBatchCost's queue, which selects
+    batch_processed=False. Retrieving a batch records no cost when the poller is active, so
+    setting the flag here retired the poller on behalf of work nobody had done: a cost
+    callback that then failed lost the batch's cost permanently with no retry left. The
+    status update must still happen so callers see the terminal state."""
+    data = await _run_update(monkeypatch, poller_active=True)
+
+    assert "batch_processed" not in data
+    assert data["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_retrieving_a_completed_batch_still_marks_processed_without_a_cost_poller(monkeypatch):
+    """With no poller to hand off to, this path is the only accountant, so it keeps setting
+    the flag. Otherwise a proxy with polling disabled would never unblock file deletion."""
+    data = await _run_update(monkeypatch, poller_active=False)
+
+    assert data["batch_processed"] is True
+    assert data["status"] == "complete"
