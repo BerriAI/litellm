@@ -1338,7 +1338,7 @@ async def _fetch_and_cache_registry(
     """The registry as the database has it, cached whole, or ``None`` when it is unusable."""
     try:
         registry_ids: Final = await fetch_ids()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # fail-safe: any registry load error must degrade to per-id lookups, never break auth
         verbose_proxy_logger.warning(
             "Registry %s could not be loaded from the database, so per-id lookups will run and the "
             "registry query is suppressed for %ss: %s",
@@ -1731,7 +1731,7 @@ async def _fetch_uncached_tags(
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
         return fetched
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # fail-safe: a tag fetch error must yield "no budget objects", never break auth
         verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
         return ()
 
