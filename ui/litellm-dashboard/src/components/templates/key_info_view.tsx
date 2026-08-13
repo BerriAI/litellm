@@ -24,6 +24,8 @@ import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend"
 import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlockedState";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useQueryClient } from "@tanstack/react-query";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
@@ -74,6 +76,7 @@ export default function KeyInfoView({
   const { teams: teamsData } = useTeams();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const { data: allMcpServers } = useMCPServers();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -201,33 +204,21 @@ export default function KeyInfoView({
         delete formValues.vector_stores;
       }
 
-      if (formValues.mcp_servers_and_groups !== undefined) {
-        const { servers, accessGroups, toolsets } = formValues.mcp_servers_and_groups || {
-          servers: [],
-          accessGroups: [],
-          toolsets: [],
-        };
-        formValues.object_permission = {
-          ...currentKeyData.object_permission,
-          mcp_servers: servers || [],
-          mcp_access_groups: accessGroups || [],
-          mcp_toolsets: toolsets || [],
-        };
-        // Remove mcp_servers_and_groups from the top level as it should be in object_permission
-        delete formValues.mcp_servers_and_groups;
-      }
-
-      // Handle MCP tool permissions
-      if (formValues.mcp_tool_permissions !== undefined) {
-        const mcpToolPermissions = formValues.mcp_tool_permissions || {};
-        if (Object.keys(mcpToolPermissions).length > 0) {
-          formValues.object_permission = {
-            ...formValues.object_permission,
-            mcp_tool_permissions: mcpToolPermissions,
-          };
+      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers ?? []);
+      if (mcpEntitlement) {
+        // Without the catalog every allowlist key is unresolvable, so nothing is pruned and a
+        // revocation would save as a no-op while reporting success. Refuse rather than mislead.
+        if (allMcpServers === undefined && Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0) {
+          NotificationManager.error("MCP server list is unavailable, so MCP permissions cannot be saved yet. Retry.");
+          return;
         }
-        delete formValues.mcp_tool_permissions;
+        formValues.object_permission = {
+          ...(formValues.object_permission ?? currentKeyData.object_permission),
+          ...mcpEntitlement,
+        };
       }
+      delete formValues.mcp_servers_and_groups;
+      delete formValues.mcp_tool_permissions;
 
       // Handle agent permissions
       if (formValues.agents_and_groups !== undefined) {

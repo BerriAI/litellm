@@ -255,6 +255,11 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: vi.fn().mockReturnValue({ data: { values: {} }, isLoading: false }),
 }));
 
+// Mock useMCPServers hook (requires QueryClientProvider which is not available in this test)
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
+  useMCPServers: vi.fn().mockReturnValue({ data: [] }),
+}));
+
 // Mock useResetKeySpend hook (requires QueryClientProvider which is not available in this test)
 vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   useResetKeySpend: vi.fn().mockReturnValue({

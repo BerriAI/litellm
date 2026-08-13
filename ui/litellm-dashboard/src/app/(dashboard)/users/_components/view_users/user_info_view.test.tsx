@@ -1,7 +1,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import UserInfoView, { extractMcpEntitlement } from "./user_info_view";
+import UserInfoView from "./user_info_view";
+import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 
 const mockTeamMemberAddCall = vi.fn();
 const mockTeamMemberDeleteCall = vi.fn();
