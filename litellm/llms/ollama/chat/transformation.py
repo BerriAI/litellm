@@ -234,14 +234,16 @@ class OllamaChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        optional_params = optional_params.copy()  # mutable-ok: request-local copy protects caller-owned logging data
-        stream: Final = optional_params.pop("stream", False)
-        format: Final = optional_params.pop("format", None)
-        keep_alive: Final = optional_params.pop("keep_alive", None)
-        think: Final = optional_params.pop("think", None)
-        function_name: Final = optional_params.pop("function_name", None)
+        request_params: Final = (
+            optional_params.copy()
+        )  # mutable-ok: request-local copy protects caller-owned logging data
+        stream: Final = request_params.pop("stream", False)
+        format: Final = request_params.pop("format", None)
+        keep_alive: Final = request_params.pop("keep_alive", None)
+        think: Final = request_params.pop("think", None)
+        function_name: Final = request_params.pop("function_name", None)
         litellm_params["function_name"] = function_name
-        tools: Final = optional_params.pop("tools", None)
+        tools: Final = request_params.pop("tools", None)
 
         new_messages: Final = []
         for m in messages:
@@ -290,13 +292,13 @@ class OllamaChatConfig(BaseConfig):
         # Load Config
         config: Final = self.get_config()
         for k, v in config.items():
-            if k not in optional_params:
-                optional_params[k] = v
+            if k not in request_params:
+                request_params[k] = v
 
         data: Final = {
             "model": model,
             "messages": new_messages,
-            "options": optional_params,
+            "options": request_params,
             "stream": stream,
         }
         if format is not None:
