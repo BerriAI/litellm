@@ -467,6 +467,7 @@ Launch a coding agent with all of its LLM traffic routed through your LiteLLM pr
 lite claude
 lite codex
 lite opencode
+lite pi
 ```
 
 Anything you type after the agent name is forwarded to it untouched, so the usual flags keep working:
@@ -480,17 +481,19 @@ Each command resolves your LiteLLM key (logging in via SSO when none is stored a
 
 The right variables are picked per agent. Claude Code gets `ANTHROPIC_BASE_URL` (the proxy root, so it appends `/v1/messages`) and `ANTHROPIC_AUTH_TOKEN`, with any stray `ANTHROPIC_API_KEY` cleared so the proxy token wins. Codex and OpenCode get `OPENAI_BASE_URL` (the proxy plus `/v1`) and `OPENAI_API_KEY`. Codex ignores `OPENAI_BASE_URL`, so it is additionally pointed at the proxy through a custom provider passed as `-c` config overrides (HTTP/SSE Responses transport, since the proxy does not speak the Responses WebSocket protocol).
 
+pi ignores base-URL environment variables entirely, so `lite pi` wires it up differently: before handoff it fetches the models your key can use from the proxy's `/v1/models` (plus each model's context window and output cap from `/model_group/info`, when available) and syncs them into a `litellm` provider entry in pi's `~/.pi/agent/models.json` (honoring `PI_CODING_AGENT_DIR`), then starts pi on that provider's first model via an injected `--model litellm/<id>`. Only that one provider entry is rewritten; the rest of the file, including any other custom providers, is left alone. The entry references the key as `$LITELLM_PROXY_API_KEY`, which the wrapper exports for the session, so the token itself never lands on disk and plain `pi` outside the wrapper simply shows the litellm models as unavailable. Your own flags come after the injected pin, so `lite pi --model litellm/<other-id>` wins, and inside the TUI the `/model` picker lists every synced litellm model.
+
 Options (these belong to the wrapper, so put them before the agent's own flags):
 
 - `--skip-verify`: Skip the pre-launch key check (useful offline or with non-standard auth).
 
-To pin the model, pass the agent's own model flag (for example `lite claude --model my-proxy-model` or `lite codex -m my-proxy-model`), or export the variable the agent reads (`ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` for Claude Code); the wrapper preserves anything you already have set. Whatever model the agent ends up requesting must exist on the proxy, since requests land on the proxy's `/v1/messages` (Anthropic) or `/v1/chat/completions` and `/v1/responses` (OpenAI) endpoints.
+To pin the model, pass the agent's own model flag (for example `lite claude --model my-proxy-model`, `lite codex -m my-proxy-model`, or `lite pi --model my-proxy-model`), or export the variable the agent reads (`ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` for Claude Code); the wrapper preserves anything you already have set. Whatever model the agent ends up requesting must exist on the proxy, since requests land on the proxy's `/v1/messages` (Anthropic) or `/v1/chat/completions` and `/v1/responses` (OpenAI) endpoints.
 
 #### About the `lite login` credential
 
 The token minted by `lite login` is a short-lived, per-session agent credential, not a managed virtual key. It is scoped to the user and team you authenticated as, inherits that user's and team's models and budgets, and is enforced on the proxy exactly like a virtual key on the same team (guardrails, routing, logging, spend). Spend is tracked against the shared team and user budgets, so running several agents (or logging in more than once) does not hand each session its own separate budget; they all draw down the same team/user allowance. There is no separate per-session cap, so sustained agent use is not capped at a small chat-session limit.
 
-The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. `lite claude`, `lite codex`, and `lite opencode` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
+The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. `lite claude`, `lite codex`, `lite opencode`, and `lite pi` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
 
 ### Route Every Claude Code Session Through the Proxy
 
