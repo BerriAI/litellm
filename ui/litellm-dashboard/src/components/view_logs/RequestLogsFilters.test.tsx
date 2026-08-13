@@ -18,9 +18,14 @@ vi.mock("@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers", () => ({
   useInfiniteSpendLogEndUsers: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
+  useInfiniteUsers: vi.fn(),
+}));
+
 import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 
 const emptyInfiniteQuery = {
   data: { pages: [], pageParams: [] },
@@ -32,10 +37,16 @@ const emptyInfiniteQuery = {
 
 const LOGS_WINDOW = { start_date: "2026-07-23 00:00:00", end_date: "2026-07-24 00:00:00" };
 
-function renderFilters(filters: Record<string, string> = {}) {
+function renderFilters(filters: Record<string, string> = {}, canFilterByInternalUser = true) {
   const set = vi.fn();
   renderWithProviders(
-    <RequestLogsFilters get={(id: string) => filters[id]} set={set} teams={[]} logsWindow={LOGS_WINDOW} />,
+    <RequestLogsFilters
+      get={(id: string) => filters[id]}
+      set={set}
+      teams={[]}
+      logsWindow={LOGS_WINDOW}
+      canFilterByInternalUser={canFilterByInternalUser}
+    />,
   );
   return { set };
 }
@@ -53,6 +64,7 @@ describe("RequestLogsFilters", () => {
     vi.mocked(useInfiniteSpendLogEndUsers).mockReturnValue(
       emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteSpendLogEndUsers>,
     );
+    vi.mocked(useInfiniteUsers).mockReturnValue(emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteUsers>);
   });
 
   it("renders every backend-supported filter field", async () => {
@@ -62,6 +74,7 @@ describe("RequestLogsFilters", () => {
       "Team ID",
       "Status",
       "Key Alias",
+      "Internal User",
       "End User",
       "Error Code",
       "Error Message",
@@ -164,8 +177,77 @@ describe("RequestLogsFilters", () => {
 
   it("scopes the End User lookup to the window the logs table is showing", async () => {
     const otherWindow = { start_date: "2026-01-01 00:00:00", end_date: "2026-01-02 00:00:00" };
-    renderWithProviders(<RequestLogsFilters get={() => undefined} set={vi.fn()} teams={[]} logsWindow={otherWindow} />);
+    renderWithProviders(
+      <RequestLogsFilters
+        get={() => undefined}
+        set={vi.fn()}
+        teams={[]}
+        logsWindow={otherWindow}
+        canFilterByInternalUser
+      />,
+    );
 
     await waitFor(() => expect(useInfiniteSpendLogEndUsers).toHaveBeenCalledWith(otherWindow, 50, undefined));
+  });
+
+  it("offers internal users by email and filters on their user id", async () => {
+    vi.mocked(useInfiniteUsers).mockReturnValue({
+      ...emptyInfiniteQuery,
+      data: {
+        pages: [
+          {
+            users: [{ user_id: "u-1", user_email: "bob@acme.com", user_alias: null }],
+            page: 1,
+            page_size: 50,
+            total: 1,
+            total_pages: 1,
+          },
+        ],
+        pageParams: [1],
+      },
+    } as unknown as ReturnType<typeof useInfiniteUsers>);
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    await user.click(await screen.findByPlaceholderText("Search a user by email"));
+    await user.click(await screen.findByText("bob@acme.com"));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.USER_ID, "u-1");
+  });
+
+  it("offers a user repeated across page boundaries only once", async () => {
+    const bob = { user_id: "u-1", user_email: "bob@acme.com", user_alias: null };
+    vi.mocked(useInfiniteUsers).mockReturnValue({
+      ...emptyInfiniteQuery,
+      data: {
+        pages: [
+          { users: [bob], page: 1, page_size: 1, total: 2, total_pages: 2 },
+          { users: [bob], page: 2, page_size: 1, total: 2, total_pages: 2 },
+        ],
+        pageParams: [1, 2],
+      },
+    } as unknown as ReturnType<typeof useInfiniteUsers>);
+    const user = userEvent.setup();
+    renderFilters();
+
+    await user.click(await screen.findByPlaceholderText("Search a user by email"));
+
+    expect(await screen.findAllByText("bob@acme.com")).toHaveLength(1);
+  });
+
+  it("pushes the Internal User query to the server rather than filtering a preloaded list", async () => {
+    const user = userEvent.setup();
+    renderFilters();
+
+    await user.type(await screen.findByPlaceholderText("Search a user by email"), "bob");
+
+    await waitFor(() => expect(useInfiniteUsers).toHaveBeenCalledWith(50, "bob"));
+  });
+
+  it("hides the Internal User filter from callers the proxy scopes to their own logs", async () => {
+    renderFilters({}, false);
+
+    expect(await screen.findByText("End User")).toBeInTheDocument();
+    expect(screen.queryByText("Internal User")).not.toBeInTheDocument();
   });
 });

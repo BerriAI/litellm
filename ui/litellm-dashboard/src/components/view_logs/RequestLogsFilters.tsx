@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { DataTableFilterField } from "@/components/shared/DataTable";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
@@ -189,6 +190,46 @@ function EndUserFilterField({
   );
 }
 
+function InternalUserFilterField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string | undefined) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteUsers(
+    PAGE_SIZE,
+    emptyToUndefined(search),
+  );
+
+  const options = useMemo<SearchSelectOption[]>(() => {
+    const users = (data?.pages ?? []).flatMap((page) => page.users.filter((user) => user.user_id !== ""));
+    const byId = new Map(users.map((user) => [user.user_id, user] as const));
+    return [...byId.values()].map((user) => {
+      const name = user.user_email || user.user_alias || "";
+      return { label: name || user.user_id, value: user.user_id, sublabel: name === "" ? undefined : user.user_id };
+    });
+  }, [data]);
+
+  return (
+    <DataTableFilterField label="Internal User">
+      <PaginatedSearchSelect
+        options={options}
+        value={value}
+        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onSearchChange={setSearch}
+        onLoadMore={() => void fetchNextPage()}
+        hasNextPage={hasNextPage}
+        isLoading={isLoading}
+        isFetchingNextPage={isFetchingNextPage}
+        placeholder="Search a user by email"
+        emptyText="No users found"
+      />
+    </DataTableFilterField>
+  );
+}
+
 function ErrorCodeFilterField({ value, onChange }: { value: string; onChange: (value: string | undefined) => void }) {
   const [query, setQuery] = useState("");
 
@@ -243,9 +284,10 @@ interface RequestLogsFiltersProps {
   set: (columnId: string, value: unknown) => void;
   teams: Team[];
   logsWindow: LogsWindow;
+  canFilterByInternalUser: boolean;
 }
 
-export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsFiltersProps) {
+export function RequestLogsFilters({ get, set, teams, logsWindow, canFilterByInternalUser }: RequestLogsFiltersProps) {
   const valueOf = (id: string): string => asString(get(id));
   const setter = (id: string) => (next: string | undefined) => set(id, next);
 
@@ -278,6 +320,10 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
         onChange={setter(LOG_FILTER_IDS.KEY_ALIAS)}
         teamId={valueOf(LOG_FILTER_IDS.TEAM_ID)}
       />
+
+      {canFilterByInternalUser && (
+        <InternalUserFilterField value={valueOf(LOG_FILTER_IDS.USER_ID)} onChange={setter(LOG_FILTER_IDS.USER_ID)} />
+      )}
 
       <EndUserFilterField
         value={valueOf(LOG_FILTER_IDS.END_USER)}

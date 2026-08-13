@@ -43,6 +43,7 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.SESSION_ID]: "Session ID",
   [LOG_FILTER_IDS.MODEL_ID]: "Model",
   [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
+  [LOG_FILTER_IDS.USER_ID]: "Internal User",
 };
 
 export interface LogsWindow {
