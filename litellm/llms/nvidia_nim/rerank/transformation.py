@@ -21,8 +21,9 @@ class NvidiaNimQueryObject(TypedDict):
     text: Required[str]
 
 
-class NvidiaNimPassageObject(TypedDict):
-    text: Required[str]
+class NvidiaNimPassageObject(TypedDict, total=False):
+    text: str
+    image: str
 
 
 class NvidiaNimRerankRequest(TypedDict, total=False):
@@ -52,6 +53,10 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
     """
 
     DEFAULT_NIM_RERANK_API_BASE = "https://ai.api.nvidia.com"
+
+    # The legacy retrieval rerank route accepts text passages only. The native
+    # ranking subclass expands this tuple for VL models that accept images.
+    SUPPORTED_PASSAGE_FIELDS: tuple[str, ...] = ("text",)
 
     def __init__(self) -> None:
         pass
@@ -206,11 +211,17 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             if isinstance(doc, str):
                 passages.append({"text": doc})
             elif isinstance(doc, dict):
-                # If document is already a dict, check if it has 'text' field
-                if "text" in doc:
-                    passages.append({"text": doc["text"]})
+                # Preserve only the structured passage fields supported by the
+                # selected rerank route.
+                supported_fields: NvidiaNimPassageObject = {}  # mutable-ok: assembling a request TypedDict
+                if "text" in self.SUPPORTED_PASSAGE_FIELDS and "text" in doc:
+                    supported_fields["text"] = doc["text"]
+                if "image" in self.SUPPORTED_PASSAGE_FIELDS and "image" in doc:
+                    supported_fields["image"] = doc["image"]
+                if supported_fields:
+                    passages.append(supported_fields)
                 else:
-                    # Otherwise, stringify the dict
+                    # No supported fields - stringify the dict
                     import json
 
                     passages.append({"text": json.dumps(doc)})
@@ -304,9 +315,10 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
                 "relevance_score": ranking["logit"],
             }
 
-            # Include document if it was in the original request
+            # Include document if it was in the original request.
+            # Image-only passages carry no 'text' field, so guard the lookup.
             index: int = ranking["index"]
-            if index < len(original_passages):
+            if index < len(original_passages) and "text" in original_passages[index]:
                 result_item["document"] = {"text": original_passages[index]["text"]}
 
             results.append(result_item)
