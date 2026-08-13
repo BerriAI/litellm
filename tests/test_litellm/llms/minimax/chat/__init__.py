@@ -1,1 +1,0 @@
-# MiniMax chat tests

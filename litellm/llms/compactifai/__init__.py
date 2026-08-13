@@ -1,1 +1,0 @@
-# CompactifAI provider for LiteLLM
