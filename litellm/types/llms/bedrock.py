@@ -216,14 +216,22 @@ class ConverseResponseOutputBlock(TypedDict):
     message: MessageBlock | None
 
 
-class ConverseTokenUsageBlock(TypedDict):
+class CacheDetailBlock(TypedDict):
+    """Per-TTL cache-write breakdown. https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html"""
+
     inputTokens: int
-    outputTokens: int
-    totalTokens: int
+    ttl: Literal["5m", "1h"]
+
+
+class ConverseTokenUsageBlock(TypedDict, total=False):
+    inputTokens: Required[int]
+    outputTokens: Required[int]
+    totalTokens: Required[int]
     cacheReadInputTokenCount: int
     cacheReadInputTokens: int
     cacheWriteInputTokenCount: int
     cacheWriteInputTokens: int
+    cacheDetails: list[CacheDetailBlock]
 
 
 class ServiceTierBlock(TypedDict):
