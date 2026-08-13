@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from parameterized import parameterized
 from unittest.mock import MagicMock, patch
 
@@ -1842,6 +1843,22 @@ class TestOpenTelemetryHeaderSplitting(unittest.TestCase):
         self.assertEqual(
             result, {"api-key": "value1=part2", "config": "setting=enabled"}
         )
+
+    def test_accepts_any_mapping_not_only_dict(self):
+        """The parameter is typed Mapping, so a non-dict Mapping must not silently drop
+        every header and leave the exporter unauthenticated."""
+        otel = OpenTelemetry()
+        headers = MappingProxyType({"authorization": "Basic abc"})
+        self.assertEqual(otel._get_headers_dictionary(headers), {"authorization": "Basic abc"})
+
+    def test_returns_a_copy_so_the_exporter_never_aliases_the_caller(self):
+        """The result is handed to a long-lived exporter, so it must not be the caller's
+        own dict."""
+        otel = OpenTelemetry()
+        headers = {"authorization": "Basic abc"}
+        result = otel._get_headers_dictionary(headers)
+        self.assertIsNot(result, headers)
+        self.assertEqual(result, headers)
 
 
 class TestOpenTelemetryEndpointNormalization(unittest.TestCase):

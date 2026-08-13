@@ -3248,8 +3248,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 for part in parts:
                     key, value = part.split("=", 1)
                     _split_otel_headers[key] = value
-            elif isinstance(headers, dict):
-                _split_otel_headers = headers
+            elif isinstance(headers, Mapping):
+                _split_otel_headers.update(headers)
         return _split_otel_headers
 
     async def async_management_endpoint_success_hook(
