@@ -25,12 +25,17 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         directly to a wrapper: it is frozen before it can escape, though anything
         mutable nested inside it still counts. Annotation-internal lists
         (`Callable[[int], str]`) are exempt, as is a dict display assigned directly
-        to a name annotated with a same-module TypedDict (`x: Final[MyTd] = {...}`,
-        bare or under `Final[...]`): it is the literal spelling of the `MyTd(...)`
-        call, which was never construction, and LIT012 keeps those fields ReadOnly.
-        Only the display itself is exempt (nested mutables still count), and a
-        TypedDict imported from another module is out of reach, exactly as in
-        LIT012. Suppress with `# mutable-ok: <reason>`.
+        to a name annotated with a same-module all-ReadOnly TypedDict
+        (`x: Final[MyTd] = {...}`, bare or under `Final[...]`): it is the literal
+        spelling of the `MyTd(...)` call, which was never construction, and an
+        all-ReadOnly payload cannot be grown or rewritten. The exemption is
+        conservative: the TypedDict's name must be bound exactly once in the file
+        (a name also bound as a function, another class, an assignment target, or
+        an import alias might resolve to something mutable at the annotation
+        site), every field it declares or inherits in-module must be
+        `ReadOnly[...]`, only the display itself is exempt (nested mutables still
+        count), and a TypedDict imported from another module is out of reach,
+        exactly as in LIT012. Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
@@ -498,23 +503,59 @@ def _declared_type_name(annotation: ast.expr) -> str | None:
     return _head_name(annotation)
 
 
+def _binding_names(node: ast.AST) -> tuple[str, ...]:
+    """The names a single statement binds: class, function, assignment target, import alias."""
+    if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        return (node.name,)
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return tuple(alias.asname or alias.name.partition(".")[0] for alias in node.names)
+    if isinstance(node, ast.Assign):
+        return tuple(target.id for target in node.targets if isinstance(target, ast.Name))
+    if isinstance(node, (ast.AnnAssign, ast.AugAssign)) and isinstance(node.target, ast.Name):
+        return (node.target.id,)
+    return ()
+
+
 def _typeddict_assigned_value_ids(tree: ast.AST) -> frozenset[int]:
-    """ids() of every dict display assigned directly to a TypedDict-annotated name.
+    """ids() of every dict display assigned directly to a frozen-TypedDict-annotated name.
 
     `x: MyTd = {...}` is the literal spelling of the `MyTd(...)` call, which was
-    never construction to begin with, and LIT012 keeps every same-module TypedDict
-    field ReadOnly, so neither spelling yields a payload the holder can grow. Only
+    never construction to begin with, so the display is a one-shot build -- provided
+    the annotation provably names a frozen payload. Three conditions gate that:
+    MyTd is a class-form TypedDict in this module (imported ones are invisible,
+    exactly as in LIT012's base-class resolution); its name is bound exactly once
+    in the file (resolution here is scope-blind, so a name the file also binds as a
+    function, another class, an assignment target, or an import alias could resolve
+    to something mutable at the annotation site); and every field it declares or
+    inherits within the module is `ReadOnly[...]`, so no holder can statically
+    rewrite a key even where LIT012 was suppressed or is riding its budget. Only
     the display itself is exempt; anything mutable nested inside it still trips
-    LIT002. A TypedDict imported from another module is invisible here, exactly as
-    in LIT012's base-class resolution.
+    LIT002.
     """
-    typeddict_names = frozenset(cls.name for cls in _typeddict_classes(tree))
+    classes = _typeddict_classes(tree)
+    by_name = {cls.name: cls for cls in classes}
+
+    def frozen_lineage(name: str, seen: frozenset[str]) -> bool:
+        cls = by_name.get(name)
+        if cls is None or name in seen:
+            return False
+        if not all(_has_readonly_qualifier(field.annotation) for field in _class_fields(cls)):
+            return False
+        return all(
+            base == TYPEDDICT_BASE or frozen_lineage(base, seen | frozenset((name,)))
+            for base in _base_names(cls)
+        )
+
+    bindings = tuple(name for node in ast.walk(tree) for name in _binding_names(node))
+    frozen_names = frozenset(
+        cls.name for cls in classes if bindings.count(cls.name) == 1 and frozen_lineage(cls.name, frozenset())
+    )
     return frozenset(
         id(node.value)
         for node in ast.walk(tree)
         if isinstance(node, ast.AnnAssign)
         and isinstance(node.value, ast.Dict)
-        and _declared_type_name(node.annotation) in typeddict_names
+        and _declared_type_name(node.annotation) in frozen_names
     )
 
 
@@ -555,7 +596,7 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
             f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
             f"(`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass / NamedTuple "
             f"/ ReadOnly TypedDict (a dict literal assigned to a name annotated with a "
-            f"same-module TypedDict is exempt), or (if it really must be dynamic) a "
+            f"same-module all-ReadOnly TypedDict is exempt), or (if it really must be dynamic) a "
             f"MappingProxyType wrapping a dict literal or comprehension "
             f"(suppress: `# mutable-ok: <reason>`)",
         )

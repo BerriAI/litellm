@@ -215,6 +215,31 @@ def test_mutable_nested_inside_typeddict_literal_still_counts(tmp_path):
     assert "LIT002" in _codes(tmp_path, _TYPEDDICT_PREFIX + "x: Td = {'a': 1, 'b': str([1])}\n")
 
 
+def test_writable_typeddict_literal_gets_no_exemption(tmp_path):
+    src = "from typing import Final, TypedDict\nclass Wtd(TypedDict):\n    a: int\nx: Final[Wtd] = {'a': 1}\n"
+    assert "LIT002" in _codes(tmp_path, src)
+
+
+def test_typeddict_inheriting_writable_fields_gets_no_exemption(tmp_path):
+    loose_sub = _TYPEDDICT_PREFIX + "class Loose(Td):\n    c: int\nz: Final[Loose] = {'a': 1, 'c': 2}\n"
+    assert "LIT002" in _codes(tmp_path, loose_sub)
+    writable_base = (
+        "from typing import Final, ReadOnly, TypedDict\n"
+        "class W(TypedDict):\n    a: int\n"
+        "class S(W):\n    b: ReadOnly[int]\n"
+        "x: Final[S] = {'a': 1, 'b': 2}\n"
+    )
+    assert "LIT002" in _codes(tmp_path, writable_base)
+
+
+def test_typeddict_name_rebound_elsewhere_gets_no_exemption(tmp_path):
+    assert "LIT002" in _codes(tmp_path, _TYPEDDICT_PREFIX + "class Td:\n    pass\nx: Td = {'a': 1}\n")
+    assert "LIT002" in _codes(
+        tmp_path, _TYPEDDICT_PREFIX + "def scope():\n    Td = dict\n    return Td\nx: Td = {'a': 1}\n"
+    )
+    assert "LIT002" in _codes(tmp_path, _TYPEDDICT_PREFIX + "from elsewhere import Td\nx: Td = {'a': 1}\n")
+
+
 def test_dict_literal_annotated_as_imported_or_unknown_type_still_counts(tmp_path):
     assert "LIT002" in _codes(tmp_path, "from other_module import Td\nx: Td = {'a': 1}\n")
     assert "LIT002" in _codes(tmp_path, "from typing import Final\ny: Final = {'a': 1}\n")
