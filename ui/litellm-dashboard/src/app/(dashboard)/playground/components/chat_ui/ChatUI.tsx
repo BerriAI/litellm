@@ -1149,12 +1149,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
     NotificationsManager.success("Chat history cleared.");
   };
 
+  const currentEndpointServes = (mode: string): boolean => {
+    const modelEndpoint = getEndpointType(mode);
+    if (
+      endpointType === EndpointType.RESPONSES ||
+      endpointType === EndpointType.ANTHROPIC_MESSAGES ||
+      endpointType === EndpointType.INTERACTIONS
+    ) {
+      return modelEndpoint === endpointType || modelEndpoint === EndpointType.CHAT;
+    }
+    if (endpointType === EndpointType.IMAGE_EDITS) {
+      return modelEndpoint === endpointType || modelEndpoint === EndpointType.IMAGE;
+    }
+    return modelEndpoint === endpointType;
+  };
+
   const onModelChange = (value: string) => {
     setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
 
     const model = modelInfo.find((option) => option.model_group === value);
-    if (model?.mode) {
+    if (model?.mode && !currentEndpointServes(model.mode)) {
       setEndpointType(getEndpointType(model.mode));
     }
   };
@@ -1805,7 +1820,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   {endpointType === EndpointType.IMAGE_EDITS && (
                     <div className="mb-4">
                       {uploadedImages.length === 0 ? (
-                        <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center hover:border-gray-400">
+                        <label
+                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center hover:border-gray-400"
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            handleImageFiles(Array.from(event.dataTransfer.files));
+                          }}
+                        >
                           <ImageIcon className="mb-2 size-6 text-gray-500" aria-hidden="true" />
                           <p className="text-sm">Click or drag images to upload</p>
                           <p className="text-xs text-gray-500">
@@ -1874,7 +1896,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   {endpointType === EndpointType.TRANSCRIPTION && (
                     <div className="mb-4">
                       {!uploadedAudio ? (
-                        <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center hover:border-gray-400">
+                        <label
+                          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center hover:border-gray-400"
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            const file = event.dataTransfer.files[0];
+                            if (file) {
+                              handleAudioUpload(file);
+                            }
+                          }}
+                        >
                           <Volume2 className="mb-2 size-6 text-gray-500" aria-hidden="true" />
                           <p className="text-sm">Click or drag audio file to upload</p>
                           <p className="text-xs text-gray-500">
