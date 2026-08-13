@@ -6,7 +6,7 @@ import moment from "moment";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
-import { internalUserRoles } from "../../utils/roles";
+import { all_admin_roles, internalUserRoles } from "../../utils/roles";
 import type { KeyResponse } from "../key_team_helpers/key_list";
 import { keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
@@ -305,6 +305,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         onSessionClick={handleSessionClick}
         teams={allTeams ?? []}
         logsWindow={logsWindow}
+        showUserIdFilter={all_admin_roles.includes(userRole)}
         toolbarChildren={
           <LogsTableToolbar
             startTime={startTime}

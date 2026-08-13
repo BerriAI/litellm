@@ -36,6 +36,7 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.TEAM_ID]: "Team ID",
   [LOG_FILTER_IDS.STATUS]: "Status",
   [LOG_FILTER_IDS.KEY_ALIAS]: "Key Alias",
+  [LOG_FILTER_IDS.USER_ID]: "User ID",
   [LOG_FILTER_IDS.END_USER]: "End User",
   [LOG_FILTER_IDS.ERROR_CODE]: "Error Code",
   [LOG_FILTER_IDS.ERROR_MESSAGE]: "Error Message",
