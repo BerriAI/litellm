@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
-from litellm.litellm_core_utils.model_response_utils import is_model_response_stream_empty
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
     make_call,
@@ -205,7 +205,7 @@ def test_bedrock_converse_streaming_consistent_id():
         assert response.id == expected_id, "All chunk IDs must match the one captured from the messageStart event"
 
 
-def test_converse_metadata_chunk_is_empty_after_usage_is_stripped():
+def test_converse_metadata_chunk_is_filtered_after_usage_is_stripped():
     decoder = AWSEventStreamDecoder(model="test")
 
     content_chunk = decoder.converse_chunk_parser({"delta": {"text": "Hello"}})
@@ -220,8 +220,28 @@ def test_converse_metadata_chunk_is_empty_after_usage_is_stripped():
     assert metadata_chunk.usage is not None
     assert metadata_chunk.choices[0].delta.role is None
 
-    stripped_chunk = metadata_chunk.model_copy(update={"usage": None})
-    assert is_model_response_stream_empty(stripped_chunk)
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "custom_llm_provider": "bedrock",
+        "litellm_params": {},
+    }
+    logging_obj.call_type = "completion"
+    logging_obj.stream_options = None
+    logging_obj.messages = [{"role": "user", "content": "Hello"}]
+    logging_obj.completion_start_time = None
+    logging_obj._llm_caching_handler = None
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter([content_chunk, metadata_chunk]),
+        model="test",
+        logging_obj=logging_obj,
+        custom_llm_provider="bedrock",
+    )
+    returned_chunks = list(wrapper)
+
+    assert len(returned_chunks) == 2
+    assert returned_chunks[0].choices[0].delta.content == "Hello"
+    assert returned_chunks[1].choices[0].finish_reason == "stop"
 
 
 @pytest.mark.asyncio
