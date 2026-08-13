@@ -2174,7 +2174,8 @@ def batch_cost_calculator(
         cache_read_cost_key: Final = _get_service_tier_cost_key("cache_read_input_token_cost", None)
         total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
 
-        cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
+        cache_creation_rate: Final = model_info.get("cache_creation_input_token_cost")
+        cache_creation_cost: Final = cache_creation_rate if cache_creation_rate is not None else input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
     if output_cost_per_token_batches:
         total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
