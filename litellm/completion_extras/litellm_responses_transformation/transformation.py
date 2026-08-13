@@ -1445,16 +1445,16 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 usage=usage,
             )
         elif event_type in ("response.failed", "error"):
-            response_data = parsed_chunk.get("response") or {}
-            if not isinstance(response_data, dict):
-                response_data = {}
-            error_data = response_data.get("error") or parsed_chunk.get("error") or parsed_chunk
+            failure_response_data = parsed_chunk.get("response") or {}
+            if not isinstance(failure_response_data, dict):
+                failure_response_data = {}
+            error_data = failure_response_data.get("error") or parsed_chunk.get("error") or parsed_chunk
             error_message = error_data.get("message") if isinstance(error_data, dict) else None
             raise litellm.APIError(
                 status_code=500,
                 message=error_message or "Responses API stream failed",
                 llm_provider="",
-                model=response_data.get("model", ""),
+                model=failure_response_data.get("model", ""),
             )
         else:
             pass
