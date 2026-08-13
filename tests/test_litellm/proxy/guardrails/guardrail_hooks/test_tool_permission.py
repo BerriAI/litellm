@@ -1217,10 +1217,10 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
     @pytest.mark.asyncio
     async def test_rewrite_mode_keeps_the_stream_identity_it_had_before_the_shared_helper(self):
-        """The SSE helpers moved to litellm/proxy/guardrails/anthropic_sse.py must be a pure move.
+        """Well-formed SSE must round-trip exactly as it did before the helpers were shared.
 
-        That module can stamp the upstream message id and model onto the assembled response for
-        callers that ask for it; this path never did, and a client reads those bytes.
+        The shared module can stamp the upstream message id and model onto the assembled response
+        for callers that ask for it; this path never did, and a client reads those bytes.
         """
         with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
             out = await self._drain(self.rewriting, self._sse_chunks("Read"))
@@ -1233,6 +1233,25 @@ class TestToolPermissionGuardrailAnthropicMessages:
         )["message"]
         assert message_start["id"].startswith("chatcmpl-"), "the rewritten stream must not adopt the upstream message id"
         assert message_start["model"] == "unknown-model", "the rewritten stream must not adopt the upstream model"
+
+    @pytest.mark.asyncio
+    async def test_message_start_without_a_dict_message_fails_closed(self):
+        """Malformed SSE must not be forwarded unscanned.
+
+        The shared assembler requires message_start.message to be a dict; the private helper it
+        replaced accepted anything, and assembled a response from it.
+        """
+        events = [
+            {"type": "message_start", "message": "not-a-dict"},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+            {"type": "message_stop"},
+        ]
+        chunks = [f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events]
+
+        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await self._drain(self.rewriting, chunks)
 
     def _resplit(self, chunks, size=7):
         joined = b"".join(chunks)

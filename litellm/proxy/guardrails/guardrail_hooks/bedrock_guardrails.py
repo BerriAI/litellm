@@ -40,6 +40,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import _serialize_http_exception_detail
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
@@ -2624,14 +2625,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
             except HTTPException as block_exc:
-                if not raw_sse:
-                    raise
-                # A keepalive ping may already have flushed the response headers, so a raise
-                # cannot reach the client; deliver the block as an error frame instead
                 block_detail: Final = block_exc.detail
-                for error_frame in anthropic_sse_error_frames(
-                    block_detail if isinstance(block_detail, Mapping) else str(block_detail)
-                ):
+                # Only a policy block carries a dict detail; every API/transport failure details a
+                # plain string (see _is_input_too_large_error). Re-raising those keeps their real
+                # status instead of reporting an outage as a guardrail decision
+                if not raw_sse or not isinstance(block_detail, Mapping):
+                    raise
+                # past the keepalive ping the headers are already flushed, so a raise cannot reach
+                # the client; the block travels as a frame
+                block_message, _ = _serialize_http_exception_detail(block_detail)
+                for error_frame in anthropic_sse_error_frames(block_message):
                     yield error_frame
                 return
             except ModifyResponseException as e:

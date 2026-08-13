@@ -2955,8 +2955,26 @@ async def test_streaming_hook_block_stream_keeps_upstream_identity():
 
 
 @pytest.mark.asyncio
+async def test_streaming_hook_reraises_guardrail_service_failures():
+    """A Bedrock outage must keep its status, not be reported to the caller as a guardrail decision.
+
+    Only a policy block details a Mapping; every API/transport failure details a plain string.
+    """
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = HTTPException(
+            status_code=500, detail="Bedrock guardrail throttle retries exhausted"
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _drain_streaming_hook(guardrail)
+
+    assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
 async def test_streaming_block_error_frame_message_is_a_string():
-    """AnthropicErrorDetail.message is typed str, so a structured guardrail detail is serialized."""
+    """AnthropicErrorDetail.message is typed str, built by the proxy's own detail serializer."""
     guardrail = _sse_guardrail()
 
     with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
@@ -2967,8 +2985,10 @@ async def test_streaming_block_error_frame_message_is_a_string():
 
     frame = next(line for line in b"".join(delivered).decode().splitlines() if line.startswith("data: "))
     message = json.loads(frame[6:])["error"]["message"]
+    # AnthropicErrorDetail.message is typed str, and the proxy's own serializer produces the
+    # readable message rather than a repr of the detail dict
     assert isinstance(message, str)
-    assert json.loads(message)["error"] == "Violated guardrail policy"
+    assert message == "Violated guardrail policy"
 
 
 @pytest.mark.asyncio
@@ -3071,6 +3091,9 @@ async def test_streaming_hook_yields_synthetic_block_stream_for_raw_anthropic_ss
     body = b"".join(delivered)
     assert b"Sorry, the model cannot answer this question." in body
     assert b"123-45-6789" not in body
+    # the upstream call was already paid for, so the block frame must still report its usage
+    assert b'"input_tokens": 5' in body
+    assert b'"output_tokens": 9' in body
 
 
 @pytest.mark.asyncio
