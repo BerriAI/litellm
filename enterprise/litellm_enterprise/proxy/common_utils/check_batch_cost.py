@@ -235,14 +235,18 @@ class CheckBatchCost:
         return bool(decoded) and get_model_id_from_unified_batch_id(decoded) is None
 
     @staticmethod
-    def _is_batch_gone_at_provider(error: Exception) -> bool:
-        """A 404 from the provider means it dropped its record of the batch, so no later
-        retrieve can ever succeed."""
+    def _is_batch_gone_at_provider(error: Exception, batch_id: str) -> bool:
+        """
+        A 404 naming the batch means the provider dropped its record of it, so no later
+        retrieve can ever succeed. A 404 about anything else, a renamed Azure deployment
+        or a fallback deployment that never saw this batch, is still fixable in config, so
+        it keeps retrying.
+        """
         import openai
 
         from litellm.exceptions import NotFoundError
 
-        return isinstance(error, (NotFoundError, openai.NotFoundError))
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and batch_id in str(error)
 
     def _batch_deployment_exists(self, model_id: str) -> bool:
         """A 404 only proves the batch is gone when it came from the batch's own
@@ -753,7 +757,7 @@ class CheckBatchCost:
                 )
                 if prom_logger:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
-                if self._is_batch_gone_at_provider(e) and self._batch_deployment_exists(model_id):
+                if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
                 continue
 
