@@ -100,9 +100,11 @@ def _run(coro):
 def test_create_vertex_batch_url():
     h = _make_handler()
     url = h.create_vertex_batch_url(vertex_location=LOCATION, vertex_project=PROJECT)
-    assert url == (
-        f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}/locations/{LOCATION}/batchPredictionJobs"
+    expected = (
+        f"https://{LOCATION}-aiplatform.googleapis.com/v1/"
+        f"projects/{PROJECT}/locations/{LOCATION}/batchPredictionJobs"
     )
+    assert url == expected
 
 
 def test_create_batch_rejects_global_vertex_location():
