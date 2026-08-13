@@ -1,8 +1,4 @@
-"""
-Nebius AI Studio Chat Completions API - Transformation
-
-This is OpenAI compatible - no translation needed / occurs
-"""
+"""Nebius Token Factory Chat Completions API transformation."""
 
 from typing import Final
 

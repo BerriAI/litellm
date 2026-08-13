@@ -6680,7 +6680,12 @@ def embedding(
             )
         elif custom_llm_provider == "nebius":
             api_key = api_key or litellm.api_key or get_secret_str("NEBIUS_API_KEY")
-            api_base = api_base or litellm.api_base or get_secret_str("NEBIUS_API_BASE") or "api.studio.nebius.ai/v1"
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("NEBIUS_API_BASE")
+                or "https://api.tokenfactory.nebius.com/v1"
+            )
 
             response = openai_chat_completions.embedding(
                 model=model,
