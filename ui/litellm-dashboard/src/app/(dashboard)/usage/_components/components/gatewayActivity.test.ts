@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GATEWAY_TOP_ROUTES,
   fetchedRangeKey,
+  hasGatewayCoverageForDates,
   selectForRange,
   selectGatewayActivity,
   topGatewayRoutes,
@@ -70,6 +71,16 @@ describe("selectGatewayActivity", () => {
 
   it("returns null before anything has been fetched", () => {
     expect(selectGatewayActivity(true, null, JANUARY)).toBeNull();
+  });
+});
+
+describe("hasGatewayCoverageForDates", () => {
+  it("withholds a newly-created gateway table until it covers the existing spend dates", () => {
+    expect(hasGatewayCoverageForDates(activity(0), ["2024-12-31", "2025-01-01"])).toBe(false);
+  });
+
+  it("accepts gateway counts once every spend date is represented", () => {
+    expect(hasGatewayCoverageForDates(activity(7), ["2025-01-01"])).toBe(true);
   });
 });
 

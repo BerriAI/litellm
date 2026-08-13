@@ -678,6 +678,22 @@ describe("UsagePage", () => {
     expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
   });
 
+  it("should fall back to spend-derived counts while a new gateway table has no rows for the range", async () => {
+    mockGatewayDailyActivityCall.mockResolvedValue({
+      total_successful_requests: 0,
+      total_failed_requests: 0,
+      by_date: [],
+      by_route: [],
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("1,450").length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText("50").length).toBeGreaterThan(0);
+  });
+
   it("should not request deployment-wide gateway counts for a non-admin", async () => {
     mockUseAuthorized.mockReturnValue(nonAdminSession);
 

@@ -57,6 +57,7 @@ import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/componen
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import {
   fetchedRangeKey,
+  hasGatewayCoverageForDates,
   selectForRange,
   selectGatewayActivity,
   topGatewayRoutes,
@@ -496,6 +497,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
     [userSpendData.results],
   );
+  const gatewayCountsCoverSpend = hasGatewayCoverageForDates(
+    gatewayActivity,
+    userSpendData.results.map(({ date }) => date),
+  );
   const gatewayRequestsByRoute = useMemo(() => topGatewayRoutes(gatewayActivity), [gatewayActivity]);
   const modelMetrics = useMemo(
     () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),
@@ -690,7 +695,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               */}
                               <Text className="text-2xl font-bold mt-2 text-green-600">
                                 {(
-                                  gatewayActivity?.total_successful_requests ??
+                                  (gatewayCountsCoverSpend ? gatewayActivity?.total_successful_requests : undefined) ??
                                   userSpendData.metadata?.total_successful_requests
                                 )?.toLocaleString() || 0}
                               </Text>
@@ -712,7 +717,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   tile disagrees with the endpoint breakdown chart below it. */}
                               <Text className="text-2xl font-bold mt-2 text-red-600">
                                 {(
-                                  gatewayActivity?.total_failed_requests ??
+                                  (gatewayCountsCoverSpend ? gatewayActivity?.total_failed_requests : undefined) ??
                                   userSpendData.metadata?.total_failed_requests
                                 )?.toLocaleString() || 0}
                               </Text>
