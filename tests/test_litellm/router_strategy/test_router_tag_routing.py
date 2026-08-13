@@ -423,6 +423,33 @@ def test_get_tags_from_request_kwargs_various_inputs():
     assert _get_tags_from_request_kwargs({"foo": "bar"}) == []
 
 
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {"metadata": "not-a-dict"},
+        {"litellm_metadata": "not-a-dict"},
+        {"litellm_metadata": ["not", "a", "dict"]},
+        {"litellm_params": "not-a-dict"},
+        {"litellm_params": {"metadata": "not-a-dict"}},
+        {"metadata": {"tags": "free"}},
+        {"metadata": {"tags": {"free": "paid"}}},
+    ],
+)
+def test_get_tags_from_request_kwargs_reads_no_tags_from_a_non_dict_shape(request_kwargs):
+    """Metadata and `tags` are request-controlled, so a client can send either as a
+    string, a list or null. Every shape that cannot hold string tags reads as untagged
+    instead of raising, because callers run on the hot request path."""
+    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+
+    assert _get_tags_from_request_kwargs(request_kwargs) == []
+
+
+def test_get_tags_from_request_kwargs_keeps_only_string_tags():
+    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+
+    assert _get_tags_from_request_kwargs({"metadata": {"tags": ["free", 7, None, "paid"]}}) == ["free", "paid"]
+
+
 # --- _split_tags unit tests ---
 
 

@@ -1176,6 +1176,41 @@ class TestPreRoutingStrategyRegistry:
         }
         assert router._select_pre_routing_strategy("smart", {}).strategy is cn
 
+    @staticmethod
+    def _router_with_plain_smart_deployment(enable_tag_filtering: bool) -> Router:
+        return Router(
+            model_list=[{"model_name": "smart", "litellm_params": {"model": "openai/gpt-4o-mini"}}],
+            enable_tag_filtering=enable_tag_filtering,
+        )
+
+    def test_select_falls_through_to_plain_deployments_when_no_tag_matches_under_tag_filtering(self):
+        router = self._router_with_plain_smart_deployment(enable_tag_filtering=True)
+        cn, us = object(), object()
+
+        router.complexity_routers = {"smart": [TaggedPreRoutingStrategy(tags=("cn",), strategy=cn)]}
+        assert router._select_pre_routing_strategy("smart", {}) is None
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}).strategy is cn
+
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("us",), strategy=us),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {}) is None
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["row"]}}) is None
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}).strategy is us
+
+        router.complexity_routers["router-only"] = [TaggedPreRoutingStrategy(tags=("cn",), strategy=cn)]
+        assert router._select_pre_routing_strategy("router-only", {}).strategy is cn
+
+    def test_select_keeps_capturing_when_tag_filtering_is_disabled(self):
+        router = self._router_with_plain_smart_deployment(enable_tag_filtering=False)
+        cn = object()
+
+        router.complexity_routers = {"smart": [TaggedPreRoutingStrategy(tags=("cn",), strategy=cn)]}
+        assert router._select_pre_routing_strategy("smart", {}).strategy is cn
+
 
 class TestAsyncPreRoutingHookMultiFormat:
     """Test async_pre_routing_hook with multiple input formats."""
