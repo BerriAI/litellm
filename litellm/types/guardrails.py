@@ -319,7 +319,7 @@ class PiiEntityType(str, Enum):
 
 # Define mappings of PII entity types by category
 PII_ENTITY_CATEGORIES_MAP: Final = {
-    PiiEntityCategory.GENERAL: [
+    PiiEntityCategory.GENERAL: (
         PiiEntityType.DATE_TIME,
         PiiEntityType.EMAIL_ADDRESS,
         PiiEntityType.IP_ADDRESS,
@@ -331,13 +331,13 @@ PII_ENTITY_CATEGORIES_MAP: Final = {
         PiiEntityType.URL,
         PiiEntityType.MAC_ADDRESS,
         PiiEntityType.UUID,
-    ],
-    PiiEntityCategory.FINANCE: [
+    ),
+    PiiEntityCategory.FINANCE: (
         PiiEntityType.CREDIT_CARD,
         PiiEntityType.CRYPTO,
         PiiEntityType.IBAN_CODE,
-    ],
-    PiiEntityCategory.USA: [
+    ),
+    PiiEntityCategory.USA: (
         PiiEntityType.US_BANK_NUMBER,
         PiiEntityType.US_DRIVER_LICENSE,
         PiiEntityType.US_ITIN,
@@ -345,41 +345,41 @@ PII_ENTITY_CATEGORIES_MAP: Final = {
         PiiEntityType.US_SSN,
         PiiEntityType.US_MBI,
         PiiEntityType.US_NPI,
-    ],
-    PiiEntityCategory.UK: [
+    ),
+    PiiEntityCategory.UK: (
         PiiEntityType.UK_NHS,
         PiiEntityType.UK_NINO,
         PiiEntityType.UK_PASSPORT,
         PiiEntityType.UK_POSTCODE,
         PiiEntityType.UK_VEHICLE_REGISTRATION,
         PiiEntityType.UK_DRIVING_LICENCE,
-    ],
-    PiiEntityCategory.SPAIN: [PiiEntityType.ES_NIF, PiiEntityType.ES_NIE, PiiEntityType.ES_PASSPORT],
-    PiiEntityCategory.ITALY: [
+    ),
+    PiiEntityCategory.SPAIN: (PiiEntityType.ES_NIF, PiiEntityType.ES_NIE, PiiEntityType.ES_PASSPORT),
+    PiiEntityCategory.ITALY: (
         PiiEntityType.IT_FISCAL_CODE,
         PiiEntityType.IT_DRIVER_LICENSE,
         PiiEntityType.IT_VAT_CODE,
         PiiEntityType.IT_PASSPORT,
         PiiEntityType.IT_IDENTITY_CARD,
-    ],
-    PiiEntityCategory.POLAND: [PiiEntityType.PL_PESEL],
-    PiiEntityCategory.SINGAPORE: [PiiEntityType.SG_NRIC_FIN, PiiEntityType.SG_UEN],
-    PiiEntityCategory.AUSTRALIA: [
+    ),
+    PiiEntityCategory.POLAND: (PiiEntityType.PL_PESEL,),
+    PiiEntityCategory.SINGAPORE: (PiiEntityType.SG_NRIC_FIN, PiiEntityType.SG_UEN),
+    PiiEntityCategory.AUSTRALIA: (
         PiiEntityType.AU_ABN,
         PiiEntityType.AU_ACN,
         PiiEntityType.AU_TFN,
         PiiEntityType.AU_MEDICARE,
-    ],
-    PiiEntityCategory.INDIA: [
+    ),
+    PiiEntityCategory.INDIA: (
         PiiEntityType.IN_PAN,
         PiiEntityType.IN_AADHAAR,
         PiiEntityType.IN_VEHICLE_REGISTRATION,
         PiiEntityType.IN_VOTER,
         PiiEntityType.IN_PASSPORT,
         PiiEntityType.IN_GSTIN,
-    ],
-    PiiEntityCategory.FINLAND: [PiiEntityType.FI_PERSONAL_IDENTITY_CODE],
-    PiiEntityCategory.GERMANY: [
+    ),
+    PiiEntityCategory.FINLAND: (PiiEntityType.FI_PERSONAL_IDENTITY_CODE,),
+    PiiEntityCategory.GERMANY: (
         PiiEntityType.DE_TAX_ID,
         PiiEntityType.DE_TAX_NUMBER,
         PiiEntityType.DE_VAT_ID,
@@ -393,21 +393,21 @@ PII_ENTITY_CATEGORIES_MAP: Final = {
         PiiEntityType.DE_KFZ,
         PiiEntityType.DE_HANDELSREGISTER,
         PiiEntityType.DE_PLZ,
-    ],
-    PiiEntityCategory.KOREA: [
+    ),
+    PiiEntityCategory.KOREA: (
         PiiEntityType.KR_RRN,
         PiiEntityType.KR_FRN,
         PiiEntityType.KR_PASSPORT,
         PiiEntityType.KR_DRIVER_LICENSE,
         PiiEntityType.KR_BRN,
-    ],
-    PiiEntityCategory.CANADA: [PiiEntityType.CA_SIN],
-    PiiEntityCategory.SWEDEN: [PiiEntityType.SE_PERSONNUMMER, PiiEntityType.SE_ORGANISATIONSNUMMER],
-    PiiEntityCategory.THAILAND: [PiiEntityType.TH_TNIN],
-    PiiEntityCategory.TURKEY: [PiiEntityType.TR_NATIONAL_ID, PiiEntityType.TR_LICENSE_PLATE],
-    PiiEntityCategory.NIGERIA: [PiiEntityType.NG_NIN, PiiEntityType.NG_VEHICLE_REGISTRATION],
-    PiiEntityCategory.PHILIPPINES: [PiiEntityType.PH_TIN, PiiEntityType.PH_UMID, PiiEntityType.PH_PASSPORT],
-    PiiEntityCategory.SOUTH_AFRICA: [PiiEntityType.ZA_ID_NUMBER],
+    ),
+    PiiEntityCategory.CANADA: (PiiEntityType.CA_SIN,),
+    PiiEntityCategory.SWEDEN: (PiiEntityType.SE_PERSONNUMMER, PiiEntityType.SE_ORGANISATIONSNUMMER),
+    PiiEntityCategory.THAILAND: (PiiEntityType.TH_TNIN,),
+    PiiEntityCategory.TURKEY: (PiiEntityType.TR_NATIONAL_ID, PiiEntityType.TR_LICENSE_PLATE),
+    PiiEntityCategory.NIGERIA: (PiiEntityType.NG_NIN, PiiEntityType.NG_VEHICLE_REGISTRATION),
+    PiiEntityCategory.PHILIPPINES: (PiiEntityType.PH_TIN, PiiEntityType.PH_UMID, PiiEntityType.PH_PASSPORT),
+    PiiEntityCategory.SOUTH_AFRICA: (PiiEntityType.ZA_ID_NUMBER,),
 }
 
 
