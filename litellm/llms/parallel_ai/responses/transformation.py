@@ -13,10 +13,13 @@ Ref: https://docs.parallel.ai/responses-api/responses-quickstart
 from types import MappingProxyType
 from typing import Final
 
+import httpx
+
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.parallel_ai.common_utils import resolve_parallel_ai_credentials
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -103,6 +106,20 @@ class ParallelAIResponsesConfig(OpenAIResponsesAPIConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        """The API reports model `parallel` for every tier; cost tracking prices by response model, so the alias is restored."""
+        response: Final = super().transform_response_api_response(
+            model=model, raw_response=raw_response, logging_obj=logging_obj
+        )
+        if model in EFFORT_TIER_MODELS:
+            response.model = model
+        return response
 
     def supports_native_websocket(self) -> bool:
         """Parallel AI does not support native WebSocket for the Responses API"""

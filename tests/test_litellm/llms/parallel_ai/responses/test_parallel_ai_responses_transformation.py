@@ -228,3 +228,30 @@ class TestParallelAIEffortTierAliases:
         )
         assert request["model"] == "parallel"
         assert request["reasoning"] == {"effort": "low"}
+
+    def test_alias_restored_on_response_model_for_cost_tracking(self):
+        from unittest.mock import MagicMock
+
+        config = ParallelAIResponsesConfig()
+        raw = MagicMock()
+        raw.json.return_value = {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1700000000,
+            "model": "parallel",
+            "status": "completed",
+            "output": [],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+        }
+        response = config.transform_response_api_response(
+            model="parallel-low", raw_response=raw, logging_obj=MagicMock()
+        )
+        assert response.model == "parallel-low"
+
+        raw.json.return_value["model"] = "parallel"
+        response_plain = config.transform_response_api_response(
+            model="parallel", raw_response=raw, logging_obj=MagicMock()
+        )
+        assert response_plain.model == "parallel"
