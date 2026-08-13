@@ -9991,9 +9991,11 @@ class Router:
         True when `fallbacks` routes `model_name` to a model group with at least one
         unblocked deployment. `fallbacks` must already reflect the precedence the router
         applies at call time, so a request-supplied list replaces the router-level chain
-        rather than merging with it. Visited groups are skipped so a cycle terminates.
+        rather than merging with it. Traversal stops on a repeat group and after
+        `max_fallbacks` hops, matching the runtime limit and bounding recursion so a long
+        client-supplied chain cannot exhaust the stack.
         """
-        if model_name in visited:
+        if model_name in visited or len(visited) >= self.max_fallbacks:
             return False
         fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_name)
         if not fallback_model_group:
