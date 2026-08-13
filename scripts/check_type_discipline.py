@@ -504,15 +504,25 @@ def _declared_type_name(annotation: ast.expr) -> str | None:
 
 
 def _binding_names(node: ast.AST) -> tuple[str, ...]:
-    """The names a single statement binds: class, function, assignment target, import alias."""
+    """The names one node binds: def/class/import/parameter/global/except/match forms,
+    plus any Name stored or deleted, which covers every assignment, loop, walrus,
+    unpacking, comprehension, and `with` target."""
     if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
         return (node.name,)
     if isinstance(node, (ast.Import, ast.ImportFrom)):
         return tuple(alias.asname or alias.name.partition(".")[0] for alias in node.names)
-    if isinstance(node, ast.Assign):
-        return tuple(target.id for target in node.targets if isinstance(target, ast.Name))
-    if isinstance(node, (ast.AnnAssign, ast.AugAssign)) and isinstance(node.target, ast.Name):
-        return (node.target.id,)
+    if isinstance(node, (ast.Global, ast.Nonlocal)):
+        return tuple(node.names)
+    if isinstance(node, ast.arg):
+        return (node.arg,)
+    if isinstance(node, ast.ExceptHandler) and node.name is not None:
+        return (node.name,)
+    if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name is not None:
+        return (node.name,)
+    if isinstance(node, ast.MatchMapping) and node.rest is not None:
+        return (node.rest,)
+    if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        return (node.id,)
     return ()
 
 
@@ -524,10 +534,11 @@ def _typeddict_assigned_value_ids(tree: ast.AST) -> frozenset[int]:
     the annotation provably names a frozen payload. Three conditions gate that:
     MyTd is a class-form TypedDict in this module (imported ones are invisible,
     exactly as in LIT012's base-class resolution); its name is bound exactly once
-    in the file (resolution here is scope-blind, so a name the file also binds as a
-    function, another class, an assignment target, or an import alias could resolve
-    to something mutable at the annotation site); and every field it declares or
-    inherits within the module is `ReadOnly[...]`, so no holder can statically
+    in the file (resolution here is scope-blind, so a name the file also binds in
+    any other form, another def, an assignment or loop target, an import alias, a
+    parameter, could resolve to something mutable at the annotation site); and
+    every field it declares or inherits within the module is `ReadOnly[...]`, so
+    no holder can statically
     rewrite a key even where LIT012 was suppressed or is riding its budget. Only
     the display itself is exempt; anything mutable nested inside it still trips
     LIT002.

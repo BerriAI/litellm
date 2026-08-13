@@ -238,6 +238,16 @@ def test_typeddict_name_rebound_elsewhere_gets_no_exemption(tmp_path):
         tmp_path, _TYPEDDICT_PREFIX + "def scope():\n    Td = dict\n    return Td\nx: Td = {'a': 1}\n"
     )
     assert "LIT002" in _codes(tmp_path, _TYPEDDICT_PREFIX + "from elsewhere import Td\nx: Td = {'a': 1}\n")
+    assert "LIT002" in _codes(
+        tmp_path, _TYPEDDICT_PREFIX + "def scope(seq):\n    for Td in seq:\n        pass\nx: Td = {'a': 1}\n"
+    )
+    assert "LIT002" in _codes(
+        tmp_path, _TYPEDDICT_PREFIX + "def scope(seq):\n    Td, other = seq\n    return other\nx: Td = {'a': 1}\n"
+    )
+    assert "LIT002" in _codes(
+        tmp_path, _TYPEDDICT_PREFIX + "def scope(v):\n    return (Td := v)\nx: Td = {'a': 1}\n"
+    )
+    assert "LIT002" in _codes(tmp_path, _TYPEDDICT_PREFIX + "def scope(Td):\n    return Td\nx: Td = {'a': 1}\n")
 
 
 def test_dict_literal_annotated_as_imported_or_unknown_type_still_counts(tmp_path):
