@@ -1,6 +1,8 @@
 import React from "react";
-import { Typography, Select, Table, Tag, Button } from "antd";
+import { Typography, Select, Tag, Button } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
+import type { ColumnDef } from "@tanstack/react-table";
+import { DataTable } from "@/components/shared/DataTable";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -28,30 +30,32 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
   onRemove,
   readOnly = false,
 }) => {
-  const columns = [
+  const columns: ColumnDef<ContentCategory>[] = [
     {
-      title: "Category",
-      dataIndex: "display_name",
-      key: "display_name",
-      render: (displayName: string, record: ContentCategory) => (
-        <div>
-          <Text strong>{displayName}</Text>
-          {displayName !== record.category && (
-            <div>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {record.category}
-              </Text>
-            </div>
-          )}
-        </div>
-      ),
+      header: "Category",
+      accessorKey: "display_name",
+      cell: ({ row }) => {
+        const { category, display_name: displayName } = row.original;
+        return (
+          <div>
+            <Text strong>{displayName}</Text>
+            {displayName !== category && (
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {category}
+                </Text>
+              </div>
+            )}
+          </div>
+        );
+      },
     },
     {
-      title: "Severity Threshold",
-      dataIndex: "severity_threshold",
-      key: "severity_threshold",
-      width: 180,
-      render: (severity: string, record: ContentCategory) => {
+      header: "Severity Threshold",
+      accessorKey: "severity_threshold",
+      size: 180,
+      cell: ({ row }) => {
+        const { id, severity_threshold: severity } = row.original;
         if (readOnly) {
           const colorMap = {
             high: "red",
@@ -63,7 +67,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
         return (
           <Select
             value={severity}
-            onChange={(value) => onSeverityChange?.(record.id, value as "high" | "medium" | "low")}
+            onChange={(value) => onSeverityChange?.(id, value as "high" | "medium" | "low")}
             style={{ width: 150 }}
             size="small"
           >
@@ -75,18 +79,18 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       },
     },
     {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: ContentCategory) => {
+      header: "Action",
+      accessorKey: "action",
+      size: 150,
+      cell: ({ row }) => {
+        const { action, id } = row.original;
         if (readOnly) {
           return <Tag color={action === "BLOCK" ? "red" : "blue"}>{action}</Tag>;
         }
         return (
           <Select
             value={action}
-            onChange={(value) => onActionChange?.(record.id, value as "BLOCK" | "MASK")}
+            onChange={(value) => onActionChange?.(id, value as "BLOCK" | "MASK")}
             style={{ width: 120 }}
             size="small"
           >
@@ -100,22 +104,22 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
 
   if (!readOnly) {
     columns.push({
-      title: "",
-      key: "actions",
-      width: 100,
-      render: (_: any, record: ContentCategory) => (
-        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove?.(record.id)}>
+      header: "",
+      id: "actions",
+      size: 100,
+      cell: ({ row }) => (
+        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove?.(row.original.id)}>
           Delete
         </Button>
       ),
-    } as any);
+    });
   }
 
   if (categories.length === 0) {
     return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No categories configured.</div>;
   }
 
-  return <Table dataSource={categories} columns={columns} rowKey="id" pagination={false} size="small" />;
+  return <DataTable data={categories} columns={columns} getRowId={(row) => row.id} size="compact" />;
 };
 
 export default CategoryTable;

@@ -11,25 +11,44 @@ This also guards the /team/new write path: it must json.dumps the window list in
 the Json? column. A raw list there made Prisma reject the create with a 500 (the key
 path and /team/update already json.dumps first); a regression would fail team creation
 here.
+
+The second test is the long-window direction, mirroring the
+key-side test (see its docstring): after the team's 30s window provably resets, the
+1d window the same burn crossed must still block the team key with "over 1d budget".
 """
 
 import time
 
 import pytest
 
-from budget_client import BudgetClient, is_budget_block
+from budget_client import BudgetClient, is_budget_block, window_reset_at
+from e2e_http import StreamingResponse, require_successful_call
 from e2e_config import unique_marker
-from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 from models import BudgetWindow
 
 pytestmark = pytest.mark.e2e
 
 WINDOW_SECONDS = 30
+SHORT_WINDOW = f"{WINDOW_SECONDS}s"
+LONG_WINDOW = "1d"
+TINY_CAP = 1e-9
+LONG_CAP = 5e-7
+RESET_DEADLINE_SECONDS = 150
 
 
 def _call(client: BudgetClient, key: str):
     return client.chat(key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16)
+
+
+def _drive_to_block(client: BudgetClient, key: str) -> StreamingResponse:
+    for _ in range(30):
+        result = _call(client, key)
+        if is_budget_block(result):
+            return result
+        require_successful_call(result)
+        time.sleep(1)
+    pytest.fail("team budget never enforced before block")
 
 
 @pytest.mark.covers("quota_management.budget.team_multi_window.blocks_then_resets")
@@ -37,7 +56,7 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
     team_id = client.create_team(
         alias=f"e2e-team-window-{unique_marker()}",
         budget_limits=[
-            BudgetWindow(budget_duration=f"{WINDOW_SECONDS}s", max_budget=3e-6),
+            BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=3e-6),
             BudgetWindow(budget_duration="1m", max_budget=1.0),  # roomy: never blocks
         ],
     )
@@ -47,15 +66,7 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
 
     # 1. exhaust the tight window -> litellm returns budget_exceeded
     start = time.monotonic()
-    blocked = False
-    for _ in range(30):
-        result = _call(client, key)
-        if is_budget_block(result):
-            blocked = True
-            break
-        require_successful_call(result)
-        time.sleep(1)
-    assert blocked, f"team {WINDOW_SECONDS}s window never enforced"
+    _drive_to_block(client, key)
 
     # 2. the window resets at the next wall-clock-aligned boundary (up to a window
     #    after start), then the reset job (~15-20s rescheduler) zeroes the spend.
@@ -71,3 +82,65 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
             return
         assert is_budget_block(result), f"non-budget error during reset wait: {result.body[:200]}"
     pytest.fail(f"team {WINDOW_SECONDS}s window never reset within 150s")
+
+
+@pytest.mark.covers("quota_management.budget.team_multi_window.blocks_then_resets")
+def test_team_long_window_blocks_after_short_window_resets(client: BudgetClient, resources: ResourceManager) -> None:
+
+    # 0. key with a short budget window and a long budget window
+    team_id = client.create_team(
+        alias=f"e2e-team-long-window-{unique_marker()}",
+        budget_limits=[
+            BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=TINY_CAP),
+            BudgetWindow(budget_duration=LONG_WINDOW, max_budget=LONG_CAP),
+        ],
+    )
+    resources.defer(lambda: client.delete_team(team_id))
+    key = client.generate_key(team_id=team_id, models=["claude-haiku-4-5"])
+    resources.defer(lambda: client.delete_key(key))
+    
+    # 1. drive the key to being blocked, assert its blocked by budget budget_exceeded
+    blocked = _drive_to_block(client, key)
+    assert blocked.status_code == 429, f"budget block was not a 429: {blocked.status_code} {blocked.body[:200]}"
+
+    # 2. check the the teams budget windows 
+    blocked_reset_at = window_reset_at(client.team_budget_windows(team_id), SHORT_WINDOW)
+    assert blocked_reset_at is not None, "short window missing from /team/info budget_limits"
+    blocked_long_reset_at = window_reset_at(client.team_budget_windows(team_id), LONG_WINDOW)
+    assert blocked_long_reset_at is not None, "long window missing from /team/info budget_limits"
+
+    # 3. keep checking that the short budget window reset, if it doesnt within the deadline then fail
+    deadline = time.monotonic() + RESET_DEADLINE_SECONDS
+    while time.monotonic() < deadline:
+        time.sleep(5)
+        current = window_reset_at(client.team_budget_windows(team_id), SHORT_WINDOW)
+        if current is not None and current > blocked_reset_at:
+            break
+    else:
+        pytest.fail(
+            f"team {SHORT_WINDOW} window's reset_at never advanced past "
+            f"{blocked_reset_at} within {RESET_DEADLINE_SECONDS}s"
+        )
+
+    # 4. short window just reset in 3, so now make another call, assert that the long window blocks the next call with budget_exceeded 
+    deadline = time.monotonic() + RESET_DEADLINE_SECONDS
+    last_body = ""
+    while time.monotonic() < deadline:
+        result = _call(client, key)
+        if result.ok:
+            rolled = window_reset_at(client.team_budget_windows(team_id), LONG_WINDOW) != blocked_long_reset_at
+            pytest.fail(
+                f"team {LONG_WINDOW} window failed to block after the {SHORT_WINDOW} window reset"
+                + (f" (the {LONG_WINDOW} window itself rolled mid-test - boundary crossed; rerun)" if rolled else "")
+            )
+        assert is_budget_block(result), (
+            f"non-budget error while waiting for {LONG_WINDOW} attribution: "
+            f"status={result.status_code} body={result.body[:200]}"
+        )
+        if f"over {LONG_WINDOW} budget" in result.body:
+            return
+        last_body = result.body
+        time.sleep(5)
+    pytest.fail(
+        f"team block never attributed to the {LONG_WINDOW} window within {RESET_DEADLINE_SECONDS}s: {last_body[:200]}"
+    )

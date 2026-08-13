@@ -5,9 +5,9 @@ import pytest
 
 from litellm.proxy._experimental.mcp_server.db import (
     create_draft_mcp_server,
+    delete_draft_mcp_server,
     delete_expired_draft_mcp_servers,
     get_draft_mcp_server,
-    _delete_draft_mcp_server,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -102,7 +102,7 @@ class TestCreateDraftMcpServer:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.db._delete_draft_mcp_server",
+                "litellm.proxy._experimental.mcp_server.db.delete_draft_mcp_server",
                 AsyncMock(),
             ) as del_mock,
             patch(
@@ -130,7 +130,7 @@ class TestCreateDraftMcpServer:
         draft_row = _make_prisma_row()
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.db._delete_draft_mcp_server",
+                "litellm.proxy._experimental.mcp_server.db.delete_draft_mcp_server",
                 AsyncMock(),
             ),
             patch(
@@ -247,7 +247,7 @@ class TestDeleteDraftMcpServer:
             "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
             return_value=repo_instance,
         ):
-            await _delete_draft_mcp_server(prisma, "target-id")
+            await delete_draft_mcp_server(prisma, "target-id")
 
         mock_table.delete_many.assert_awaited_once()
         where = mock_table.delete_many.call_args.kwargs["where"]
@@ -267,4 +267,4 @@ class TestDeleteDraftMcpServer:
             ),
             pytest.raises(Exception, match="db error"),
         ):
-            await _delete_draft_mcp_server(prisma, "target-id")
+            await delete_draft_mcp_server(prisma, "target-id")

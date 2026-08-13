@@ -1,8 +1,9 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Form } from "antd";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
-import Settings from "./settings";
+import Settings, { backendCallbackLogoSrc, CallbackSelector } from "./settings";
 
 vi.mock("./networking", () => ({
   getCallbacksCall: vi.fn(),
@@ -230,5 +231,46 @@ describe("Settings", () => {
     });
 
     expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+  });
+});
+
+describe("backendCallbackLogoSrc", () => {
+  it("prefixes bare filenames with the assets logo folder", () => {
+    expect(backendCallbackLogoSrc("datadog.png")).toBe("/ui/assets/logos/datadog.png");
+  });
+
+  it("passes through urls, data uris, and paths untouched", () => {
+    expect(backendCallbackLogoSrc("https://logos.example.com/x.png")).toBe("https://logos.example.com/x.png");
+    expect(backendCallbackLogoSrc("data:image/png;base64,abc")).toBe("data:image/png;base64,abc");
+    expect(backendCallbackLogoSrc("/custom/path.png")).toBe("/custom/path.png");
+  });
+
+  it("returns undefined when the backend provides no logo", () => {
+    expect(backendCallbackLogoSrc(undefined)).toBeUndefined();
+    expect(backendCallbackLogoSrc(null)).toBeUndefined();
+    expect(backendCallbackLogoSrc("")).toBeUndefined();
+  });
+});
+
+describe("CallbackSelector logos", () => {
+  it("resolves backend logos per entry: bare filename, external url, and missing logo", async () => {
+    const callbackConfigs = [
+      { id: "langfuse", displayName: "Langfuse", logo: "langfuse.png" },
+      { id: "hosted", displayName: "Hosted", logo: "https://logos.example.com/hosted.png" },
+      { id: "nologo", displayName: "NoLogo" },
+    ];
+
+    render(
+      <Form>
+        <CallbackSelector callbackConfigs={callbackConfigs} selectedCallback={null} onCallbackChange={vi.fn()} />
+      </Form>,
+    );
+
+    fireEvent.mouseDown(screen.getByRole("combobox"));
+
+    expect(await screen.findByAltText("Langfuse logo")).toHaveAttribute("src", "/ui/assets/logos/langfuse.png");
+    expect(screen.getByAltText("Hosted logo")).toHaveAttribute("src", "https://logos.example.com/hosted.png");
+    expect(screen.queryByAltText("NoLogo logo")).toBeNull();
+    expect(screen.getByText("N")).toBeInTheDocument();
   });
 });

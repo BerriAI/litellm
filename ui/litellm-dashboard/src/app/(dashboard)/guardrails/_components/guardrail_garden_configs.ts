@@ -294,9 +294,21 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  deepkeep: {
+    provider: "Deepkeep",
+    guardrailNameSuggestion: "DeepKeep AI Firewall",
+    mode: "pre_call",
+    defaultOn: false,
+  },
   repelloai: {
     provider: "Repelloai",
     guardrailNameSuggestion: "RepelloAI Argus",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  straiker: {
+    provider: "Straiker",
+    guardrailNameSuggestion: "Straiker Guardrail",
     mode: "pre_call",
     defaultOn: false,
   },

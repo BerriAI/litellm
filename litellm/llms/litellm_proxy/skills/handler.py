@@ -6,7 +6,7 @@ Used by the transformation layer and skills injection hook.
 """
 
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -26,8 +26,8 @@ from litellm.repositories.table_repositories import SkillsRepository
 # lets us cache a true "skill does not exist" so repeated misses also
 # avoid the DB — ``InMemoryCache`` returns ``None`` indistinguishably for
 # "miss" and "cached as None".
-_NEGATIVE_SKILL_SENTINEL = "__litellm_skill_not_found__"
-_SKILL_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
+_NEGATIVE_SKILL_SENTINEL: Final = "__litellm_skill_not_found__"
+_SKILL_CACHE: Final = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
 
 
 def _prisma_skill_to_litellm(prisma_skill) -> LiteLLM_SkillsTable:
@@ -38,7 +38,7 @@ def _prisma_skill_to_litellm(prisma_skill) -> LiteLLM_SkillsTable:
     """
     import base64
 
-    data = prisma_skill.model_dump()
+    data: Final = prisma_skill.model_dump()
 
     if data.get("file_content") is not None:
         if isinstance(data["file_content"], str):
@@ -61,13 +61,13 @@ class LiteLLMSkillsHandler:
     @staticmethod
     async def create_skill(
         data: NewSkillRequest,
-        user_id: Optional[str] = None,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        user_id: str | None = None,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> LiteLLM_SkillsTable:
-        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        prisma_client: Final = await LiteLLMSkillsHandler._get_prisma_client()
 
-        skill_id = f"{LITELLM_SKILL_ID_PREFIX}{uuid.uuid4()}"
-        owner = get_primary_resource_owner_scope(user_api_key_dict) or user_id
+        skill_id: Final = f"{LITELLM_SKILL_ID_PREFIX}{uuid.uuid4()}"
+        owner: Final = get_primary_resource_owner_scope(user_api_key_dict) or user_id
         if owner is None:
             # Identity-less callers (no user_id / team_id / org_id /
             # api_key / token) can't be uniquely stamped on the row.
@@ -76,7 +76,7 @@ class LiteLLMSkillsHandler:
             # this module FastAPI-free per the project layering rule.
             raise ValueError("Unable to record skill ownership: caller has no identity scope.")
 
-        skill_data: Dict[str, Any] = {
+        skill_data: Final[dict[str, Any]] = {
             "skill_id": skill_id,
             "display_title": data.display_title,
             "description": data.description,
@@ -100,59 +100,59 @@ class LiteLLMSkillsHandler:
         if data.file_type is not None:
             skill_data["file_type"] = data.file_type
 
-        verbose_logger.debug(f"LiteLLMSkillsHandler: Creating skill {skill_id} with title={data.display_title}")
+        verbose_logger.debug("LiteLLMSkillsHandler: Creating skill %s with title=%s", skill_id, data.display_title)
 
-        new_skill = await SkillsRepository(prisma_client).table.create(data=skill_data)
+        new_skill: Final = await SkillsRepository(prisma_client).table.create(data=skill_data)
         return _prisma_skill_to_litellm(new_skill)
 
     @staticmethod
     async def list_skills(
         limit: int = 20,
         offset: int = 0,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-    ) -> List[LiteLLM_SkillsTable]:
-        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> list[LiteLLM_SkillsTable]:
+        prisma_client: Final = await LiteLLMSkillsHandler._get_prisma_client()
 
-        verbose_logger.debug(f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}")
+        verbose_logger.debug("LiteLLMSkillsHandler: Listing skills with limit=%s, offset=%s", limit, offset)
 
-        find_many_kwargs: Dict[str, Any] = {
+        find_many_kwargs: Final[dict[str, Any]] = {
             "take": limit,
             "skip": offset,
             "order": {"created_at": "desc"},
         }
         if user_api_key_dict is not None and not is_proxy_admin(user_api_key_dict):
-            owner_scopes = get_resource_owner_scopes(user_api_key_dict)
+            owner_scopes: Final = get_resource_owner_scopes(user_api_key_dict)
             if not owner_scopes:
                 return []
             find_many_kwargs["where"] = {"created_by": {"in": owner_scopes}}
 
-        skills = await SkillsRepository(prisma_client).table.find_many(**find_many_kwargs)
+        skills: Final = await SkillsRepository(prisma_client).table.find_many(**find_many_kwargs)
         return [_prisma_skill_to_litellm(s) for s in skills]
 
     @staticmethod
-    async def _load_skill(skill_id: str) -> Optional[Any]:
+    async def _load_skill(skill_id: str) -> Any | None:
         """Cache-first read of the Prisma skill row. Owner-scope filtering
         happens on the cached row, so the cache is per-skill not per-caller.
         """
-        cached = _SKILL_CACHE.get_cache(skill_id)
+        cached: Final = _SKILL_CACHE.get_cache(skill_id)
         if cached == _NEGATIVE_SKILL_SENTINEL:
             return None
         if cached is not None:
             return cached
 
-        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
-        skill = await SkillsRepository(prisma_client).table.find_unique(where={"skill_id": skill_id})
+        prisma_client: Final = await LiteLLMSkillsHandler._get_prisma_client()
+        skill: Final = await SkillsRepository(prisma_client).table.find_unique(where={"skill_id": skill_id})
         _SKILL_CACHE.set_cache(skill_id, skill if skill is not None else _NEGATIVE_SKILL_SENTINEL)
         return skill
 
     @staticmethod
     async def get_skill(
         skill_id: str,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> LiteLLM_SkillsTable:
-        verbose_logger.debug(f"LiteLLMSkillsHandler: Getting skill {skill_id}")
+        verbose_logger.debug("LiteLLMSkillsHandler: Getting skill %s", skill_id)
 
-        skill = await LiteLLMSkillsHandler._load_skill(skill_id)
+        skill: Final = await LiteLLMSkillsHandler._load_skill(skill_id)
         # Same "not found" message for both "missing" and "cross-tenant"
         # so callers can't enumerate skill IDs they don't own.
         if skill is None or not user_can_access_resource_owner(getattr(skill, "created_by", None), user_api_key_dict):
@@ -163,12 +163,12 @@ class LiteLLMSkillsHandler:
     @staticmethod
     async def delete_skill(
         skill_id: str,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-    ) -> Dict[str, str]:
-        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
-        verbose_logger.debug(f"LiteLLMSkillsHandler: Deleting skill {skill_id}")
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> dict[str, str]:
+        prisma_client: Final = await LiteLLMSkillsHandler._get_prisma_client()
+        verbose_logger.debug("LiteLLMSkillsHandler: Deleting skill %s", skill_id)
 
-        skill = await LiteLLMSkillsHandler._load_skill(skill_id)
+        skill: Final = await LiteLLMSkillsHandler._load_skill(skill_id)
         if skill is None or not user_can_access_resource_owner(getattr(skill, "created_by", None), user_api_key_dict):
             raise ValueError(f"Skill not found: {skill_id}")
 
@@ -180,8 +180,8 @@ class LiteLLMSkillsHandler:
     @staticmethod
     async def fetch_skill_from_db(
         skill_id: str,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-    ) -> Optional[LiteLLM_SkillsTable]:
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> LiteLLM_SkillsTable | None:
         """Skills-injection-hook helper: returns None instead of raising on
         not-found / not-authorized so the hook can silently skip."""
         try:
@@ -189,5 +189,5 @@ class LiteLLMSkillsHandler:
         except ValueError:
             return None
         except Exception as e:
-            verbose_logger.warning(f"LiteLLMSkillsHandler: Error fetching skill {skill_id}: {e}")
+            verbose_logger.warning("LiteLLMSkillsHandler: Error fetching skill %s: %s", skill_id, e)
             return None

@@ -1,13 +1,11 @@
+import os
 import sys
 from datetime import datetime
-from typing import List, Optional
-import pytest
-from litellm._uuid import uuid
-import os
-import asyncio
 from unittest import mock
-from fastapi.testclient import TestClient
-from fastapi import FastAPI
+
+import pytest
+
+from litellm._uuid import uuid
 
 # MCP requires Python >= 3.10.  Tests that mock functions defined inside the
 # ``if MCP_AVAILABLE`` block cannot run on older interpreters because those
@@ -17,19 +15,17 @@ _SKIP_NO_MCP = pytest.mark.skipif(
     reason="MCP requires Python >= 3.10",
 )
 
-from starlette import status
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
-    MCPTransportType,
-    MCPTransport,
-    NewMCPServerRequest,
-    UpdateMCPServerRequest,
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
+    MCPTransport,
+    MCPTransportType,
+    NewMCPServerRequest,
+    UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
-from litellm.types.mcp import MCPAuth
 from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     does_mcp_server_exist,
 )
@@ -38,7 +34,7 @@ TEST_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-1234")
 
 
 def generate_mcpserver_record(
-    url: Optional[str] = None, transport: Optional[MCPTransportType] = None
+    url: str | None = None, transport: MCPTransportType | None = None
 ) -> LiteLLM_MCPServerTable:
     """
     Generate a mock record for testing.
@@ -65,9 +61,9 @@ def is_valid_uuid(val):
 
 
 def generate_mcpserver_create_request(
-    server_id: Optional[str] = None,
-    url: Optional[str] = None,
-    transport: Optional[MCPTransportType] = None,
+    server_id: str | None = None,
+    url: str | None = None,
+    transport: MCPTransportType | None = None,
 ) -> NewMCPServerRequest:
     """
     Generate a mock create request for testing.
@@ -105,7 +101,7 @@ def test_does_mcp_server_exist():
     """
     Unit Test if the MCP server exists in the list.
     """
-    mcp_server_records: List[LiteLLM_MCPServerTable] = [
+    mcp_server_records: list[LiteLLM_MCPServerTable] = [
         generate_mcpserver_record(),
         generate_mcpserver_record(),
     ]
@@ -142,7 +138,7 @@ async def test_create_mcp_server_direct():
             new_callable=mock.AsyncMock,
         ) as mock_get_server,
         mock.patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._delete_draft_mcp_server",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_draft_mcp_server",
             new_callable=mock.AsyncMock,
         ) as mock_delete_draft,
         mock.patch(
@@ -239,15 +235,16 @@ async def test_create_duplicate_mcp_server():
             new_callable=mock.AsyncMock,
         ) as mock_get_server,
         mock.patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._delete_draft_mcp_server",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_draft_mcp_server",
             new_callable=mock.AsyncMock,
         ) as mock_delete_draft,
     ):
         # Import after mocking
+        from fastapi import HTTPException
+
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,
         )
-        from fastapi import HTTPException
 
         # Mock database client
         mock_prisma = mock.Mock()
@@ -306,10 +303,11 @@ async def test_create_mcp_server_auth_failure():
         ) as mock_get_prisma,
     ):
         # Import after mocking
+        from fastapi import HTTPException
+
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,
         )
-        from fastapi import HTTPException
 
         # Mock database client
         mock_prisma = mock.Mock()
@@ -358,10 +356,11 @@ async def test_create_mcp_server_invalid_alias():
             "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server"
         ) as mock_create,
     ):
+        from fastapi import HTTPException
+
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,
         )
-        from fastapi import HTTPException
 
         mock_prisma = mock.Mock()
         mock_get_prisma.return_value = mock_prisma
@@ -473,8 +472,9 @@ def test_validate_mcp_server_name_direct():
     """
     Test the validation function directly to ensure it works.
     """
-    from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
     from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
 
     # Test that valid names pass
     validate_mcp_server_name("valid_name")

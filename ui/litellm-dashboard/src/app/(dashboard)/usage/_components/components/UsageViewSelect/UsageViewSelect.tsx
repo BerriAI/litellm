@@ -11,6 +11,8 @@ import {
 } from "@ant-design/icons";
 import { Badge, Select } from "antd";
 import React from "react";
+import { hasCapability, type Capability } from "@/utils/capabilities";
+import { all_admin_roles } from "@/utils/roles";
 export type UsageOption =
   | "global"
   | "my-usage"
@@ -24,7 +26,7 @@ export type UsageOption =
 export interface UsageViewSelectProps {
   value: UsageOption;
   onChange: (value: UsageOption) => void;
-  isAdmin: boolean;
+  userRole: string | null;
   canViewTagUsage?: boolean;
   title?: string;
   description?: string;
@@ -35,6 +37,7 @@ interface OptionConfig {
   label: string;
   description: string;
   icon: React.ReactNode;
+  capability?: Capability;
   adminOnly?: boolean;
   showForAdmin?: string;
   showForNonAdmin?: string;
@@ -63,12 +66,9 @@ const OPTIONS: OptionConfig[] = [
   {
     value: "organization",
     label: "Organization Usage",
-    showForAdmin: "Organization Usage",
-    showForNonAdmin: "Your Organization Usage",
-    description: "View organization-level usage",
-    descriptionForAdmin: "View usage across all organizations",
-    descriptionForNonAdmin: "View your organization's usage",
+    description: "View usage across all organizations",
     icon: <BankOutlined style={{ fontSize: "16px" }} />,
+    capability: "viewOrganizationUsage",
   },
   {
     value: "team",
@@ -95,7 +95,7 @@ const OPTIONS: OptionConfig[] = [
     label: "Agent Usage (A2A)",
     description: "View usage by AI agents",
     icon: <RobotOutlined style={{ fontSize: "16px" }} />,
-    adminOnly: true,
+    capability: "viewAgentUsage",
   },
   {
     value: "user",
@@ -115,14 +115,18 @@ const OPTIONS: OptionConfig[] = [
 export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
-  isAdmin,
+  userRole,
   canViewTagUsage = false,
   title = "Usage View",
   description = "Select the usage data you want to view",
   "data-id": dataId,
 }) => {
+  const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
     return OPTIONS.filter((option) => {
+      if (option.capability) {
+        return hasCapability(userRole, option.capability);
+      }
       if (option.value === "tag" && canViewTagUsage) {
         return true;
       }
