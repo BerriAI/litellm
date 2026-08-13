@@ -2055,9 +2055,6 @@
   "src/components/GuardrailSettingsView.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/GuardrailsMonitor/LogViewer.tsx": {
@@ -2646,11 +2643,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/DurationSelect.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
