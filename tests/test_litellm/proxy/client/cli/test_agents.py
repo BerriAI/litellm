@@ -12,6 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
+from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.agents import (
     AgentRunError,
     agent_commands,
@@ -21,6 +22,7 @@ from litellm.proxy.client.cli.commands.agents import (
     run_agent,
     verify_proxy_key,
 )
+from litellm.proxy.client.cli.interface import show_commands
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
 
@@ -473,3 +475,41 @@ class TestAgentCommands:
             )
         assert result.exit_code == 0, result.output
         assert captured["reattach_terminal"] is None
+
+
+class TestUnsupportedAgentsAreHiddenButUsable:
+    def setup_method(self) -> None:
+        self.runner = CliRunner()
+
+    def test_top_level_help_lists_claude_but_not_codex_or_opencode(self) -> None:
+        result = self.runner.invoke(cli, ["--help"])
+        assert result.exit_code == 0, result.output
+        assert "claude" in result.output
+        assert "codex" not in result.output
+        assert "opencode" not in result.output
+
+    def test_interactive_shell_listing_omits_codex_and_opencode(self, capsys: pytest.CaptureFixture[str]) -> None:
+        show_commands()
+        listing = capsys.readouterr().out
+        assert "claude" in listing
+        assert "codex" not in listing
+        assert "opencode" not in listing
+
+    def test_hidden_agents_are_still_invokable(self) -> None:
+        with patch(f"{AGENTS_MODULE}.run_agent") as run_agent_mock:
+            result = self.runner.invoke(
+                cli,
+                [
+                    "--base-url",
+                    "http://localhost:4000",
+                    "--api-key",
+                    "sk-key",
+                    "codex",
+                    "exec",
+                    "do a thing",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        _base_url, _api_key, command = run_agent_mock.call_args.args
+        assert list(command) == ["codex", "exec", "do a thing"]
+        assert "routing Codex through proxy" in result.output

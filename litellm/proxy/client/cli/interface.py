@@ -89,7 +89,7 @@ def show_commands():
         ("teams", "Manage teams and team assignments"),
         ("users", "Manage users"),
     ]
-    commands += [(c.name, c.get_short_help_str()) for c in agent_commands()]
+    commands += [(c.name, c.get_short_help_str()) for c in agent_commands() if not c.hidden]
     commands += [
         ("version", "Show version information"),
         ("help", "Show this help message"),
