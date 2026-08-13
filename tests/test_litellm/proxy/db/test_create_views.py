@@ -191,29 +191,40 @@ async def test_create_views_creates_view_on_undefined_table_error():
     mock_db.execute_raw.assert_called_once()
 
 
+# Every view create_missing_views is responsible for. Hard-coded rather than
+# derived from the module, so adding a view without guarding it fails here.
+EXPECTED_VIEW_COUNT = 8
+
+
 @pytest.mark.asyncio
-async def test_create_views_tolerates_concurrent_creator_and_continues():
-    """A replica that loses the CREATE race must not abort the remaining views.
+async def test_create_views_tolerates_a_concurrent_creator_on_every_view():
+    """A replica that loses the CREATE race must attempt every view regardless.
 
     Regression: two proxy pods booting on a fresh DB both see every view as
-    absent and both issue the CREATE. Postgres fails the loser with a
-    duplicate-object error, which propagated out of create_missing_views and
-    left every later view (MonthlyGlobalSpend, DailyTagSpend, ...) uncreated,
-    so /global/spend* 500'd for the life of the deployment.
+    absent and both issue the CREATE, and Postgres fails the loser with a
+    duplicate-object error on whichever views the winner got to first. Any
+    creation site still calling execute_raw unguarded re-raises that error and
+    aborts the rest of the function.
+
+    Every CREATE loses here, which is what pins the guard to all of them: an
+    earlier version of this fix converted only the first and the last site and
+    still died on MonthlyGlobalSpend against a real Postgres. Counting the
+    attempts is the assertion, because a partial fix simply stops early.
     """
     from litellm.proxy.db.create_views import create_missing_views
 
     mock_db = MagicMock()
     mock_db.query_raw = AsyncMock(side_effect=Exception("relation does not exist"))
     mock_db.execute_raw = AsyncMock(
-        side_effect=[Exception('relation "LiteLLM_VerificationTokenView" already exists')]
-        + [None] * 20
+        side_effect=Exception('relation "some_view" already exists')
     )
 
     await create_missing_views(mock_db)
 
-    assert mock_db.execute_raw.await_count > 1, (
-        "lost the race on the first view and stopped; later views were never created"
+    assert mock_db.execute_raw.await_count == EXPECTED_VIEW_COUNT, (
+        f"every view must still be attempted when the replica loses every race; "
+        f"got {mock_db.execute_raw.await_count} of {EXPECTED_VIEW_COUNT}, so a "
+        f"creation site is still unguarded and aborted the rest"
     )
 
 
