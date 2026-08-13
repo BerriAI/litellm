@@ -786,8 +786,9 @@ class DBSpendUpdateWriter:
             )
         )
         if prisma_client is not None and spend_logs_url is not None or prisma_client is not None:
-            async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload)
+            from litellm.proxy.utils import enqueue_spend_logs
+
+            await enqueue_spend_logs(prisma_client, (payload,))
         else:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
 

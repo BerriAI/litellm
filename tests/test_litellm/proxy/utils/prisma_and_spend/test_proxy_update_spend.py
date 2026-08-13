@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm.proxy.utils as utils_mod
-from litellm.proxy.utils import ProxyUpdateSpend
+from litellm.proxy.utils import ProxyUpdateSpend, enqueue_spend_logs
 
 
 class _AsyncCM:
@@ -404,12 +404,29 @@ async def test_requeue_after_outage_drops_oldest_logs_at_the_queue_cap(
     monkeypatch.setattr(utils_mod, "SPEND_LOG_QUEUE_MAX_SIZE", 3)
     mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="new")]
 
-    await ProxyUpdateSpend._requeue_spend_logs(
+    await enqueue_spend_logs(
         mock_prisma_client,
         [make_spend_log_row(request_id=f"old{i}") for i in range(4)],
+        at_head=True,
     )
 
     assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["old2", "old3", "new"]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_drops_oldest_logs_once_producers_fill_the_queue(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cap has to govern the producer side too. While a flush retries against
+    a dead DB, requests keep landing, so an append path that ignores the cap
+    leaves the outage OOM open no matter how well the requeue trims.
+    """
+    monkeypatch.setattr(utils_mod, "SPEND_LOG_QUEUE_MAX_SIZE", 2)
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id=f"old{i}") for i in range(2)]
+
+    await enqueue_spend_logs(mock_prisma_client, [make_spend_log_row(request_id="new")])
+
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["old1", "new"]
 
 
 @pytest.mark.asyncio

@@ -5455,6 +5455,34 @@ def _hash_token_if_needed(token: str) -> str:
         return token
 
 
+async def enqueue_spend_logs(
+    prisma_client: PrismaClient,
+    logs: Sequence[Mapping[str, object]],
+    *,
+    at_head: bool = False,
+) -> None:
+    """Queue spend logs for the next flush, capped at ``SPEND_LOG_QUEUE_MAX_SIZE``.
+
+    ``at_head`` replays a batch the DB refused, so it flushes before the logs
+    that piled up during the outage. Past the cap the oldest logs are dropped,
+    which keeps a long outage from growing the queue until the pod dies.
+    """
+    async with prisma_client._spend_log_transactions_lock:
+        queued: Final = (
+            tuple(logs) + tuple(prisma_client.spend_log_transactions)
+            if at_head
+            else tuple(prisma_client.spend_log_transactions) + tuple(logs)
+        )
+        dropped: Final = max(0, len(queued) - SPEND_LOG_QUEUE_MAX_SIZE)
+        prisma_client.spend_log_transactions[:] = queued[dropped:]
+    if dropped > 0:
+        verbose_proxy_logger.error(
+            "Spend tracking - spend log queue is at its %d entry cap; dropped the %d oldest spend logs",
+            SPEND_LOG_QUEUE_MAX_SIZE,
+            dropped,
+        )
+
+
 class ProxyUpdateSpend:
     @staticmethod
     async def update_end_user_spend(
@@ -5494,22 +5522,6 @@ class ProxyUpdateSpend:
                 await asyncio.sleep(2**i)  # Exponential backoff
             except Exception as e:
                 _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
-
-    @staticmethod
-    async def _requeue_spend_logs(
-        prisma_client: PrismaClient,
-        logs_to_process: Sequence[Mapping[str, object]],
-    ) -> None:
-        async with prisma_client._spend_log_transactions_lock:
-            requeued: Final = tuple(logs_to_process) + tuple(prisma_client.spend_log_transactions)
-            dropped: Final = max(0, len(requeued) - SPEND_LOG_QUEUE_MAX_SIZE)
-            prisma_client.spend_log_transactions[:] = requeued[dropped:]
-        if dropped > 0:
-            verbose_proxy_logger.error(
-                "Spend tracking - spend log queue is at its %d entry cap; dropped the %d oldest spend logs",
-                SPEND_LOG_QUEUE_MAX_SIZE,
-                dropped,
-            )
 
     @staticmethod
     async def update_spend_logs(
@@ -5588,7 +5600,7 @@ class ProxyUpdateSpend:
                         str(e),
                     )
                     if i >= n_retry_times:
-                        await ProxyUpdateSpend._requeue_spend_logs(prisma_client, logs_to_process)
+                        await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
                         raise
                     await asyncio.sleep(2**i)
         except Exception as e:
