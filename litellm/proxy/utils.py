@@ -5713,7 +5713,7 @@ async def _requeue_spend_log_transactions(prisma_client: PrismaClient, logs: Seq
     if not logs:
         return
     async with prisma_client._spend_log_transactions_lock:
-        prisma_client.spend_log_transactions = [*logs, *prisma_client.spend_log_transactions]
+        prisma_client.spend_log_transactions[:0] = logs
 
 
 def _requeue_tool_usage_transactions_if_flush_failed(
