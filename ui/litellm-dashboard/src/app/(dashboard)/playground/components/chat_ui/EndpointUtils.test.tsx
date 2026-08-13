@@ -197,19 +197,12 @@ describe("determineEndpointType", () => {
 });
 
 describe("isModelCompatibleWithEndpoint / filterModelsForEndpoint", () => {
-  beforeEach(() => {
-    vi.mocked(getEndpointType).mockImplementation((mode: string) => {
-      const map: Record<string, EndpointType> = {
-        chat: EndpointType.CHAT,
-        responses: EndpointType.RESPONSES,
-        image_generation: EndpointType.IMAGE,
-        image_edits: EndpointType.IMAGE_EDITS,
-        audio_speech: EndpointType.SPEECH,
-        realtime: EndpointType.REALTIME,
-        embedding: EndpointType.EMBEDDINGS,
-      };
-      return map[mode] ?? EndpointType.CHAT;
-    });
+  beforeEach(async () => {
+    const actual =
+      await vi.importActual<typeof import("@/components/chat_ui/mode_endpoint_mapping")>(
+        "@/components/chat_ui/mode_endpoint_mapping",
+      );
+    vi.mocked(getEndpointType).mockImplementation(actual.getEndpointType);
   });
 
   it("keeps models with no mode for every endpoint", () => {
@@ -253,5 +246,15 @@ describe("isModelCompatibleWithEndpoint / filterModelsForEndpoint", () => {
     expect(isModelCompatibleWithEndpoint(batchModel, EndpointType.CHAT)).toBe(false);
     expect(isModelCompatibleWithEndpoint(rerankModel, EndpointType.RESPONSES)).toBe(false);
     expect(isModelCompatibleWithEndpoint(batchModel, EndpointType.REALTIME)).toBe(false);
+  });
+
+  it("keeps image-edit models for the image-edits endpoint using the mode the backend sends", () => {
+    const imageEditModel: ModelGroup = { model_group: "gpt-image-1", mode: "image_edit" };
+    const imageModel: ModelGroup = { model_group: "dall-e-3", mode: "image_generation" };
+
+    expect(isModelCompatibleWithEndpoint(imageEditModel, EndpointType.IMAGE_EDITS)).toBe(true);
+    expect(filterModelsForEndpoint([imageEditModel, imageModel], EndpointType.IMAGE_EDITS).map((m) => m.model_group)).toEqual(
+      ["gpt-image-1", "dall-e-3"],
+    );
   });
 });

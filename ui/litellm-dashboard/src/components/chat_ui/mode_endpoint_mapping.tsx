@@ -8,7 +8,7 @@ export enum ModelMode {
   VIDEO_GENERATION = "video_generation",
   CHAT = "chat",
   RESPONSES = "responses",
-  IMAGE_EDITS = "image_edits",
+  IMAGE_EDITS = "image_edit",
   ANTHROPIC_MESSAGES = "anthropic_messages",
   EMBEDDING = "embedding",
   REALTIME = "realtime",
