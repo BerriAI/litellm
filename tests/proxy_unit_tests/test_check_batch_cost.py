@@ -1879,6 +1879,35 @@ class TestPollPageStarvation:
         }
 
     @pytest.mark.asyncio
+    async def test_provider_404_with_deployment_gone_keeps_job(self):
+        """With the batch's own deployment removed from the router, default fallbacks can
+        send the retrieve to a provider that never saw the batch. That 404 proves nothing,
+        so the row must stay unprocessed instead of losing its spend forever."""
+        import litellm
+
+        prisma = self._prisma(
+            [
+                self._job(
+                    "job-misrouted",
+                    self._encode("litellm_proxy;model_id:model-gone;llm_batch_id:batch_alive"),
+                )
+            ]
+        )
+        llm_router = MagicMock()
+        llm_router.get_deployment = MagicMock(return_value=None)
+        llm_router.aretrieve_batch = AsyncMock(
+            side_effect=litellm.NotFoundError(
+                message="No batch found with id 'batch_alive'.",
+                model="model-gone",
+                llm_provider="openai",
+            )
+        )
+
+        await self._instance(prisma, llm_router).check_batch_cost()
+
+        prisma.db.litellm_managedobjecttable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_transient_provider_error_keeps_job_for_retry(self):
         """A failure that may clear up (timeout, 5xx) must still leave the row unprocessed."""
         prisma = self._prisma(
