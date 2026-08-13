@@ -7954,3 +7954,82 @@ def test_ensure_deployment_affinity_callback_is_idempotent():
     finally:
         for cb in router.optional_callbacks or []:
             litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+
+def _priority_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "code",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+            }
+        ],
+        default_priority=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_uses_default_priority_when_request_has_none():
+    """default_priority must be forwarded to the scheduler instead of blowing up the request"""
+    router = _priority_router()
+    queued: list[int] = []
+    original_add_request = router.scheduler.add_request
+
+    async def spy(request):
+        queued.append(request.priority)
+        return await original_add_request(request=request)
+
+    with patch.object(router.scheduler, "add_request", side_effect=spy):
+        response = await router.acompletion(
+            model="code",
+            messages=[{"role": "user", "content": "Hi"}],
+            mock_response="Hello",
+        )
+
+    assert queued == [10]
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+@pytest.mark.asyncio
+async def test_acompletion_request_priority_wins_over_default_priority():
+    router = _priority_router()
+    queued: list[int] = []
+    original_add_request = router.scheduler.add_request
+
+    async def spy(request):
+        queued.append(request.priority)
+        return await original_add_request(request=request)
+
+    with patch.object(router.scheduler, "add_request", side_effect=spy):
+        response = await router.acompletion(
+            model="code",
+            messages=[{"role": "user", "content": "Hi"}],
+            priority=5,
+            mock_response="Hello",
+        )
+
+    assert queued == [5]
+    assert response.choices[0].message.content == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_schedule_acompletion_queues_once_with_default_priority_configured():
+    """schedule_acompletion must not re-enter the scheduler via acompletion's default_priority"""
+    router = _priority_router()
+    queued: list[int] = []
+    original_add_request = router.scheduler.add_request
+
+    async def spy(request):
+        queued.append(request.priority)
+        return await original_add_request(request=request)
+
+    with patch.object(router.scheduler, "add_request", side_effect=spy):
+        response = await router.schedule_acompletion(
+            model="code",
+            messages=[{"role": "user", "content": "Hi"}],
+            priority=3,
+            mock_response="Hello",
+        )
+
+    assert queued == [3]
+    assert response.choices[0].message.content == "Hello"
