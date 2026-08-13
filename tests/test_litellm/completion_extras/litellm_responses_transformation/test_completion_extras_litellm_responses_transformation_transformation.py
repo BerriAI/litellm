@@ -18,6 +18,37 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 )
 
 
+@pytest.mark.parametrize(
+    ("chunk", "message"),
+    [
+        (
+            {
+                "type": "response.failed",
+                "response": {
+                    "model": "gpt-5.6-luna",
+                    "error": {"code": "server_error", "message": "upstream failed"},
+                },
+            },
+            "upstream failed",
+        ),
+        ({"type": "error", "code": "server_error", "message": "stream failed"}, "stream failed"),
+        (
+            {"type": "response.failed", "response": "invalid", "error": {"message": "malformed failure"}},
+            "malformed failure",
+        ),
+    ],
+)
+def test_response_stream_failure_raises_api_error(chunk, message):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    with pytest.raises(litellm.APIError, match=message) as exc_info:
+        OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
+
+    assert exc_info.value.status_code == 500
+
+
 def test_convert_chat_completion_messages_to_responses_api_image_input():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
