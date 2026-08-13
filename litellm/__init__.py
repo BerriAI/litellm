@@ -167,6 +167,14 @@ _custom_logger_compatible_callbacks_literal = Literal[
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(get_args(_custom_logger_compatible_callbacks_literal))
+# Callback names that must never be read as a model-name prefix. The router treats any
+# entry in the callback list as a prompt-management provider when it appears before the
+# "/" of a model string, so a callback named for an ordinary word would silently reserve
+# that prefix product-wide and break existing deployments that already use it.
+_CALLBACKS_NOT_USABLE_AS_MODEL_PREFIX: Final = frozenset({"generic"})
+_known_prompt_management_prefixes: Final = frozenset(
+    name for name in _known_custom_logger_compatible_callbacks if name not in _CALLBACKS_NOT_USABLE_AS_MODEL_PREFIX
+)
 callbacks: List[
     Union[Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"]  # CustomLogger is lazy-loaded
 ] = []

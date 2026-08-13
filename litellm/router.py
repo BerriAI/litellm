@@ -3734,7 +3734,7 @@ class Router:
             return False
 
         split_litellm_model: Final = litellm_model.split("/")[0]
-        return split_litellm_model in litellm._known_custom_logger_compatible_callbacks
+        return split_litellm_model in litellm._known_prompt_management_prefixes
 
     async def _prompt_management_factory(
         self,
@@ -8181,7 +8181,7 @@ class Router:
 
         if "/" in litellm_model:
             split_litellm_model: Final = litellm_model.split("/")[0]
-            if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
+            if split_litellm_model in litellm._known_prompt_management_prefixes:
                 is_prompt_management_model = True
 
         if is_prompt_management_model:
