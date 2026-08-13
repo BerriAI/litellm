@@ -320,10 +320,10 @@
   },
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailsOverview.tsx": {
     "no-nested-ternary": {
-      "count": 8
+      "count": 5
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/GuardrailTestPanel.tsx": {
