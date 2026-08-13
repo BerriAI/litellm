@@ -105,7 +105,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         }
 
         version: Final = (
-            metadata.get("version") if metadata.get("version") is not None else metadata.get("trace_version")
+            metadata.get("trace_version") if metadata.get("trace_version") is not None else metadata.get("version")
         )
         if version is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.VERSION.value, version)

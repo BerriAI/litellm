@@ -211,7 +211,7 @@ class TestLangfuseOtelIntegration:
                 LangfuseSpanAttributes.GENERATION_NAME.value: "gen-name",
                 LangfuseSpanAttributes.GENERATION_ID.value: "gen-id",
                 LangfuseSpanAttributes.PARENT_OBSERVATION_ID.value: "parent-id",
-                LangfuseSpanAttributes.VERSION.value: "v1",
+                LangfuseSpanAttributes.VERSION.value: "t-ver",
                 LangfuseSpanAttributes.MASK_INPUT.value: True,
                 LangfuseSpanAttributes.MASK_OUTPUT.value: False,
                 LangfuseSpanAttributes.TRACE_USER_ID.value: "user-123",
@@ -244,18 +244,18 @@ class TestLangfuseOtelIntegration:
         [
             (
                 {"version": "v-observation", "trace_version": "v-trace"},
-                "v-observation",
+                "v-trace",
             ),
             ({"trace_version": "v-trace"}, "v-trace"),
             ({"version": "v-observation"}, "v-observation"),
-            ({"version": "", "trace_version": "v-trace"}, ""),
+            ({"version": "v-observation", "trace_version": ""}, ""),
             ({}, None),
         ],
         ids=[
-            "observation-wins-and-becomes-trace-version",
+            "trace-version-wins-as-documented",
             "trace-only",
-            "observation-only",
-            "empty-observation-version-is-not-absent",
+            "observation-version-is-the-fallback",
+            "empty-trace-version-is-not-absent",
             "neither-key-emits-nothing",
         ],
     )
