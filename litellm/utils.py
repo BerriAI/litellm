@@ -3119,12 +3119,6 @@ def register_model(
                 existing_model.pop(_cost_field, None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
-        # An empty payload for a model with no built-in entry carries no
-        # information — do not materialize a bare key for it. Key existence is
-        # what cost lookup treats as "mapped", so an empty entry flips
-        # ``completion_cost`` for an unmapped model from a loud "model isn't
-        # mapped" error to a silent $0.0 (``Router.__init__`` registers every
-        # deployment's backend key this way when no pricing is configured).
         if updated_dictionary:
             litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
 
