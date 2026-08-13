@@ -21,6 +21,7 @@ from litellm.caching import RedisCache
 from litellm.constants import (
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
     DB_SPEND_UPDATE_JOB_NAME,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
@@ -1794,6 +1795,7 @@ class DBSpendUpdateWriter:
             if call_type:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
 
+            is_internal_call: Final = bool(_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
             cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
             savings_spend: Final = compute_savings_spend(
@@ -1818,15 +1820,20 @@ class DBSpendUpdateWriter:
                 prompt_tokens=payload["prompt_tokens"],
                 completion_tokens=payload["completion_tokens"],
                 spend=payload["spend"],
-                api_requests=1,
-                successful_requests=1 if request_status == "success" else 0,
-                failed_requests=1 if request_status != "success" else 0,
+                # Internal sub-calls (auto-router classifier, shadow eval's shadow and
+                # judge) bill real spend and tokens to the key, but they are not
+                # requests the caller made: counting them inflates request-volume
+                # readers, and an auto-router savings figure computed on a shadow
+                # duplicate credits savings for traffic no user sent.
+                api_requests=0 if is_internal_call else 1,
+                successful_requests=1 if not is_internal_call and request_status == "success" else 0,
+                failed_requests=1 if not is_internal_call and request_status != "success" else 0,
                 cache_read_input_tokens=cache_read_input_tokens,
                 cache_creation_input_tokens=extract_cache_creation_tokens(usage_obj),
                 compression_saved_tokens=compression_saved_tokens,
                 compression_savings_spend=savings_spend.compression,
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
-                autorouter_savings_spend=savings_spend.autorouter,
+                autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
             )
             return daily_transaction
         except Exception as e:
