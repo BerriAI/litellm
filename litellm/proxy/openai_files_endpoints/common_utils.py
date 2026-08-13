@@ -1231,6 +1231,29 @@ async def get_batch_from_database(
         return None, None
 
 
+def batch_cost_poller_is_active() -> bool:
+    """
+    Whether the CheckBatchCost poller is running and will therefore account for a
+    managed batch's cost itself.
+
+    False whenever the poller cannot be relied on: polling disabled by config, or the
+    job absent from the scheduler because the enterprise import failed.
+    """
+    from litellm.constants import PROXY_BATCH_POLLING_ENABLED
+
+    if not PROXY_BATCH_POLLING_ENABLED:
+        return False
+    try:
+        import litellm.proxy.proxy_server as proxy_server_module
+
+        scheduler = getattr(proxy_server_module, "scheduler", None)
+        if scheduler is None:
+            return False
+        return scheduler.get_job("check_batch_cost_job") is not None
+    except Exception:  # noqa: BLE001  # scheduler backends raise varied types from get_job; an unreadable scheduler means the poller cannot be relied on
+        return False
+
+
 async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
@@ -1304,15 +1327,7 @@ async def update_batch_in_database(
             "updated_at": litellm.utils.get_utc_datetime(),
         }
 
-        # When a batch reaches completion, also mark batch_processed=True.
-        # The cost callback is enqueued asynchronously during the
-        # aretrieve_batch call that detected completion (via the @client
-        # decorator).  It is not awaited, so there is a theoretical window
-        # where the callback hasn't executed yet.  In practice the callback
-        # completes reliably.  Setting the flag here unblocks file deletion
-        # which queries batch_processed=False.  CheckBatchCost acts as a
-        # safety net for the rare case where the callback fails.
-        if db_status == "complete":
+        if db_status == "complete" and not batch_cost_poller_is_active():
             update_data["batch_processed"] = True
 
         try:
