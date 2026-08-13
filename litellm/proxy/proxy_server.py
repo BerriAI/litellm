@@ -2329,8 +2329,11 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 def cost_tracking():
     global prisma_client
     if prisma_client is not None:
+        from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
         litellm.logging_callback_manager.add_litellm_async_success_callback(_ProxyDBLogger())
+        litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
 
 
 # Bounds authoritative DB re-reads when enforcing a budget against a
