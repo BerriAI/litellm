@@ -37,6 +37,13 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
         )
 
 
+def _declared_type_value(variant_schema: Dict[str, Any]) -> Any:
+    """The single `type` value a union variant pins, whether spelled as a const or a 1-item enum."""
+    type_property = variant_schema.get("properties", {}).get("type", {})
+    enum_values = type_property.get("enum") or []
+    return type_property.get("const") or (enum_values[0] if len(enum_values) == 1 else None)
+
+
 @pytest.fixture(scope="module")
 def spec_dict() -> Dict[str, Any]:
     """Load raw spec dict for manual validation."""
@@ -105,26 +112,51 @@ class TestRequestCompliance:
         assert "string" in input_types, "Input should support string"
         assert "array" in input_types, "Input should support array"
 
-    def test_content_schema_uses_discriminator(self, spec_dict):
-        """Verify Content uses type discriminator."""
+    def test_content_variants_are_identified_by_their_type_field(self, spec_dict):
+        """Verify a Content part can be told apart by its `type`, however the spec spells that.
+
+        Our transformation reads `type` off each content part to route it, so what has to hold is
+        that every variant of the union pins a distinct `type` value and that text is one of them.
+        A spec may express that with an OpenAPI `discriminator` on the union or with a `const` on
+        each member's own `type`; both are equivalent for us, so accepting only the first makes
+        this test fail on a stylistic change upstream that costs us nothing.
+        """
         content_schema = spec_dict["components"]["schemas"]["Content"]
 
-        assert "discriminator" in content_schema
-        assert content_schema["discriminator"]["propertyName"] == "type"
-
-        # Check TextContent is an option (via mapping if present, or via oneOf refs)
-        mapping = content_schema["discriminator"].get("mapping")
-        if mapping:
-            assert "text" in mapping
-            print(f"Content type discriminator mapping: {list(mapping.keys())}")
-        else:
-            # Discriminator without explicit mapping — verify via oneOf
-            one_of = content_schema.get("oneOf", [])
-            ref_names = [opt["$ref"].split("/")[-1] for opt in one_of if "$ref" in opt]
+        discriminator = content_schema.get("discriminator")
+        if discriminator is not None:
             assert (
-                "TextContent" in ref_names
-            ), f"TextContent not found in oneOf refs: {ref_names}"
-            print(f"Content type discriminator (no mapping), oneOf refs: {ref_names}")
+                discriminator.get("propertyName") == "type"
+            ), f"Content is discriminated on {discriminator.get('propertyName')!r}, not 'type'"
+
+        variant_names = [
+            option["$ref"].split("/")[-1]
+            for option in content_schema.get("oneOf", [])
+            if "$ref" in option
+        ]
+        assert variant_names, f"Content is not a union of named variants: {content_schema}"
+
+        mapping = (discriminator or {}).get("mapping") or {}
+        type_values = {
+            variant: mapping_value
+            for mapping_value, ref in mapping.items()
+            for variant in [ref.split("/")[-1]]
+        } or {
+            variant: _declared_type_value(spec_dict["components"]["schemas"].get(variant, {}))
+            for variant in variant_names
+        }
+
+        assert set(type_values) == set(variant_names) and all(type_values.values()), (
+            f"every Content variant needs a discoverable type value, "
+            f"got {type_values} for variants {sorted(variant_names)}"
+        )
+        assert len(set(type_values.values())) == len(type_values), (
+            f"Content variants must pin DISTINCT type values, got {type_values}"
+        )
+        assert type_values.get("TextContent") == "text", (
+            f"TextContent must be reachable as type 'text', got {type_values}"
+        )
+        print(f"Content variants by type: {type_values}")
 
     def test_text_content_schema(self, spec_dict):
         """Verify TextContent schema."""

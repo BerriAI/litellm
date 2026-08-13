@@ -611,12 +611,12 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
 
 
 @pytest.mark.asyncio
-async def test_should_reserve_user_budget_counter_for_team_key(spend_counter_state):
-    """A user's personal budget must be reserved even when the key belongs to a team.
+async def test_should_not_reserve_user_budget_counter_for_team_key(spend_counter_state):
+    """The reservation path mirrors the read path: no personal user counter for a team key.
 
-    Regression for GitHub issue #12905: previously the reservation path skipped the
-    user spend counter whenever the key had a team, so a team key could overshoot the
-    user's personal max_budget under concurrency.
+    A team-scoped key reserves against the key and team counters only, so the key
+    owner's personal max_budget never gates a team request. Fails if the user
+    counter is reserved for team keys again.
     """
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
@@ -645,25 +645,29 @@ async def test_should_reserve_user_budget_counter_for_team_key(spend_counter_sta
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team") == pytest.approx(0.3)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team") is None
 
     await release_budget_reservation(reservation)
 
 
 @pytest.mark.asyncio
-async def test_should_skip_user_budget_counter_for_team_key_when_flag_set(spend_counter_state):
-    """skip_user_budget_on_team_key=True restores the legacy behavior where a user's
-    personal budget is not reserved for a team key."""
+async def test_should_reserve_user_budget_counter_for_team_key_when_flag_enabled(spend_counter_state):
+    """apply_user_budget_to_team_keys must widen the reservation path too.
+
+    Read-time enforcement alone leaks budget under concurrency, so the opt-in has
+    to reserve against the personal counter as well or a burst of team-key
+    requests slips past the owner's max_budget.
+    """
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
-        token="key-user-on-team-skip",
+        token="key-user-on-team-flagged",
         spend=0.0,
-        user_id="user-on-team-skip",
-        team_id="team-no-budget-skip",
+        user_id="user-on-team-flagged",
+        team_id="team-no-budget",
     )
-    team_object = LiteLLM_TeamTable(team_id="team-no-budget-skip", spend=0.0, max_budget=None)
-    user_object = LiteLLM_UserTable(user_id="user-on-team-skip", spend=0.0, max_budget=5.0)
+    team_object = LiteLLM_TeamTable(team_id="team-no-budget", spend=0.0, max_budget=None)
+    user_object = LiteLLM_UserTable(user_id="user-on-team-flagged", spend=0.0, max_budget=5.0)
 
     with patch(
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
@@ -679,10 +683,10 @@ async def test_should_skip_user_budget_counter_for_team_key_when_flag_set(spend_
             prisma_client=None,
             user_api_key_cache=key_cache,
             proxy_logging_obj=proxy_logging_obj,
-            skip_user_budget_on_team_key=True,
+            apply_user_budget_to_team_keys=True,
         )
 
-    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team-skip") is None
+    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team-flagged") == pytest.approx(0.3)
 
     await release_budget_reservation(reservation)
 

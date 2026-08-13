@@ -6,17 +6,30 @@ without a semconv equivalent lives under the ``litellm.*`` vendor namespace.
 from enum import Enum
 from typing import Final
 
+from litellm._logging import verbose_logger
+
 
 class GenAIOperation(str, Enum):
-    """Values for ``gen_ai.operation.name``."""
+    """Values for ``gen_ai.operation.name``.
+
+    The first block is the convention's own vocabulary. The ``LITELLM_`` members
+    are vendor values for operations the convention names nothing for; its note
+    on this attribute directs instrumentation to use a system-specific name in
+    exactly that case, the same allowance :func:`resolve_provider` relies on for
+    unmapped providers. They stay under the ``litellm.`` prefix so a value the
+    convention adds later can never collide with one of ours.
+    """
 
     CHAT = "chat"
     TEXT_COMPLETION = "text_completion"
     EMBEDDINGS = "embeddings"
     GENERATE_CONTENT = "generate_content"
+    RETRIEVAL = "retrieval"  # vector-store search / RAG query spans
     CREATE_AGENT = "create_agent"  # reserved for future agent spans
-    INVOKE_AGENT = "invoke_agent"  # reserved for future agent spans
+    INVOKE_AGENT = "invoke_agent"  # agent (A2A) message spans
     EXECUTE_TOOL = "execute_tool"  # MCP tool-call spans
+    LITELLM_VECTOR_STORE_MANAGEMENT = "litellm.vector_store_management"
+    LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
 
 
 class GenAIProvider(str, Enum):
@@ -49,11 +62,17 @@ class MCPMethod(str, Enum):
 
 
 class GenAI:
-    """Canonical OTel GenAI span-attribute keys."""
+    """Canonical OTel GenAI attribute keys.
+
+    ``SYSTEM`` is the one exception: the convention deprecated it in favor of
+    ``PROVIDER_NAME``, and it survives here only so already-shipped series keep
+    resolving for consumers that query it. Nothing new should use it.
+    """
 
     # request
     OPERATION_NAME: Final = "gen_ai.operation.name"
     PROVIDER_NAME: Final = "gen_ai.provider.name"
+    SYSTEM: Final = "gen_ai.system"
     REQUEST_MODEL: Final = "gen_ai.request.model"
     REQUEST_TEMPERATURE: Final = "gen_ai.request.temperature"
     REQUEST_TOP_P: Final = "gen_ai.request.top_p"
@@ -111,9 +130,23 @@ class JsonRpc:
     """JSON-RPC keys carried on MCP spans. The error/status code lives in the
     ``rpc.*`` namespace per semconv, not ``jsonrpc.*``."""
 
+    SYSTEM: Final = "rpc.system"
     REQUEST_ID: Final = "jsonrpc.request.id"
     PROTOCOL_VERSION: Final = "jsonrpc.protocol.version"
     RESPONSE_STATUS_CODE: Final = "rpc.response.status_code"
+
+
+class RpcSystem(str, Enum):
+    """Well-known values for ``rpc.system``. MCP frames every message as JSON-RPC 2.0.
+
+    Naming the system also classifies the span: a CLIENT span carrying none of the
+    ``rpc.*``/``http.*``/``db.*``/``messaging.*`` families records no span type or
+    subtype in backends that derive those from the attribute family. It is emitted
+    only alongside ``server.address``/``server.port``, since a backend that reads it
+    as a downstream dependency names that dependency from the server address.
+    """
+
+    JSONRPC = "jsonrpc"
 
 
 class NetworkTransport(str, Enum):
@@ -233,6 +266,7 @@ class LiteLLM:
     # ``litellm_params.model``), distinct from the user-facing ``gen_ai.request.model``.
     PROVIDER_MODEL: Final = "litellm.provider.model"
     REQUEST_STREAMING: Final = "litellm.request.streaming"
+    TOOLS_DECLARED: Final = "litellm.request.tools.declared"
     GUARDRAIL_NAME: Final = "litellm.guardrail.name"
     GUARDRAIL_MODE: Final = "litellm.guardrail.mode"
     GUARDRAIL_STATUS: Final = "litellm.guardrail.status"
@@ -257,18 +291,32 @@ class LiteLLM:
 
 
 class Metric:
-    """GenAI metric instrument names."""
+    """GenAI metric instrument names.
+
+    Every name here that a convention or a backend defines uses that name, so a
+    consumer charting GenAI telemetry finds litellm's series where it looks for
+    them. ``TOKEN_USAGE``, ``OPERATION_DURATION``, ``TIME_TO_FIRST_TOKEN`` and
+    ``TIME_PER_OUTPUT_TOKEN`` are semconv instruments, defined in the GenAI
+    conventions; the ``gen_ai.client.response.*`` spellings litellm used for the
+    latter two are not conventions at all, so nothing downstream could chart
+    them. Cost has no semconv instrument, so it takes ``gen_ai.usage.cost``, the
+    name backends already query for spend.
+
+    ``RESPONSE_DURATION`` keeps its vendor spelling deliberately: the closest
+    convention, ``gen_ai.server.request.duration``, would collide in meaning with
+    ``OPERATION_DURATION``, which litellm already emits for the whole operation.
+    """
 
     TOKEN_USAGE: Final = "gen_ai.client.token.usage"
     OPERATION_DURATION: Final = "gen_ai.client.operation.duration"
-    TOKEN_COST: Final = "gen_ai.client.token.cost"
-    TIME_TO_FIRST_TOKEN: Final = "gen_ai.client.response.time_to_first_token"
-    TIME_PER_OUTPUT_TOKEN: Final = "gen_ai.client.response.time_per_output_token"
+    TOKEN_COST: Final = "gen_ai.usage.cost"
+    TIME_TO_FIRST_TOKEN: Final = "gen_ai.server.time_to_first_token"
+    TIME_PER_OUTPUT_TOKEN: Final = "gen_ai.server.time_per_output_token"
     RESPONSE_DURATION: Final = "gen_ai.client.response.duration"
 
 
 # litellm ``custom_llm_provider`` -> ``gen_ai.provider.name`` value.
-_PROVIDER_BY_LITELLM: dict[str, GenAIProvider] = {
+_PROVIDER_BY_LITELLM: Final[dict[str, GenAIProvider]] = {
     "openai": GenAIProvider.OPENAI,
     "text-completion-openai": GenAIProvider.OPENAI,
     "azure": GenAIProvider.AZURE_AI_OPENAI,
@@ -290,7 +338,7 @@ _PROVIDER_BY_LITELLM: dict[str, GenAIProvider] = {
 }
 
 # litellm ``call_type`` -> ``gen_ai.operation.name``.
-_OPERATION_BY_CALL_TYPE: dict[str, GenAIOperation] = {
+_OPERATION_BY_CALL_TYPE: Final[dict[str, GenAIOperation]] = {
     "completion": GenAIOperation.CHAT,
     "acompletion": GenAIOperation.CHAT,
     "completion_with_retries": GenAIOperation.CHAT,
@@ -301,6 +349,35 @@ _OPERATION_BY_CALL_TYPE: dict[str, GenAIOperation] = {
     "responses": GenAIOperation.CHAT,
     "aresponses": GenAIOperation.CHAT,
     "call_mcp_tool": GenAIOperation.EXECUTE_TOOL,
+    "vector_store_search": GenAIOperation.RETRIEVAL,
+    "avector_store_search": GenAIOperation.RETRIEVAL,
+    "query": GenAIOperation.RETRIEVAL,
+    "aquery": GenAIOperation.RETRIEVAL,
+    "send_message": GenAIOperation.INVOKE_AGENT,
+    "asend_message": GenAIOperation.INVOKE_AGENT,
+    "asend_message_streaming": GenAIOperation.INVOKE_AGENT,
+    "vector_store_create": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_create": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_retrieve": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_retrieve": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_list": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_list": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_update": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_update": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_delete": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "avector_store_delete": GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT,
+    "vector_store_file_create": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_create": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_list": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_list": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_retrieve": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_retrieve": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_content": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_content": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_update": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_update": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "vector_store_file_delete": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
+    "avector_store_file_delete": GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT,
 }
 
 
@@ -312,12 +389,26 @@ def resolve_provider(custom_llm_provider: str | None) -> str:
     """
     if not custom_llm_provider:
         return ""
-    mapped = _PROVIDER_BY_LITELLM.get(custom_llm_provider.lower())
+    mapped: Final = _PROVIDER_BY_LITELLM.get(custom_llm_provider.lower())
     return mapped.value if mapped is not None else custom_llm_provider
 
 
 def resolve_operation(call_type: str | None) -> GenAIOperation:
-    """Map a litellm ``call_type`` to a ``gen_ai.operation.name`` value."""
+    """Map a litellm ``call_type`` to a ``gen_ai.operation.name`` value.
+
+    An unmapped call type still falls back to ``chat`` so every series keeps an
+    operation label, but it logs at debug rather than falling through silently:
+    a new call type mislabelled as ``chat`` mixes its latency and cost into
+    everyone's chat charts, which is invisible until someone reads the numbers.
+    """
     if not call_type:
         return GenAIOperation.CHAT
-    return _OPERATION_BY_CALL_TYPE.get(call_type.lower(), GenAIOperation.CHAT)
+    mapped: Final = _OPERATION_BY_CALL_TYPE.get(call_type.lower())
+    if mapped is not None:
+        return mapped
+    verbose_logger.debug(
+        "otel: call_type %r has no gen_ai.operation.name mapping; labelling it %r. Add it to _OPERATION_BY_CALL_TYPE.",
+        call_type,
+        GenAIOperation.CHAT.value,
+    )
+    return GenAIOperation.CHAT
