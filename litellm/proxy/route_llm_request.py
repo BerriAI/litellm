@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -74,9 +74,16 @@ def _is_a2a_agent_model(model_name: Any) -> bool:
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
+def _validated_block_fallbacks(raw: object) -> Sequence[Mapping[str, Sequence[str]] | str] | None:
+    try:
+        return _BLOCK_GATE_FALLBACKS_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return None
+
+
 def _reachable_block_fallbacks(
-    llm_router: LitellmRouter, data: dict, route_type: str
-) -> list[dict[str, list[str]] | str] | None:
+    llm_router: LitellmRouter, data: Mapping[str, object], route_type: str
+) -> Sequence[Mapping[str, Sequence[str]] | str] | None:
     """Fallbacks the router would actually attempt for a blocked primary, or None when
     none can run: eval routes bypass the router, disabled fallbacks skip the chain, and a
     request-supplied list replaces the router-level one, matching what the router does."""
@@ -84,30 +91,25 @@ def _reachable_block_fallbacks(
         return None
     if data.get("disable_fallbacks") is True:
         return None
-    request_fallbacks: Final[object] = data.get("fallbacks")
-    raw_fallbacks: Final[object] = request_fallbacks if isinstance(request_fallbacks, list) else llm_router.fallbacks
-    try:
-        return _BLOCK_GATE_FALLBACKS_ADAPTER.validate_python(raw_fallbacks)
-    except ValidationError:
-        return None
+    if "fallbacks" in data:
+        return _validated_block_fallbacks(data.get("fallbacks"))
+    # Router.fallbacks is an untyped list attribute; the adapter validates it into a typed view.
+    return _validated_block_fallbacks(llm_router.fallbacks)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped attr, validated by adapter
 
 
 def _raise_if_model_fully_blocked(
     llm_router: LitellmRouter,
     model_name: Any,
     team_id: str | None,
-    reachable_fallbacks: list[dict[str, list[str]] | str] | None,
+    reachable_fallbacks: Sequence[Mapping[str, Sequence[str]] | str] | None,
 ) -> None:
     if not isinstance(model_name, str) or not model_name:
         return
     if not isinstance(llm_router, litellm.Router):
         return
-    deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
-    if not llm_router._are_all_deployments_blocked(deployments):
-        return
-    if reachable_fallbacks is not None and llm_router._has_reachable_fallback(
+    if not llm_router._is_blocked_without_reachable_fallback(
         model_name=model_name,
-        fallbacks=reachable_fallbacks,
+        reachable_fallbacks=reachable_fallbacks,
         team_id=team_id,
     ):
         return

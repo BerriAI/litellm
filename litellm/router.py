@@ -9983,7 +9983,7 @@ class Router:
     def _has_reachable_fallback(
         self,
         model_name: str,
-        fallbacks: list[dict[str, list[str]] | str],
+        fallbacks: Sequence[Mapping[str, Sequence[str]] | str],
         team_id: str | None = None,
         visited: frozenset[str] = frozenset(),
     ) -> bool:
@@ -10004,6 +10004,26 @@ class Router:
             or self._has_reachable_fallback(group, fallbacks, team_id, next_visited)
             for group in fallback_model_group
         )
+
+    def _is_blocked_without_reachable_fallback(
+        self,
+        model_name: str,
+        reachable_fallbacks: Sequence[Mapping[str, Sequence[str]] | str] | None,
+        team_id: str | None,
+    ) -> bool:
+        """
+        True when every deployment of `model_name` is blocked and no reachable fallback
+        can serve the request. `reachable_fallbacks` is the already-resolved chain the
+        caller would attempt, or None when no fallback can run on this path.
+        """
+        deployments: Final = self.get_model_list(model_name=model_name, team_id=team_id) or []
+        if not self._are_all_deployments_blocked(deployments):
+            return False
+        if reachable_fallbacks is not None and self._has_reachable_fallback(
+            model_name=model_name, fallbacks=reachable_fallbacks, team_id=team_id
+        ):
+            return False
+        return True
 
     async def async_get_fully_unhealthy_model_names(self) -> set[str]:
         """
