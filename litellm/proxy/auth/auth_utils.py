@@ -325,7 +325,7 @@ _LLM_ROUTE_BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = ("api_key",)
 
 
 def _banned_params_for_route(route: str) -> tuple[str, ...]:
-    from litellm.proxy.auth.route_checks import RouteChecks  # noqa: PLC0415  # auth_utils participates in a proxy import cycle
+    from litellm.proxy.auth.route_checks import RouteChecks  # noqa: PLC0415  # proxy import cycle
 
     if RouteChecks.is_llm_api_route(route):
         return _BANNED_REQUEST_BODY_PARAMS + _LLM_ROUTE_BANNED_REQUEST_BODY_PARAMS
