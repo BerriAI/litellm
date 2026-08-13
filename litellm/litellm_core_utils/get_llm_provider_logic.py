@@ -240,7 +240,7 @@ def get_llm_provider(
 
                         custom_llm_provider = "parallel_ai"  # rebind-ok: function returns custom_llm_provider
                         api_base, dynamic_api_key = resolve_parallel_ai_credentials(  # rebind-ok: function returns api_base
-                            api_base=api_base, api_key=None
+                            api_base=api_base, api_key=api_key
                         )
                     elif endpoint == "api.endpoints.anyscale.com/v1":
                         custom_llm_provider = "anyscale"

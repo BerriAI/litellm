@@ -2,20 +2,31 @@
 Parallel AI Responses API, an OpenAI Responses-compatible web-research endpoint.
 
 Provider quirks:
-- single `parallel` model; the performance tier is selected via `reasoning.effort` (low/medium/high)
+- single `parallel` model; the performance tier is selected via `reasoning.effort` (low/medium/high),
+  or with the `parallel-low` / `parallel-medium` / `parallel-high` aliases, which pin the tier and
+  carry per-tier pricing in the cost map
 - no `tools` param; web grounding is built in
 
 Ref: https://docs.parallel.ai/responses-api/responses-quickstart
 """
 
+from types import MappingProxyType
 from typing import Final
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.parallel_ai.common_utils import resolve_parallel_ai_credentials
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+EFFORT_TIER_MODELS: Final = MappingProxyType(
+    {
+        "parallel-low": "low",
+        "parallel-medium": "medium",
+        "parallel-high": "high",
+    }
+)
 
 
 class ParallelAIResponsesConfig(OpenAIResponsesAPIConfig):
@@ -63,6 +74,35 @@ class ParallelAIResponsesConfig(OpenAIResponsesAPIConfig):
         if trimmed.endswith("/v1/responses"):
             return trimmed
         return f"{trimmed.removesuffix('/v1')}/v1/responses"
+
+    def transform_responses_api_request(  # mutable-ok: BaseResponsesAPIConfig contract
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,  # mutable-ok: BaseResponsesAPIConfig contract
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,  # mutable-ok: BaseResponsesAPIConfig contract
+    ) -> dict:  # mutable-ok: BaseResponsesAPIConfig contract
+        """The tier aliases pin `reasoning.effort` so each alias bills at its cost map entry."""
+        effort: Final = EFFORT_TIER_MODELS.get(model)
+        if effort is None:
+            return super().transform_responses_api_request(
+                model=model,
+                input=input,
+                response_api_optional_request_params=response_api_optional_request_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        return super().transform_responses_api_request(
+            model="parallel",
+            input=input,
+            response_api_optional_request_params={
+                **response_api_optional_request_params,
+                "reasoning": {"effort": effort},
+            },  # mutable-ok: request payload
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def supports_native_websocket(self) -> bool:
         """Parallel AI does not support native WebSocket for the Responses API"""

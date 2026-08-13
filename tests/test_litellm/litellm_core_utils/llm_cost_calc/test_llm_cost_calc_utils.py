@@ -2706,6 +2706,24 @@ def test_flat_per_request_cost_applies_once(_local_model_cost_map):
     assert large_completion_cost == 0.0
 
 
+@pytest.mark.parametrize(
+    "model,expected",
+    [("parallel_ai/parallel-low", 0.01), ("parallel_ai/parallel-medium", 0.05), ("parallel_ai/parallel-high", 0.25)],
+)
+def test_effort_tier_aliases_bill_their_own_rate(model, expected, _local_model_cost_map):
+    """Each Parallel effort alias carries its published per-request price."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="parallel_ai",
+    )
+    assert prompt_cost == pytest.approx(expected)
+    assert completion_cost == 0.0
+
+
 def test_flat_per_request_cost_routes_through_cost_per_token(_local_model_cost_map):
     """The provider-agnostic cost_per_token dispatch must not skip a model whose
     only pricing is a flat per-request rate."""

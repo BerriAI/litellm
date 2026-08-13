@@ -95,3 +95,12 @@ class TestParallelAIProviderWiring:
 
         result = litellm.validate_environment(model="parallel_ai/parallel")
         assert result["keys_in_environment"] is True
+
+    def test_api_base_detection_keeps_explicit_caller_key(self, monkeypatch):
+        monkeypatch.setenv("PARALLEL_AI_API_KEY", "pk-env")
+
+        model, provider, api_key, api_base = litellm.get_llm_provider(
+            model="parallel", api_base="https://api.parallel.ai", api_key="pk-explicit"
+        )
+        assert provider == "parallel_ai"
+        assert api_key == "pk-explicit"

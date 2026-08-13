@@ -187,3 +187,44 @@ class TestParallelAICompletionBridge:
         )
 
         assert response.choices[0].message.content == "grounded answer"
+
+
+class TestParallelAIEffortTierAliases:
+    @pytest.mark.parametrize(
+        "alias,effort",
+        [("parallel-low", "low"), ("parallel-medium", "medium"), ("parallel-high", "high")],
+    )
+    def test_alias_pins_model_and_effort(self, alias, effort):
+        config = ParallelAIResponsesConfig()
+        request = config.transform_responses_api_request(
+            model=alias,
+            input="question",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert request["model"] == "parallel"
+        assert request["reasoning"] == {"effort": effort}
+
+    def test_alias_effort_wins_over_explicit_reasoning(self):
+        config = ParallelAIResponsesConfig()
+        request = config.transform_responses_api_request(
+            model="parallel-high",
+            input="question",
+            response_api_optional_request_params={"reasoning": {"effort": "low"}},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert request["reasoning"] == {"effort": "high"}
+
+    def test_plain_model_passes_reasoning_through(self):
+        config = ParallelAIResponsesConfig()
+        request = config.transform_responses_api_request(
+            model="parallel",
+            input="question",
+            response_api_optional_request_params={"reasoning": {"effort": "low"}},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert request["model"] == "parallel"
+        assert request["reasoning"] == {"effort": "low"}
