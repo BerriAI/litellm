@@ -78,11 +78,12 @@ def _first(values: Sequence[str] | None) -> str:
 def _namespace(database: str, schema: str) -> str | None:
     """``{database}|{schema}`` per the PostgreSQL semconv, dropping absent halves.
 
-    Prisma's default schema stays implicit, case-insensitively because an
-    unquoted identifier folds, so one deployment yields one value however the
-    DSN spells it.
+    Only Prisma's literal default schema stays implicit. The match is
+    case-sensitive because Prisma quotes the name, so ``?schema=PUBLIC`` builds
+    a second schema alongside ``public`` and the two must not collapse to one
+    namespace.
     """
-    qualifier: Final = "" if schema.casefold() == _DEFAULT_POSTGRES_SCHEMA else schema
+    qualifier: Final = "" if schema == _DEFAULT_POSTGRES_SCHEMA else schema
     return "|".join(part for part in (database, qualifier) if part) or None
 
 

@@ -144,12 +144,18 @@ def test_dsn_with_neither_host_nor_database_yields_no_endpoint():
     assert parse_database_endpoint("postgresql://") is None
 
 
-@pytest.mark.parametrize("spelling", ["public", "PUBLIC", "Public"])
-def test_default_schema_is_implicit_whatever_its_case(spelling):
-    """An unquoted PostgreSQL identifier case-folds, so every spelling of the
-    default schema is the same namespace and must not split a group-by."""
-    endpoint = parse_database_endpoint(f"postgresql://u:p@db.internal/litellm?schema={spelling}")
+def test_prisma_default_schema_is_left_implicit():
+    endpoint = parse_database_endpoint("postgresql://u:p@db.internal/litellm?schema=public")
     assert endpoint is not None and endpoint.namespace == "litellm"
+
+
+@pytest.mark.parametrize("spelling", ["PUBLIC", "Public", "reporting"])
+def test_a_non_default_schema_stays_in_the_namespace(spelling):
+    """Prisma quotes the schema name, so ``?schema=PUBLIC`` provisions a second
+    schema alongside ``public`` with its own tables. Case-folding them into one
+    namespace would report two different schemas as the same database."""
+    endpoint = parse_database_endpoint(f"postgresql://u:p@db.internal/litellm?schema={spelling}")
+    assert endpoint is not None and endpoint.namespace == f"litellm|{spelling}"
 
 
 def test_postgres_scheme_alias_is_accepted():
