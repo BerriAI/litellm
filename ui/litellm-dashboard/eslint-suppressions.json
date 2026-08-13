@@ -3525,17 +3525,11 @@
   "src/components/team/TeamMemberTab.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/team/TeamVirtualKeysTable.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/team/member_permissions.tsx": {
