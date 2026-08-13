@@ -814,6 +814,38 @@ class TestOllamaReasoningContentStreaming:
 
 
 class TestOllamaToolCallTransformation:
+    def test_transform_request_preserves_logged_tool_schema(self):
+        config = OllamaChatConfig()
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        optional_params = {"tools": tools, "stream": False, "num_ctx": 262144}
+
+        result = config.transform_request(
+            model="gemma4:27b",
+            messages=cast(
+                list[AllMessageValues],
+                [{"role": "user", "content": "Weather in London?"}],
+            ),
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["tools"] == tools
+        assert optional_params == {"tools": tools, "stream": False, "num_ctx": 262144}
+
     def test_transform_request_preserves_tool_calls(self):
         """
         tool_calls on assistant messages must survive transform_request.
