@@ -40,7 +40,7 @@ import { isMaskedSecret, stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
-import { normalizeTierModels } from "./add_model/complexity_router_tiers";
+import { normalizeTierModels, resolveComplexityDefaultModel } from "./add_model/complexity_router_tiers";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,
@@ -146,6 +146,7 @@ interface ComplexityRouterTierConfig {
   };
   semantic_keyword_matching?: boolean;
   embedding_model?: string;
+  default_model?: string;
 }
 
 interface ComplexityRouterModelData {
@@ -170,25 +171,23 @@ const buildComplexityRouterTestTargets = (
     config = rawConfig;
   }
 
-  const tierTargets = buildAutoRouterTestTargets({
-    tiers: {
-      SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
-      MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
-      COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
-      REASONING: normalizeTierModels(config.tiers?.REASONING),
-    },
+  const tiers = {
+    SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
+    MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
+    COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
+    REASONING: normalizeTierModels(config.tiers?.REASONING),
+  };
+
+  // litellm_params overrides the config blob at init (complexity_router.py), so it wins here too.
+  const pinned = modelData?.litellm_params?.complexity_router_default_model || config.default_model;
+
+  const testTargetParams = {
+    tiers,
     semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
     embeddingModel: config.embedding_model,
-  });
-
-  const defaultModel = modelData?.litellm_params?.complexity_router_default_model?.trim();
-  if (!defaultModel || tierTargets.some((target) => target.modelGroup === defaultModel)) {
-    return tierTargets;
-  }
-  return [
-    ...tierTargets,
-    { labels: ["Default (unconfigured tiers)"], modelGroup: defaultModel, mode: "chat" as const },
-  ];
+    defaultModel: resolveComplexityDefaultModel(tiers, pinned),
+  };
+  return buildAutoRouterTestTargets(testTargetParams);
 };
 
 export default function ModelInfoView({

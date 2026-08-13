@@ -395,11 +395,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const handleTestConnection = () => {
-    const targets = buildAutoRouterTestTargets({
+    const testTargetParams = {
       tiers: complexityRouterConfig.tiers,
       semanticMatchingEnabled,
       embeddingModel,
-    });
+      defaultModel: resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model),
+    };
+    const targets = buildAutoRouterTestTargets(testTargetParams);
 
     if (targets.length === 0) {
       NotificationManager.fromBackend("Please select at least one model for a complexity tier");
