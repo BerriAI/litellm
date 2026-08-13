@@ -1055,9 +1055,6 @@
     "no-nested-ternary": {
       "count": 2
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 5
     }
@@ -1098,9 +1095,6 @@
     "no-nested-ternary": {
       "count": 2
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/immutability": {
       "count": 2
     },
@@ -1115,9 +1109,6 @@
     "no-nested-ternary": {
       "count": 4
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1125,9 +1116,6 @@
   "src/app/(dashboard)/playground/components/compareUI/components/ComparisonPanel.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/playground/components/compareUI/components/MessageDisplay.tsx": {
@@ -1135,19 +1123,9 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/playground/components/compareUI/components/MessageInput.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/playground/components/compareUI/components/ModelSelector.tsx": {
     "no-restricted-imports": {
       "count": 2
-    }
-  },
-  "src/app/(dashboard)/playground/components/compareUI/components/UnifiedSelector.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/playground/components/complianceUI/ComplianceUI.tsx": {
@@ -3579,6 +3557,14 @@
   },
   "src/components/ui/skeleton.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/ui/slider.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    },
+    "no-nested-ternary": {
       "count": 1
     }
   },
