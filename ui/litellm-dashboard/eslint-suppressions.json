@@ -3794,17 +3794,7 @@
       "count": 1
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/CollapsibleMessage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/DrawerHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/HistoryTree.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
