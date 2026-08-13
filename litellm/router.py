@@ -2140,7 +2140,7 @@ class Router:
             kwargs["original_function"] = self._acompletion
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            request_priority: Final = kwargs.pop("priority", None) or self.default_priority
+            request_priority: Final = kwargs.get("priority") or self.default_priority
             start_time: Final = time.time()
             _is_prompt_management_model: Final = self._is_prompt_management_model(model)
 
@@ -2156,7 +2156,7 @@ class Router:
                     priority=request_priority,
                     original_function=self.async_function_with_fallbacks,
                     args=(),
-                    kwargs=kwargs,
+                    kwargs={key: value for key, value in kwargs.items() if key != "priority"},
                 )
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
