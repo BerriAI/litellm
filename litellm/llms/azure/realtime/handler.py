@@ -4,6 +4,7 @@ This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 from litellm._logging import _redact_string, verbose_proxy_logger
@@ -121,11 +122,13 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             ssl_context: Final = get_shared_realtime_ssl_context()
             # Auth precedence mirrors BaseAzureLLM._base_validate_azure_environment:
             # prefer api-key, fall back to Azure AD (Entra ID) bearer token, never both.
-            auth_headers: dict[str, str] = {}
-            if api_key:
-                auth_headers = {"api-key": api_key}
-            elif azure_ad_token:
-                auth_headers = {"Authorization": f"Bearer {azure_ad_token}"}
+            auth_headers: Final[Mapping[str, str]] = (
+                {"api-key": api_key}
+                if api_key
+                else {"Authorization": f"Bearer {azure_ad_token}"}
+                if azure_ad_token
+                else {}
+            )
             async with websockets.connect(
                 url,
                 additional_headers=auth_headers,

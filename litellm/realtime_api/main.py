@@ -1,6 +1,7 @@
 """Abstraction function for OpenAI's realtime API"""
 
 import os
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 import litellm
@@ -544,7 +545,7 @@ async def _realtime_health_check(
     import websockets
 
     url: str | None = None
-    auth_headers: dict[str, Any] = {"api-key": api_key}
+    auth_headers: Mapping[str, Any] = {"api-key": api_key}
     if custom_llm_provider == "azure":
         url = azure_realtime._construct_url(
             api_base=api_base or "",
