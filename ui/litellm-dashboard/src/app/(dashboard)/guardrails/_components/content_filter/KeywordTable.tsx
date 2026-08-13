@@ -1,6 +1,8 @@
 import { DeleteOutlined } from "@ant-design/icons";
-import { Button, Select, Table } from "antd";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Button, Select } from "antd";
 import React from "react";
+import { DataTable } from "@/components/shared/DataTable";
 
 const { Option } = Select;
 
@@ -18,21 +20,19 @@ interface KeywordTableProps {
 }
 
 const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, onRemove }) => {
-  const columns = [
+  const columns: ColumnDef<BlockedWord>[] = [
     {
-      title: "Keyword",
-      dataIndex: "keyword",
-      key: "keyword",
+      header: "Keyword",
+      accessorKey: "keyword",
     },
     {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: BlockedWord) => (
+      header: "Action",
+      accessorKey: "action",
+      size: 150,
+      cell: ({ row }) => (
         <Select
-          value={action}
-          onChange={(value) => onActionChange(record.id, "action", value)}
+          value={row.original.action}
+          onChange={(value) => onActionChange(row.original.id, "action", value)}
           style={{ width: 120 }}
           size="small"
         >
@@ -42,17 +42,16 @@ const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, o
       ),
     },
     {
-      title: "Description",
-      dataIndex: "description",
-      key: "description",
-      render: (desc: string) => desc || "-",
+      header: "Description",
+      accessorKey: "description",
+      cell: ({ row }) => row.original.description || "-",
     },
     {
-      title: "",
-      key: "actions",
-      width: 100,
-      render: (_: any, record: BlockedWord) => (
-        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove(record.id)}>
+      header: "",
+      id: "actions",
+      size: 100,
+      cell: ({ row }) => (
+        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove(row.original.id)}>
           Delete
         </Button>
       ),
@@ -63,7 +62,7 @@ const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, o
     return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No keywords added.</div>;
   }
 
-  return <Table dataSource={keywords} columns={columns} rowKey="id" pagination={false} size="small" />;
+  return <DataTable data={keywords} columns={columns} getRowId={(row) => row.id} size="compact" />;
 };
 
 export default KeywordTable;

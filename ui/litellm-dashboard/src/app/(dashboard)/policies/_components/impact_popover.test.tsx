@@ -1,13 +1,28 @@
 import React from "react";
-import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import ImpactPopover from "./impact_popover";
 import { PolicyAttachment } from "@/components/policies/types";
 
 vi.mock("@/components/networking");
+
+interface LegacyIconProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  icon: React.ComponentType;
+}
+
+interface LegacyPopoverProps {
+  children: React.ReactElement<React.HTMLAttributes<HTMLElement>>;
+  content: React.ReactNode;
+  onOpenChange?: (open: boolean) => void;
+  title?: React.ReactNode;
+}
+
+interface LegacyTooltipProps {
+  children: React.ReactElement<React.ButtonHTMLAttributes<HTMLButtonElement>>;
+  title?: React.ReactNode;
+}
 
 vi.mock("@heroicons/react/outline", () => ({
   EyeIcon: function EyeIcon() {
@@ -17,48 +32,42 @@ vi.mock("@heroicons/react/outline", () => ({
 
 vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
-  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts. A file-level
-  // vi.mock fully replaces the setup-level mock, so without this the real Tremor Button
-  // leaks through and its useTooltip(300) schedules a native setTimeout that can fire
-  // post-teardown -> "window is not defined".
   return {
     ...actual,
-    Icon: ({ icon: IconComp, onClick, className }: any) =>
-      React.createElement(
-        "button",
-        { type: "button", onClick, className },
-        IconComp?.displayName ?? IconComp?.name ?? "icon",
-      ),
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-      React.createElement("button", { ...props, ref }, children),
-    ),
-    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
+    Icon: React.forwardRef<HTMLButtonElement, LegacyIconProps>(({ icon: _icon, ...props }, ref) => (
+      <button ref={ref} type="button" {...props} />
+    )),
   };
 });
 
-// Expose the Popover's onOpenChange so tests can trigger it programmatically.
 vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<any>();
+  const actual = await importOriginal<typeof import("antd")>();
   return {
     ...actual,
-    Popover: ({ children, onOpenChange, content }: any) =>
-      React.createElement(
-        "div",
-        null,
-        React.createElement("div", { "data-testid": "popover-content" }, content),
-        React.createElement(
-          "div",
-          {
-            role: "button",
-            "aria-label": "open-popover",
-            onClick: () => onOpenChange?.(true),
-          },
-          children,
-        ),
-      ),
-    Tooltip: ({ children }: any) => React.createElement(React.Fragment, null, children),
-    Spin: () => React.createElement("span", null, "Loading..."),
-    Tag: ({ children }: any) => React.createElement("span", null, children),
+    Popover: ({ children, content, onOpenChange, title }: LegacyPopoverProps) => {
+      const [open, setOpen] = React.useState(false);
+      return (
+        <>
+          {React.cloneElement(children, {
+            onClick: () => {
+              const nextOpen = !open;
+              setOpen(nextOpen);
+              onOpenChange?.(nextOpen);
+            },
+          })}
+          {open && (
+            <div>
+              <p>{title}</p>
+              {content}
+            </div>
+          )}
+        </>
+      );
+    },
+    Tooltip: ({ children, title }: LegacyTooltipProps) =>
+      React.cloneElement(children, { "aria-label": typeof title === "string" ? title : undefined }),
+    Spin: () => <span aria-hidden="true" />,
+    Tag: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   };
 });
 
@@ -76,16 +85,12 @@ const makeAttachment = (overrides: Partial<PolicyAttachment> = {}): PolicyAttach
 describe("ImpactPopover", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   it("should render", () => {
     renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken="tok" />);
-    expect(screen.getByRole("button", { name: /open-popover/i })).toBeInTheDocument();
-  });
-
-  it("should show 'Click to load' as the initial popover content", () => {
-    renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken="tok" />);
-    expect(screen.getByText(/click to load/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /view blast radius/i })).toBeInTheDocument();
   });
 
   it("should call estimateAttachmentImpactCall when the popover is opened", async () => {
@@ -98,7 +103,7 @@ describe("ImpactPopover", () => {
     });
     const attachment = makeAttachment({ policy_name: "rate-limit", teams: ["team-a"] });
     renderWithProviders(<ImpactPopover attachment={attachment} accessToken="my-token" />);
-    await user.click(screen.getByRole("button", { name: /open-popover/i }));
+    await user.click(screen.getByRole("button", { name: /view blast radius/i }));
     await waitFor(() => {
       expect(networking.estimateAttachmentImpactCall).toHaveBeenCalledWith("my-token", {
         policy_name: "rate-limit",
@@ -114,17 +119,17 @@ describe("ImpactPopover", () => {
   it("should not call the API when accessToken is null", async () => {
     const user = userEvent.setup();
     renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken={null} />);
-    await user.click(screen.getByRole("button", { name: /open-popover/i }));
+    await user.click(screen.getByRole("button", { name: /view blast radius/i }));
     expect(networking.estimateAttachmentImpactCall).not.toHaveBeenCalled();
+    expect(screen.getByText(/click to load/i)).toBeInTheDocument();
   });
 
   it("should show a loading indicator while the impact is being fetched", async () => {
     const user = userEvent.setup();
     vi.mocked(networking.estimateAttachmentImpactCall).mockReturnValue(new Promise(() => {}));
     renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken="tok" />);
-    await user.click(screen.getByRole("button", { name: /open-popover/i }));
-    // Multiple "Loading..." nodes exist (Spin + adjacent text) — assert at least one is present
-    expect(screen.queryAllByText(/loading/i).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: /view blast radius/i }));
+    expect(screen.getByText(/loading/i)).toBeInTheDocument();
   });
 
   it("should show a global scope warning when affected_keys_count is -1", async () => {
@@ -136,36 +141,38 @@ describe("ImpactPopover", () => {
       sample_teams: [],
     });
     renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken="tok" />);
-    await user.click(screen.getByRole("button", { name: /open-popover/i }));
+    await user.click(screen.getByRole("button", { name: /view blast radius/i }));
     expect(await screen.findByText(/global scope.*affects all keys and teams/i)).toBeInTheDocument();
   });
 
-  it("should show key and team counts when impact data is loaded for a specific scope", async () => {
+  it("should use singular count labels for one affected key and team", async () => {
     const user = userEvent.setup();
     vi.mocked(networking.estimateAttachmentImpactCall).mockResolvedValue({
-      affected_keys_count: 5,
-      affected_teams_count: 2,
+      affected_keys_count: 1,
+      affected_teams_count: 1,
       sample_keys: ["sk-abc"],
       sample_teams: ["team-x"],
     });
     renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken="tok" />);
-    await user.click(screen.getByRole("button", { name: /open-popover/i }));
-    expect(await screen.findByText(/5/)).toBeInTheDocument();
-    expect(screen.getByText(/2/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /view blast radius/i }));
+    expect(
+      await screen.findByText((_, element) => element?.textContent === "1 key, 1 team affected"),
+    ).toBeInTheDocument();
   });
 
-  it("should render sample key tags when returned from the API", async () => {
+  it("should render sample keys and teams returned by the API", async () => {
     const user = userEvent.setup();
     vi.mocked(networking.estimateAttachmentImpactCall).mockResolvedValue({
       affected_keys_count: 2,
-      affected_teams_count: 0,
+      affected_teams_count: 1,
       sample_keys: ["sk-key-one", "sk-key-two"],
-      sample_teams: [],
+      sample_teams: ["team-one"],
     });
     renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken="tok" />);
-    await user.click(screen.getByRole("button", { name: /open-popover/i }));
+    await user.click(screen.getByRole("button", { name: /view blast radius/i }));
     expect(await screen.findByText("sk-key-one")).toBeInTheDocument();
     expect(screen.getByText("sk-key-two")).toBeInTheDocument();
+    expect(screen.getByText("team-one")).toBeInTheDocument();
   });
 
   it("should show 'No keys or teams currently affected' when both counts are 0", async () => {
@@ -177,7 +184,7 @@ describe("ImpactPopover", () => {
       sample_teams: [],
     });
     renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken="tok" />);
-    await user.click(screen.getByRole("button", { name: /open-popover/i }));
+    await user.click(screen.getByRole("button", { name: /view blast radius/i }));
     expect(await screen.findByText(/no keys or teams currently affected/i)).toBeInTheDocument();
   });
 
@@ -190,9 +197,33 @@ describe("ImpactPopover", () => {
       sample_teams: [],
     });
     renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken="tok" />);
-    await user.click(screen.getByRole("button", { name: /open-popover/i }));
+    const trigger = screen.getByRole("button", { name: /view blast radius/i });
+    await user.click(trigger);
     await screen.findByText("sk-abc");
-    await user.click(screen.getByRole("button", { name: /open-popover/i }));
+    await user.click(trigger);
+    await user.click(trigger);
     expect(networking.estimateAttachmentImpactCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("should retry loading after a failed request", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.estimateAttachmentImpactCall)
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockResolvedValueOnce({
+        affected_keys_count: 1,
+        affected_teams_count: 0,
+        sample_keys: ["sk-recovered"],
+        sample_teams: [],
+      });
+    renderWithProviders(<ImpactPopover attachment={makeAttachment()} accessToken="tok" />);
+
+    const trigger = screen.getByRole("button", { name: /view blast radius/i });
+    await user.click(trigger);
+    expect(await screen.findByText(/click to load/i)).toBeInTheDocument();
+    await user.click(trigger);
+    await user.click(trigger);
+
+    expect(await screen.findByText("sk-recovered")).toBeInTheDocument();
+    expect(console.error).toHaveBeenCalledWith("Failed to load impact:", expect.any(Error));
   });
 });

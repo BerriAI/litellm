@@ -1,22 +1,8 @@
 import React, { useState, useEffect } from "react";
-import {
-  Title,
-  Subtitle,
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableBody,
-  TableCell,
-  Text,
-  Button,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-} from "@tremor/react";
+import { Title, Subtitle, Text, Button, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import type { ColumnDef } from "@tanstack/react-table";
 import { BarChart } from "@/components/shared/charts";
+import { DataTable } from "@/components/shared/DataTable";
 import { perUserAnalyticsCall } from "./networking";
 
 interface PerUserMetrics {
@@ -89,6 +75,48 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     }
   };
 
+  const columns: ColumnDef<PerUserMetrics>[] = [
+    {
+      header: "User ID",
+      accessorKey: "user_id",
+      cell: ({ row }) => <span className="font-medium">{row.original.user_id}</span>,
+    },
+    {
+      header: "User Email",
+      accessorKey: "user_email",
+      cell: ({ row }) => row.original.user_email || "N/A",
+    },
+    {
+      header: "User Agent",
+      accessorKey: "user_agent",
+      cell: ({ row }) => row.original.user_agent || "Unknown",
+    },
+    {
+      header: "Success Generations",
+      accessorKey: "successful_requests",
+      meta: { numeric: true },
+      cell: ({ row }) => formatAbbreviatedNumber(row.original.successful_requests),
+    },
+    {
+      header: "Total Tokens",
+      accessorKey: "total_tokens",
+      meta: { numeric: true },
+      cell: ({ row }) => formatAbbreviatedNumber(row.original.total_tokens),
+    },
+    {
+      header: "Failed Requests",
+      accessorKey: "failed_requests",
+      meta: { numeric: true },
+      cell: ({ row }) => formatAbbreviatedNumber(row.original.failed_requests),
+    },
+    {
+      header: "Total Cost",
+      accessorKey: "spend",
+      meta: { numeric: true },
+      cell: ({ row }) => `$${formatAbbreviatedNumber(row.original.spend, 4)}`,
+    },
+  ];
+
   return (
     <div className="mb-6">
       <Title>Per User Usage</Title>
@@ -103,46 +131,13 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
         <TabPanels>
           {/* Tab 1: Existing User Details Table */}
           <TabPanel>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>User ID</TableHeaderCell>
-                  <TableHeaderCell>User Email</TableHeaderCell>
-                  <TableHeaderCell>User Agent</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Success Generations</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Total Tokens</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Failed Requests</TableHeaderCell>
-                  <TableHeaderCell className="text-right">Total Cost</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {perUserData.results.slice(0, 10).map((item: PerUserMetrics, index: number) => (
-                  <TableRow key={index}>
-                    <TableCell>
-                      <Text className="font-medium">{item.user_id}</Text>
-                    </TableCell>
-                    <TableCell>
-                      <Text>{item.user_email || "N/A"}</Text>
-                    </TableCell>
-                    <TableCell>
-                      <Text>{item.user_agent || "Unknown"}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>{formatAbbreviatedNumber(item.successful_requests)}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>{formatAbbreviatedNumber(item.total_tokens)}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>{formatAbbreviatedNumber(item.failed_requests)}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>${formatAbbreviatedNumber(item.spend, 4)}</Text>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataTable
+              columns={columns}
+              data={perUserData.results.slice(0, 10)}
+              getRowId={(row) => row.user_id}
+              noDataMessage="No per-user usage data"
+              size="compact"
+            />
 
             {perUserData.results.length > 10 && (
               <div className="mt-4 flex justify-between items-center">
