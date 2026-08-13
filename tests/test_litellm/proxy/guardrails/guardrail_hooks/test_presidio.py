@@ -2849,3 +2849,32 @@ async def test_stream_pii_unmasking_passthrough_when_no_tokens(mock_user_api_key
         chunks.append(chunk)
 
     assert chunks == [raw_chunk]
+
+
+def test_new_entities_pass_through_analyze_payload():
+    """
+    Newly added upstream entities (e.g. German DE_*) must reach the analyzer
+    payload as their exact recognizer names, whether configured as enum or str.
+    """
+    import json
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        pii_entities_config={
+            PiiEntityType.DE_TAX_ID: PiiAction.MASK,
+            "KR_RRN": PiiAction.BLOCK,
+        },
+        presidio_language="de",
+    )
+
+    payload = guardrail._get_presidio_analyze_request_payload(
+        text="Meine Steuer-ID ist 65929970489",
+        presidio_config=None,
+        request_data={},
+    )
+
+    assert set(payload["entities"]) == {"DE_TAX_ID", "KR_RRN"}
+    assert payload["language"] == "de"
+    serialized = json.dumps(payload)
+    assert '"DE_TAX_ID"' in serialized
+    assert '"KR_RRN"' in serialized

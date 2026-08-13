@@ -15,6 +15,7 @@ class TestUKPiiEntities:
         assert hasattr(PiiEntityType, "UK_PASSPORT")
         assert hasattr(PiiEntityType, "UK_POSTCODE")
         assert hasattr(PiiEntityType, "UK_VEHICLE_REGISTRATION")
+        assert hasattr(PiiEntityType, "UK_DRIVING_LICENCE")
 
     def test_uk_pii_entity_values(self):
         """Test UK PII entity types have correct string values"""
@@ -23,6 +24,7 @@ class TestUKPiiEntities:
         assert PiiEntityType.UK_PASSPORT == "UK_PASSPORT"
         assert PiiEntityType.UK_POSTCODE == "UK_POSTCODE"
         assert PiiEntityType.UK_VEHICLE_REGISTRATION == "UK_VEHICLE_REGISTRATION"
+        assert PiiEntityType.UK_DRIVING_LICENCE == "UK_DRIVING_LICENCE"
 
     def test_uk_category_exists(self):
         """Test UK category exists in PII_ENTITY_CATEGORIES_MAP"""
@@ -37,6 +39,7 @@ class TestUKPiiEntities:
         assert PiiEntityType.UK_PASSPORT in uk_entities
         assert PiiEntityType.UK_POSTCODE in uk_entities
         assert PiiEntityType.UK_VEHICLE_REGISTRATION in uk_entities
+        assert PiiEntityType.UK_DRIVING_LICENCE in uk_entities
 
     def test_uk_entities_match_presidio_recognizers(self):
         """Test UK entity type names match Presidio recognizer names"""
@@ -46,6 +49,7 @@ class TestUKPiiEntities:
             "UK_PASSPORT",
             "UK_POSTCODE",
             "UK_VEHICLE_REGISTRATION",
+            "UK_DRIVING_LICENCE",
         }
 
         uk_entities = PII_ENTITY_CATEGORIES_MAP[PiiEntityCategory.UK]
