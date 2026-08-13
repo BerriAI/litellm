@@ -19,9 +19,9 @@ from litellm.types.utils import LlmProviders
 
 
 class ParallelAIResponsesConfig(OpenAIResponsesAPIConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseResponsesAPIConfig contract
         """Ref: https://docs.parallel.ai/responses-api/responses-quickstart"""
-        return [
+        return [  # mutable-ok: callers concatenate with other lists
             "stream",
             "reasoning",
             "instructions",
@@ -38,19 +38,26 @@ class ParallelAIResponsesConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: BaseResponsesAPIConfig contract
         """Parallel rejects unknown Responses params (e.g. `tools`), so unsupported keys are filtered out."""
         supported: Final = frozenset(self.get_supported_openai_params(model))
-        return {key: value for key, value in dict(response_api_optional_params).items() if key in supported}
+        return {  # mutable-ok: request payload, merged downstream
+            key: value for key, value in response_api_optional_params.items() if key in supported
+        }
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(  # mutable-ok: BaseResponsesAPIConfig contract
+        self,
+        headers: dict,  # mutable-ok: BaseResponsesAPIConfig contract
+        model: str,
+        litellm_params: GenericLiteLLMParams | None,
+    ) -> dict:  # mutable-ok: BaseResponsesAPIConfig contract
         resolved_params: Final = litellm_params or GenericLiteLLMParams()
         _, api_key = resolve_parallel_ai_credentials(api_base=resolved_params.api_base, api_key=resolved_params.api_key)
         if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+            headers["Authorization"] = f"Bearer {api_key}"  # rebind-ok: stamping the caller's headers is the contract
         return headers
 
-    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:  # mutable-ok: base contract
         resolved_api_base: Final = api_base or get_secret_str("PARALLEL_AI_API_BASE") or "https://api.parallel.ai"
         trimmed: Final = resolved_api_base.rstrip("/")
         if trimmed.endswith("/v1/responses"):

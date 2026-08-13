@@ -238,8 +238,10 @@ def get_llm_provider(
                             resolve_parallel_ai_credentials,
                         )
 
-                        custom_llm_provider = "parallel_ai"
-                        api_base, dynamic_api_key = resolve_parallel_ai_credentials(api_base=api_base, api_key=None)
+                        custom_llm_provider = "parallel_ai"  # rebind-ok: function returns custom_llm_provider
+                        api_base, dynamic_api_key = resolve_parallel_ai_credentials(  # rebind-ok: function returns api_base
+                            api_base=api_base, api_key=None
+                        )
                     elif endpoint == "api.endpoints.anyscale.com/v1":
                         custom_llm_provider = "anyscale"
                         dynamic_api_key = get_secret_str("ANYSCALE_API_KEY")
@@ -558,7 +560,9 @@ def _get_openai_compatible_provider_info(
         from litellm.llms.parallel_ai.common_utils import resolve_parallel_ai_credentials
 
         # parallel_ai serves the OpenAI Responses-compatible API at https://api.parallel.ai/v1/responses
-        api_base, dynamic_api_key = resolve_parallel_ai_credentials(api_base=api_base, api_key=api_key)
+        api_base, dynamic_api_key = resolve_parallel_ai_credentials(  # rebind-ok: function returns api_base
+            api_base=api_base, api_key=api_key
+        )
     elif custom_llm_provider == "aiohttp_openai":
         return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":

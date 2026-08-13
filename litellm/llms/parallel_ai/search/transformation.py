@@ -4,10 +4,13 @@ Calls Parallel AI's /v1/search endpoint to search the web.
 Parallel AI API Reference: https://docs.parallel.ai/api-reference/search/search
 """
 
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, TypedDict
 
 import httpx
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import ReadOnly
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -24,7 +27,7 @@ class _ParallelAIV1SearchResult(BaseModel):
     url: str = ""
     title: str | None = None
     publish_date: str | None = None
-    excerpts: list[str] = []
+    excerpts: Sequence[str] = ()
 
 
 class _ParallelAIV1SearchResponse(BaseModel):
@@ -32,9 +35,9 @@ class _ParallelAIV1SearchResponse(BaseModel):
 
     search_id: str | None = None
     session_id: str | None = None
-    results: list[_ParallelAIV1SearchResult] = []
-    usage: list[dict[str, object]] | None = None
-    warnings: list[dict[str, object]] | None = None
+    results: Sequence[_ParallelAIV1SearchResult] = ()
+    usage: Sequence[Mapping[str, object]] | None = None
+    warnings: Sequence[Mapping[str, object]] | None = None
 
 
 class _ParallelAISourcePolicy(TypedDict, total=False):
@@ -48,9 +51,9 @@ class _ParallelAIExcerptSettings(TypedDict, total=False):
 
 
 class _ParallelAIFetchPolicy(TypedDict, total=False):
-    max_age_seconds: int
-    timeout_seconds: float
-    disable_cache_fallback: bool
+    max_age_seconds: ReadOnly[int]
+    timeout_seconds: ReadOnly[float]
+    disable_cache_fallback: ReadOnly[bool]
 
 
 class _ParallelAIAdvancedSettings(TypedDict, total=False):
@@ -76,7 +79,7 @@ class ParallelAISearchRequest(TypedDict, total=False):
     advanced_settings: _ParallelAIAdvancedSettings
 
 
-LEGACY_PROCESSOR_TO_MODE: Final = {"base": "basic", "pro": "advanced"}
+LEGACY_PROCESSOR_TO_MODE: Final = MappingProxyType({"base": "basic", "pro": "advanced"})
 
 
 class ParallelAISearchConfig(BaseSearchConfig):
@@ -93,16 +96,16 @@ class ParallelAISearchConfig(BaseSearchConfig):
         api_base: str | None = None,
         **kwargs,
     ) -> dict:
-        api_key = self.resolve_server_api_key(
+        resolved_api_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
             key_env_vars=("PARALLEL_AI_API_KEY", "PARALLEL_API_KEY"),
             base_env_var="PARALLEL_AI_API_BASE",
             default_api_base=self.PARALLEL_AI_API_BASE,
         )
-        if not api_key:
+        if not resolved_api_key:
             raise ValueError("PARALLEL_API_KEY is not set. Set `PARALLEL_API_KEY` environment variable.")
-        headers["x-api-key"] = api_key
+        headers["x-api-key"] = resolved_api_key
         headers["Content-Type"] = "application/json"
         return headers
 
@@ -113,13 +116,12 @@ class ParallelAISearchConfig(BaseSearchConfig):
         data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
-        api_base = api_base or get_secret_str("PARALLEL_AI_API_BASE") or self.PARALLEL_AI_API_BASE
+        resolved_api_base: Final = api_base or get_secret_str("PARALLEL_AI_API_BASE") or self.PARALLEL_AI_API_BASE
 
-        api_base = api_base.rstrip("/")
-        if not api_base.endswith("/v1/search"):
-            api_base = f"{api_base.removesuffix('/v1')}/v1/search"
-
-        return api_base
+        trimmed: Final = resolved_api_base.rstrip("/")
+        if trimmed.endswith("/v1/search"):
+            return trimmed
+        return f"{trimmed.removesuffix('/v1')}/v1/search"
 
     def transform_search_request(
         self,
@@ -211,9 +213,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
         # unified-spec param with no v1 equivalent
         params.pop("max_tokens_per_page", None)
 
-        result_data: Final[dict] = dict(request_data)
-        result_data.update(params)
-        return result_data
+        return {**request_data, **params}
 
     def transform_search_response(
         self,
