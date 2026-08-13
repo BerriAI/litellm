@@ -2639,13 +2639,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return
             except ModifyResponseException as e:
                 if raw_sse:
-                    # the shared per-endpoint block builder the unified guardrail path uses; it
-                    # mints a fresh message id because the block is not the upstream message, but
-                    # it reports exc.model, which defaults to the guardrail name rather than the model
-                    e.model = _pre_block_response.model or e.model  # rebind-ok: local synthetic block payload
+                    e.model = _pre_block_response.model or e.model  # rebind-ok: exc.model defaults to the guardrail
                     if e.original_response is None:
-                        # the builder reads usage off this; the upstream call was already paid for
-                        e.original_response = _pre_block_response  # rebind-ok: local synthetic block payload
+                        e.original_response = _pre_block_response  # rebind-ok: the block builder reads usage off this
                     for block_chunk in AnthropicMessagesHandler().build_block_sse_chunks(e, stream_started=False):
                         yield block_chunk
                     return
