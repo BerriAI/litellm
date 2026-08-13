@@ -4790,6 +4790,29 @@ if MCP_AVAILABLE:
 
         return stored
 
+    async def _refresh_request_otel_destinations(
+        user_api_key_auth: object,
+    ) -> None:
+        """Re-resolve the caller's admin destinations for THIS JSON-RPC message.
+
+        A stateful MCP session dispatches every later message on descendants of the task
+        its ``initialize`` POST spawned, and a ContextVar is copied at task creation. The
+        destinations resolved for the first message therefore stay frozen on that task for
+        the session's whole life, so re-scoping or deleting a destination mid-session left
+        the revoked sink still receiving that team's spans. Resolving per message keeps the
+        access map authoritative for a session that outlives an admin's edit.
+        """
+        if user_api_key_auth is None:
+            return
+        try:
+            from litellm.proxy.litellm_pre_call_utils import (
+                _apply_admin_logging_exporters,  # pyright: ignore[reportPrivateUsage]  # the MCP path applies the same pre-call resolution as the HTTP path
+            )
+
+            await _apply_admin_logging_exporters(user_api_key_auth)
+        except Exception as exc:  # noqa: BLE001  # a resolver failure must not break the MCP call
+            verbose_logger.debug("MCP: could not refresh otel destinations: %s", exc)
+
     async def get_or_extract_auth_context() -> tuple[
         UserAPIKeyAuth | None,
         str | None,
@@ -4826,6 +4849,7 @@ if MCP_AVAILABLE:
                 oauth2_headers = stored.oauth2_headers
                 raw_headers = stored.raw_headers
                 _client_ip = stored.client_ip
+        await _refresh_request_otel_destinations(user_api_key_auth)
         return (
             user_api_key_auth,
             mcp_auth_header,

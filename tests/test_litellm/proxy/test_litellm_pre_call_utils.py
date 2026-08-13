@@ -1,3 +1,4 @@
+import inspect
 import asyncio
 import copy
 import json
@@ -6821,6 +6822,28 @@ async def test_resolve_logging_exporters_noop_when_flag_off(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mcp_auth_chokepoint_refreshes_destinations_per_message(monkeypatch):
+    """Regression: a stateful MCP session outlived an admin's re-scope of a destination.
+
+    Every JSON-RPC message after ``initialize`` is dispatched on a descendant of the task
+    that POST spawned, and a ContextVar is copied at task creation, so the destinations
+    resolved for the first message stayed frozen for the session's life. A destination
+    re-scoped to another team kept receiving the original team's spans until the client
+    disconnected. The shared auth chokepoint now re-resolves per message.
+    """
+    import litellm.proxy._experimental.mcp_server.server as mcp_server
+
+    src = inspect.getsource(mcp_server)
+    assert "_refresh_request_otel_destinations" in src
+    # It must hang off the one helper every JSON-RPC handler funnels through, not off a
+    # single handler; tools/list, get_prompt and read_resource all leaked precisely
+    # because only the tool-call path re-resolved.
+    chokepoint = src[src.index("async def get_or_extract_auth_context"):]
+    chokepoint = chokepoint[: chokepoint.index("def get_active_mcp_session")]
+    assert "await _refresh_request_otel_destinations(user_api_key_auth)" in chokepoint
+
+
+@pytest.mark.asyncio
 async def test_apply_admin_logging_exporters_needs_no_opentelemetry_when_flag_off(monkeypatch):
     """opentelemetry ships only in the proxy-runtime extra, so a litellm[proxy] install
     does not have it. Publishing the destination ContextVar imports it, and that call sat
@@ -6894,3 +6917,25 @@ async def test_apply_admin_logging_exporters_degrades_when_flag_on_without_opent
         env={**os.environ, "PYTHONPATH": repo_root, "LITELLM_OTEL_V2": "true"},
     )
     assert "REQUEST_PATH_OK" in result.stdout, f"flag-on request path raised:\n{result.stderr[-3000:]}"
+
+
+
+@pytest.mark.asyncio
+async def test_apply_admin_logging_exporters_registers_on_failure(_seeded_logging_credentials, monkeypatch):
+    """An admin-owned destination must capture a FAILED upstream call, not only a
+    successful one.
+
+    The destination sink is one process-wide logger, so it has to sit on the failure
+    list as well as the success list; registering it on success alone means a
+    401/timeout never reaches the destination and the trace lands with no error
+    gen-AI span. Registration is idempotent.
+    """
+    import litellm
+    from litellm.integrations.otel.destination_logger import admin_destination_logger
+    from litellm.integrations.otel.logger import publish_global_otel_v2_provider
+
+    sink = admin_destination_logger()
+    publish_global_otel_v2_provider([], lambda provider: None)
+    publish_global_otel_v2_provider([], lambda provider: None)
+    for bucket in (litellm._async_success_callback, litellm._async_failure_callback):
+        assert sum(1 for callback in bucket if callback is sink) == 1

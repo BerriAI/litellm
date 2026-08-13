@@ -84,6 +84,14 @@ def test_gate_toggles_with_env(monkeypatch):
     assert is_otel_v2_enabled() is True
 
 
+def test_blank_flag_does_not_escape_the_startup_mount(monkeypatch):
+    """The whole-proxy symptom: ``instrument_fastapi_app`` is called at
+    ``proxy_server`` import time, so it must not raise on a blank flag."""
+    monkeypatch.setenv("LITELLM_OTEL_V2", "")
+    is_otel_v2_enabled.cache_clear()
+    instrument_fastapi_app(fastapi.FastAPI())
+
+
 def test_instrumented_app_emits_server_span():
     app, logger = _instrumented_app()
     exporter = InMemorySpanExporter()

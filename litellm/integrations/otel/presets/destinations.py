@@ -20,7 +20,9 @@ from litellm.integrations.langfuse.langfuse_otel import (
     LangfuseOtelLogger,
 )
 from litellm.integrations.otel.model.destination import OtelDestination
-from litellm.integrations.weave.weave_otel import _get_weave_authorization_header
+from litellm.integrations.weave.weave_otel import (
+    _get_weave_authorization_header,  # pyright: ignore[reportPrivateUsage]  # reuse the backend's own header builder rather than duplicating its auth scheme
+)
 
 
 def _parse_header_string(raw: str) -> Mapping[str, str]:
@@ -40,7 +42,7 @@ def _langfuse_destination(values: Mapping[str, str]) -> OtelDestination | None:
         return None
     host: Final = values.get("langfuse_host")
     endpoint: Final = _langfuse_endpoint(host) if host else LANGFUSE_CLOUD_US_ENDPOINT
-    auth: Final = LangfuseOtelLogger._get_langfuse_authorization_header(public_key=public_key, secret_key=secret_key)
+    auth: Final = LangfuseOtelLogger._get_langfuse_authorization_header(public_key=public_key, secret_key=secret_key)  # pyright: ignore[reportPrivateUsage]  # reuse the backend's own header builder rather than duplicating its auth scheme
     return OtelDestination(endpoint=endpoint, headers=MappingProxyType({"Authorization": auth}))
 
 

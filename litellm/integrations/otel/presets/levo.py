@@ -13,9 +13,15 @@ from litellm.integrations.otel.model.config import (
 def levo_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
-    cfg: Final = _V1Levo.get_levo_config()
     base: Final = config_overrides or OpenTelemetryV2Config()
+    try:
+        cfg: Final = _V1Levo.get_levo_config()
+    except Exception:
+        if not allow_missing_credentials:
+            raise
+        return base
     return base.model_copy(
         update={
             "exporters": [

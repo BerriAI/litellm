@@ -1035,7 +1035,7 @@ async def _hoist_request_destinations(request: Request, user_api_key_dict: UserA
             set_request_destinations,
         )
         from litellm.proxy.litellm_pre_call_utils import (
-            _resolve_logging_exporters,
+            _resolve_logging_exporters,  # pyright: ignore[reportPrivateUsage]  # resolver lives in the pre-call module it is hoisted from
         )
 
         destinations_raw, _backends = await _resolve_logging_exporters(user_api_key_dict)

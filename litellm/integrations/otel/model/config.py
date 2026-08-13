@@ -4,9 +4,18 @@ from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Any, Final
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
@@ -45,6 +54,35 @@ class _OTelV2Flag(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
     enabled: bool = Field(default=False, validation_alias=AliasChoices(OTEL_V2_ENV))
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _unparseable_reads_as_off(cls, value: object) -> object:
+        """Never raise on this flag: an unusable value reads as off, loudly.
+
+        The flag is read from ``instrument_fastapi_app`` while ``proxy_server`` is still
+        importing, so a parse error here takes the whole proxy down before it binds a
+        port. ``LITELLM_OTEL_V2=`` is routine in k8s ConfigMaps and ``.env`` files, and a
+        stray space or a word pydantic does not accept (``enabled``, ``2``) is an easy
+        typo; none of them is worth refusing to start over a feature that is off by
+        default. Surrounding whitespace is trimmed first so ``"true "`` still means true,
+        and anything left unrecognized warns and degrades rather than failing closed on
+        the whole process.
+        """
+        if not isinstance(value, str):
+            return value
+        stripped: Final = value.strip()
+        if not stripped:
+            return False
+        try:
+            return TypeAdapter(bool).validate_python(stripped)
+        except ValidationError:
+            verbose_logger.warning(
+                "%s=%r is not a recognized boolean; treating OpenTelemetry v2 as disabled. Use true or false.",
+                OTEL_V2_ENV,
+                value,
+            )
+            return False
 
 
 @lru_cache(maxsize=1)
@@ -243,8 +281,16 @@ class OpenTelemetryV2Config(BaseSettings):
         if self.endpoint and self.exporter == "console":
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
-        # shorthand into one spec so the provider always has a destination.
-        if not self.exporters:
+        # shorthand into one spec so the provider has a destination. The exception is
+        # the "nothing configured" degrade case -- a preset returning a bare config
+        # because it found no credentials, where ``exporter`` is left at its default
+        # ``console`` and no endpoint is set: leave it exporter-less so the provider
+        # exports nothing, rather than degrading to a console exporter that prints every
+        # span (including prompt and completion content) to stdout synchronously on the
+        # request path. An explicitly chosen exporter (even ``console``), a non-console
+        # kind, or an endpoint all still fold.
+        console_by_default: Final = self.exporter == "console" and "exporter" not in self.model_fields_set
+        if not self.exporters and (self.endpoint or not console_by_default):
             self.exporters = [
                 ExporterSpec(
                     kind=self.exporter,
