@@ -4539,3 +4539,117 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def test_handle_non_streaming_google_genai_returns_modelresponse_unchanged():
+    """When result is already a ModelResponse, the handler must return it
+    verbatim. This avoids an unnecessary (and potentially expensive)
+    transform pass on responses that have already been converted upstream."""
+    from litellm.types.utils import ModelResponse
+
+    logging_obj = LitellmLogging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="generate_content",
+        start_time=time.time(),
+        litellm_call_id="genai-mr-early-return",
+        function_id="genai-mr-early-return",
+    )
+    logging_obj.optional_params = {}
+
+    mr = ModelResponse(model="gemini-2.5-flash", usage=None)
+    result = logging_obj._handle_non_streaming_google_genai_generate_content_response_logging(result=mr)
+    assert result is mr
+
+
+def test_handle_non_streaming_google_genai_falls_back_to_dict_when_no_httpx_response():
+    """When ``httpx_response`` is missing, the handler must fall back to the
+    dict ``result`` instead of raising. This covers cases where the SDK
+    returns a pre-parsed payload (e.g., some Vertex AI paths) rather than an
+    httpx.Response."""
+    from litellm.types.utils import ModelResponse
+
+    logging_obj = LitellmLogging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="generate_content",
+        start_time=time.time(),
+        litellm_call_id="genai-dict-fallback",
+        function_id="genai-dict-fallback",
+    )
+    logging_obj.optional_params = {}
+
+    native_body = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "hi"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 15,
+        },
+    }
+
+    result = logging_obj._handle_non_streaming_google_genai_generate_content_response_logging(
+        result=native_body
+    )
+    assert isinstance(result, ModelResponse)
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 10
+    assert result.usage.completion_tokens == 5
+
+
+def test_handle_non_streaming_google_genai_raises_on_none_without_httpx_response():
+    """When both ``httpx_response`` and ``result`` are unavailable, the
+    handler should still raise — the old behaviour for truly missing data."""
+    logging_obj = LitellmLogging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="generate_content",
+        start_time=time.time(),
+        litellm_call_id="genai-none-missing",
+        function_id="genai-none-missing",
+    )
+    logging_obj.optional_params = {}
+
+    with pytest.raises(ValueError, match="Google GenAI Generate Content: httpx_response is None"):
+        logging_obj._handle_non_streaming_google_genai_generate_content_response_logging(result=None)
+
+
+def test_handle_non_streaming_google_genai_prefers_httpx_response_over_dict():
+    """When ``httpx_response`` is present the handler must use it, ignoring
+    any dict ``result`` passed in. This preserves the original path while
+    ensuring the new fallback doesn't short-circuit an existing response."""
+    logging_obj = LitellmLogging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="generate_content",
+        start_time=time.time(),
+        litellm_call_id="genai-httpx-wins",
+        function_id="genai-httpx-wins",
+    )
+    logging_obj.optional_params = {}
+
+    httpx_resp = MagicMock(spec=httpx.Response)
+    httpx_resp.json.return_value = {
+        "candidates": [
+            {"content": {"parts": [{"text": "from-httpx"}], "role": "model"}, "finishReason": "STOP"}
+        ],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    }
+    logging_obj.model_call_details["httpx_response"] = httpx_resp
+
+    result = logging_obj._handle_non_streaming_google_genai_generate_content_response_logging(
+        result={"candidates": [{"content": {"parts": [{"text": "ignored"}], "role": "model"}}]}
+    )
+    assert isinstance(result, ModelResponse)
+    httpx_resp.json.assert_called_once()
+    assert result.usage is not None
+    assert result.usage.total_tokens == 2
