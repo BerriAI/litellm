@@ -15600,3 +15600,106 @@ async def test_unblock_key_stamps_settings_updated_at(monkeypatch):
     sent = mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
     assert sent["blocked"] is False
     assert before <= sent["settings_updated_at"] <= after
+
+
+def _wire_key_generation_prisma(monkeypatch):
+    created_key = MagicMock(token="hashed_token_123", litellm_budget_table=None, object_permission=None)
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.insert_data = AsyncMock(return_value=created_key)
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=created_key)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    return mock_prisma_client.insert_data
+
+
+async def _generate_key_and_get_persisted_row(data: GenerateKeyRequest, mock_insert_data):
+    await _common_key_generation_helper(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+        litellm_changed_by=None,
+        team_table=None,
+    )
+    key_call = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
+    return key_call.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_key_generate_explicit_null_budget_duration_beats_default_key_generate_params(monkeypatch):
+    """An explicit `"budget_duration": null` asks for a budget that never resets.
+
+    Gating on the value alone made that indistinguishable from omitting the field,
+    so the configured default overrode the opt-out and budget_reset_at got stamped.
+    """
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"budget_duration": "30d"})
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
+
+    key_row = await _generate_key_and_get_persisted_row(GenerateKeyRequest(budget_duration=None), mock_insert_data)
+
+    assert key_row["budget_duration"] is None
+    assert key_row["budget_reset_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_key_generate_omitted_budget_duration_still_takes_default_key_generate_params(monkeypatch):
+    """Omitting the field keeps applying the default, the behavior the explicit-null fix must not break."""
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"budget_duration": "30d"})
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
+
+    key_row = await _generate_key_and_get_persisted_row(GenerateKeyRequest(), mock_insert_data)
+
+    assert key_row["budget_duration"] == "30d"
+    assert key_row["budget_reset_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_key_generate_explicit_null_budget_duration_cannot_bypass_upperbound(monkeypatch):
+    """upperbound_key_generate_params is an admin ceiling: an explicit null must not mint an uncapped key,
+    otherwise any key creator could bypass configured limits (duration, budgets, rate limits)."""
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        LiteLLM_UpperboundKeyGenerateParams(budget_duration="30d"),
+    )
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
+
+    key_row = await _generate_key_and_get_persisted_row(GenerateKeyRequest(budget_duration=None), mock_insert_data)
+
+    assert key_row["budget_duration"] == "30d"
+    assert key_row["budget_reset_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_key_generate_omitted_budget_duration_still_filled_by_upperbound(monkeypatch):
+    """The upperbound's long-standing fill-on-omitted behavior stays untouched."""
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        LiteLLM_UpperboundKeyGenerateParams(budget_duration="30d"),
+    )
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
+
+    key_row = await _generate_key_and_get_persisted_row(GenerateKeyRequest(), mock_insert_data)
+
+    assert key_row["budget_duration"] == "30d"
+    assert key_row["budget_reset_at"] is not None

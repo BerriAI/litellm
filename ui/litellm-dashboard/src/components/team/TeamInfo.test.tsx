@@ -959,6 +959,83 @@ describe("TeamInfoView", () => {
         );
       });
     });
+
+    const openSettingsEditorForTeam = async (
+      user: ReturnType<typeof userEvent.setup>,
+      teamOverrides: Record<string, unknown>,
+    ) => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData(teamOverrides));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      await waitFor(() => {
+        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+      });
+
+      return screen.getByText("Reset Budget").closest(".ant-form-item") as HTMLElement;
+    };
+
+    it("should send an explicit null budget_duration when a stored Reset Budget is cleared", async () => {
+      const user = userEvent.setup({ delay: null });
+      const resetBudgetItem = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
+
+      const clearIcon = resetBudgetItem.querySelector(".ant-select-clear");
+      expect(clearIcon).not.toBeNull();
+      fireEvent.mouseDown(clearIcon as Element);
+
+      await waitFor(() => {
+        expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(updateArg.budget_duration).toBeNull();
+      expect(JSON.stringify(updateArg)).toContain('"budget_duration":null');
+    });
+
+    it("should keep a stored Reset Budget when the form is saved untouched", async () => {
+      const user = userEvent.setup({ delay: null });
+      await openSettingsEditorForTeam(user, { budget_duration: "30d" });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].budget_duration).toBe("30d");
+    });
+
+    it("should send the newly picked budget_duration when one is selected", async () => {
+      const user = userEvent.setup({ delay: null });
+      const resetBudgetItem = await openSettingsEditorForTeam(user, { budget_duration: null });
+
+      await user.click(within(resetBudgetItem).getByRole("combobox"));
+      await user.click(await screen.findByText("weekly"));
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].budget_duration).toBe("7d");
+    });
   });
 
   describe("metadata key-value editing", () => {

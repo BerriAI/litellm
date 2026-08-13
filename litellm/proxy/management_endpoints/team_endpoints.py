@@ -1313,8 +1313,9 @@ async def new_team(
             if isinstance(default_organization_id, str):
                 data.organization_id = default_organization_id
 
-        # Apply defaults from litellm.default_team_params for any fields
-        # not explicitly provided in the request.
+        # Apply defaults from litellm.default_team_params to null fields.
+        # budget_duration alone distinguishes explicit null (a deliberate
+        # never-resetting budget, which the default must not override) from omitted.
         for field in (
             "max_budget",
             "budget_duration",
@@ -1322,7 +1323,9 @@ async def new_team(
             "rpm_limit",
             "team_member_permissions",
         ):
-            if getattr(data, field, None) is None:
+            if getattr(data, field, None) is None and (
+                field != "budget_duration" or field not in data.model_fields_set
+            ):
                 default_value = _get_default_team_param(field)
                 if default_value is not None:
                     setattr(data, field, default_value)
