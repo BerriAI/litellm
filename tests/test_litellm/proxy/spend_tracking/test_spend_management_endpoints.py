@@ -150,7 +150,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     return where
 
 
-def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=None):
+def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None):
     """
     Create a MockPrismaClient for /spend/logs/ui endpoint tests.
 
@@ -177,6 +177,8 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
             return [{col: value, "_count": {col: n}} for value, n in tallied.items()]
 
         async def query_raw(self, sql_query, *params):
+            if query_observer is not None:
+                query_observer(sql_query, params)
             if "mcp_tool_call_count" in sql_query:
                 return []
             filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
@@ -1318,6 +1320,127 @@ async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(
         assert data["data"][0]["user"] == "internal_user_1"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_explicit_user_filter_cannot_escape_own_scope(client, monkeypatch):
+    caller_log = {
+        "id": "log1",
+        "request_id": "req1",
+        "api_key": "sk-test-key",
+        "user": "caller@example.com",
+        "team_id": None,
+        "spend": 0.05,
+        "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+        "model": "gpt-4",
+    }
+    observed_queries = []
+
+    def observe_query(sql_query, params):
+        if 'FROM "LiteLLM_SpendLogs"' in sql_query:
+            observed_queries.append((sql_query, params))
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma([caller_log], lambda _where: [], query_observer=observe_query),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
+        AsyncMock(return_value=[]),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller@example.com"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "user_id": "someone-else@example.com",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"] == []
+        page_sql, page_params = next((sql, params) for sql, params in observed_queries if "SELECT\n" in sql)
+        assert page_sql.count('"user" = $') == 2
+        assert page_params[2:4] == ("someone-else@example.com", "caller@example.com")
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_without_user_filter_includes_permitted_team_scope(client, monkeypatch):
+    caller_log = {
+        "id": "log1",
+        "request_id": "req1",
+        "api_key": "sk-test-key",
+        "user": "team-admin@example.com",
+        "team_id": None,
+        "spend": 0.05,
+        "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+        "model": "gpt-4",
+    }
+    member_log = {**caller_log, "id": "log2", "request_id": "req2", "user": "member@example.com", "team_id": "team-9"}
+    outside_log = {
+        **caller_log,
+        "id": "log3",
+        "request_id": "req3",
+        "user": "outside@example.com",
+        "team_id": "outside-team",
+    }
+
+    def filter_by_scope(where):
+        if {"multi_team": True} in where.get("OR", []) and "user" not in where:
+            return [caller_log, member_log]
+        return [caller_log, member_log, outside_log]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma([caller_log, member_log, outside_log], filter_by_scope),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
+        AsyncMock(return_value=["team-9"]),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin@example.com"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        assert [row["request_id"] for row in response.json()["data"]] == ["req1", "req2"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
+        AsyncMock(side_effect=RuntimeError("database unavailable")),
+    )
+
+    permitted_team_ids = await spend_management_endpoints._get_permitted_team_ids_for_spend_logs_or_empty(
+        prisma_client=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="caller@example.com",
+        ),
+    )
+
+    assert permitted_team_ids == ()
 
 
 @pytest.mark.asyncio
