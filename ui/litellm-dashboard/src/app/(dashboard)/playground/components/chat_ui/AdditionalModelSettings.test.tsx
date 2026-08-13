@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import AdditionalModelSettings from "./AdditionalModelSettings";
@@ -127,5 +127,48 @@ describe("AdditionalModelSettings", () => {
     await waitFor(() => {
       expect(onMockTestFallbacksChange).toHaveBeenCalledWith(false);
     });
+  });
+
+  it("should keep a half-typed decimal temperature instead of rewriting it", async () => {
+    const onTemperatureChange = vi.fn();
+
+    render(<AdditionalModelSettings useAdvancedParams onTemperatureChange={onTemperatureChange} />);
+
+    const temperatureField = screen.getByLabelText("Temperature value") as HTMLInputElement;
+    fireEvent.change(temperatureField, { target: { value: "0." } });
+
+    expect(temperatureField.value).toBe("0.");
+
+    fireEvent.change(temperatureField, { target: { value: "0.5" } });
+
+    expect(temperatureField.value).toBe("0.5");
+    expect(onTemperatureChange).toHaveBeenLastCalledWith(0.5);
+  });
+
+  it("should let the max tokens field be cleared instead of snapping to a value", async () => {
+    const user = userEvent.setup();
+    const onMaxTokensChange = vi.fn();
+
+    render(<AdditionalModelSettings useAdvancedParams onMaxTokensChange={onMaxTokensChange} />);
+
+    const maxTokensField = screen.getByLabelText("Max tokens value");
+    await user.clear(maxTokensField);
+
+    expect((maxTokensField as HTMLInputElement).value).toBe("");
+  });
+
+  it("should clamp an out-of-range temperature once the field is left", async () => {
+    const user = userEvent.setup();
+    const onTemperatureChange = vi.fn();
+
+    render(<AdditionalModelSettings useAdvancedParams onTemperatureChange={onTemperatureChange} />);
+
+    const temperatureField = screen.getByLabelText("Temperature value");
+    await user.clear(temperatureField);
+    await user.type(temperatureField, "9");
+    await user.tab();
+
+    expect((temperatureField as HTMLInputElement).value).toBe("2");
+    expect(onTemperatureChange).toHaveBeenLastCalledWith(2);
   });
 });
