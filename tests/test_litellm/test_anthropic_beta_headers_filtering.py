@@ -425,6 +425,51 @@ class TestAnthropicBetaHeadersFiltering:
                 len(filtered) == 0
             ), f"Empty headers list should return empty result for {provider}"
 
+    def test_claude_code_beta_header_passes_through_for_anthropic(self):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/36683.
+
+        claude-code-20250219 must pass through for the 'anthropic' provider so
+        that Claude Code IDE tools (Bash_ide, Skill_ide, Workflow_ide) remain
+        available when routed via LiteLLM /v1/messages.  The header should be
+        dropped for providers that do not natively support it (bedrock,
+        bedrock_converse, vertex_ai, azure_ai).
+        """
+        # Anthropic: header must be forwarded unchanged
+        result = filter_and_transform_beta_headers(
+            beta_headers=["claude-code-20250219"],
+            provider="anthropic",
+        )
+        assert "claude-code-20250219" in result, (
+            "claude-code-20250219 must pass through for the 'anthropic' provider; "
+            "without it Claude Code IDE tools are unavailable (issue #36683)"
+        )
+
+        # Paired headers that Claude Code always sends together should all survive
+        claude_code_headers = [
+            "claude-code-20250219",
+            "advanced-tool-use-2025-11-20",
+            "fine-grained-tool-streaming-2025-05-14",
+        ]
+        result = filter_and_transform_beta_headers(
+            beta_headers=claude_code_headers,
+            provider="anthropic",
+        )
+        for hdr in claude_code_headers:
+            assert (
+                hdr in result
+            ), f"Beta header '{hdr}' must not be dropped for the 'anthropic' provider"
+
+        # Non-Anthropic providers do not support the claude-code header
+        for provider in ["bedrock", "bedrock_converse", "vertex_ai"]:
+            result = filter_and_transform_beta_headers(
+                beta_headers=["claude-code-20250219"],
+                provider=provider,
+            )
+            assert (
+                "claude-code-20250219" not in result
+            ), f"claude-code-20250219 should be dropped for provider '{provider}'"
+
     def test_mixed_supported_and_unsupported_headers(self):
         """Test filtering with a mix of supported, unsupported, and unknown headers."""
         for provider in ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"]:
