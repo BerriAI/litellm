@@ -22,10 +22,10 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    SPEND_LOG_QUEUE_MAX_SIZE,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
 )
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
     DB_RETRY_SAFE_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -5496,6 +5496,22 @@ class ProxyUpdateSpend:
                 _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
 
     @staticmethod
+    async def _requeue_spend_logs(
+        prisma_client: PrismaClient,
+        logs_to_process: list[dict[str, object]],
+    ) -> None:
+        async with prisma_client._spend_log_transactions_lock:
+            requeued: Final = logs_to_process + prisma_client.spend_log_transactions
+            dropped: Final = max(0, len(requeued) - SPEND_LOG_QUEUE_MAX_SIZE)
+            prisma_client.spend_log_transactions = requeued[dropped:]
+        if dropped > 0:
+            verbose_proxy_logger.error(
+                "Spend tracking - spend log queue is at its %d entry cap; dropped the %d oldest spend logs",
+                SPEND_LOG_QUEUE_MAX_SIZE,
+                dropped,
+            )
+
+    @staticmethod
     async def update_spend_logs(
         n_retry_times: int,
         prisma_client: PrismaClient,
@@ -5561,9 +5577,9 @@ class ProxyUpdateSpend:
                             "%s logs processed. Remaining in queue: %s", len(logs_to_process), remaining_count
                         )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i is None:
-                        i = 0
+                except Exception as e:
+                    if not PrismaDBExceptionHandler.is_database_transport_error(e):
+                        raise
                     verbose_proxy_logger.warning(
                         "Spend tracking - DB connection error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
                         i + 1,
@@ -5572,11 +5588,10 @@ class ProxyUpdateSpend:
                         str(e),
                     )
                     if i >= n_retry_times:
+                        await ProxyUpdateSpend._requeue_spend_logs(prisma_client, logs_to_process)
                         raise
                     await asyncio.sleep(2**i)
         except Exception as e:
-            # Logs already removed from queue at start - don't put them back
-            # This matches the original behavior where logs are removed even on error
             _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
         finally:
             # Clean up logs_to_process only if we popped it (caller-owned otherwise)

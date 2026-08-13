@@ -359,6 +359,85 @@ async def test_update_spend_logs_reraises_connection_masquerade_dataerror(
 
 
 @pytest.mark.asyncio
+async def test_update_spend_logs_retries_and_requeues_batch_on_db_outage(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A P1001 outage must be retried and, once retries exhaust, the batch goes
+    back to the head of the queue so the next flush persists it. Before the fix
+    prisma's ``DataError`` masquerade fell outside the retry clause, so the pod
+    dropped every queued spend log for the duration of the outage.
+    """
+
+    async def _fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
+        side_effect=_data_error("Can't reach database server at db-host:5432 (P1001)")
+    )
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    logs = [make_spend_log_row(request_id="a"), make_spend_log_row(request_id="b")]
+    queued_during_outage = make_spend_log_row(request_id="c")
+    mock_prisma_client.spend_log_transactions = [queued_during_outage]
+
+    with pytest.raises(type(_data_error("x"))):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=2,
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=logs,
+        )
+
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == 3
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_requeue_after_outage_drops_oldest_logs_at_the_queue_cap(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requeueing must stay bounded: a long outage cannot grow the in-memory
+    queue past its cap, and the rows dropped are the oldest ones.
+    """
+    monkeypatch.setattr(utils_mod, "SPEND_LOG_QUEUE_MAX_SIZE", 3)
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="new")]
+
+    await ProxyUpdateSpend._requeue_spend_logs(
+        mock_prisma_client,
+        [make_spend_log_row(request_id=f"old{i}") for i in range(4)],
+    )
+
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["old2", "old3", "new"]
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_does_not_requeue_non_transport_failures(
+    mock_prisma_client: Any, make_spend_log_row: Any
+) -> None:
+    """Only transport failures are worth replaying. A rejection the DB will keep
+    rejecting must not be requeued, or it would wedge the queue forever.
+    """
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=ValueError("bad payload"))
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = []
+
+    with pytest.raises(ValueError):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=1,
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=[make_spend_log_row(request_id="a")],
+        )
+
+    assert mock_prisma_client.spend_log_transactions == []
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_update_spend_logs_caps_isolation_attempts_under_poison_flood(
     mock_prisma_client: Any, make_spend_log_row: Any
 ) -> None:
