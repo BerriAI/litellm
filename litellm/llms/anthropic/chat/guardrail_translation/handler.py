@@ -18,7 +18,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
 
-from typing_extensions import TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -97,13 +97,13 @@ InputWriteBackTarget = (
 
 
 class _SSEDelta(TypedDict, total=False):
-    type: str
-    text: str
-    stop_reason: str | None
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+    stop_reason: ReadOnly[str | None]
 
 
 class _SSEEventData(TypedDict, total=False):
-    delta: _SSEDelta
+    delta: ReadOnly[_SSEDelta]
 
 
 def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -241,7 +241,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         def _sse(event_type: str, payload: dict) -> bytes:
             return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
 
-        output_tokens: Final = blocked_response_usage(getattr(exc, "original_response", None))["output_tokens"]
+        output_tokens: Final = blocked_response_usage(getattr(exc, "original_response", None)).get("output_tokens", 0)
         open_index, max_index = self._content_block_state(responses_so_far)
         new_index: Final = (max_index + 1) if max_index is not None else 0
         chunks: list[bytes] = []

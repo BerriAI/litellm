@@ -3105,29 +3105,6 @@ def test_completion_anyscale_api():
 
 
 @pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_completion_anyscale_2():
-    try:
-        # litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="anyscale/meta-llama/Llama-2-7b-chat-hf", messages=messages
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_mistral_anyscale_stream():
     litellm.set_verbose = False
     response = completion(

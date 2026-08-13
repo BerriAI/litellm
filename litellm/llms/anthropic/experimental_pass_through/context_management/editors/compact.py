@@ -16,7 +16,7 @@ import re
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, Union, cast
 
-from typing_extensions import NotRequired, TypedDict, Unpack
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
@@ -96,12 +96,17 @@ def _is_tool_result_block(block: object) -> bool:
 
 
 class _SummaryCallKwargs(TypedDict):
-    model: str
-    max_tokens: int
-    timeout: float
-    litellm_metadata: Mapping[str, object]
-    user: NotRequired[str]
-    allowed_model_region: NotRequired[str]
+    model: ReadOnly[str]
+    max_tokens: ReadOnly[int]
+    timeout: ReadOnly[float]
+    litellm_metadata: ReadOnly[Mapping[str, object]]
+    user: ReadOnly[NotRequired[str]]
+    allowed_model_region: ReadOnly[NotRequired[str]]
+
+
+class _SummaryOptionalKwargs(TypedDict, total=False):
+    user: ReadOnly[str]
+    allowed_model_region: ReadOnly[str]
 
 
 class _SummaryAcompletion(Protocol):
@@ -950,21 +955,29 @@ async def _call_summary_model(
     # the parent ``/v1/messages`` request. On timeout the caller catches the
     # exception and surfaces ``applied_edits[0].error = "summary_call_failed"``,
     # forwarding the request without compaction rather than hanging.
-    call_kwargs: Final[_SummaryCallKwargs] = {
-        "model": summary_model,
-        "max_tokens": max_tokens,
-        "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
-        "litellm_metadata": metadata,
-    }
     # The end-user id must also travel as the top-level ``user`` kwarg: legacy
     # limiter hooks and prometheus end-user tracking read it from there rather
     # than from ``litellm_metadata``, so without it the summary tokens would not
     # debit the caller's end-user counters.
     end_user_id: Final = metadata.get("user_api_key_end_user_id")
-    if isinstance(end_user_id, str) and end_user_id:
-        call_kwargs["user"] = end_user_id
-    if allowed_model_region is not None:
-        call_kwargs["allowed_model_region"] = allowed_model_region
+    user_kwargs: Final = (
+        _SummaryOptionalKwargs(user=end_user_id)
+        if isinstance(end_user_id, str) and end_user_id
+        else _SummaryOptionalKwargs()
+    )
+    region_kwargs: Final = (
+        _SummaryOptionalKwargs(allowed_model_region=allowed_model_region)
+        if allowed_model_region is not None
+        else _SummaryOptionalKwargs()
+    )
+    call_kwargs: Final[_SummaryCallKwargs] = {
+        "model": summary_model,
+        "max_tokens": max_tokens,
+        "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
+        "litellm_metadata": metadata,
+        **user_kwargs,
+        **region_kwargs,
+    }
     router_acompletion: Final[_SummaryAcompletion | None] = getattr(llm_router, "acompletion", None)
     if llm_router is not None and router_acompletion is not None:
         return await router_acompletion(messages=summary_messages, **call_kwargs)

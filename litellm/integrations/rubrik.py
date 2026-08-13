@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypedDict, overload
 
 import httpx
-from typing_extensions import Never, Required
+from typing_extensions import Never, ReadOnly, Required
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -55,25 +55,25 @@ _EMPTY_MAPPING: Final[Mapping[str, Never]] = MappingProxyType({})
 
 
 class _ModerationToolCall(TypedDict, total=False):
-    id: Required[str]
+    id: ReadOnly[Required[str]]
 
 
 class _ModerationMessage(TypedDict, total=False):
-    content: str | None
-    tool_calls: Sequence[_ModerationToolCall] | None
+    content: ReadOnly[str | None]
+    tool_calls: ReadOnly[Sequence[_ModerationToolCall] | None]
 
 
 class _ModerationChoice(TypedDict, total=False):
-    message: _ModerationMessage | None
+    message: ReadOnly[_ModerationMessage | None]
 
 
 class _ModerationResponse(TypedDict, total=False):
-    choices: Sequence[_ModerationChoice]
+    choices: ReadOnly[Sequence[_ModerationChoice]]
 
 
 class _LogEventKwargs(TypedDict, total=False):
-    standard_logging_object: Required[StandardLoggingPayload]
-    litellm_call_id: str
+    standard_logging_object: ReadOnly[Required[StandardLoggingPayload]]
+    litellm_call_id: ReadOnly[str]
 
 
 class _HasCallId(Protocol):
@@ -115,41 +115,41 @@ class _ToolCallLike(Protocol):
 
 
 class _ModerationSourceToolCall(TypedDict, total=False):
-    function: Mapping[str, object] | None
+    function: ReadOnly[Mapping[str, object] | None]
 
 
 class _ModerationSourceMessage(TypedDict, total=False):
-    role: str
-    function_call: Mapping[str, object] | None
-    tool_calls: Sequence[_ModerationSourceToolCall | None] | None
+    role: ReadOnly[str]
+    function_call: ReadOnly[Mapping[str, object] | None]
+    tool_calls: ReadOnly[Sequence[_ModerationSourceToolCall | None] | None]
 
 
 class _FlattenedModerationMessage(TypedDict):
-    role: str | None
-    content: str
+    role: ReadOnly[str | None]
+    content: ReadOnly[str]
 
 
 class _CorrelatablePayload(TypedDict):
-    id: str
+    id: str  # writable-ok: _apply_correlation_id overwrites the provider id on a deep-copied payload
 
 
 class _SystemPromptCarrier(TypedDict, total=False):
-    messages: object
+    messages: object  # writable-ok: _prepend_system_prompt rebinds messages on the copied payload by design
 
 
 class _BlockFailurePayload(TypedDict, total=False):
-    id: object
-    model: object
-    model_group: object
-    model_id: str
-    model_parameters: object
-    startTime: float | None
-    endTime: float | None
-    completionStartTime: float | None
-    messages: object
-    metadata: StandardLoggingUserAPIKeyMetadata
-    response: str
-    status: str
+    id: object  # writable-ok: correlation id is pinned after copying the base payload
+    model: ReadOnly[object]
+    model_group: ReadOnly[object]
+    model_id: ReadOnly[str]
+    model_parameters: ReadOnly[object]
+    startTime: ReadOnly[float | None]
+    endTime: ReadOnly[float | None]
+    completionStartTime: ReadOnly[float | None]
+    messages: object  # writable-ok: passed to _prepend_system_prompt, which rebinds messages
+    metadata: ReadOnly[StandardLoggingUserAPIKeyMetadata]
+    response: str  # writable-ok: block failure text replaces the copied response
+    status: ReadOnly[str]
 
 
 class _MalformedToolBlockingResponseError(Exception):

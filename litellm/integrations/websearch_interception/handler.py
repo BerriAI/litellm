@@ -12,6 +12,8 @@ import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Never, TypedDict, TypeVar, cast
 
+from typing_extensions import ReadOnly
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_interface import messages as anthropic_messages
@@ -96,90 +98,90 @@ class _WebSearchSettingsView(TypedDict):
 
 
 class _SearchToolLitellmParams(TypedDict, total=False):
-    search_provider: str | None
+    search_provider: ReadOnly[str | None]
 
 
 class _SearchToolConfig(TypedDict, total=False):
     search_tool_name: str
-    litellm_params: _SearchToolLitellmParams | None
+    litellm_params: ReadOnly[_SearchToolLitellmParams | None]
 
 
 class _LitellmParamsProviderView(TypedDict, total=False):
-    custom_llm_provider: str
+    custom_llm_provider: ReadOnly[str]
 
 
 class _DeploymentCallKwargsView(TypedDict):
-    custom_llm_provider: str
-    litellm_params: _LitellmParamsProviderView
-    model: str
+    custom_llm_provider: ReadOnly[str]
+    litellm_params: ReadOnly[_LitellmParamsProviderView]
+    model: ReadOnly[str]
 
 
 class _AcreateNamedParams(TypedDict, total=False):
-    metadata: Never
-    stop_sequences: Never
-    stream: bool | None
-    system: str | None
-    temperature: float | None
-    thinking: Never
-    tool_choice: Never
-    tools: Never
-    top_k: int | None
-    top_p: float | None
-    container: Never
+    metadata: ReadOnly[Never]
+    stop_sequences: ReadOnly[Never]
+    stream: ReadOnly[bool | None]
+    system: ReadOnly[str | None]
+    temperature: ReadOnly[float | None]
+    thinking: ReadOnly[Never]
+    tool_choice: ReadOnly[Never]
+    tools: ReadOnly[Never]
+    top_k: ReadOnly[int | None]
+    top_p: ReadOnly[float | None]
+    container: ReadOnly[Never]
 
 
 class _AsearchNamedParams(TypedDict, total=False):
-    max_results: int | None
-    search_domain_filter: Never
-    max_tokens_per_page: int | None
-    country: str | None
-    api_key: str | None
-    api_base: str | None
-    timeout: float | None
-    extra_headers: Never
+    max_results: ReadOnly[int | None]
+    search_domain_filter: ReadOnly[Never]
+    max_tokens_per_page: ReadOnly[int | None]
+    country: ReadOnly[str | None]
+    api_key: ReadOnly[str | None]
+    api_base: ReadOnly[str | None]
+    timeout: ReadOnly[float | None]
+    extra_headers: ReadOnly[Never]
 
 
 class _AcompletionNamedParams(TypedDict, total=False):
-    functions: Never
-    function_call: str | None
-    timeout: float | None
-    temperature: float | None
-    top_p: float | None
-    n: int | None
-    stream: bool | None
-    stream_options: Never
-    stop: Never
-    max_tokens: int | None
-    max_completion_tokens: int | None
-    modalities: Never
-    prediction: ChatCompletionPredictionContentParam | None
-    audio: ChatCompletionAudioParam | None
-    presence_penalty: float | None
-    frequency_penalty: float | None
-    logit_bias: Never
-    user: str | None
-    response_format: Never
-    seed: int | None
-    tools: Never
-    tool_choice: Never
-    parallel_tool_calls: bool | None
-    logprobs: bool | None
-    top_logprobs: int | None
-    deployment_id: str | None
-    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"] | None
-    verbosity: Literal["low", "medium", "high"] | None
-    safety_identifier: str | None
-    service_tier: str | None
-    base_url: str | None
-    api_version: str | None
-    api_key: str | None
-    model_list: Never
-    extra_headers: Never
-    thinking: AnthropicThinkingParam | None
-    web_search_options: OpenAIWebSearchOptions | None
-    include_server_side_tool_invocations: bool | None
-    shared_session: "ClientSession | None"
-    enable_json_schema_validation: bool | None
+    functions: ReadOnly[Never]
+    function_call: ReadOnly[str | None]
+    timeout: ReadOnly[float | None]
+    temperature: ReadOnly[float | None]
+    top_p: ReadOnly[float | None]
+    n: ReadOnly[int | None]
+    stream: ReadOnly[bool | None]
+    stream_options: ReadOnly[Never]
+    stop: ReadOnly[Never]
+    max_tokens: ReadOnly[int | None]
+    max_completion_tokens: ReadOnly[int | None]
+    modalities: ReadOnly[Never]
+    prediction: ReadOnly[ChatCompletionPredictionContentParam | None]
+    audio: ReadOnly[ChatCompletionAudioParam | None]
+    presence_penalty: ReadOnly[float | None]
+    frequency_penalty: ReadOnly[float | None]
+    logit_bias: ReadOnly[Never]
+    user: ReadOnly[str | None]
+    response_format: ReadOnly[Never]
+    seed: ReadOnly[int | None]
+    tools: ReadOnly[Never]
+    tool_choice: ReadOnly[Never]
+    parallel_tool_calls: ReadOnly[bool | None]
+    logprobs: ReadOnly[bool | None]
+    top_logprobs: ReadOnly[int | None]
+    deployment_id: ReadOnly[str | None]
+    reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"] | None]
+    verbosity: ReadOnly[Literal["low", "medium", "high"] | None]
+    safety_identifier: ReadOnly[str | None]
+    service_tier: ReadOnly[str | None]
+    base_url: ReadOnly[str | None]
+    api_version: ReadOnly[str | None]
+    api_key: ReadOnly[str | None]
+    model_list: ReadOnly[Never]
+    extra_headers: ReadOnly[Never]
+    thinking: ReadOnly[AnthropicThinkingParam | None]
+    web_search_options: ReadOnly[OpenAIWebSearchOptions | None]
+    include_server_side_tool_invocations: ReadOnly[bool | None]
+    shared_session: ReadOnly["ClientSession | None"]
+    enable_json_schema_validation: ReadOnly[bool | None]
 
 
 _NO_ACREATE_NAMED: Final[_AcreateNamedParams] = {}
