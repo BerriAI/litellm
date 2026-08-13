@@ -1171,7 +1171,7 @@ def test_count_content_list_rejects_unknown_type():
     ],
     ids=["base64", "url", "file"],
 )
-def test_token_counter_with_anthropic_image_block(source):
+def test_token_counter_with_anthropic_image_block(source: dict[str, str]):
     """
     Anthropic-native `image` blocks must NOT raise, for every source variant.
 
