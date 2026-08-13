@@ -1,7 +1,7 @@
 """Teams management client for LiteLLM proxy."""
 
 import builtins
-from typing import Any
+from typing import Any, Final
 
 import requests
 
@@ -29,7 +29,7 @@ class TeamsManagementClient:
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
@@ -53,14 +53,14 @@ class TeamsManagementClient:
             requests.exceptions.HTTPError: If the request fails
             UnauthorizedError: If authentication fails
         """
-        url = f"{self._base_url}/team/list"
-        params = {}
+        url: Final = f"{self._base_url}/team/list"
+        params: Final = {}
         if user_id:
             params["user_id"] = user_id
         if organization_id:
             params["organization_id"] = organization_id
 
-        response = requests.get(url, headers=self._get_headers(), params=params)
+        response: Final = requests.get(url, headers=self._get_headers(), params=params)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
@@ -99,8 +99,8 @@ class TeamsManagementClient:
             requests.exceptions.HTTPError: If the request fails
             UnauthorizedError: If authentication fails
         """
-        url = f"{self._base_url}/v2/team/list"
-        params: dict[str, str | int] = {
+        url: Final = f"{self._base_url}/v2/team/list"
+        params: Final[dict[str, str | int]] = {
             "page": page,
             "page_size": page_size,
             "sort_order": sort_order,
@@ -117,7 +117,7 @@ class TeamsManagementClient:
         if sort_by:
             params["sort_by"] = sort_by
 
-        response = requests.get(url, headers=self._get_headers(), params=params)
+        response: Final = requests.get(url, headers=self._get_headers(), params=params)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
@@ -136,9 +136,9 @@ class TeamsManagementClient:
             requests.exceptions.HTTPError: If the request fails
             UnauthorizedError: If authentication fails
         """
-        url = f"{self._base_url}/team/available"
+        url: Final = f"{self._base_url}/team/available"
 
-        response = requests.get(url, headers=self._get_headers())
+        response: Final = requests.get(url, headers=self._get_headers())
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")

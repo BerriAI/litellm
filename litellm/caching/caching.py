@@ -13,7 +13,7 @@ import json
 import time
 import traceback
 from enum import Enum
-from typing import Any
+from typing import Any, Final
 
 from pydantic import BaseModel
 
@@ -169,13 +169,13 @@ class Cache:
         if type == LiteLLMCacheType.REDIS:
             # Check REDIS_CLUSTER_NODES env var if no explicit startup nodes
             if not redis_startup_nodes:
-                _env_cluster_nodes = litellm.get_secret("REDIS_CLUSTER_NODES")
+                _env_cluster_nodes: Final = litellm.get_secret("REDIS_CLUSTER_NODES")
                 if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
                     redis_startup_nodes = json.loads(_env_cluster_nodes)
 
             if redis_startup_nodes:
                 # Only pass GCP parameters if they are provided
-                cluster_kwargs = {
+                cluster_kwargs: Final = {
                     "host": host,
                     "port": port,
                     "password": password,
@@ -312,9 +312,9 @@ class Cache:
         )
 
     def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
-        metadata: dict = kwargs.get("metadata") or {}
-        litellm_params: dict = kwargs.get("litellm_params") or {}
-        metadata_in_litellm_params: dict = litellm_params.get("metadata") or {}
+        metadata: Final[dict] = kwargs.get("metadata") or {}
+        litellm_params: Final[dict] = kwargs.get("litellm_params") or {}
+        metadata_in_litellm_params: Final[dict] = litellm_params.get("metadata") or {}
 
         scope = ""
         for field in self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS:
@@ -338,28 +338,28 @@ class Cache:
         cache_key = ""
         # verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
 
-        preset_cache_key = self._get_preset_cache_key_from_kwargs(**kwargs)
+        preset_cache_key: Final = self._get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs = ModelParamHelper._get_all_llm_api_params()
-        litellm_param_kwargs = all_litellm_params
-        is_semantic_cache = self._is_semantic_cache()
-        scope_excluded_params = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        combined_kwargs: Final = ModelParamHelper._get_all_llm_api_params()
+        litellm_param_kwargs: Final = all_litellm_params
+        is_semantic_cache: Final = self._is_semantic_cache()
+        scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
         for param in kwargs:
             if param in scope_excluded_params:
                 continue
             if param in combined_kwargs:
                 param_value: str | None = self._get_param_value(param, kwargs)
                 if param_value is not None:
-                    cache_key += f"{param!s}: {param_value!s}"
+                    cache_key += f"{param}: {param_value}"
             elif param not in litellm_param_kwargs:  # check if user passed in optional param - e.g. top_k
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
                     param_value = kwargs[param]
-                    cache_key += f"{param!s}: {param_value!s}"
+                    cache_key += f"{param}: {param_value}"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
@@ -373,7 +373,7 @@ class Cache:
         )
         # Remove preset_cache_key from kwargs to avoid "got multiple values" TypeError
         # when kwargs already contains preset_cache_key from upstream callers
-        kwargs_for_preset = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
+        kwargs_for_preset: Final = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
         self._set_preset_cache_key_in_kwargs(preset_cache_key=hashed_cache_key, **kwargs_for_preset)
         return hashed_cache_key
 
@@ -399,15 +399,15 @@ class Cache:
         2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
         3. Else use the `model` passed in kwargs
         """
-        metadata: dict = kwargs.get("metadata", {}) or {}
-        litellm_params: dict = kwargs.get("litellm_params", {}) or {}
-        metadata_in_litellm_params: dict = litellm_params.get("metadata", {}) or {}
-        model_group: str | None = metadata.get("model_group") or metadata_in_litellm_params.get("model_group")
-        caching_group = self._get_caching_group(metadata, model_group)
+        metadata: Final[dict] = kwargs.get("metadata", {}) or {}
+        litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
+        metadata_in_litellm_params: Final[dict] = litellm_params.get("metadata", {}) or {}
+        model_group: Final[str | None] = metadata.get("model_group") or metadata_in_litellm_params.get("model_group")
+        caching_group: Final = self._get_caching_group(metadata, model_group)
         return caching_group or model_group or kwargs["model"]
 
     def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:
-        caching_groups: list | None = metadata.get("caching_groups", [])
+        caching_groups: Final[list | None] = metadata.get("caching_groups", [])
         if caching_groups:
             for group in caching_groups:
                 if model_group in group:
@@ -418,9 +418,9 @@ class Cache:
         """
         Handles getting the value for the 'file' param from kwargs. Used for `transcription` requests
         """
-        file = kwargs.get("file")
-        metadata = kwargs.get("metadata", {})
-        litellm_params = kwargs.get("litellm_params", {})
+        file: Final = kwargs.get("file")
+        metadata: Final = kwargs.get("metadata", {})
+        litellm_params: Final = kwargs.get("litellm_params", {})
         return (
             metadata.get("file_checksum")
             or getattr(file, "name", None)
@@ -467,9 +467,9 @@ class Cache:
         Returns:
             str: The hashed cache key.
         """
-        hash_object = hashlib.sha256(cache_key.encode())
+        hash_object: Final = hashlib.sha256(cache_key.encode())
         # Hexadecimal representation of the hash
-        hash_hex = hash_object.hexdigest()
+        hash_hex: Final = hash_object.hexdigest()
         verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
         return hash_hex
 
@@ -484,16 +484,16 @@ class Cache:
         Returns:
             str: The final hashed cache key with the redis namespace.
         """
-        dynamic_cache_control: DynamicCacheControl = kwargs.get("cache", {})
-        metadata = kwargs.get("metadata") or {}
-        namespace = dynamic_cache_control.get("namespace") or metadata.get("redis_namespace") or self.namespace
+        dynamic_cache_control: Final[DynamicCacheControl] = kwargs.get("cache", {})
+        metadata: Final = kwargs.get("metadata") or {}
+        namespace: Final = dynamic_cache_control.get("namespace") or metadata.get("redis_namespace") or self.namespace
         if namespace:
             hash_hex = f"{namespace}:{hash_hex}"
         verbose_logger.debug("Final hashed key: %s", hash_hex)
         return hash_hex
 
     def generate_streaming_content(self, content):
-        chunk_size = 5  # Adjust the chunk size as needed
+        chunk_size: Final = 5  # Adjust the chunk size as needed
         for i in range(0, len(content), chunk_size):
             yield {
                 "choices": [
@@ -517,11 +517,11 @@ class Cache:
         """
         # Check if a timestamp was stored with the cached response
         if cached_result is not None and isinstance(cached_result, dict) and "timestamp" in cached_result:
-            timestamp = cached_result["timestamp"]
-            current_time = time.time()
+            timestamp: Final = cached_result["timestamp"]
+            current_time: Final = time.time()
 
             # Calculate age of the cached response
-            response_age = current_time - timestamp
+            response_age: Final = current_time - timestamp
 
             # Check if the cached response is older than the max-age
             if max_age is not None and response_age > max_age:
@@ -534,22 +534,20 @@ class Cache:
                 if isinstance(cached_response, dict):
                     pass
                 else:
-                    cached_response = json.loads(
-                        cached_response  # type: ignore
-                    )  # Convert string to dictionary
+                    cached_response = json.loads(cached_response)  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)  # type: ignore
+                cached_response = ast.literal_eval(cached_response)
             return cached_response
         return cached_result
 
     @staticmethod
     def _get_safe_cache_lookup_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-        cache_lookup_kwargs: dict[str, Any] = {}
+        cache_lookup_kwargs: Final[dict[str, Any]] = {}
         for prompt_kwarg in ("messages", "input"):
             if prompt_kwarg in kwargs:
                 cache_lookup_kwargs[prompt_kwarg] = kwargs[prompt_kwarg]
 
-        metadata = kwargs.get("metadata")
+        metadata: Final = kwargs.get("metadata")
         if isinstance(metadata, dict):
             cache_lookup_kwargs["metadata"] = dict(metadata)
 
@@ -559,8 +557,8 @@ class Cache:
     def _update_metadata_from_cache_lookup_kwargs(
         original_kwargs: dict[str, Any], cache_lookup_kwargs: dict[str, Any]
     ) -> None:
-        original_metadata = original_kwargs.get("metadata")
-        cache_lookup_metadata = cache_lookup_kwargs.get("metadata")
+        original_metadata: Final = original_kwargs.get("metadata")
+        cache_lookup_metadata: Final = cache_lookup_kwargs.get("metadata")
         if not isinstance(original_metadata, dict) or not isinstance(cache_lookup_metadata, dict):
             return
 
@@ -586,9 +584,9 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
-                cache_control_args: DynamicCacheControl = kwargs.get("cache", {})
+                cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
                 max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
-                cache_lookup_kwargs = self._get_safe_cache_lookup_kwargs(kwargs)
+                cache_lookup_kwargs: Final = self._get_safe_cache_lookup_kwargs(kwargs)
                 if dynamic_cache_object is not None:
                     cached_result = dynamic_cache_object.get_cache(cache_key, **cache_lookup_kwargs)
                 else:
@@ -618,8 +616,8 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
-                cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
+                cache_control_args: Final = kwargs.get("cache", {})
+                max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
                 if dynamic_cache_object is not None:
                     cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
                 else:
@@ -646,13 +644,13 @@ class Cache:
                 if self.ttl is not None:
                     kwargs["ttl"] = self.ttl
                 ## Get Cache-Controls ##
-                _cache_kwargs = kwargs.get("cache", None)
+                _cache_kwargs: Final = kwargs.get("cache", None)
                 if isinstance(_cache_kwargs, dict):
                     for k, v in _cache_kwargs.items():
                         if k == "ttl":
                             kwargs["ttl"] = v
 
-                cached_data = {"timestamp": time.time(), "response": result}
+                cached_data: Final = {"timestamp": time.time(), "response": result}
                 return cache_key, cached_data, kwargs
             else:
                 raise Exception("cache key is None")
@@ -676,7 +674,7 @@ class Cache:
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e!s}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
@@ -695,7 +693,7 @@ class Cache:
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e!s}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     def _convert_to_cached_embedding(
         self,
@@ -756,7 +754,7 @@ class Cache:
         if result.usage is None or result.usage.prompt_tokens_details is None:
             return None
 
-        details = result.usage.prompt_tokens_details
+        details: Final = result.usage.prompt_tokens_details
         if hasattr(details, "model_dump"):
             details_dict = details.model_dump(exclude_none=True)
         elif isinstance(details, dict):
@@ -767,12 +765,12 @@ class Cache:
         if not details_dict:
             return None
 
-        num_items = len(result.data)
+        num_items: Final = len(result.data)
         if num_items <= 1:
             return details_dict
 
         # Distribute integer/float fields evenly across items
-        per_item: dict = {}
+        per_item: Final[dict] = {}
         for key, value in details_dict.items():
             if isinstance(value, int):
                 quotient, remainder = divmod(value, num_items)
@@ -798,8 +796,8 @@ class Cache:
         if result.usage is None or result.usage.prompt_tokens is None:
             return None
 
-        total = result.usage.prompt_tokens
-        num_items = len(result.data)
+        total: Final = result.usage.prompt_tokens
+        num_items: Final = len(result.data)
         if num_items <= 1:
             return total
 
@@ -813,23 +811,23 @@ class Cache:
         kwargs: dict,
         idx_in_result_data: int = 0,
     ) -> tuple[str, dict, dict]:
-        preset_cache_key = self.get_cache_key(**{**kwargs, "input": input})
+        preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
-        embedding_response = result.data[idx_in_result_data]
+        embedding_response: Final = result.data[idx_in_result_data]
 
         # Extract per-item prompt_tokens + details from response usage
-        prompt_tokens = self._get_per_item_prompt_tokens(
+        prompt_tokens: Final = self._get_per_item_prompt_tokens(
             result=result,
             idx_in_result_data=idx_in_result_data,
         )
-        prompt_tokens_details = self._get_per_item_prompt_tokens_details(
+        prompt_tokens_details: Final = self._get_per_item_prompt_tokens_details(
             result=result,
             idx_in_result_data=idx_in_result_data,
         )
 
         # Always convert to properly typed CachedEmbedding
-        model_name = result.model
-        embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(
+        model_name: Final = result.model
+        embedding_dict: Final[CachedEmbedding] = self._convert_to_cached_embedding(
             embedding_response,
             model_name,
             prompt_tokens=prompt_tokens,
@@ -856,7 +854,7 @@ class Cache:
             if self.ttl is not None:
                 kwargs["ttl"] = self.ttl
 
-            cache_list = []
+            cache_list: Final = []
             if isinstance(kwargs["input"], list):
                 for idx, i in enumerate(kwargs["input"]):
                     (
@@ -874,7 +872,7 @@ class Cache:
             else:
                 await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e!s}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     def should_use_cache(self, **kwargs):
         """
@@ -887,7 +885,7 @@ class Cache:
             return True
 
         # when mode == default_off -> Cache is opt in only
-        _cache = kwargs.get("cache", None)
+        _cache: Final = kwargs.get("cache", None)
         verbose_logger.debug("should_use_cache: kwargs: %s; _cache: %s", kwargs, _cache)
         if _cache and isinstance(_cache, dict):
             if _cache.get("use-cache", False) is True:
@@ -899,13 +897,13 @@ class Cache:
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 
     async def ping(self):
-        cache_ping = getattr(self.cache, "ping")
+        cache_ping: Final = getattr(self.cache, "ping")
         if cache_ping:
             return await cache_ping()
         return None
 
     async def delete_cache_keys(self, keys):
-        cache_delete_cache_keys = getattr(self.cache, "delete_cache_keys")
+        cache_delete_cache_keys: Final = getattr(self.cache, "delete_cache_keys")
         if cache_delete_cache_keys:
             return await cache_delete_cache_keys(keys)
         return None

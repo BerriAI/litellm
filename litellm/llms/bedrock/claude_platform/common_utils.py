@@ -1,11 +1,11 @@
-from typing import Literal
+from typing import Final
 
 import litellm
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.secret_managers.main import get_secret_str
 
-CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = "aws-external-anthropic"
-CLAUDE_PLATFORM_BEDROCK_ROUTE = "claude_platform/"
+CLAUDE_PLATFORM_SERVICE_NAME: Final = "aws-external-anthropic"
+CLAUDE_PLATFORM_BEDROCK_ROUTE: Final = "claude_platform/"
 
 
 def strip_claude_platform_route(model: str) -> str:
@@ -32,7 +32,7 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         return get_secret_str("ANTHROPIC_AWS_WORKSPACE_ID") or get_secret_str("ANTHROPIC_WORKSPACE_ID")
 
     def _get_required_aws_region_name(self, optional_params: dict) -> str:
-        aws_region_name = (
+        aws_region_name: Final = (
             optional_params.get("aws_region_name")
             or get_secret_str("AWS_REGION_NAME")
             or get_secret_str("AWS_REGION")
@@ -66,7 +66,7 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
             or get_secret_str("ANTHROPIC_AWS_API_BASE")
         )
         if api_base is None:
-            aws_region_name = self._get_required_aws_region_name(optional_params)
+            aws_region_name: Final = self._get_required_aws_region_name(optional_params)
             api_base = f"https://{CLAUDE_PLATFORM_SERVICE_NAME}.{aws_region_name}.api.aws"
         if not api_base.endswith("/v1/messages"):
             api_base = f"{api_base.rstrip('/')}/v1/messages"

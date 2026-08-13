@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from fastapi import HTTPException
 
@@ -30,7 +30,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 
-GUARDRAIL_NAME = "aporia"
+GUARDRAIL_NAME: Final = "aporia"
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -53,9 +53,9 @@ class AporiaGuardrail(CustomGuardrail):
 
     #### CALL HOOKS - proxy only ####
     def transform_messages(self, messages: list[dict]) -> list[dict]:
-        supported_openai_roles = ["system", "user", "assistant"]
-        default_role = "other"  # for unsupported roles - e.g. tool
-        new_messages = []
+        supported_openai_roles: Final = ["system", "user", "assistant"]
+        default_role: Final = "other"  # for unsupported roles - e.g. tool
+        new_messages: Final = []
         for m in messages:
             if m.get("role", "") in supported_openai_roles:
                 new_messages.append(m)
@@ -70,7 +70,7 @@ class AporiaGuardrail(CustomGuardrail):
         return new_messages
 
     async def prepare_aporia_request(self, new_messages: list[dict], response_string: str | None = None) -> dict:
-        data: dict[str, Any] = {}
+        data: Final[dict[str, Any]] = {}
         if new_messages is not None:
             data["messages"] = new_messages
         if response_string is not None:
@@ -93,11 +93,11 @@ class AporiaGuardrail(CustomGuardrail):
         new_messages: list[dict],
         response_string: str | None = None,
     ):
-        data = await self.prepare_aporia_request(new_messages=new_messages, response_string=response_string)
+        data: Final = await self.prepare_aporia_request(new_messages=new_messages, response_string=response_string)
 
         data.update(self.get_guardrail_dynamic_request_body_params(request_data=request_data))
 
-        _json_data = json.dumps(data)
+        _json_data: Final = json.dumps(data)
 
         """
         export APORIO_API_KEY=<your key>
@@ -116,7 +116,7 @@ class AporiaGuardrail(CustomGuardrail):
 '
         """
 
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             url=self.aporia_api_base + "/validate",
             data=_json_data,
             headers={
@@ -127,7 +127,7 @@ class AporiaGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("Aporia AI response: %s", response.text)
         if response.status_code == 200:
             # check if the response was flagged
-            _json_response = response.json()
+            _json_response: Final = response.json()
             action: str = _json_response.get("action")  # possible values are modify, passthrough, block, rephrase
             if action == "block":
                 raise HTTPException(
@@ -152,11 +152,11 @@ class AporiaGuardrail(CustomGuardrail):
         """
         Use this for the post call moderation with Guardrails
         """
-        event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        response_str: str | None = convert_litellm_response_object_to_str(response)
+        response_str: Final[str | None] = convert_litellm_response_object_to_str(response)
         if response_str is not None:
             await self.make_aporia_api_request(
                 request_data=data,
@@ -189,7 +189,7 @@ class AporiaGuardrail(CustomGuardrail):
             should_proceed_based_on_metadata,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 

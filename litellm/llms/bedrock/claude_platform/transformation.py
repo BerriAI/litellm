@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -30,7 +30,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        workspace_id = self._get_workspace_id(optional_params, litellm_params)
+        workspace_id: Final = self._get_workspace_id(optional_params, litellm_params)
         if workspace_id is None:
             raise litellm.AuthenticationError(
                 message=(
@@ -42,7 +42,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
             )
 
         api_key = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
-        anthropic_headers = self.get_anthropic_headers(
+        anthropic_headers: Final = self.get_anthropic_headers(
             api_key=api_key,
             auth_token=None,
             computer_tool_used=self.is_computer_tool_used(tools=optional_params.get("tools")),

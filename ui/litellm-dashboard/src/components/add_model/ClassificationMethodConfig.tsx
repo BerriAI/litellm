@@ -1,15 +1,46 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Select as AntdSelect, Card, InputNumber, Radio, Space, Switch, Tooltip, Typography } from "antd";
 import React from "react";
+import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import {
+  ClassifierFallback,
   ClassifierType,
   ComplexityRouterConfigValue,
   DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+  DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
+  effectiveTierLabel,
 } from "./ComplexityRouterConfig";
 
 const { Text } = Typography;
+
+const DEFAULT_SCORING_EXPLANATION =
+  "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
+  "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
+
+const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
+  "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
+  "names stay fixed. The scoring below is the heuristic, which now runs only when the classifier call fails:";
+
+const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
+  "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
+  "names stay fixed. The scoring below no longer runs at all, since a failed classifier routes to the default " +
+  "model instead:";
+
+/**
+ * What the scoring breakdown below it actually describes. A custom prompt means the score no longer
+ * decides the tier, and pairing one with the default-model fallback means the heuristic never runs
+ * at all, so the panel must not keep implying a score is involved on either router.
+ */
+const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
+  const usesCustomPrompt =
+    value.classifier_type === "llm" && Boolean(value.classifier_llm_config?.system_prompt?.trim());
+  if (!usesCustomPrompt) return DEFAULT_SCORING_EXPLANATION;
+  return value.classifier_fallback === "default_model"
+    ? CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK
+    : CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK;
+};
 
 interface ClassificationMethodConfigProps {
   value: ComplexityRouterConfigValue;
@@ -18,6 +49,8 @@ interface ClassificationMethodConfigProps {
   customTechnicalKeywords?: string[];
   onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
   showValidationErrors?: boolean;
+  /** Enables the default-model fallback, which the backend rejects without a default model. */
+  hasDefaultModel?: boolean;
 }
 
 const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
@@ -27,6 +60,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   customTechnicalKeywords,
   onCustomTechnicalKeywordsChange,
   showValidationErrors = false,
+  hasDefaultModel = false,
 }) => {
   const classifierModelMissing =
     showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
@@ -49,6 +83,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           : undefined,
       classifier_context_include_assistant_turns:
         classifierType === "llm" ? value.classifier_context_include_assistant_turns : undefined,
+      classifier_fallback: classifierType === "llm" ? value.classifier_fallback : undefined,
     };
     onChange(nextValue);
   };
@@ -57,6 +92,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({
       ...value,
       classifier_llm_config: {
+        ...value.classifier_llm_config,
         model,
         timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
       },
@@ -67,10 +103,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({
       ...value,
       classifier_llm_config: {
+        ...value.classifier_llm_config,
         model: value.classifier_llm_config?.model ?? "",
         timeout_ms: timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
       },
     });
+  };
+
+  const handleClassifierSystemPromptChange = (systemPrompt: string | undefined) => {
+    onChange({
+      ...value,
+      classifier_llm_config: {
+        ...value.classifier_llm_config,
+        model: value.classifier_llm_config?.model ?? "",
+        timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+        system_prompt: systemPrompt,
+      },
+    });
+  };
+
+  const handleClassifierFallbackChange = (fallback: ClassifierFallback) => {
+    onChange({ ...value, classifier_fallback: fallback });
   };
 
   const handleClassifierContextWindowSizeChange = (windowSize: number | null) => {
@@ -145,8 +198,47 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               style={{ width: "100%" }}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Falls back to the heuristic scorer if the classifier call errors, times out, or returns an unparseable
-              response.
+              How long the classifier call has before it fails and the fallback below takes over.
+            </Text>
+          </div>
+          <div>
+            <Text strong style={{ display: "block", marginBottom: 4 }}>
+              Classifier Prompt
+            </Text>
+            <ClassifierPromptEditor
+              systemPrompt={value.classifier_llm_config?.system_prompt}
+              onChange={handleClassifierSystemPromptChange}
+              contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
+              tierLabels={value.tier_labels}
+            />
+          </div>
+          <div>
+            <Text strong style={{ display: "block", marginBottom: 4 }}>
+              If the classifier fails
+            </Text>
+            <Radio.Group
+              value={value.classifier_fallback ?? DEFAULT_CLASSIFIER_FALLBACK}
+              onChange={(e) => handleClassifierFallbackChange(e.target.value)}
+            >
+              <Space direction="vertical">
+                <Radio value="heuristic">
+                  <Text>Score with the heuristic</Text>{" "}
+                  <Text type="secondary">— right when the classifier grades complexity too</Text>
+                </Radio>
+                <Radio value="default_model" disabled={!hasDefaultModel}>
+                  <Tooltip
+                    title={hasDefaultModel ? undefined : "Set a default model on this router to use this option"}
+                  >
+                    <span>
+                      <Text>Route to the default model</Text>{" "}
+                      <Text type="secondary">— right when your prompt grades something other than complexity</Text>
+                    </span>
+                  </Tooltip>
+                </Radio>
+              </Space>
+            </Radio.Group>
+            <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+              Applies when the classifier call errors, times out, or returns an unparseable response.
             </Text>
           </div>
           <div>
@@ -233,22 +325,21 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           How Classification Works
         </Text>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical
-          terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the
-          tier:
+          {scoringExplanation(value)}
         </Text>
         <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
           <li>
-            <strong>SIMPLE</strong>: Score &lt; 0.15
+            <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; 0.15
           </li>
           <li>
-            <strong>MEDIUM</strong>: Score 0.15 - 0.35
+            <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>: Score 0.15 - 0.35
           </li>
           <li>
-            <strong>COMPLEX</strong>: Score 0.35 - 0.60
+            <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>: Score 0.35 - 0.60
           </li>
           <li>
-            <strong>REASONING</strong>: Score &gt; 0.60 (or 2+ reasoning markers)
+            <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; 0.60 (or 2+ reasoning
+            markers)
           </li>
         </ul>
       </Card>

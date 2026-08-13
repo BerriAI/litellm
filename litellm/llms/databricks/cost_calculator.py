@@ -3,6 +3,8 @@ Helper util for handling databricks-specific cost calculation
 - e.g.: handling 'dbrx-instruct-*'
 """
 
+from typing import Final
+
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -41,13 +43,13 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     elif model.startswith("databricks/llama-2-70b-chat") or model.startswith("llama-2-70b-chat"):
         base_model = "databricks-llama-2-70b-chat"
     ## GET MODEL INFO
-    model_info = get_model_info(model=base_model, custom_llm_provider="databricks")
+    model_info: Final = get_model_info(model=base_model, custom_llm_provider="databricks")
 
     ## CALCULATE INPUT COST
 
-    prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
+    prompt_cost: Final[float] = usage["prompt_tokens"] * model_info["input_cost_per_token"]
 
     ## CALCULATE OUTPUT COST
-    completion_cost = usage["completion_tokens"] * model_info["output_cost_per_token"]
+    completion_cost: Final = usage["completion_tokens"] * model_info["output_cost_per_token"]
 
     return prompt_cost, completion_cost

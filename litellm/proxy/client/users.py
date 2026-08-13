@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import requests
 
@@ -11,15 +11,15 @@ class UsersManagementClient:
         self.api_key = api_key
 
     def _get_headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
     def list_users(self, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """List users (GET /user/list)"""
-        url = f"{self.base_url}/user/list"
-        response = requests.get(url, headers=self._get_headers(), params=params)
+        url: Final = f"{self.base_url}/user/list"
+        response: Final = requests.get(url, headers=self._get_headers(), params=params)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
@@ -27,9 +27,9 @@ class UsersManagementClient:
 
     def get_user(self, user_id: str | None = None) -> dict[str, Any]:
         """Get user info (GET /user/info)"""
-        url = f"{self.base_url}/user/info"
-        params = {"user_id": user_id} if user_id else {}
-        response = requests.get(url, headers=self._get_headers(), params=params)
+        url: Final = f"{self.base_url}/user/info"
+        params: Final = {"user_id": user_id} if user_id else {}
+        response: Final = requests.get(url, headers=self._get_headers(), params=params)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         if response.status_code == 404:
@@ -39,9 +39,9 @@ class UsersManagementClient:
 
     def get_user_v2(self, user_id: str | None = None) -> dict[str, Any]:
         """Get user info v2 - lightweight, returns only user object (GET /v2/user/info)"""
-        url = f"{self.base_url}/v2/user/info"
-        params = {"user_id": user_id} if user_id else {}
-        response = requests.get(url, headers=self._get_headers(), params=params)
+        url: Final = f"{self.base_url}/v2/user/info"
+        params: Final = {"user_id": user_id} if user_id else {}
+        response: Final = requests.get(url, headers=self._get_headers(), params=params)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         if response.status_code == 404:
@@ -51,8 +51,8 @@ class UsersManagementClient:
 
     def create_user(self, user_data: dict[str, Any]) -> dict[str, Any]:
         """Create a new user (POST /user/new)"""
-        url = f"{self.base_url}/user/new"
-        response = requests.post(url, headers=self._get_headers(), json=user_data)
+        url: Final = f"{self.base_url}/user/new"
+        response: Final = requests.post(url, headers=self._get_headers(), json=user_data)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
@@ -60,8 +60,8 @@ class UsersManagementClient:
 
     def delete_user(self, user_ids: list[str]) -> dict[str, Any]:
         """Delete users (POST /user/delete)"""
-        url = f"{self.base_url}/user/delete"
-        response = requests.post(url, headers=self._get_headers(), json={"user_ids": user_ids})
+        url: Final = f"{self.base_url}/user/delete"
+        response: Final = requests.post(url, headers=self._get_headers(), json={"user_ids": user_ids})
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()

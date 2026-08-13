@@ -1,5 +1,7 @@
 """Exceptions raised by the LiteLLM MCP proxy."""
 
+from typing import Final
+
 from fastapi import HTTPException
 
 
@@ -59,13 +61,13 @@ class MCPUpstreamAuthError(Exception):
         """
         challenge: str | None = self.www_authenticate
         if challenge is None and self.status_code == 401 and base_url:
-            prefix = base_url.rstrip("/")
+            prefix: Final = base_url.rstrip("/")
             if request_path and request_path.startswith(f"/{self.server_name}/mcp"):
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
             else:
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
-        detail = "Forbidden" if self.status_code == 403 else "Unauthorized"
+        detail: Final = "Forbidden" if self.status_code == 403 else "Unauthorized"
         return HTTPException(
             status_code=self.status_code,
             detail=detail,

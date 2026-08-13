@@ -60,6 +60,7 @@ export interface KeyResponse {
   created_at: string;
   created_by?: string;
   updated_at: string;
+  settings_updated_at?: string | null;
   last_active: string | null;
   team_spend: number;
   team_alias: string;
@@ -94,6 +95,7 @@ export interface KeyResponse {
   object_permission?: ObjectPermission | null;
   access_group_ids?: string[];
   budget_fallbacks?: Record<string, string[]>;
+  router_settings?: Record<string, unknown> | null;
   budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;

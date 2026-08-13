@@ -1,12 +1,7 @@
 import datetime
 import traceback
 from collections.abc import AsyncIterator, Iterator
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Optional,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import anyio
 
@@ -91,16 +86,16 @@ class FileContentStreamingResponse:
 
         self._close_completed = True
         self._logging_completed = True
-        stream_to_close = self.stream_iterator
+        stream_to_close: Final = self.stream_iterator
         self.stream_iterator = cast(Iterator[bytes] | AsyncIterator[bytes], iter(()))
 
         # Shield cleanup from request cancellation so upstream HTTP connections
         # are released promptly on client disconnects.
         with anyio.CancelScope(shield=True):
             if hasattr(stream_to_close, "aclose"):
-                await cast(AsyncIterator[bytes], stream_to_close).aclose()  # type: ignore[attr-defined]
+                await cast(AsyncIterator[bytes], stream_to_close).aclose()
             elif hasattr(stream_to_close, "close"):
-                result = cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+                result: Final = cast(Iterator[bytes], stream_to_close).close()
                 if result is not None:
                     await result
 
@@ -110,14 +105,14 @@ class FileContentStreamingResponse:
 
         self._close_completed = True
         self._logging_completed = True
-        stream_to_close = self.stream_iterator
+        stream_to_close: Final = self.stream_iterator
         self.stream_iterator = cast(Iterator[bytes] | AsyncIterator[bytes], iter(()))
 
         if hasattr(stream_to_close, "close"):
-            cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+            cast(Iterator[bytes], stream_to_close).close()
 
     def _build_logging_response(self) -> dict[str, str]:
-        response = {
+        response: Final = {
             "id": self.file_id,
             "object": "file.content",
         }
@@ -154,7 +149,7 @@ class FileContentStreamingResponse:
         )
 
         self._sync_hidden_params()
-        payload = get_standard_logging_object_payload(
+        payload: Final = get_standard_logging_object_payload(
             kwargs=self.logging_obj.model_call_details,
             init_response_obj=self._build_logging_response(),
             start_time=self._start_time,
@@ -165,7 +160,7 @@ class FileContentStreamingResponse:
         if payload is None:
             return None
 
-        merged_hidden_params = cast(
+        merged_hidden_params: Final = cast(
             "StandardLoggingHiddenParams",
             {
                 **cast(dict[str, Any], payload.get("hidden_params") or {}),
@@ -189,8 +184,8 @@ class FileContentStreamingResponse:
             return
 
         self._logging_completed = True
-        end_time = datetime.datetime.now()
-        standard_logging_object = self._build_standard_logging_object(end_time=end_time)
+        end_time: Final = datetime.datetime.now()
+        standard_logging_object: Final = self._build_standard_logging_object(end_time=end_time)
         await self.logging_obj.async_success_handler(
             result=self._build_logging_response(),
             start_time=self._start_time,
@@ -208,8 +203,8 @@ class FileContentStreamingResponse:
             return
 
         self._logging_completed = True
-        end_time = datetime.datetime.now()
-        standard_logging_object = self._build_standard_logging_object(end_time=end_time)
+        end_time: Final = datetime.datetime.now()
+        standard_logging_object: Final = self._build_standard_logging_object(end_time=end_time)
         self.logging_obj.success_handler(
             result=self._build_logging_response(),
             start_time=self._start_time,
@@ -222,8 +217,8 @@ class FileContentStreamingResponse:
             return
 
         self._logging_completed = True
-        end_time = datetime.datetime.now()
-        traceback_str = traceback.format_exc()
+        end_time: Final = datetime.datetime.now()
+        traceback_str: Final = traceback.format_exc()
         self.logging_obj.failure_handler(error, traceback_str, self._start_time, end_time)
         await self.logging_obj.async_failure_handler(error, traceback_str, self._start_time, end_time)
 
@@ -232,5 +227,5 @@ class FileContentStreamingResponse:
             return
 
         self._logging_completed = True
-        end_time = datetime.datetime.now()
+        end_time: Final = datetime.datetime.now()
         self.logging_obj.failure_handler(error, traceback.format_exc(), self._start_time, end_time)

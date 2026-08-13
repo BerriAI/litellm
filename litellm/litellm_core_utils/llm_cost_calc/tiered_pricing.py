@@ -5,6 +5,8 @@ Shared by provider cost calculators (e.g. Dashscope) and the proxy budget
 reservation logic so neither has to depend on the other.
 """
 
+from typing import Final
+
 
 def _coerce_cost_per_token(value: float | str | None) -> float:
     """
@@ -62,7 +64,7 @@ def calculate_tiered_cost(
     total_cost = 0.0
     tokens_processed = 0
 
-    sorted_tiers = sorted(tiered_pricing, key=lambda x: x.get("range", [0, 0])[0])
+    sorted_tiers: Final = sorted(tiered_pricing, key=lambda x: x.get("range", [0, 0])[0])
 
     for tier in sorted_tiers:
         if tokens_processed >= tokens:
@@ -89,8 +91,8 @@ def calculate_tiered_cost(
     # After loop, check if any tokens remain (i.e., tokens > highest tier's end range)
     # and charge them at the last tier's rate.
     if tokens_processed < tokens and sorted_tiers:
-        last_tier = sorted_tiers[-1]
-        remaining_tokens = tokens - tokens_processed
+        last_tier: Final = sorted_tiers[-1]
+        remaining_tokens: Final = tokens - tokens_processed
         cost_per_token = last_tier.get(cost_key) or last_tier.get(fallback_cost_key, 0)
         total_cost += remaining_tokens * _coerce_cost_per_token(cost_per_token)
 
@@ -116,12 +118,12 @@ def select_tier_for_input(
     if not tiered_pricing or input_tokens <= 0:
         return None
 
-    sorted_tiers = sorted(tiered_pricing, key=lambda t: t.get("range", [0, 0])[0])
-    valid_tiers = [tier for tier in sorted_tiers if len(tier.get("range", [])) == 2]
+    sorted_tiers: Final = sorted(tiered_pricing, key=lambda t: t.get("range", [0, 0])[0])
+    valid_tiers: Final = [tier for tier in sorted_tiers if len(tier.get("range", [])) == 2]
     if not valid_tiers:
         return None
 
-    matching = [tier for tier in valid_tiers if tier["range"][0] < input_tokens <= tier["range"][1]]
+    matching: Final = [tier for tier in valid_tiers if tier["range"][0] < input_tokens <= tier["range"][1]]
     if matching:
         return matching[0]
     return valid_tiers[-1]
@@ -133,5 +135,5 @@ def tier_rate(
     fallback_cost_key: str | None = None,
 ) -> float:
     """Read a per-token rate from a tier, coercing YAML string costs to float."""
-    raw = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
+    raw: Final = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
     return _coerce_cost_per_token(raw)

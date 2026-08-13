@@ -4,9 +4,15 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException, Request, status
 from prisma import errors as prisma_errors
+from prisma.engine.errors import (
+    BinaryNotFoundError,
+    EngineConnectionError,
+    MismatchedVersionsError,
+)
 from prisma.errors import (
     ClientNotConnectedError,
     DataError,
@@ -31,19 +37,20 @@ from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHan
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prisma_error",
+    "db_error",
     [
-        # Specific connectivity subclasses.
-        HTTPClientClosedError(),
-        ClientNotConnectedError(),
-        # Bare / generic PrismaError defaults to connectivity — we can't
-        # tell what it is, so err on the safe side for genuine outages.
-        PrismaError(),
+        pytest.param(httpx.ConnectError("All connection attempts failed"), id="ConnectError"),
+        pytest.param(httpx.ReadError("read failed"), id="ReadError"),
+        pytest.param(httpx.ReadTimeout("timed out"), id="ReadTimeout"),
+        pytest.param(EngineConnectionError(), id="EngineConnectionError"),
     ],
 )
-async def test_handle_authentication_error_db_unavailable_connectivity(prisma_error):
-    """Transport-level / connectivity failures (and generic PrismaError)
-    trigger the HA fallback."""
+async def test_handle_authentication_error_db_unavailable_connectivity(db_error):
+    """A database that is temporarily unreachable triggers the HA fallback.
+
+    These are the failures a real outage actually produces: the query engine is
+    a local HTTP server, so an unreachable database surfaces as a transport
+    error against it."""
     handler = UserAPIKeyAuthExceptionHandler()
 
     mock_request = MagicMock()
@@ -52,7 +59,7 @@ async def test_handle_authentication_error_db_unavailable_connectivity(prisma_er
         {"allow_requests_on_db_unavailable": True},
     ):
         result = await handler._handle_authentication_error(
-            prisma_error,
+            db_error,
             mock_request,
             {},
             "/test",
@@ -61,6 +68,52 @@ async def test_handle_authentication_error_db_unavailable_connectivity(prisma_er
         )
         assert result.key_name == "failed-to-connect-to-db"
         assert result.token == "failed-to-connect-to-db"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prisma_error",
+    [
+        pytest.param(BinaryNotFoundError("query engine binary not found"), id="BinaryNotFoundError"),
+        pytest.param(MismatchedVersionsError(expected="1", got="2"), id="MismatchedVersionsError"),
+        pytest.param(HTTPClientClosedError(), id="HTTPClientClosedError"),
+        pytest.param(ClientNotConnectedError(), id="ClientNotConnectedError"),
+        pytest.param(PrismaError(), id="bare_PrismaError"),
+    ],
+)
+async def test_handle_authentication_error_permanent_fault_gets_no_fallback_identity(
+    prisma_error,
+):
+    """A fault that cannot resolve on its own must not mint a fallback identity,
+    even with ``allow_requests_on_db_unavailable`` enabled.
+
+    That setting trades verification for availability on the assumption the
+    database returns. When it never will, the trade buys nothing and the proxy
+    would keep admitting callers it cannot verify for as long as it runs, so the
+    fault has to reach the caller instead.
+
+    It must still reach them as a service failure. Denying the fallback is not
+    licence to report a database fault as a rejected credential, which would
+    send an operator hunting a key problem that does not exist."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    mock_request = MagicMock()
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                prisma_error,
+                mock_request,
+                {},
+                "/test",
+                None,
+                "test-key",
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+    assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
 @pytest.mark.asyncio

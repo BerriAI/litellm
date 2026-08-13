@@ -1,6 +1,8 @@
 # stdlib imports
 
 # third party imports
+from typing import Final
+
 import click
 
 from litellm._version import version as litellm_version
@@ -31,8 +33,8 @@ def print_version(base_url: str, api_key: str | None):
     if base_url:
         click.echo(f"LiteLLM Proxy Server URL: {base_url}")
     try:
-        health_client = HealthManagementClient(base_url=base_url, api_key=api_key)
-        server_version = health_client.get_server_version()
+        health_client: Final = HealthManagementClient(base_url=base_url, api_key=api_key)
+        server_version: Final = health_client.get_server_version()
         if server_version:
             click.echo(f"LiteLLM Proxy Server Version: {server_version}")
         else:
@@ -68,8 +70,8 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
 
-    stored_base_url = get_config_value("base_url")
-    base_url_provided = base_url is not None
+    stored_base_url: Final = get_config_value("base_url")
+    base_url_provided: Final = base_url is not None
 
     # Normalize once here so every downstream command (login, agents, http, ...) can safely
     # do f"{base_url}/some/path" without producing a double slash.

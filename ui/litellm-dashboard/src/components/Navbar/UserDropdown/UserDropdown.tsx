@@ -69,7 +69,7 @@ interface UserDropdownProps {
 }
 
 const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar", collapsed = false }) => {
-  const { userId, userEmail, userRole, premiumUser } = useAuthorized();
+  const { userId, userEmail, userRoleLabel: userRole, premiumUser } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();

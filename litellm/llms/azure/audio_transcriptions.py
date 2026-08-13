@@ -1,5 +1,5 @@
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, Final
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
@@ -35,7 +35,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         atranscription: bool = False,
         litellm_params: dict | None = None,
     ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
-        data = {"model": model, "file": audio_file, **optional_params}
+        data: Final = {"model": model, "file": audio_file, **optional_params}
 
         if atranscription is True:
             return self.async_audio_transcriptions(
@@ -52,7 +52,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 litellm_params=litellm_params,
             )
 
-        azure_client = self.get_azure_openai_client(
+        azure_client: Final = self.get_azure_openai_client(
             api_version=api_version,
             api_base=api_base,
             api_key=api_key,
@@ -79,9 +79,9 @@ class AzureAudioTranscription(AzureChatCompletion):
             },
         )
 
-        response = azure_client.audio.transcriptions.create(
+        response: Final = azure_client.audio.transcriptions.create(
             **data,
-            timeout=timeout,  # type: ignore
+            timeout=timeout,
         )
 
         if isinstance(response, BaseModel):
@@ -96,13 +96,13 @@ class AzureAudioTranscription(AzureChatCompletion):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        hidden_params = {"model": model, "custom_llm_provider": "azure"}
-        final_response: TranscriptionResponse = convert_to_model_response_object(
+        hidden_params: Final = {"model": model, "custom_llm_provider": "azure"}
+        final_response: Final[TranscriptionResponse] = convert_to_model_response_object(
             response_object=stringified_response,
             model_response_object=model_response,
             hidden_params=hidden_params,
             response_type="audio_transcription",
-        )  # type: ignore
+        )
         return final_response
 
     async def async_audio_transcriptions(
@@ -122,7 +122,7 @@ class AzureAudioTranscription(AzureChatCompletion):
     ) -> TranscriptionResponse:
         response = None
         try:
-            async_azure_client = self.get_azure_openai_client(
+            async_azure_client: Final = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
                 api_key=api_key,
@@ -149,18 +149,18 @@ class AzureAudioTranscription(AzureChatCompletion):
                 },
             )
 
-            raw_response = await async_azure_client.audio.transcriptions.with_raw_response.create(
+            raw_response: Final = await async_azure_client.audio.transcriptions.with_raw_response.create(
                 **data, timeout=timeout
-            )  # type: ignore
+            )
 
-            headers = dict(raw_response.headers)
+            headers: Final = dict(raw_response.headers)
             response = raw_response.parse()
 
             if isinstance(response, BaseModel):
                 stringified_response = response.model_dump()
             else:
                 stringified_response = TranscriptionResponse(text=response).model_dump()
-                duration = extract_duration_from_srt_or_vtt(response)
+                duration: Final = extract_duration_from_srt_or_vtt(response)
                 stringified_response["_audio_transcription_duration"] = duration
 
             ## LOGGING
@@ -175,7 +175,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 },
                 original_response=stringified_response,
             )
-            hidden_params = {"model": model, "custom_llm_provider": "azure"}
+            hidden_params: Final = {"model": model, "custom_llm_provider": "azure"}
             response = convert_to_model_response_object(
                 _response_headers=headers,
                 response_object=stringified_response,

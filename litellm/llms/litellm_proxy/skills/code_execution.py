@@ -14,7 +14,7 @@ Generated files are returned directly in the response - no separate storage need
 import base64
 import json
 from enum import Enum
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 
@@ -70,7 +70,7 @@ def get_litellm_code_execution_tool_anthropic() -> dict[str, Any]:
 
 
 # Singleton tool definition for backwards compatibility
-LITELLM_CODE_EXECUTION_TOOL = get_litellm_code_execution_tool()
+LITELLM_CODE_EXECUTION_TOOL: Final = get_litellm_code_execution_tool()
 
 
 class CodeExecutionHandler:
@@ -133,15 +133,15 @@ class CodeExecutionHandler:
             SkillsSandboxExecutor,
         )
 
-        current_messages = list(messages)
-        generated_files: list[dict[str, Any]] = []  # Files returned directly
-        execution_results: list[dict] = []
+        current_messages: Final = list(messages)
+        generated_files: Final[list[dict[str, Any]]] = []  # Files returned directly
+        execution_results: Final[list[dict]] = []
 
-        executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
+        executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
         response: Any = None  # Initialize to avoid possibly unbound error
 
         for iteration in range(self.max_iterations):
-            verbose_logger.debug(f"CodeExecutionHandler: Iteration {iteration + 1}/{self.max_iterations}")
+            verbose_logger.debug("CodeExecutionHandler: Iteration %s/%s", iteration + 1, self.max_iterations)
 
             # Make LLM call
             response = await litellm.acompletion(
@@ -151,8 +151,8 @@ class CodeExecutionHandler:
                 **kwargs,
             )
 
-            assistant_message = response.choices[0].message  # type: ignore
-            stop_reason = response.choices[0].finish_reason  # type: ignore
+            assistant_message = response.choices[0].message
+            stop_reason = response.choices[0].finish_reason
 
             # Build assistant message for conversation history
             assistant_msg_dict: dict[str, Any] = {
@@ -175,7 +175,7 @@ class CodeExecutionHandler:
 
             # Check if we're done (no tool calls or not tool_calls finish reason)
             if stop_reason != "tool_calls" or not assistant_message.tool_calls:
-                verbose_logger.debug(f"CodeExecutionHandler: Completed after {iteration + 1} iterations")
+                verbose_logger.debug("CodeExecutionHandler: Completed after %s iterations", iteration + 1)
                 return {
                     "response": response,
                     "files": generated_files,  # Files returned directly with base64 content
@@ -193,14 +193,14 @@ class CodeExecutionHandler:
                         args = json.loads(tool_call.function.arguments)
                         code = args.get("code", "")
 
-                        verbose_logger.debug(f"CodeExecutionHandler: Executing code ({len(code)} chars)")
+                        verbose_logger.debug("CodeExecutionHandler: Executing code (%s chars)", len(code))
 
                         exec_result = executor.execute(
                             code=code,
                             skill_files=skill_files,
                         )
 
-                        verbose_logger.debug(f"CodeExecutionHandler: Execution result: {exec_result}")
+                        verbose_logger.debug("CodeExecutionHandler: Execution result: %s", exec_result)
 
                         execution_results.append(
                             {
@@ -232,14 +232,14 @@ class CodeExecutionHandler:
                                 tool_result += f"\n- {f['name']} ({len(file_content)} bytes)"
 
                                 verbose_logger.debug(
-                                    f"CodeExecutionHandler: Generated file {f['name']} ({len(file_content)} bytes)"
+                                    "CodeExecutionHandler: Generated file %s (%s bytes)", f["name"], len(file_content)
                                 )
 
                         if exec_result["error"]:
                             tool_result += f"\n\nError:\n{exec_result['error']}"
 
                     except Exception as e:
-                        tool_result = f"Code execution failed: {e!s}"
+                        tool_result = f"Code execution failed: {e}"
                         execution_results.append(
                             {
                                 "iteration": iteration,
@@ -268,7 +268,7 @@ class CodeExecutionHandler:
                     )
 
         # Max iterations reached
-        verbose_logger.warning(f"CodeExecutionHandler: Max iterations ({self.max_iterations}) reached")
+        verbose_logger.warning("CodeExecutionHandler: Max iterations (%s) reached", self.max_iterations)
         return {
             "response": response,
             "files": generated_files,
@@ -298,4 +298,4 @@ def add_code_execution_tool(tools: list[dict] | None) -> list[dict]:
 
 
 # Global handler instance
-code_execution_handler = CodeExecutionHandler()
+code_execution_handler: Final = CodeExecutionHandler()
