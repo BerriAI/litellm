@@ -3799,11 +3799,6 @@
       "count": 1
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/JsonViewer.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx": {
     "no-nested-ternary": {
       "count": 3
@@ -3839,21 +3834,6 @@
     }
   },
   "src/components/view_logs/LogDetailsDrawer/SectionHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/SimpleMessageBlock.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/SimpleToolCallBlock.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/TokenFlow.tsx": {
     "no-restricted-imports": {
       "count": 1
     }

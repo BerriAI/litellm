@@ -2221,3 +2221,50 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
     assert call_kwargs["where"] == {"token": token}
     assert set(call_kwargs["data"]) == {"spend", "last_active"}
     assert call_kwargs["data"]["spend"] == {"increment": response_cost}
+
+
+@pytest.mark.asyncio
+async def test_daily_transaction_internal_call_keeps_spend_but_not_request_counts():
+    """Internal sub-calls (auto-router classifier, shadow eval's shadow and judge) bill
+    spend and tokens to the key but are not requests the caller made: api_requests,
+    successful_requests, and autorouter_savings_spend must all stay zero for them."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    def _payload(metadata: dict) -> dict:
+        return {
+            "request_id": "req-internal-1",
+            "user": "test-user",
+            "startTime": "2026-08-11T00:00:00",
+            "api_key": "test-key",
+            "model": "claude-sonnet-5",
+            "custom_llm_provider": "anthropic",
+            "model_group": "claude-sonnet-5",
+            "call_type": "acompletion",
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "spend": 0.05,
+            "metadata": json.dumps(metadata),
+        }
+
+    internal = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=_payload({"internal_call_origin": "shadow_eval_judge"}),
+        prisma_client=mock_prisma,
+        type="user",
+    )
+    user_sent = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=_payload({}),
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert internal is not None and user_sent is not None
+    assert internal["spend"] == 0.05
+    assert internal["prompt_tokens"] == 100
+    assert internal["api_requests"] == 0
+    assert internal["successful_requests"] == 0
+    assert internal["failed_requests"] == 0
+    assert internal["autorouter_savings_spend"] == 0.0
+    assert user_sent["api_requests"] == 1
+    assert user_sent["successful_requests"] == 1
