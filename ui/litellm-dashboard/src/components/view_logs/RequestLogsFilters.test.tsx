@@ -135,6 +135,38 @@ describe("RequestLogsFilters", () => {
     await waitFor(() => expect(useInfiniteUsers).toHaveBeenCalledWith(50, "alice@example.com"));
   });
 
+  it("loads the next page when the User ID list is scrolled near the end", async () => {
+    const fetchNextPage = vi.fn();
+    vi.mocked(useInfiniteUsers).mockReturnValue({
+      ...emptyInfiniteQuery,
+      fetchNextPage,
+      hasNextPage: true,
+      data: {
+        pages: [
+          {
+            users: [{ user_id: "user-1", user_alias: "Alice", user_email: "alice@example.com" }],
+            page: 1,
+            page_size: 50,
+            total: 51,
+            total_pages: 2,
+          },
+        ],
+        pageParams: [1],
+      },
+    } as unknown as ReturnType<typeof useInfiniteUsers>);
+    const user = userEvent.setup();
+    renderFilters();
+
+    await user.click(await screen.findByPlaceholderText("Search an internal user"));
+    const list = await screen.findByTestId("paginated-search-select-list");
+    Object.defineProperty(list, "scrollTop", { value: 90, configurable: true });
+    Object.defineProperty(list, "clientHeight", { value: 10, configurable: true });
+    Object.defineProperty(list, "scrollHeight", { value: 100, configurable: true });
+    list.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    await waitFor(() => expect(fetchNextPage).toHaveBeenCalled());
+  });
+
   it("does not show or query the User ID filter for non-admin request logs", () => {
     renderFilters({}, false);
 
