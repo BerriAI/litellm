@@ -46,6 +46,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    _refresh_cached_team,
     new_team,
     team_member_add,
     team_member_delete,
@@ -1888,6 +1889,24 @@ async def update_group(
             data=update_data,
         )
 
+        # Refresh the in-memory team cache so the very next auth check sees
+        # the new `team_alias` and `metadata`. Without this, a SCIM-driven
+        # rename (displayName) does not take effect on auth until the
+        # management-object TTL expires — see #36817. Same pattern as
+        # `team_endpoints.update_team` (line 1930) and the
+        # cycle-9 `_refresh_cached_team` work for `/team/block` and
+        # `/team/unblock` (#35565).
+        from litellm.proxy.proxy_server import (
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        await _refresh_cached_team(
+            team_row=updated_team,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
         # Handle user-team relationship changes
         current_members = set(await _get_team_member_user_ids_from_team(existing_team))
         verbose_proxy_logger.debug(f"SCIM PUT GROUP current_members: {current_members}")
@@ -1950,6 +1969,28 @@ async def delete_group(
 
         # Delete team
         await TeamRepository(prisma_client).table.delete(where={"team_id": group_id})
+
+        # Invalidate the in-memory team cache so the very next auth check
+        # sees the team as gone. Without this, a stale `team_id:{group_id}`
+        # entry stays readable until the management-object TTL expires —
+        # see #36817. The team is gone, so we invalidate (delete) rather
+        # than refresh. Both the local LRU and the Redis side of the
+        # dual cache are cleared, plus the alias-keyed cache if the team
+        # had one (matches the alias-invalidation half of `_cache_team_object`
+        # at `auth_checks.py:1806`).
+        from litellm.proxy.proxy_server import (
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        user_api_key_cache.delete_cache(key=f"team_id:{group_id}")
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=f"team_id:{group_id}")
+        if existing_team.team_alias:
+            alias_key = f"team_alias:{existing_team.team_alias}"
+            user_api_key_cache.delete_cache(key=alias_key)
+            if proxy_logging_obj is not None:
+                await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
 
         return Response(status_code=204)
 
@@ -2170,6 +2211,24 @@ async def patch_group(
         final_team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
         if final_team:
             updated_team = final_team
+
+        # Refresh the in-memory team cache so the very next auth check sees
+        # the new `team_alias` / `metadata` / SCIM-managed state. Without
+        # this, a SCIM-driven rename or metadata change does not take
+        # effect on auth until the management-object TTL expires. See
+        # #36817. Same pattern as the `update_group` fix above and the
+        # cycle-9 `_refresh_cached_team` work for `/team/block` and
+        # `/team/unblock` (#35565).
+        from litellm.proxy.proxy_server import (
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        await _refresh_cached_team(
+            team_row=updated_team,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
         # Convert to SCIM format and return
         scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(

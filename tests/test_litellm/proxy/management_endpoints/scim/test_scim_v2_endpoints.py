@@ -1198,13 +1198,28 @@ async def test_update_group_metadata_serialization_issue(mocker):
     mock_existing_team.created_at = None
     mock_existing_team.updated_at = None
 
-    # Mock updated team response
+    # Mock updated team response. `model_dump` must return a real dict —
+    # `update_group` now calls `_refresh_cached_team` after the DB write,
+    # which does `LiteLLM_TeamTableCachedObj(**team_row.model_dump())`.
+    # A `MagicMock` for `model_dump` would unpack to `{}` (MagicMock acts
+    # as a Mapping with empty keys()), which would fail the team_id
+    # validation. The real fix is to make the mock's `model_dump`
+    # contract match the real Prisma row shape.
     mock_updated_team = mocker.MagicMock()
     mock_updated_team.team_id = group_id
     mock_updated_team.team_alias = "Test Group"
     mock_updated_team.members = ["user1"]
     mock_updated_team.created_at = None
     mock_updated_team.updated_at = None
+    mock_updated_team.model_dump = mocker.MagicMock(
+        return_value={
+            "team_id": group_id,
+            "team_alias": "Test Group",
+            "members": ["user1"],
+            "created_at": None,
+            "updated_at": None,
+        }
+    )
 
     # Create a properly structured mock for the prisma client
     mock_prisma_client = mocker.MagicMock()
@@ -3519,3 +3534,331 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     )
 
     assert final_members == set()
+
+
+class TestScimGroupCacheInvalidation:
+    """
+    Regression pin for #36817.
+
+    SCIM PATCH/PUT/DELETE /Groups/{id} previously only wrote to
+    `litellm_teamtable` and left the in-memory `team_id:{team_id}` cache
+    stale. Operators using SCIM-driven IdPs (Okta, Azure AD, etc.) expect
+    a rename to take effect immediately; without cache invalidation it
+    silently takes effect only on the next TTL refresh.
+
+    Pin: each SCIM group endpoint must call the same cache-management
+    helpers the team management endpoints use. `update_group` and
+    `patch_group` must call `_refresh_cached_team` with the post-mutation
+    row. `delete_group` must invalidate (delete) both the `team_id` key
+    and the `team_alias` key in the dual cache, matching the alias-
+    invalidation half of `_cache_team_object` at
+    `auth_checks.py:1806`.
+    """
+
+    @staticmethod
+    def _make_team(group_id, team_alias, members_with_roles):
+        from litellm.proxy._types import LiteLLM_TeamTable, Member
+
+        return LiteLLM_TeamTable(
+            team_id=group_id,
+            team_alias=team_alias,
+            members=[],
+            members_with_roles=[
+                Member(user_id=m, role="user") for m in members_with_roles
+            ],
+            metadata={},
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_group_refreshes_team_cache(self, mocker):
+        """
+        `PUT /scim/v2/Groups/{id}` must call `_refresh_cached_team` with the
+        post-mutation row after the database update. Regression pin for
+        #36817.
+        """
+        from litellm.proxy._types import LiteLLM_TeamTable
+        from litellm.proxy.management_endpoints.scim.scim_v2 import update_group
+        from litellm.types.proxy.management_endpoints.scim_v2 import SCIMGroup
+
+        group_id = "scim-update-cache-test"
+        existing_team = self._make_team(
+            group_id=group_id, team_alias="Old Name", members_with_roles=["user1"]
+        )
+        updated_team = self._make_team(
+            group_id=group_id, team_alias="New Name", members_with_roles=["user1"]
+        )
+
+        mock_prisma_client = mocker.MagicMock()
+        mock_prisma_client.db = mocker.MagicMock()
+        mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=existing_team
+        )
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+            return_value=updated_team
+        )
+        mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+        mock_user = mocker.MagicMock()
+        mock_user.user_id = "user1"
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=mock_user
+        )
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+            AsyncMock(return_value=mock_prisma_client),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._handle_group_membership_changes",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+            AsyncMock(
+                return_value=SCIMGroup(
+                    schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+                    id=group_id,
+                    displayName="New Name",
+                )
+            ),
+        )
+
+        mock_user_cache = mocker.MagicMock()
+        mock_logging = mocker.MagicMock()
+        mock_logging.internal_usage_cache.dual_cache = mocker.MagicMock()
+        mock_logging.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+        mocker.patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache
+        )
+        mocker.patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", mock_logging
+        )
+
+        refresh_mock = mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._refresh_cached_team",
+            new=AsyncMock(),
+        )
+
+        await update_group(
+            group_id=group_id,
+            group=SCIMGroup(
+                schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+                id=group_id,
+                displayName="New Name",
+            ),
+        )
+
+        # Pin: update_group must call _refresh_cached_team exactly once
+        # with the post-mutation row. The post-mutation row is the object
+        # the Prisma `update` returned (the `updated_team` MagicMock), not
+        # the pre-mutation `existing_team`.
+        assert refresh_mock.await_count == 1, (
+            "update_group must call _refresh_cached_team exactly once after "
+            "the DB update (#36817 regression pin); "
+            f"got await_count={refresh_mock.await_count}"
+        )
+        call_kwargs = refresh_mock.await_args.kwargs
+        assert call_kwargs["team_row"] is updated_team
+        assert call_kwargs["user_api_key_cache"] is mock_user_cache
+        assert call_kwargs["proxy_logging_obj"] is mock_logging
+
+    @pytest.mark.asyncio
+    async def test_patch_group_refreshes_team_cache(self, mocker):
+        """
+        `PATCH /scim/v2/Groups/{id}` must call `_refresh_cached_team` after
+        the final find_unique. Regression pin for #36817.
+        """
+        from litellm.proxy._types import LiteLLM_TeamTable
+        from litellm.proxy.management_endpoints.scim.scim_v2 import patch_group
+        from litellm.types.proxy.management_endpoints.scim_v2 import (
+            SCIMGroup,
+            SCIMPatchOp,
+            SCIMPatchOperation,
+        )
+
+        group_id = "scim-patch-cache-test"
+        existing_team = self._make_team(
+            group_id=group_id, team_alias="Old Name", members_with_roles=["user1"]
+        )
+        updated_team = self._make_team(
+            group_id=group_id, team_alias="New Name", members_with_roles=["user1"]
+        )
+
+        mock_prisma_client = mocker.MagicMock()
+        mock_prisma_client.db = mocker.MagicMock()
+        mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+        # `patch_group` does find_unique for the post-update final state.
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=updated_team
+        )
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+            return_value=updated_team
+        )
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+            AsyncMock(return_value=mock_prisma_client),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._handle_group_membership_changes",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._check_team_exists",
+            AsyncMock(return_value=existing_team),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._get_team_member_user_ids_from_team",
+            AsyncMock(return_value=["user1"]),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._process_group_patch_operations",
+            AsyncMock(return_value=({"team_alias": "New Name"}, {"user1"}, None)),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+            AsyncMock(
+                return_value=SCIMGroup(
+                    schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+                    id=group_id,
+                    displayName="New Name",
+                )
+            ),
+        )
+
+        mock_user_cache = mocker.MagicMock()
+        mock_logging = mocker.MagicMock()
+        mock_logging.internal_usage_cache.dual_cache = mocker.MagicMock()
+        mock_logging.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+        mocker.patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache
+        )
+        mocker.patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", mock_logging
+        )
+
+        refresh_mock = mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._refresh_cached_team",
+            new=AsyncMock(),
+        )
+
+        await patch_group(
+            group_id=group_id,
+            patch_ops=SCIMPatchOp(
+                schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                Operations=[
+                    SCIMPatchOperation(
+                        op="replace", path="displayName", value="New Name"
+                    )
+                ],
+            ),
+        )
+
+        # Pin: patch_group must call _refresh_cached_team exactly once
+        # with the post-mutation row. The post-mutation row is the object
+        # the final find_unique returned, not the pre-mutation
+        # `existing_team`.
+        assert refresh_mock.await_count == 1, (
+            "patch_group must call _refresh_cached_team exactly once after "
+            "the final find_unique (#36817 regression pin); "
+            f"got await_count={refresh_mock.await_count}"
+        )
+        call_kwargs = refresh_mock.await_args.kwargs
+        assert call_kwargs["team_row"] is updated_team
+        assert call_kwargs["user_api_key_cache"] is mock_user_cache
+        assert call_kwargs["proxy_logging_obj"] is mock_logging
+
+    @pytest.mark.asyncio
+    async def test_delete_group_invalidates_team_id_and_alias_caches(self, mocker):
+        """
+        `DELETE /scim/v2/Groups/{id}` must invalidate both the
+        `team_id:{group_id}` cache key and the `team_alias:{alias}` cache
+        key in the dual cache (local LRU + Redis). Regression pin for
+        #36817.
+        """
+        from litellm.proxy.management_endpoints.scim.scim_v2 import delete_group
+
+        group_id = "scim-delete-cache-test"
+        team_alias = "Engineering"
+        existing_team = self._make_team(
+            group_id=group_id, team_alias=team_alias, members_with_roles=["user1"]
+        )
+
+        mock_prisma_client = mocker.MagicMock()
+        mock_prisma_client.db = mocker.MagicMock()
+        mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=existing_team
+        )
+        mock_prisma_client.db.litellm_teamtable.delete = AsyncMock()
+        mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=mocker.MagicMock(teams=[group_id])
+        )
+        mock_prisma_client.db.litellm_usertable.update = AsyncMock()
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+            AsyncMock(return_value=mock_prisma_client),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._check_team_exists",
+            AsyncMock(return_value=existing_team),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._get_team_member_user_ids_from_team",
+            AsyncMock(return_value=["user1"]),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+            AsyncMock(),
+        )
+
+        mock_user_cache = mocker.MagicMock()
+        mock_logging = mocker.MagicMock()
+        mock_dual_cache = mocker.MagicMock()
+        mock_dual_cache.async_delete_cache = AsyncMock()
+        mock_logging.internal_usage_cache.dual_cache = mock_dual_cache
+        mocker.patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache
+        )
+        mocker.patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", mock_logging
+        )
+
+        await delete_group(group_id=group_id)
+
+        # Pin: delete_group must invalidate the team_id cache key
+        # in BOTH the local LRU (user_api_key_cache.delete_cache) AND
+        # the Redis side of the dual cache
+        # (proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache).
+        mock_user_cache.delete_cache.assert_any_call(key=f"team_id:{group_id}")
+        mock_dual_cache.async_delete_cache.assert_any_call(
+            key=f"team_id:{group_id}"
+        )
+        # And the alias-keyed cache must also be invalidated — the
+        # alias-keyed cache is what JWT-by-alias auth reads from, so
+        # leaving it would keep the deleted team reachable under the
+        # old alias until TTL expiry.
+        mock_user_cache.delete_cache.assert_any_call(
+            key=f"team_alias:{team_alias}"
+        )
+        mock_dual_cache.async_delete_cache.assert_any_call(
+            key=f"team_alias:{team_alias}"
+        )
