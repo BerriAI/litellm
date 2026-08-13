@@ -1,8 +1,9 @@
 import json
+from collections.abc import Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from typing_extensions import Required, TypedDict, override
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -216,6 +217,11 @@ class ConverseResponseOutputBlock(TypedDict):
     message: MessageBlock | None
 
 
+class ConverseCacheDetailBlock(TypedDict):
+    ttl: ReadOnly[str]
+    inputTokens: ReadOnly[int]
+
+
 class ConverseTokenUsageBlock(TypedDict):
     inputTokens: int
     outputTokens: int
@@ -224,6 +230,7 @@ class ConverseTokenUsageBlock(TypedDict):
     cacheReadInputTokens: int
     cacheWriteInputTokenCount: int
     cacheWriteInputTokens: int
+    cacheDetails: NotRequired[ReadOnly[Sequence[ConverseCacheDetailBlock]]]
 
 
 class ServiceTierBlock(TypedDict):

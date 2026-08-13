@@ -51,6 +51,69 @@ def test_transform_usage():
     assert openai_usage.completion_tokens_details.text_tokens == usage["outputTokens"]
 
 
+@pytest.mark.parametrize(
+    "cache_details, expected_5m, expected_1h",
+    [
+        ([{"ttl": "1h", "inputTokens": 11632}], 0, 11632),
+        ([{"ttl": "5m", "inputTokens": 11632}], 11632, 0),
+        (
+            [{"ttl": "5m", "inputTokens": 1632}, {"ttl": "1h", "inputTokens": 10000}],
+            1632,
+            10000,
+        ),
+        (None, None, None),
+        ([{"ttl": "3h", "inputTokens": 11632}], None, None),
+    ],
+)
+def test_transform_usage_splits_cache_details_by_ttl(cache_details, expected_5m, expected_1h):
+    """Bedrock reports cache write TTLs in `cacheDetails`; without it 1h writes are billed at the 5m rate."""
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 16,
+            "outputTokens": 4,
+            "totalTokens": 11652,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 11632,
+            **({"cacheDetails": cache_details} if cache_details is not None else {}),
+        }
+    )
+    openai_usage = AmazonConverseConfig()._transform_usage(usage)
+    assert openai_usage._cache_creation_input_tokens == 11632
+    details = getattr(openai_usage.prompt_tokens_details, "cache_creation_token_details", None)
+    if expected_5m is None:
+        assert details is None
+        return
+    assert details is not None
+    assert details.ephemeral_5m_input_tokens == expected_5m
+    assert details.ephemeral_1h_input_tokens == expected_1h
+
+
+def test_bedrock_converse_1h_cache_write_cost_uses_1h_rate():
+    """Regression for 1h Bedrock Converse cache writes being priced at the 5m rate."""
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 16,
+            "outputTokens": 4,
+            "totalTokens": 11652,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 11632,
+            "cacheDetails": [{"ttl": "1h", "inputTokens": 11632}],
+        }
+    )
+    openai_usage = AmazonConverseConfig()._transform_usage(usage)
+    model = "bedrock/converse/global.anthropic.claude-opus-4-8"
+    prompt_cost, completion_cost = litellm.cost_calculator.cost_per_token(model=model, usage_object=openai_usage)
+    model_info = litellm.get_model_info(model=model)
+    expected_prompt_cost = (
+        16 * model_info["input_cost_per_token"] + 11632 * model_info["cache_creation_input_token_cost_above_1hr"]
+    )
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert prompt_cost > 16 * model_info["input_cost_per_token"] + 11632 * model_info[
+        "cache_creation_input_token_cost"
+    ]
+    assert completion_cost == pytest.approx(4 * model_info["output_cost_per_token"])
+
+
 def test_transform_usage_with_reasoning_content():
     """Test that completion_tokens_details correctly tracks reasoning vs text tokens."""
     usage = ConverseTokenUsageBlock(

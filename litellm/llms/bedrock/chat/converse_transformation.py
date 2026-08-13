@@ -57,6 +57,7 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionMessageToolCall,
     CompletionTokensDetailsWrapper,
     Function,
@@ -1770,6 +1771,30 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
 
+    @staticmethod
+    def _transform_cache_creation_token_details(
+        usage: ConverseTokenUsageBlock,
+        cache_creation_input_tokens: int,
+    ) -> CacheCreationTokenDetails | None:
+        """Split Bedrock's ``cacheDetails`` per-TTL breakdown into 5m and 1h cache write buckets.
+
+        Returns ``None`` when Bedrock reports no breakdown or when the known TTLs don't account for
+        every cache write token, so pricing falls back to the aggregate cache write rate.
+        """
+        cache_details: Final = usage.get("cacheDetails")
+        if not cache_details:
+            return None
+        tokens_by_ttl: Final = {
+            ttl: sum(detail["inputTokens"] for detail in cache_details if detail["ttl"] == ttl)
+            for ttl in ("5m", "1h")
+        }
+        if sum(tokens_by_ttl.values()) != cache_creation_input_tokens:
+            return None
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=tokens_by_ttl["5m"],
+            ephemeral_1h_input_tokens=tokens_by_ttl["1h"],
+        )
+
     def _transform_usage(
         self,
         usage: ConverseTokenUsageBlock,
@@ -1792,6 +1817,9 @@ class AmazonConverseConfig(BaseConfig):
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
+            cache_creation_token_details=self._transform_cache_creation_token_details(
+                usage, cache_creation_input_tokens
+            ),
             text_tokens=raw_input_tokens,
         )
         reasoning_tokens = token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
