@@ -333,3 +333,30 @@ class TestFormatDeprecationAlertMessage:
         assert "`soon`" in message
         # Upcoming models must NOT be in the alert (avoid alert fatigue).
         assert "`later`" not in message
+
+    def test_should_neutralize_slack_markup_from_model_metadata(self):
+        today = date(2026, 6, 1)
+        router = _make_router(
+            [
+                {
+                    "model_name": "<!channel> pwned",
+                    "litellm_params": {"model": "openai/whatever"},
+                    "model_info": {
+                        "id": "1",
+                        "deprecation_date": "2026-06-10",
+                        "litellm_provider": "<https://evil.example|openai> & co",
+                    },
+                }
+            ]
+        )
+
+        snapshot = collect_model_deprecations(
+            llm_router=router, warn_within_days=30, today=today
+        )
+        message = format_deprecation_alert_message(snapshot)
+
+        assert message is not None
+        assert "<!channel>" not in message
+        assert "<https://evil.example|openai>" not in message
+        assert "&lt;!channel&gt; pwned" in message
+        assert "&lt;https://evil.example|openai&gt; &amp; co" in message
