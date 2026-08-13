@@ -1526,13 +1526,6 @@ class CustomStreamWrapper:
 
             if response_obj["usage"] is not None:
                 if isinstance(response_obj["usage"], dict):
-                    # Pass the full dict through: rebuilding from only
-                    # prompt/completion/total tokens drops
-                    # prompt_tokens_details (cached_tokens),
-                    # completion_tokens_details (reasoning_tokens) and cache
-                    # token counts that the Usage/BaseModel arms below
-                    # preserve. Usage.__init__ coerces nested detail dicts
-                    # into their wrapper types and tolerates extra keys.
                     setattr(
                         model_response,
                         "usage",
