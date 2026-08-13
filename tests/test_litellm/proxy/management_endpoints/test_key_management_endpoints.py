@@ -4177,6 +4177,7 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
     mock_generate_key = AsyncMock(
         return_value={
             "key": "sk-test-key",
+            "token_id": "tok-1",
             "expires": None,
             "user_id": "alice",
             "team_id": "team-1",
@@ -11362,7 +11363,6 @@ def _make_regenerate_existing_key():
 async def test_execute_virtual_key_regeneration_rejects_preset_over_custom_routes(
     key_type,
 ):
-    """A non-admin regeneration preset must preserve a custom route allowlist."""
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _execute_virtual_key_regeneration,
@@ -11395,7 +11395,6 @@ async def test_execute_virtual_key_regeneration_rejects_preset_over_custom_route
 
 @pytest.mark.asyncio
 async def test_regenerate_rejects_route_transition_before_recording_deletion():
-    """A rejected regeneration must not create a deleted-key history row."""
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         regenerate_key_fn,
@@ -12086,7 +12085,6 @@ class TestAllowedRoutesCallerPermission:
     async def test_non_admin_update_key_rejects_preset_over_custom_routes(
         self, key_type
     ):
-        """A preset must not replace an admin-defined route allowlist."""
         from types import SimpleNamespace
 
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -12122,7 +12120,6 @@ class TestAllowedRoutesCallerPermission:
 
     @pytest.mark.asyncio
     async def test_regenerate_key_omitting_key_type_preserves_classification(self):
-        """Regeneration must not materialize the request model's default key type."""
         from types import SimpleNamespace
 
         from litellm.proxy._types import RegenerateKeyRequest
@@ -12169,7 +12166,6 @@ class TestAllowedRoutesCallerPermission:
         self,
         data: UpdateKeyRequest,
     ):
-        """An explicit default preset must remove the stored route restriction."""
         from types import SimpleNamespace
 
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -12200,7 +12196,6 @@ class TestAllowedRoutesCallerPermission:
         self,
         key_type,
     ):
-        """The key_type-only payload cannot clear an admin-defined allowlist."""
         from types import SimpleNamespace
 
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -13784,6 +13779,18 @@ async def test_ghsa_q775_ui_session_token_team_key_exempt_from_budget_ceiling():
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
+        patch(  # test-quality-ok: isolate key generation helper for budget validation check
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            AsyncMock(
+                return_value={
+                    "key": "sk-test",
+                    "token_id": "tok-1",
+                    "expires": None,
+                    "user_id": "user-1",
+                    "team_id": "team-abc",
+                }
+            ),
+        ),
     ):
         try:
             await _common_key_generation_helper(
