@@ -1160,6 +1160,149 @@ async def test_create_pass_through_route_forwards_timeout():
         assert call_kwargs["timeout"] == 1800
 
 
+def test_pass_through_generic_endpoint_accepts_model():
+    from litellm.proxy._types import PassThroughGenericEndpoint
+
+    endpoint = PassThroughGenericEndpoint(
+        path="/parsers/east",
+        target="http://parser.example.com",
+        model="doc-parser-east",
+    )
+    assert endpoint.model == "doc-parser-east"
+
+
+@pytest.mark.asyncio
+async def test_create_pass_through_route_forwards_model():
+    unique_path = "/test/path/unique/model"
+    endpoint_func = create_pass_through_route(
+        endpoint=unique_path,
+        target="http://example.com",
+        custom_headers={},
+        _forward_headers=True,
+        _merge_query_params=False,
+        dependencies=[],
+        model="doc-parser-east",
+    )
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+    ):
+        sentinel_response = MagicMock()
+        mock_pass_through.return_value = sentinel_response
+        mock_is_registered.return_value = True
+        mock_get_registered.return_value = None
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.url = MagicMock()
+        mock_request.url.path = unique_path
+        mock_request.path_params = {}
+        mock_request.query_params = QueryParams({})
+        mock_request.method = "POST"
+        mock_request.headers = Headers({})
+        mock_request.body = AsyncMock(return_value=b"{}")
+
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.api_key = "test-key"
+
+        result = await endpoint_func(
+            request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+            fastapi_response=MagicMock(),
+        )
+
+        assert result is sentinel_response
+        assert mock_pass_through.call_args[1]["model"] == "doc-parser-east"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "custom_body,configured_model,expected",
+    [
+        ({"query": "parse this"}, "doc-parser-east", "doc-parser-east"),
+        ({"model": "gpt-4o", "messages": []}, "doc-parser-east", "gpt-4o"),
+        ({"query": "parse this"}, None, "unknown"),
+    ],
+)
+async def test_pass_through_request_resolves_model_for_spend_logs(
+    custom_body, configured_model, expected
+):
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.litellm_core_utils.litellm_logging.Logging"
+        ) as mock_logging_cls:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+            ) as mock_get_client:
+                mock_proxy_logging.pre_call_hook = AsyncMock(
+                    side_effect=lambda **kwargs: kwargs["data"]
+                )
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_logging_cls.return_value = MagicMock()
+
+                mock_client = MagicMock()
+                mock_client.client = MagicMock()
+                mock_client.client.send = AsyncMock(
+                    side_effect=httpx.HTTPError("Request failed")
+                )
+                mock_get_client.return_value = mock_client
+
+                mock_request = MagicMock(spec=Request)
+                mock_request.method = "POST"
+                mock_request.headers = Headers({})
+                mock_request.query_params = QueryParams({})
+
+                with pytest.raises(ProxyException, match="Request failed"):
+                    await pass_through_request(
+                        request=mock_request,
+                        target="http://test.com",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                        custom_body=custom_body,
+                        model=configured_model,
+                    )
+
+                mock_logging_cls.assert_called()
+                assert mock_logging_cls.call_args.kwargs["model"] == expected
+
+
+def test_add_exact_path_route_stores_model():
+    mock_app = MagicMock()
+    endpoint_id = "test-model-hint-endpoint"
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=mock_app,
+        path="/parsers/east",
+        target="http://parser.example.com",
+        custom_headers={},
+        forward_headers=False,
+        merge_query_params=False,
+        dependencies=[],
+        cost_per_request=0.0,
+        endpoint_id=endpoint_id,
+        model="doc-parser-east",
+    )
+    stored = next(
+        value
+        for key, value in _registered_pass_through_routes.items()
+        if value["endpoint_id"] == endpoint_id
+    )
+    assert stored["passthrough_params"]["model"] == "doc-parser-east"
+    keys_to_remove = [
+        key
+        for key, value in list(_registered_pass_through_routes.items())
+        if value["endpoint_id"] == endpoint_id
+    ]
+    for key in keys_to_remove:
+        del _registered_pass_through_routes[key]
+
+
 def test_initialize_pass_through_endpoints_with_cost_per_request():
     """
     Test that initialize_pass_through_endpoints correctly passes cost_per_request to route creation

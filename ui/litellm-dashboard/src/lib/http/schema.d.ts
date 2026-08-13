@@ -30724,6 +30724,11 @@ export interface components {
              */
             methods?: string[] | null;
             /**
+             * Model
+             * @description Optional model name written to spend logs for this endpoint. Use when the pass-through is not an LLM completion but still needs per-model metering (e.g. multi-instance document parsers). Request-body `model` still takes precedence when present.
+             */
+            model?: string | null;
+            /**
              * Path
              * @description The route to be added to the LiteLLM Proxy Server.
              */

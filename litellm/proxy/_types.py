@@ -2192,6 +2192,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
+    model: str | None = Field(
+        default=None,
+        description="Optional model name written to spend logs for this endpoint. Use when the pass-through is not an LLM completion but still needs per-model metering (e.g. multi-instance document parsers). Request-body `model` still takes precedence when present.",
+    )
     timeout: float | None = Field(
         default=None,
         description="Upstream request timeout in seconds for this pass-through endpoint. If unset, uses general_settings.pass_through_request_timeout (default 600).",
