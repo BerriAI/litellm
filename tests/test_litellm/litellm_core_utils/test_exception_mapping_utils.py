@@ -300,6 +300,27 @@ def test_lemonade_context_window_error_mapping():
     assert excinfo.value.model == model
 
 
+def test_openai_missing_credentials_maps_to_authentication_error():
+    original_exception = OpenAIError(
+        status_code=500,
+        message=(
+            "Missing credentials. Please pass an `api_key`, `workload_identity`, "
+            "`admin_api_key`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` "
+            "environment variable."
+        ),
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="gpt-4o-mini",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.llm_provider == "openai"
+
+
 @pytest.mark.parametrize(
     "error_message",
     [
