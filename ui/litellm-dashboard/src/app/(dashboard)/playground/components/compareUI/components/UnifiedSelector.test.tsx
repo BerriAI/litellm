@@ -7,8 +7,6 @@ import { EndpointId, ENDPOINT_CONFIGS } from "../endpoint_config";
 const CHAT = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
 const AGENTS = ENDPOINT_CONFIGS[EndpointId.A2A_AGENTS];
 
-// A select's prompt text is a rendered node in one library and an input
-// placeholder attribute in the other, so accept either.
 const promptIsVisible = (text: string) =>
   screen.queryByText(text) !== null || screen.queryByPlaceholderText(text) !== null;
 
@@ -67,8 +65,6 @@ describe("UnifiedSelector", () => {
 
     await openList(user);
 
-    // antd renders a hidden measurement copy of each option, so take the last
-    // match: it is the live one, and it is the only one when there is no copy.
     const matches = await screen.findAllByText("Option Two");
     await user.click(matches[matches.length - 1]);
 
