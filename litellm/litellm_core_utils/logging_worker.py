@@ -56,6 +56,10 @@ class LoggingWorker:
         self._queue: asyncio.Queue[LoggingTask] | None = None
         self._worker_task: asyncio.Task[None] | None = None
         self._running_tasks: set[asyncio.Task[None]] = set()  # mutable-ok: tracks live tasks for cancellation
+        self._task_coroutines: dict[  # mutable-ok: closes queued callbacks when wrapper tasks are cancelled
+            asyncio.Task[None],
+            Coroutine[object, object, object],
+        ] = {}
         self._bound_loop: asyncio.AbstractEventLoop | None = None
         self._stopping: bool = False
         self._last_aggressive_clear_time: float = 0.0
@@ -76,9 +80,9 @@ class LoggingWorker:
         if self._queue is not None and self._bound_loop is not current_loop:
             verbose_logger.debug("LoggingWorker: Event loop changed, reinitializing queue and worker")
             # Clear old state - these are bound to the old loop
+            self._close_queued_coroutines()
             self._queue = None
-            self._worker_task = None
-            self._running_tasks.clear()
+            self._release_running_tasks()
 
         if self._queue is None:
             self._queue = asyncio.Queue(maxsize=self.max_queue_size)
@@ -123,15 +127,43 @@ class LoggingWorker:
             self._process_log_task(logging_task),
         )
         self._running_tasks.add(processing_task)
+        self._task_coroutines[processing_task] = logging_task["coroutine"]
         self._worker_task = processing_task
         processing_task.add_done_callback(self._processing_task_done)
         return True
 
     def _processing_task_done(self, task: asyncio.Task[None]) -> None:
         self._running_tasks.discard(task)
+        if coroutine := self._task_coroutines.pop(task, None):
+            coroutine.close()
         if self._worker_task is task:
             self._worker_task = next(iter(self._running_tasks), None)
         self._start_queued_tasks()
+
+    def _close_queued_coroutines(self) -> None:
+        if self._queue is None:
+            return
+        while True:
+            try:
+                logging_task: Final = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            logging_task["coroutine"].close()
+            self._queue.task_done()
+
+    def _release_running_tasks(self) -> None:
+        for task in tuple(self._running_tasks):
+            if not task.done():
+                try:
+                    task.cancel()
+                except RuntimeError:
+                    pass
+                setattr(task, "_log_destroy_pending", False)
+            if coroutine := self._task_coroutines.get(task):
+                coroutine.close()
+        self._running_tasks.clear()
+        self._task_coroutines.clear()
+        self._worker_task = None
 
     def enqueue(self, coroutine: Coroutine[object, object, object]) -> None:
         """
@@ -353,9 +385,8 @@ class LoggingWorker:
         # Wait for cancellation to settle; ignore errors raised during shutdown.
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
 
-        self._worker_task = None
         # Drop references to completed tasks so we can restart cleanly.
-        self._running_tasks.clear()
+        self._release_running_tasks()
         await self.clear_queue()
         self._stopping = False
 
@@ -522,6 +553,14 @@ class LoggingWorker:
     def flush_on_exit(self) -> None:
         self._flush_on_exit()
 
+    def flush_stale_loop(self) -> None:
+        self._flush_on_exit()
+        self._close_queued_coroutines()
+        self._release_running_tasks()
+        self._queue = None
+        self._bound_loop = None
+        self._stopping = False
+
 
 class LoopAwareLoggingWorker:
     def __init__(
@@ -567,7 +606,7 @@ class LoopAwareLoggingWorker:
                 self._workers[id(loop)] = (weakref.ref(loop), worker)
 
         for stale_worker in stale_workers:
-            stale_worker.flush_on_exit()
+            stale_worker.flush_stale_loop()
         return worker
 
     def start(self) -> None:

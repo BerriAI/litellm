@@ -316,17 +316,17 @@ class TestLoggingWorker:
         task1_result = next((r for r in task_results if r["task_id"] == "task_1"), None)
         assert task1_result is not None, "Task 1 result not found"
         assert task1_result["context_accessible"] is True, "Task 1 should have access to context variable"
-        assert (
-            task1_result["context_value"] == "context_1"
-        ), f"Task 1 should see 'context_1', got: {task1_result['context_value']}"
+        assert task1_result["context_value"] == "context_1", (
+            f"Task 1 should see 'context_1', got: {task1_result['context_value']}"
+        )
 
         # Task 2 should see "context_2"
         task2_result = next((r for r in task_results if r["task_id"] == "task_2"), None)
         assert task2_result is not None, "Task 2 result not found"
         assert task2_result["context_accessible"] is True, "Task 2 should have access to context variable"
-        assert (
-            task2_result["context_value"] == "context_2"
-        ), f"Task 2 should see 'context_2', got: {task2_result['context_value']}"
+        assert task2_result["context_value"] == "context_2", (
+            f"Task 2 should see 'context_2', got: {task2_result['context_value']}"
+        )
 
         # Task 3 should not have access to the context variable
         task3_result = next((r for r in task_results if r["task_id"] == "task_3"), None)
@@ -489,4 +489,50 @@ def test_loop_aware_worker_does_not_strand_tasks_when_event_loops_close():
         loop.run_until_complete(run())
         loop.close()
 
+    assert errors.empty()
+
+
+def test_loop_aware_worker_releases_active_tasks_from_closed_loops():
+    worker = LoopAwareLoggingWorker(timeout=30.0, max_queue_size=10)
+    errors: queue.Queue[dict[str, object]] = queue.Queue()
+    captured_worker: LoggingWorker | None = None
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.set_exception_handler(lambda _loop, context: errors.put(context))
+    started = asyncio.Event()
+
+    async def wait_forever() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    async def run() -> None:
+        nonlocal captured_worker
+        worker.ensure_initialized_and_enqueue(wait_forever())
+        captured_worker = worker._workers[id(asyncio.get_running_loop())][1]
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+
+    try:
+        loop.run_until_complete(run())
+    finally:
+        loop.close()
+
+    next_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(next_loop)
+
+    async def trigger_cleanup() -> None:
+        worker.start()
+
+    try:
+        next_loop.run_until_complete(trigger_cleanup())
+    finally:
+        next_loop.run_until_complete(worker.stop())
+        next_loop.close()
+        asyncio.set_event_loop(None)
+
+    assert captured_worker is not None
+    assert captured_worker._running_tasks == set()
+    assert captured_worker._task_coroutines == {}
+    assert captured_worker._queue is None
+    assert worker._workers == {}
     assert errors.empty()
