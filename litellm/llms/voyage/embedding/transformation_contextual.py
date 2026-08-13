@@ -3,9 +3,7 @@ This module is used to transform the request and response for the Voyage context
 This would be used for all the contextualized embeddings models in Voyage.
 """
 
-from __future__ import annotations
-
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -22,7 +20,7 @@ class VoyageError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict | httpx.Headers = {},  # mutable-ok: base class signature
+        headers: dict | httpx.Headers = {},
     ):
         self.status_code = status_code
         self.message = message
@@ -51,8 +49,8 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,  # mutable-ok: base class signature
-        litellm_params: dict,  # mutable-ok: base class signature
+        optional_params: dict,
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         if api_base:
@@ -86,12 +84,12 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,  # mutable-ok: base class signature
         model: str,
-        messages: list[AllMessageValues],  # mutable-ok: base class signature
-        optional_params: dict,  # mutable-ok: base class signature
-        litellm_params: dict,  # mutable-ok: base class signature
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: base class signature
+    ) -> dict:
         if api_key is None:
             api_key = (
                 get_secret_str("VOYAGE_API_KEY")
@@ -107,10 +105,10 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
     def transform_embedding_request(
         self,
         model: str,
-        input: AllEmbeddingInputValues | list[list[str]],  # mutable-ok: base class signature
-        optional_params: dict,  # mutable-ok: base class signature
-        headers: dict,  # mutable-ok: base class signature
-    ) -> dict:  # mutable-ok: base class signature
+        input: AllEmbeddingInputValues | list[list[str]],
+        optional_params: dict,
+        headers: dict,
+    ) -> dict:
         inputs, extra_params = self._transform_contextual_inputs(input, optional_params)
         return {
             "inputs": inputs,
@@ -184,12 +182,12 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},  # mutable-ok: base class signature
-        optional_params: dict = {},  # mutable-ok: base class signature
-        litellm_params: dict = {},  # mutable-ok: base class signature
+        request_data: dict = {},
+        optional_params: dict = {},
+        litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise VoyageError(
                 message=raw_response.text,
@@ -200,19 +198,14 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )
         model_response.usage = usage
         return model_response
 
-    def get_error_class(
-        self,
-        error_message: str,
-        status_code: int,
-        headers: dict | httpx.Headers,  # mutable-ok: base class signature
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VoyageError(message=error_message, status_code=status_code, headers=headers)
 
     @staticmethod

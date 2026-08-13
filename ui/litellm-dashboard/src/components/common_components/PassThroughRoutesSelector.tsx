@@ -3,7 +3,7 @@ import { Select } from "antd";
 import { getPassThroughEndpointsCall } from "../networking";
 
 interface PassThroughRoutesSelectorProps {
-  onChange: (selectedRoutes: string[]) => void;
+  onChange?: (selectedRoutes: string[]) => void;
   value?: string[];
   className?: string;
   accessToken: string;

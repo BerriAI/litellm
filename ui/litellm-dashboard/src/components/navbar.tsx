@@ -3,6 +3,7 @@ import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBounci
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { useWorker } from "@/hooks/useWorker";
 import { getProxyBaseUrl } from "@/components/networking";
+import { migratedHref } from "@/utils/migratedPages";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
@@ -75,7 +76,7 @@ const Navbar: React.FC<NavbarProps> = ({
             )}
 
             <div className="flex items-center gap-2">
-              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
+              <Link href={migratedHref("")} className="flex items-center">
                 <div className="relative">
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
                     <img

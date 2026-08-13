@@ -26,7 +26,6 @@ from e2e_http import (
     is_ok,
     unwrap,
 )
-from proxy_client import ProxyClient
 from models import (
     AnthropicMessagesBody,
     ChatBody,
@@ -45,15 +44,16 @@ from models import (
     SpendTagsResponse,
     TagSpend,
 )
+from proxy_client import ProxyClient
 
 __all__ = [
+    "ProbeResult",
     "SpendClient",
+    "SpendLogRow",
     "build_client",
+    "is_ok",
     "unique_marker",
     "unwrap",
-    "is_ok",
-    "SpendLogRow",
-    "ProbeResult",
 ]
 
 

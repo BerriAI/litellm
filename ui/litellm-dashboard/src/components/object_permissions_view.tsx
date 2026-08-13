@@ -28,7 +28,7 @@ export function ObjectPermissionsView({
   const searchTools = objectPermission?.search_tools || [];
 
   const content = (
-    <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
+    <div className={variant === "card" ? "grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-6" : "space-y-4"}>
       <VectorStorePermissions vectorStores={vectorStores} accessToken={accessToken} />
       <MCPServerPermissions
         mcpServers={mcpServers}
@@ -53,7 +53,7 @@ export function ObjectPermissionsView({
 
   if (variant === "card") {
     return (
-      <div className={`bg-white border border-gray-200 rounded-lg p-6 ${className}`}>
+      <div className={`@container bg-white border border-gray-200 rounded-lg p-6 ${className}`}>
         <div className="flex items-center gap-2 mb-6">
           <div>
             <Text className="font-semibold text-gray-900">Object Permissions</Text>

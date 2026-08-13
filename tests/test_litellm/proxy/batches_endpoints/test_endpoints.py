@@ -51,7 +51,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
-from litellm.types.utils import LiteLLMBatch
+from litellm.types.utils import CredentialItem, LiteLLMBatch
 
 from fastapi import Response
 
@@ -469,13 +469,14 @@ async def test_create__fallback_body_custom_llm_provider(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_single_model(harness):
+async def test_create__unified_file_id_single_model_disables_cross_model_fallbacks(harness):
     set_body(
         harness,
         {
             "input_file_id": "litellm_proxy_unified_id",
             "endpoint": "/v1/chat/completions",
             "completion_window": "24h",
+            "disable_fallbacks": False,
         },
     )
     with (
@@ -489,6 +490,7 @@ async def test_create__unified_file_id_single_model(harness):
     harness.litellm_acreate.assert_not_called()
     # model injected from the unified id, input_file_id restored, hidden param set
     assert harness.router_kwargs()["model"] == "gpt-4o-mini"
+    assert harness.router_kwargs()["disable_fallbacks"] is True
     assert resp.input_file_id == "litellm_proxy_unified_id"
     assert resp._hidden_params["unified_file_id"] == "unified-xyz"
 
@@ -935,8 +937,7 @@ class RetrieveHarness:
     creds_resolver: MagicMock
     get_batch_from_db: AsyncMock
     update_batch_in_db: AsyncMock
-    resolve_input: AsyncMock
-    resolve_output: AsyncMock
+    ensure_managed_files: AsyncMock
 
     @property
     def router_aretrieve(self) -> AsyncMock:
@@ -973,8 +974,7 @@ def retrieve_harness():
     # Default: DB miss -> always fall through to provider routing.
     get_batch_from_db = AsyncMock(return_value=(None, None))
     update_batch_in_db = AsyncMock(return_value=None)
-    resolve_input = AsyncMock(return_value=None)
-    resolve_output = AsyncMock(return_value=None)
+    ensure_managed_files = AsyncMock(return_value=None)
 
     with ExitStack() as stack:
         stack.enter_context(
@@ -1001,8 +1001,7 @@ def retrieve_harness():
         )
         stack.enter_context(patch.object(endpoints, "get_batch_from_database", get_batch_from_db))
         stack.enter_context(patch.object(endpoints, "update_batch_in_database", update_batch_in_db))
-        stack.enter_context(patch.object(endpoints, "resolve_input_file_id_to_unified", resolve_input))
-        stack.enter_context(patch.object(endpoints, "resolve_output_file_ids_to_unified", resolve_output))
+        stack.enter_context(patch.object(endpoints, "ensure_batch_response_managed_file_ids", ensure_managed_files))
         stack.enter_context(patch.object(litellm, "aretrieve_batch", litellm_aretrieve))
         stack.enter_context(patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", False))
         stack.enter_context(patch.object(proxy_server, "llm_router", router))
@@ -1024,8 +1023,7 @@ def retrieve_harness():
             creds_resolver=router.get_deployment_credentials_with_provider,
             get_batch_from_db=get_batch_from_db,
             update_batch_in_db=update_batch_in_db,
-            resolve_input=resolve_input,
-            resolve_output=resolve_output,
+            ensure_managed_files=ensure_managed_files,
         )
 
 
@@ -1150,9 +1148,8 @@ async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
     assert resp._hidden_params["unified_batch_id"] == UNIFIED_BATCH_ID
     assert resp._hidden_params["model_id"] == "gpt-4o-mini"
 
-    # raw provider file ids on the response are resolved back to unified ids.
-    retrieve_harness.resolve_input.assert_called_once()
-    retrieve_harness.resolve_output.assert_called_once()
+    # raw provider file ids on the response are normalized to managed unified ids.
+    retrieve_harness.ensure_managed_files.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -1168,9 +1165,8 @@ async def test_retrieve__loadbalancing_raw_id_routes_to_router(retrieve_harness)
     # not a unified id -> hidden param reflects that, no model_id stamped.
     assert resp._hidden_params["unified_batch_id"] is False
     assert "model_id" not in resp._hidden_params
-    # not a unified id -> no file-id resolution.
-    retrieve_harness.resolve_input.assert_not_called()
-    retrieve_harness.resolve_output.assert_not_called()
+    # not a unified id -> no managed-file normalization.
+    retrieve_harness.ensure_managed_files.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
@@ -1261,14 +1257,18 @@ async def test_retrieve__db_terminal_state_short_circuits(retrieve_harness, stat
 @pytest.mark.asyncio
 async def test_retrieve__db_terminal_unified_resolves_file_ids(retrieve_harness):
     db_response = make_batch(id="batch-from-db", status="completed")
-    retrieve_harness.get_batch_from_db.return_value = (MagicMock(), db_response)
+    db_batch_object = MagicMock()
+    retrieve_harness.get_batch_from_db.return_value = (db_batch_object, db_response)
 
     with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
         await call_retrieve(retrieve_harness, "batch-unified-blob")
 
-    # Terminal short-circuit still resolves raw provider file ids to unified.
-    retrieve_harness.resolve_input.assert_called_once()
-    retrieve_harness.resolve_output.assert_called_once()
+    # Terminal short-circuit still registers/normalizes raw provider file ids.
+    retrieve_harness.ensure_managed_files.assert_called_once()
+    ensure_kwargs = retrieve_harness.ensure_managed_files.call_args.kwargs
+    assert ensure_kwargs["response"] is db_response
+    assert ensure_kwargs["db_batch_object"] is db_batch_object
+    assert ensure_kwargs["unified_batch_id"] == UNIFIED_BATCH_ID
     retrieve_harness.litellm_aretrieve.assert_not_called()
     retrieve_harness.router_aretrieve.assert_not_called()
 
@@ -1510,26 +1510,14 @@ async def test_list__managed_files_beats_model_param(list_harness):
 
 
 # --------------------------------------------------------------------------- #
-# Branch 2 - model from body/query/header. CURRENTLY BROKEN: the endpoint
-# forwards custom_llm_provider both explicitly and via **data (it calls
-# data.update(credentials) but never pops custom_llm_provider the way
-# create/retrieve do through prepare_data_with_credentials), so every call
-# raises "multiple values for keyword argument 'custom_llm_provider'".
-#
-# The strict xfail below encodes the INTENDED contract (litellm seam fires,
-# creds resolved for the body model, response ids encoded). It xfails today on
-# the duplicate-kwarg TypeError; the day that branch is fixed it will XPASS and
-# strict-mode turns the green into a failure, forcing whoever fixes it to drop
-# the marker and adopt this as a live regression test.
+# Branch 2 - model from body/query/header. The endpoint resolves credentials
+# for the body model, forwards custom_llm_provider once (it pops it from data
+# via prepare_data_with_credentials the way create/retrieve do), and encodes
+# the response ids. Regression guard for the duplicate-kwarg
+# "multiple values for keyword argument 'custom_llm_provider'" bug.
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ProxyException,
-    reason="list_batches model branch passes custom_llm_provider twice "
-    "(explicit kwarg + **data after data.update(credentials)); remove when fixed",
-)
 @pytest.mark.asyncio
 async def test_list__model_from_body_routes_and_encodes(list_harness):
     list_harness.litellm_alist.return_value = FakeListPage([make_batch(id="batch-1"), make_batch(id="batch-2")])
@@ -1899,6 +1887,17 @@ async def test_cancel__unified_batch_id_routes_to_router(cancel_harness):
 
 
 @pytest.mark.asyncio
+async def test_cancel__db_write_receives_caller_auth(cancel_harness):
+    """update_batch_in_database can only mint managed IDs for a cancelled batch's
+    output files when it has an auth context, so cancel must forward the caller's."""
+    caller = UserAPIKeyAuth(api_key="sk-test", user_id="user-cancel-1")
+    with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        await call_cancel(cancel_harness, "batch-unified-blob", user=caller)
+
+    assert cancel_harness.update_batch_in_db.call_args.kwargs["user_api_key_dict"] is caller
+
+
+@pytest.mark.asyncio
 async def test_cancel__unified_missing_model_id_400(cancel_harness):
     # unified id with no model_id segment -> get_model_id returns None -> 400.
     with patch.object(
@@ -1980,19 +1979,11 @@ async def test_cancel__fallback_provider_from_query(cancel_harness):
     assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "azure"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ProxyException,
-    reason="cancel SCENARIO 3: `provider or data.pop('custom_llm_provider')` "
-    "short-circuits when provider (path param) is set, so a body "
-    "custom_llm_provider is left in data and forwarded twice -> duplicate-kwarg "
-    "TypeError. Intended: path param wins cleanly. Remove marker when fixed.",
-)
 @pytest.mark.asyncio
 async def test_cancel__fallback_provider_precedence_path_over_body(cancel_harness):
     """Intended contract: provider path param beats a body custom_llm_provider.
-    CURRENTLY raises because the `or` short-circuit skips the data.pop, leaving
-    the body value to collide with the explicit kwarg."""
+    Regression guard: the body value is popped from data before the fallback
+    chain, so it never collides with the explicit kwarg."""
     await call_cancel(
         cancel_harness,
         "batch-raw-xyz",
@@ -2091,3 +2082,327 @@ async def test_retrieve__unified_no_router_500(retrieve_harness):
     assert exc.value.code == "500"
     retrieve_harness.router_aretrieve.assert_not_called()
     retrieve_harness.litellm_aretrieve.assert_not_called()
+
+
+# =========================================================================== #
+# SCENARIO 3 + configured deployments: a provider-only call (custom-llm-provider
+# header, no model anywhere) must resolve the gateway/team deployment's named
+# credential for that provider and attach it to the provider call kwargs,
+# instead of silently falling through to the host environment's default
+# credentials (regression: vertex batch jobs landing in the hosting env's GCP
+# project because litellm_credential_name never reached the call).
+# =========================================================================== #
+
+VERTEX_NAMED_CREDENTIAL = CredentialItem(
+    credential_name="vertex-named-cred",
+    credential_info={},
+    credential_values={
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    },
+)
+
+
+def vertex_named_credential_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "litellm_credential_name": "vertex-named-cred",
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_create__provider_only_resolves_named_vertex_credentials(harness):
+    """Provider-only create must attach the configured named credential, and must
+    NOT turn the call into a model-routed one (no model kwarg injected)."""
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.provider_from_headers.return_value = "vertex_ai"
+
+    with patch.object(litellm, "credential_list", [VERTEX_NAMED_CREDENTIAL]):
+        with patch.object(proxy_server, "llm_router", vertex_named_credential_router()):
+            await call_create(harness)
+
+    assert harness.acreate_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "metadata": None,
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create__provider_only_ignores_other_provider_deployments(harness):
+    """A provider-only vertex call must not pick up credentials from deployments
+    of a different provider; with no vertex deployment the payload is exactly the
+    pre-fix env-var fallback."""
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.provider_from_headers.return_value = "vertex_ai"
+    openai_only_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-global-openai"},
+            }
+        ]
+    )
+
+    with patch.object(proxy_server, "llm_router", openai_only_router):
+        await call_create(harness)
+
+    assert harness.acreate_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "metadata": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_retrieve__provider_only_resolves_named_vertex_credentials(retrieve_harness):
+    retrieve_harness.provider_from_headers.return_value = "vertex_ai"
+
+    with patch.object(litellm, "credential_list", [VERTEX_NAMED_CREDENTIAL]):
+        with patch.object(proxy_server, "llm_router", vertex_named_credential_router()):
+            await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert retrieve_harness.aretrieve_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "batch_id": "batch-raw-xyz",
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    }
+
+
+@pytest.mark.asyncio
+async def test_list__provider_only_resolves_named_vertex_credentials(list_harness):
+    list_harness.provider_from_headers.return_value = "vertex_ai"
+
+    with patch.object(litellm, "credential_list", [VERTEX_NAMED_CREDENTIAL]):
+        with patch.object(proxy_server, "llm_router", vertex_named_credential_router()):
+            await call_list(list_harness)
+
+    assert list_harness.alist_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "after": None,
+        "limit": None,
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cancel__provider_only_resolves_named_vertex_credentials(cancel_harness):
+    cancel_harness.provider_from_headers.return_value = "vertex_ai"
+
+    with patch.object(litellm, "credential_list", [VERTEX_NAMED_CREDENTIAL]):
+        with patch.object(proxy_server, "llm_router", vertex_named_credential_router()):
+            await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    assert cancel_harness.acancel_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "batch_id": "batch-raw-xyz",
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    }
+
+
+# =========================================================================== #
+# require_managed_files - raw provider ids must not reach the provider.        #
+#                                                                              #
+# Ownership rows only exist for LiteLLM managed ids. A raw provider id sent to #
+# these routes is forwarded under the shared provider credentials with no      #
+# tenant check, so any caller who learns another tenant's id can read its      #
+# batch, reuse its file as batch input, or cancel its job. These lock the      #
+# guard on every batches route that accepts a caller-supplied id.              #
+# =========================================================================== #
+
+
+def _unified_batch_id(model_id: str = "azure/gpt-4o", batch_id: str = "batch-provider-id") -> str:
+    import base64
+
+    from litellm.types.utils import SpecialEnums
+
+    unified = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(model_id, batch_id)
+    return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+def _unified_file_id() -> str:
+    import base64
+
+    from litellm.types.utils import SpecialEnums
+
+    unified = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/json", "managed-id", "gpt-4o-mini", "file-provider-id", "gpt-4o-mini-id"
+    )
+    return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+@dataclass(frozen=True)
+class ManagedResourceAccessCheckerStub:
+    file_access: bool = True
+    object_access: bool = True
+
+    async def can_user_call_unified_file_id(
+        self,
+        unified_file_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return self.file_access
+
+    async def can_user_call_unified_object_id(
+        self,
+        unified_object_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        return self.object_access
+
+
+@pytest.mark.asyncio
+async def test_create__raw_input_file_id_rejected_when_managed_files_required(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-victim-abc123",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "400"
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__model_encoded_input_file_id_rejected_when_managed_files_required(harness):
+    """A model-encoded id is client-forgeable and has no ownership row, so it is
+    not a managed file id and must be rejected like any other raw id."""
+    set_body(
+        harness,
+        {
+            "input_file_id": AZURE_FILE_ID,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "400"
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__raw_input_file_id_allowed_when_managed_files_not_required(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-victim-abc123",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    with patch.object(litellm, "require_managed_files", False):
+        await call_create(harness)
+
+    assert harness.acreate_kwargs()["input_file_id"] == "file-victim-abc123"
+
+
+@pytest.mark.asyncio
+async def test_create__other_teams_unified_input_file_id_rejected(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": _unified_file_id(),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub(file_access=False)
+
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "403"
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__raw_batch_id_rejected_when_managed_files_required(retrieve_harness):
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_retrieve(retrieve_harness, "batch-victim-abc123")
+
+    assert exc.value.code == "400"
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__unified_batch_id_allowed_when_managed_files_required(retrieve_harness):
+    retrieve_harness.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
+    with patch.object(litellm, "require_managed_files", True):
+        await call_retrieve(retrieve_harness, _unified_batch_id())
+
+    assert retrieve_harness.router_aretrieve.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel__raw_batch_id_rejected_when_managed_files_required(cancel_harness):
+    with patch.object(litellm, "require_managed_files", True):
+        with pytest.raises(ProxyException) as exc:
+            await call_cancel(cancel_harness, "batch-victim-abc123")
+
+    assert exc.value.code == "400"
+    cancel_harness.litellm_acancel.assert_not_called()
+    cancel_harness.router_acancel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__unified_batch_id_allowed_when_managed_files_required(cancel_harness):
+    cancel_harness.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+
+    with patch.object(litellm, "require_managed_files", True):
+        await call_cancel(cancel_harness, _unified_batch_id())
+
+    assert cancel_harness.router_acancel.call_count == 1
