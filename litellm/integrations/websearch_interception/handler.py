@@ -10,7 +10,7 @@ import asyncio
 import math
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Never, TypedDict, TypeVar, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -41,7 +41,13 @@ from litellm.types.integrations.websearch_interception import (
     AnthropicServerToolUseBlock,
     WebSearchInterceptionConfig,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.anthropic import AnthropicThinkingParam
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAudioParam,
+    ChatCompletionPredictionContentParam,
+    OpenAIWebSearchOptions,
+)
 from litellm.types.utils import (
     AgenticLoopParams,
     CallTypes,
@@ -51,6 +57,8 @@ from litellm.types.utils import (
 from litellm.utils import ProviderConfigManager
 
 if TYPE_CHECKING:
+    from aiohttp import ClientSession
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
@@ -72,6 +80,8 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_b
 # ``web_search_tool_result`` blocks to inject into the final response.
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 
+_ResponseT = TypeVar("_ResponseT")
+
 
 class _PlanMetadataView(TypedDict):
     websearch_native_blocks: Sequence[Mapping[str, object]] | None
@@ -85,9 +95,96 @@ class _WebSearchSettingsView(TypedDict):
     websearch_interception_params: WebSearchInterceptionConfig
 
 
+class _SearchToolLitellmParams(TypedDict, total=False):
+    search_provider: str | None
+
+
 class _SearchToolConfig(TypedDict, total=False):
     search_tool_name: str
-    litellm_params: Mapping[str, object] | None
+    litellm_params: _SearchToolLitellmParams | None
+
+
+class _LitellmParamsProviderView(TypedDict, total=False):
+    custom_llm_provider: str
+
+
+class _DeploymentCallKwargsView(TypedDict):
+    custom_llm_provider: str
+    litellm_params: _LitellmParamsProviderView
+    model: str
+
+
+class _AcreateNamedParams(TypedDict, total=False):
+    metadata: Never
+    stop_sequences: Never
+    stream: bool | None
+    system: str | None
+    temperature: float | None
+    thinking: Never
+    tool_choice: Never
+    tools: Never
+    top_k: int | None
+    top_p: float | None
+    container: Never
+
+
+class _AsearchNamedParams(TypedDict, total=False):
+    max_results: int | None
+    search_domain_filter: Never
+    max_tokens_per_page: int | None
+    country: str | None
+    api_key: str | None
+    api_base: str | None
+    timeout: float | None
+    extra_headers: Never
+
+
+class _AcompletionNamedParams(TypedDict, total=False):
+    functions: Never
+    function_call: str | None
+    timeout: float | None
+    temperature: float | None
+    top_p: float | None
+    n: int | None
+    stream: bool | None
+    stream_options: Never
+    stop: Never
+    max_tokens: int | None
+    max_completion_tokens: int | None
+    modalities: Never
+    prediction: ChatCompletionPredictionContentParam | None
+    audio: ChatCompletionAudioParam | None
+    presence_penalty: float | None
+    frequency_penalty: float | None
+    logit_bias: Never
+    user: str | None
+    response_format: Never
+    seed: int | None
+    tools: Never
+    tool_choice: Never
+    parallel_tool_calls: bool | None
+    logprobs: bool | None
+    top_logprobs: int | None
+    deployment_id: str | None
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"] | None
+    verbosity: Literal["low", "medium", "high"] | None
+    safety_identifier: str | None
+    service_tier: str | None
+    base_url: str | None
+    api_version: str | None
+    api_key: str | None
+    model_list: Never
+    extra_headers: Never
+    thinking: AnthropicThinkingParam | None
+    web_search_options: OpenAIWebSearchOptions | None
+    include_server_side_tool_invocations: bool | None
+    shared_session: "ClientSession | None"
+    enable_json_schema_validation: bool | None
+
+
+_NO_ACREATE_NAMED: Final[_AcreateNamedParams] = {}
+_NO_ASEARCH_NAMED: Final[_AsearchNamedParams] = {}
+_NO_ACOMPLETION_NAMED: Final[_AcompletionNamedParams] = {}
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -275,12 +372,17 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
         # Check if this is for an enabled provider
         # Try top-level kwargs first, then nested litellm_params, then derive from model name
-        custom_llm_provider = kwargs.get("custom_llm_provider", "") or kwargs.get("litellm_params", {}).get(
+        call_kwargs_view: Final[_DeploymentCallKwargsView] = {
+            "custom_llm_provider": kwargs.get("custom_llm_provider", ""),
+            "litellm_params": kwargs.get("litellm_params", {}),
+            "model": kwargs.get("model", ""),
+        }
+        custom_llm_provider = call_kwargs_view["custom_llm_provider"] or call_kwargs_view["litellm_params"].get(
             "custom_llm_provider", ""
         )
         if not custom_llm_provider:
             try:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=kwargs.get("model", ""))
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=call_kwargs_view["model"])
             except Exception:
                 custom_llm_provider = ""
         if custom_llm_provider not in self.enabled_providers:
@@ -903,17 +1005,18 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _inject_native_blocks(response: Any, native_blocks: Sequence[Mapping[str, object]]) -> Any:
+    def _inject_native_blocks(response: _ResponseT, native_blocks: Sequence[Mapping[str, object]]) -> _ResponseT:
         """Prepend native blocks to response content, dict or object form."""
         if not native_blocks:
             return response
         if isinstance(response, dict):
-            existing = response.get("content") or []
+            existing: Sequence[object] = response.get("content") or []
             response["content"] = list(native_blocks) + list(existing)
             return response
         existing = getattr(response, "content", None) or []
+        content_attribute: Final = "content"
         try:
-            response.content = list(native_blocks) + list(existing)
+            setattr(response, content_attribute, list(native_blocks) + list(existing))
         except (AttributeError, TypeError):
             # Object refused write — fall through and leave the response
             # untouched rather than crash the request.
@@ -1169,10 +1272,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         messages: list[dict],
         tool_calls: list[dict],
         thinking_blocks: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> "AnthropicMessagesResponse | AsyncIterator[object]":
         """Legacy path: execute search + build patch + run follow-up call."""
         request_patch, structured_results = await self._build_anthropic_request_patch(
@@ -1180,9 +1283,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             messages=messages,
             tool_calls=tool_calls,
             thinking_blocks=thinking_blocks,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=dict[str, object](anthropic_messages_optional_request_params),
             logging_obj=logging_obj,
-            kwargs=kwargs,
+            kwargs=dict[str, object](kwargs),
         )
         if request_patch.messages is None:
             raise ValueError("WebSearchInterception: missing follow-up messages")
@@ -1197,12 +1300,14 @@ class WebSearchInterceptionLogger(CustomLogger):
         if max_tokens is None:
             max_tokens = cast(int, kwargs.get("max_tokens", 1024))
 
+        patch_kwargs: Final = dict[str, object](request_patch.kwargs)
         response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
             max_tokens=max_tokens,
             messages=request_patch.messages,
             model=request_patch.model or model,
+            **_NO_ACREATE_NAMED,
             **optional_params,
-            **request_patch.kwargs,
+            **patch_kwargs,
         )
 
         # Legacy path: the new path goes through the typed plan + core
@@ -1344,12 +1449,13 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             search_tool: Final = self._select_search_tool_from_router(llm_router=llm_router)
             search_provider: str | None = None
-            search_litellm_params: dict[str, Any] = {}
+            search_litellm_params: Mapping[str, object] = {}
             search_tool_name: Final = self._selected_search_tool_name(search_tool=search_tool)
             if search_tool is not None:
                 await self._authorize_search_tool(search_tool=search_tool, kwargs=kwargs)
-                search_litellm_params = dict(search_tool.get("litellm_params", {}) or {})
-                search_provider = search_litellm_params.get("search_provider")
+                tool_params: Final[_SearchToolLitellmParams] = search_tool.get("litellm_params", {}) or {}
+                search_litellm_params = dict[str, object](tool_params)
+                search_provider = tool_params.get("search_provider")
 
             # Fallback to perplexity if no router or no search tools configured
             if not search_provider:
@@ -1377,12 +1483,15 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if key != "search_provider" and value is not None
             }
             result: Final = (
-                await litellm.asearch(query=query, search_provider=search_provider, **search_kwargs)
+                await litellm.asearch(
+                    query=query, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
+                )
                 if search_metadata is None
                 else await litellm.asearch(
                     query=query,
                     search_provider=search_provider,
                     litellm_metadata=search_metadata,
+                    **_NO_ASEARCH_NAMED,
                     **search_kwargs,
                 )
             )
@@ -1422,7 +1531,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             valid_token=user_api_key_auth,
         )
 
-        team_id: Final = getattr(user_api_key_auth, "team_id", None)
+        team_id: Final[str | None] = getattr(user_api_key_auth, "team_id", None)
         if team_id:
             from litellm.proxy.proxy_server import (
                 prisma_client,
@@ -1537,10 +1646,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         model: str,
         messages: list[dict],
         tool_calls: list[dict],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
         response_format: str = "openai",
     ) -> "ModelResponse | CustomStreamWrapper":
         """Legacy path: execute search + build patch + run follow-up call."""
@@ -1548,8 +1657,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             model=model,
             messages=messages,
             tool_calls=tool_calls,
-            optional_params=optional_params,
-            kwargs=kwargs,
+            optional_params=dict[str, object](optional_params),
+            kwargs=dict[str, object](kwargs),
             response_format=response_format,
         )
         if request_patch.messages is None:
@@ -1557,11 +1666,13 @@ class WebSearchInterceptionLogger(CustomLogger):
         params: Final = dict(optional_params)
         params.update(request_patch.optional_params)
         params.pop("tool_choice", None)
+        patch_kwargs: Final = dict[str, object](request_patch.kwargs)
         return await litellm.acompletion(
             model=request_patch.model or model,
             messages=request_patch.messages,
+            **_NO_ACOMPLETION_NAMED,
             **params,
-            **request_patch.kwargs,
+            **patch_kwargs,
         )
 
     async def _build_chat_completion_request_patch(

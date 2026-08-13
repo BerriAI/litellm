@@ -10,8 +10,9 @@ POST /v1/tool/policy            - Update the input_policy / output_policy for a 
 """
 
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Annotated, Any, Final
+from typing import TYPE_CHECKING, Annotated, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, TypeAdapter
@@ -48,6 +49,144 @@ from litellm.types.tool_management import (
     ToolUsageLogEntry,
     ToolUsageLogsResponse,
 )
+
+
+class _DailyToolSpendRecord(Protocol):
+    date: str
+    tool_name: str
+    spend: float
+    request_count: int
+
+
+class _SpendLogToolIndexRecord(Protocol):
+    request_id: str
+
+
+class _SpendLogRecord(Protocol):
+    request_id: str
+    startTime: datetime
+    model: str | None
+    spend: float | None
+    total_tokens: int | None
+    messages: object
+    proxy_server_request: object
+
+
+class _VerificationTokenRecord(Protocol):
+    object_permission_id: str | None
+
+
+class _TeamRecord(Protocol):
+    object_permission_id: str | None
+
+
+class _DailyToolSpendTable(Protocol):
+    async def group_by(
+        self,
+        *,
+        by: Sequence[str],
+        sum: Mapping[str, bool],
+        where: Mapping[str, object],
+        order: Mapping[str, object],
+        take: int,
+    ) -> Sequence[object] | None: ...
+
+    async def find_many(
+        self,
+        *,
+        where: Mapping[str, object],
+        order: Sequence[Mapping[str, str]],
+    ) -> Sequence[_DailyToolSpendRecord]: ...
+
+
+class _SpendLogToolIndexTable(Protocol):
+    async def count(self, *, where: Mapping[str, object]) -> int: ...
+
+    async def find_many(
+        self,
+        *,
+        where: Mapping[str, object],
+        order: Mapping[str, str],
+        skip: int,
+        take: int,
+    ) -> Sequence[_SpendLogToolIndexRecord]: ...
+
+
+class _SpendLogsTable(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_SpendLogRecord]: ...
+
+
+class _VerificationTokenTable(Protocol):
+    async def find_unique(self, *, where: Mapping[str, object]) -> _VerificationTokenRecord | None: ...
+
+    async def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
+
+class _TeamTable(Protocol):
+    async def find_unique(self, *, where: Mapping[str, object]) -> _TeamRecord | None: ...
+
+    async def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
+
+class _ObjectPermissionTable(Protocol):
+    async def create(self, *, data: Mapping[str, str | Sequence[str]]) -> object: ...
+
+    async def delete(self, *, where: Mapping[str, object]) -> object: ...
+
+
+class _DailyToolSpendTableHolder(Protocol):
+    @property
+    def table(self) -> _DailyToolSpendTable: ...
+
+
+class _SpendLogToolIndexTableHolder(Protocol):
+    @property
+    def table(self) -> _SpendLogToolIndexTable: ...
+
+
+class _SpendLogsTableHolder(Protocol):
+    @property
+    def table(self) -> _SpendLogsTable: ...
+
+
+class _VerificationTokenTableHolder(Protocol):
+    @property
+    def table(self) -> _VerificationTokenTable: ...
+
+
+class _TeamTableHolder(Protocol):
+    @property
+    def table(self) -> _TeamTable: ...
+
+
+class _ObjectPermissionTableHolder(Protocol):
+    @property
+    def table(self) -> _ObjectPermissionTable: ...
+
+
+def _daily_tool_spend_table(repo: _DailyToolSpendTableHolder) -> _DailyToolSpendTable:
+    return repo.table
+
+
+def _spend_log_tool_index_table(repo: _SpendLogToolIndexTableHolder) -> _SpendLogToolIndexTable:
+    return repo.table
+
+
+def _spend_logs_table(repo: _SpendLogsTableHolder) -> _SpendLogsTable:
+    return repo.table
+
+
+def _verification_token_table(repo: _VerificationTokenTableHolder) -> _VerificationTokenTable:
+    return repo.table
+
+
+def _team_table(repo: _TeamTableHolder) -> _TeamTable:
+    return repo.table
+
+
+def _object_permission_table(repo: _ObjectPermissionTableHolder) -> _ObjectPermissionTable:
+    return repo.table
+
 
 router: Final = APIRouter()
 
@@ -154,6 +293,7 @@ class _TopToolRow(BaseModel):
 
 
 _TOP_TOOL_ROWS: Final = TypeAdapter(list[_TopToolRow])
+_PARSED_JSON: Final = TypeAdapter(object)
 
 
 @router.get(
@@ -201,7 +341,7 @@ async def get_tool_spend(
     end_str: Final = end_day.strftime("%Y-%m-%d")
     date_window: Final = {"date": {"gte": start_str, "lte": end_str}}
 
-    table: Final = DailyToolSpendRepository(prisma_client).table
+    table: Final = _daily_tool_spend_table(DailyToolSpendRepository(prisma_client))
     top_tools: Final = _TOP_TOOL_ROWS.validate_python(
         await table.group_by(
             by=["tool_name"],
@@ -222,7 +362,7 @@ async def get_tool_spend(
         for row in top_tools
     ]
 
-    daily_rows: Final = (
+    daily_rows: Final[Sequence[_DailyToolSpendRecord]] = (
         await table.find_many(
             where={**date_window, "tool_name": {"in": [row.tool_name for row in top_tools]}},
             order=[{"date": "asc"}, {"spend": "desc"}],
@@ -270,23 +410,23 @@ async def get_tool_detail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _input_snippet_for_tool_log(sl: Any, max_len: int = 200) -> str | None:
+def _input_snippet_for_tool_log(sl: _SpendLogRecord | None, max_len: int = 200) -> str | None:
     """Short snippet from messages or proxy_server_request for tool usage log row."""
     if sl is None:
         return None
-    messages: Final = getattr(sl, "messages", None)
+    messages: Final[object] = getattr(sl, "messages", None)
     if messages is not None:
         s = _snippet_str(messages, max_len)
         if s:
             return s
-    psr = getattr(sl, "proxy_server_request", None)
+    psr: object = getattr(sl, "proxy_server_request", None)
     if not psr:
         return None
     if isinstance(psr, str):
         import json
 
         try:
-            psr = json.loads(psr)
+            psr = _PARSED_JSON.validate_python(json.loads(psr))
         except Exception:
             return _snippet_str(psr, max_len)
     if isinstance(psr, dict):
@@ -299,7 +439,7 @@ def _input_snippet_for_tool_log(sl: Any, max_len: int = 200) -> str | None:
     return _snippet_str(psr, max_len)
 
 
-def _snippet_str(text: Any, max_len: int = 200) -> str | None:
+def _snippet_str(text: object, max_len: int = 200) -> str | None:
     if text is None:
         return None
     if isinstance(text, str):
@@ -344,10 +484,9 @@ async def get_tool_usage_logs(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        where: Final[dict] = {"tool_name": tool_name}
+        start_time_filter: datetime | None = None
+        end_time_filter: datetime | None = None
         if start_date or end_date:
-            start_time_filter: datetime | None = None
-            end_time_filter: datetime | None = None
             if start_date:
                 try:
                     start_time_filter = datetime.strptime(start_date + "T00:00:00", "%Y-%m-%dT%H:%M:%S").replace(
@@ -362,15 +501,15 @@ async def get_tool_usage_logs(
                     )
                 except ValueError:
                     pass
-            if start_time_filter is not None or end_time_filter is not None:
-                where["start_time"] = {}
-                if start_time_filter is not None:
-                    where["start_time"]["gte"] = start_time_filter
-                if end_time_filter is not None:
-                    where["start_time"]["lte"] = end_time_filter
+        start_time_range: Final[Mapping[str, datetime]] = {
+            key: value for key, value in (("gte", start_time_filter), ("lte", end_time_filter)) if value is not None
+        }
+        where: Final[Mapping[str, str | Mapping[str, datetime]]] = (
+            {"tool_name": tool_name, "start_time": start_time_range} if start_time_range else {"tool_name": tool_name}
+        )
 
-        total: Final = await SpendLogToolIndexRepository(prisma_client).table.count(where=where)
-        index_rows: Final = await SpendLogToolIndexRepository(prisma_client).table.find_many(
+        total: Final = await _spend_log_tool_index_table(SpendLogToolIndexRepository(prisma_client)).count(where=where)
+        index_rows: Final = await _spend_log_tool_index_table(SpendLogToolIndexRepository(prisma_client)).find_many(
             where=where,
             order={"start_time": "desc"},
             skip=(page - 1) * page_size,
@@ -380,7 +519,9 @@ async def get_tool_usage_logs(
         if not request_ids:
             return ToolUsageLogsResponse(logs=[], total=total, page=page, page_size=page_size)
 
-        spend_logs = await SpendLogsRepository(prisma_client).table.find_many(where={"request_id": {"in": request_ids}})
+        spend_logs = await _spend_logs_table(SpendLogsRepository(prisma_client)).find_many(
+            where={"request_id": {"in": request_ids}}
+        )
         log_by_id: Final = {s.request_id: s for s in spend_logs}
 
         logs_out: Final[list[ToolUsageLogEntry]] = []
@@ -449,23 +590,29 @@ async def _resolve_key_hash_to_object_permission_id(
     hashed: Final = key_hash if "sk-" not in (key_hash or "") else hash_token(key_hash)
     if not hashed:
         return None
-    row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed})
+    row = await _verification_token_table(VerificationTokenRepository(prisma_client)).find_unique(
+        where={"token": hashed}
+    )
     if row is None:
         return None
-    op_id: Final = getattr(row, "object_permission_id", None)
+    op_id: Final[str | None] = getattr(row, "object_permission_id", None)
     if op_id:
         return op_id
     new_id: Final = str(uuid.uuid4())
-    await ObjectPermissionRepository(prisma_client).table.create(
+    await _object_permission_table(ObjectPermissionRepository(prisma_client)).create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    updated_count: Final = await VerificationTokenRepository(prisma_client).table.update_many(
+    updated_count: Final = await _verification_token_table(VerificationTokenRepository(prisma_client)).update_many(
         where={"token": hashed, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
     if updated_count == 0:
-        await ObjectPermissionRepository(prisma_client).table.delete(where={"object_permission_id": new_id})
-        row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed})
+        await _object_permission_table(ObjectPermissionRepository(prisma_client)).delete(
+            where={"object_permission_id": new_id}
+        )
+        row = await _verification_token_table(VerificationTokenRepository(prisma_client)).find_unique(
+            where={"token": hashed}
+        )
         return getattr(row, "object_permission_id", None) if row else None
     return new_id
 
@@ -478,23 +625,25 @@ async def _resolve_team_id_to_object_permission_id(
     if not team_id or not team_id.strip():
         return None
     team_id_clean: Final = team_id.strip()
-    row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id_clean})
+    row = await _team_table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id_clean})
     if row is None:
         return None
-    op_id: Final = getattr(row, "object_permission_id", None)
+    op_id: Final[str | None] = getattr(row, "object_permission_id", None)
     if op_id:
         return op_id
     new_id: Final = str(uuid.uuid4())
-    await ObjectPermissionRepository(prisma_client).table.create(
+    await _object_permission_table(ObjectPermissionRepository(prisma_client)).create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    updated_count: Final = await TeamRepository(prisma_client).table.update_many(
+    updated_count: Final = await _team_table(TeamRepository(prisma_client)).update_many(
         where={"team_id": team_id_clean, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
     if updated_count == 0:
-        await ObjectPermissionRepository(prisma_client).table.delete(where={"object_permission_id": new_id})
-        row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id_clean})
+        await _object_permission_table(ObjectPermissionRepository(prisma_client)).delete(
+            where={"object_permission_id": new_id}
+        )
+        row = await _team_table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id_clean})
         return getattr(row, "object_permission_id", None) if row else None
     return new_id
 

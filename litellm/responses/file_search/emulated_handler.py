@@ -14,16 +14,19 @@ Flow:
 import json
 import time
 import uuid
-from collections.abc import Iterable
-from typing import Any, Final, cast
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
 
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+
 # Keep ToolParam broad so we stay compatible with both dict and Pydantic forms
-ToolParam = Any
+ToolParam = object
 
 FILE_SEARCH_FUNCTION_NAME: Final = "litellm_file_search"
 
@@ -35,7 +38,7 @@ FILE_SEARCH_FUNCTION_NAME: Final = "litellm_file_search"
 
 def should_use_emulated_file_search(
     tools: Iterable[ToolParam] | None,
-    provider_config: Any,  # BaseResponsesAPIConfig
+    provider_config: "BaseResponsesAPIConfig | None",
 ) -> bool:
     """Return True when there is a file_search tool and the provider can't handle it natively."""
     if not tools:
@@ -51,7 +54,7 @@ def should_use_emulated_file_search(
 # ---------------------------------------------------------------------------
 
 
-def _build_function_tool(vector_store_ids: list[str]) -> dict[str, Any]:
+def _build_function_tool(vector_store_ids: Sequence[str]) -> Mapping[str, object]:
     """
     Create a Responses API function-tool definition that describes file search.
     The function accepts one or more natural-language queries (like OpenAI's native
@@ -94,27 +97,26 @@ def _build_function_tool(vector_store_ids: list[str]) -> dict[str, Any]:
     }
 
 
+def _file_search_tool_vector_store_ids(tool: object) -> Sequence[str] | None:
+    if not (isinstance(tool, dict) and tool.get("type") == "file_search"):
+        return None
+    return tool.get("vector_store_ids") or []
+
+
 def _replace_file_search_tools(
     tools: Iterable[ToolParam] | None,
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[Sequence[object], Sequence[str]]:
     """
     Replace all file_search tools with a single function tool.
 
     Returns:
         (new_tools_list, all_vector_store_ids)
     """
-    non_file_search: Final[list[dict[str, Any]]] = []
-    vector_store_ids: Final[list[str]] = []
-
-    for tool in tools or []:
-        if isinstance(tool, dict) and tool.get("type") == "file_search":
-            ids = tool.get("vector_store_ids") or []
-            vector_store_ids.extend(ids)
-        else:
-            non_file_search.append(tool)
+    ids_and_tools: Final = tuple((_file_search_tool_vector_store_ids(tool), tool) for tool in tools or ())
 
     # Deduplicate while preserving order
-    unique_ids: Final[list[str]] = list(dict.fromkeys(vector_store_ids))
+    unique_ids: Final = list(dict.fromkeys(vs_id for ids, _ in ids_and_tools if ids is not None for vs_id in ids))
+    non_file_search: Final = [tool for ids, tool in ids_and_tools if ids is None]
     if unique_ids:
         non_file_search.append(_build_function_tool(unique_ids))
 
@@ -127,9 +129,9 @@ def _replace_file_search_tools(
 
 
 async def _run_vector_searches(
-    queries: list[str],
-    vector_store_ids: list[str],
-) -> tuple[list[str], list[VectorStoreSearchResult]]:
+    queries: Sequence[str],
+    vector_store_ids: Sequence[str],
+) -> tuple[Sequence[str], Sequence[VectorStoreSearchResult]]:
     """
     Run `asearch` against all vector stores for all queries and collect results.
 
@@ -172,7 +174,7 @@ async def _run_vector_searches(
 # ---------------------------------------------------------------------------
 
 
-def _get_field(result: Any, key: str, default: Any = None) -> Any:
+def _get_field(result: object, key: str, default: object = None) -> object:
     """Read a field from either a dict/TypedDict or an attribute-based object."""
     if isinstance(result, dict):
         return result.get(key, default)
@@ -180,7 +182,7 @@ def _get_field(result: Any, key: str, default: Any = None) -> Any:
 
 
 def _format_search_results_as_tool_output(
-    results: list[VectorStoreSearchResult],
+    results: Sequence[VectorStoreSearchResult],
 ) -> str:
     """Serialize search results into a string to pass back as the tool's output."""
     if not results:
@@ -191,7 +193,8 @@ def _format_search_results_as_tool_output(
         score = _get_field(result, "score")
         file_id = _get_field(result, "file_id")
         filename = _get_field(result, "filename")
-        content_items = _get_field(result, "content") or []
+        raw_content = _get_field(result, "content")
+        content_items = raw_content if isinstance(raw_content, list) else []
         text_chunks = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
         text = " ".join(t for t in text_chunks if t)
 
@@ -209,9 +212,24 @@ def _format_search_results_as_tool_output(
     return "\n\n".join(parts)
 
 
+def _format_result_for_include(result: VectorStoreSearchResult) -> Mapping[str, object]:
+    file_id: Final = _get_field(result, "file_id") or ""
+    raw_content: Final = _get_field(result, "content")
+    content_items: Final = raw_content if isinstance(raw_content, list) else []
+    text_chunks: Final = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
+    text: Final = " ".join(t for t in text_chunks if t)
+    return {
+        "file_id": file_id,
+        "filename": _get_field(result, "filename") or "",
+        "score": _get_field(result, "score"),
+        "text": text,
+        "attributes": _get_field(result, "attributes") or {},
+    }
+
+
 def _build_search_results_for_include(
-    results: list[VectorStoreSearchResult],
-) -> list[dict[str, Any]]:
+    results: Sequence[VectorStoreSearchResult],
+) -> Sequence[Mapping[str, object]]:
     """
     Convert VectorStoreSearchResult objects to the format expected in
     file_search_call.search_results (mirrors OpenAI's include= format).
@@ -220,30 +238,15 @@ def _build_search_results_for_include(
     behaviour of OpenAI's native file_search which surfaces every relevant
     chunk even when multiple chunks originate from the same document.
     """
-    formatted: Final[list[dict[str, Any]]] = []
-    for result in results:
-        file_id = _get_field(result, "file_id") or ""
-        content_items = _get_field(result, "content") or []
-        text_chunks = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
-        text = " ".join(t for t in text_chunks if t)
-        formatted.append(
-            {
-                "file_id": file_id,
-                "filename": _get_field(result, "filename") or "",
-                "score": _get_field(result, "score"),
-                "text": text,
-                "attributes": _get_field(result, "attributes") or {},
-            }
-        )
-    return formatted
+    return [_format_result_for_include(result) for result in results]
 
 
 def _build_file_search_call_output(
     call_id: str,
-    queries: list[str],
-    results: list[VectorStoreSearchResult] | None = None,
+    queries: Sequence[str],
+    results: Sequence[VectorStoreSearchResult] | None = None,
     include_search_results: bool = False,
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     """Build the file_search_call output item (mirrors OpenAI's format).
 
     Args:
@@ -266,39 +269,34 @@ def _build_file_search_call_output(
 
 
 def _build_file_citation_annotations(
-    results: list[VectorStoreSearchResult],
+    results: Sequence[VectorStoreSearchResult],
     text: str,
-) -> list[dict[str, Any]]:
+) -> Sequence[Mapping[str, object]]:
     """
     Build file_citation annotations for the text.
     Each result with a file_id gets a citation at the end of the text.
     """
-    annotations: Final[list[dict[str, Any]]] = []
     index: Final = len(text)  # cite at end of text block
-    seen_file_ids: Final[set] = set()
+    id_filename_pairs: Final = tuple(
+        (_get_field(result, "file_id"), _get_field(result, "filename")) for result in results
+    )
+    first_filename_by_id: Final = {file_id: filename for file_id, filename in reversed(id_filename_pairs) if file_id}
 
-    for result in results:
-        file_id = _get_field(result, "file_id")
-        filename = _get_field(result, "filename")
-        if not file_id or file_id in seen_file_ids:
-            continue
-        seen_file_ids.add(file_id)
-        annotations.append(
-            {
-                "type": "file_citation",
-                "index": index,
-                "file_id": file_id,
-                "filename": filename or "",
-            }
-        )
-
-    return annotations
+    return [
+        {
+            "type": "file_citation",
+            "index": index,
+            "file_id": file_id,
+            "filename": first_filename_by_id[file_id] or "",
+        }
+        for file_id in dict.fromkeys(file_id for file_id, _ in id_filename_pairs if file_id)
+    ]
 
 
 def _build_message_output(
     response_text: str,
-    results: list[VectorStoreSearchResult],
-) -> dict[str, Any]:
+    results: Sequence[VectorStoreSearchResult],
+) -> Mapping[str, object]:
     """Build the message output item with optional file_citation annotations."""
     annotations: Final = _build_file_citation_annotations(results, response_text)
     return {
@@ -330,8 +328,8 @@ def _extract_text_from_responses_output(response: ResponsesAPIResponse) -> str:
 
 def _synthesize_responses_api_response(
     original_response: ResponsesAPIResponse,
-    file_search_call_output: dict[str, Any],
-    message_output: dict[str, Any],
+    file_search_call_output: Mapping[str, object],
+    message_output: Mapping[str, object],
     first_response: ResponsesAPIResponse | None = None,
 ) -> ResponsesAPIResponse:
     """
@@ -343,21 +341,20 @@ def _synthesize_responses_api_response(
     synthesized _hidden_params so that billing callbacks see the total cost of
     both provider calls that the emulated flow makes.
     """
-    synthesized_output: Final[list[dict[str, Any]]] = [file_search_call_output, message_output]
     synthesized: Final = ResponsesAPIResponse(
         id=getattr(original_response, "id", f"resp_{uuid.uuid4().hex}"),
         object="response",
         created_at=getattr(original_response, "created_at", int(time.time())),
         status="completed",
         model=getattr(original_response, "model", ""),
-        output=cast(list[ResponseOutputItem | dict[str, Any]], synthesized_output),
+        output=[dict(file_search_call_output), dict(message_output)],
         usage=getattr(original_response, "usage", None),
         error=None,
     )
     if hasattr(original_response, "_hidden_params"):
         hidden: Final = dict(getattr(original_response, "_hidden_params") or {})
         if first_response is not None and hasattr(first_response, "_hidden_params"):
-            first_hidden: Final = getattr(first_response, "_hidden_params") or {}
+            first_hidden: Final[object] = getattr(first_response, "_hidden_params", None) or {}
             first_cost: Final = (
                 first_hidden.get("response_cost")
                 if isinstance(first_hidden, dict)
@@ -382,9 +379,10 @@ async def _call_aresponses(input, model, tools, **kwargs):  # pragma: no cover â
 
 
 def _prepare_emulated_file_search_call(
-    kwargs: dict[str, Any],
-) -> tuple[bool, dict[str, Any]]:
-    include_items: Final[list[str]] = list(kwargs.get("include") or [])
+    kwargs: Mapping[str, object],
+) -> tuple[bool, Mapping[str, object]]:
+    raw_include: Final = kwargs.get("include")
+    include_items: Final[Sequence[str]] = raw_include if isinstance(raw_include, list) else []
     include_search_results: Final = "file_search_call.results" in include_items
 
     original_stream: Final = kwargs.get("stream")
@@ -398,7 +396,7 @@ def _prepare_emulated_file_search_call(
     return include_search_results, updated_kwargs
 
 
-def _extract_tool_call_fields(tool_call: Any, fallback_call_id: str) -> tuple[str, str]:
+def _extract_tool_call_fields(tool_call: object, fallback_call_id: str) -> tuple[str, str]:
     """Extract (call_id, raw_arguments_string) from a dict or Pydantic tool_call item."""
     if isinstance(tool_call, dict):
         call_id = str(tool_call.get("call_id") or tool_call.get("id") or fallback_call_id)
@@ -410,7 +408,13 @@ def _extract_tool_call_fields(tool_call: Any, fallback_call_id: str) -> tuple[st
     return call_id, raw_args
 
 
-def _resolve_queries_from_args(args: dict[str, Any], input: Any) -> list[str]:
+class _FileSearchArguments(TypedDict, total=False):
+    queries: Sequence[str]
+    query: str
+    vector_store_id: str
+
+
+def _resolve_queries_from_args(args: _FileSearchArguments, input: object) -> Sequence[str]:
     """Pull the queries list out of parsed tool-call arguments, with backward-compat fallbacks."""
     queries_from_call: Final = args.get("queries")
     if not queries_from_call:
@@ -422,76 +426,96 @@ def _resolve_queries_from_args(args: dict[str, Any], input: Any) -> list[str]:
     return queries_from_call
 
 
-async def _execute_file_search_tool_calls(
-    file_search_calls: list[Any],
-    all_vs_ids: list[str],
-    input: Any,
+def _parse_file_search_arguments(raw_args: str) -> _FileSearchArguments:
+    if not isinstance(raw_args, str):
+        return raw_args
+    try:
+        return json.loads(raw_args)
+    except json.JSONDecodeError:
+        return {}
+
+
+async def _execute_single_file_search_call(
+    tool_call: object,
+    all_vs_ids: Sequence[str],
+    input: object,
     file_search_call_id: str,
-) -> tuple[list[dict[str, Any]], list[str], list[VectorStoreSearchResult]]:
+) -> tuple[Mapping[str, object], Sequence[str], Sequence[VectorStoreSearchResult]]:
+    call_id, raw_args = _extract_tool_call_fields(tool_call, fallback_call_id=file_search_call_id)
+    args: Final = _parse_file_search_arguments(raw_args)
+    queries_from_call: Final = _resolve_queries_from_args(args, input)
+
+    vs_id_arg: Final = args.get("vector_store_id")
+    vs_ids_for_call: Final = [vs_id_arg] if vs_id_arg else all_vs_ids
+
+    queries, results = await _run_vector_searches(
+        queries=queries_from_call,
+        vector_store_ids=vs_ids_for_call,
+    )
+
+    return (
+        {
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": _format_search_results_as_tool_output(results),
+        },
+        queries,
+        results,
+    )
+
+
+async def _execute_file_search_tool_calls(
+    file_search_calls: Sequence[object],
+    all_vs_ids: Sequence[str],
+    input: object,
+    file_search_call_id: str,
+) -> tuple[Sequence[Mapping[str, object]], Sequence[str], Sequence[VectorStoreSearchResult]]:
     """Run the vector search for each file_search tool_call and collect results."""
-    tool_results: Final[list[dict[str, Any]]] = []
-    all_queries: Final[list[str]] = []
-    all_results: Final[list[VectorStoreSearchResult]] = []
+    per_call: Final = tuple(
+        [
+            await _execute_single_file_search_call(
+                tool_call=tool_call,
+                all_vs_ids=all_vs_ids,
+                input=input,
+                file_search_call_id=file_search_call_id,
+            )
+            for tool_call in file_search_calls
+        ]
+    )
 
-    for tool_call in file_search_calls:
-        call_id, raw_args = _extract_tool_call_fields(tool_call, fallback_call_id=file_search_call_id)
-
-        try:
-            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-        except json.JSONDecodeError:
-            args = {}
-
-        queries_from_call = _resolve_queries_from_args(args, input)
-
-        vs_id_arg = args.get("vector_store_id")
-        vs_ids_for_call = [vs_id_arg] if vs_id_arg else all_vs_ids
-
-        queries, results = await _run_vector_searches(
-            queries=queries_from_call,
-            vector_store_ids=vs_ids_for_call,
-        )
-        all_queries.extend(queries)
-        all_results.extend(results)
-
-        tool_results.append(
-            {
-                "type": "function_call_output",
-                "call_id": call_id,
-                "output": _format_search_results_as_tool_output(results),
-            }
-        )
-
-    return tool_results, all_queries, all_results
+    return (
+        [tool_result for tool_result, _, _ in per_call],
+        [query for _, queries, _ in per_call for query in queries],
+        [result for _, _, results in per_call for result in results],
+    )
 
 
 def _build_follow_up_input(
-    input: Any,
+    input: object,
     first_response: ResponsesAPIResponse,
-    tool_results: list[dict[str, Any]],
-) -> list[Any]:
+    tool_results: Sequence[Mapping[str, object]],
+) -> Sequence[object]:
     """Assemble the follow-up call input: original messages + first-response output + tool results.
 
     Including all output items (text blocks, reasoning, non-file-search calls) ensures providers
     like Anthropic that emit text before the tool call have complete conversation context.
     Serializes Pydantic model instances to plain dicts so the transformation layer can call .get().
     """
-    original_input_items: Final = (
-        list(input) if isinstance(input, (list, tuple)) else [{"role": "user", "content": str(input)}]
+    original_input_items: Final[tuple[object, ...]] = (
+        tuple(input) if isinstance(input, (list, tuple)) else ({"role": "user", "content": str(input)},)
     )
-    first_response_output_items: Final[list[Any]] = []
-    for _item in first_response.output:
-        if isinstance(_item, dict):
-            first_response_output_items.append(_item)
-        elif hasattr(_item, "model_dump"):
-            first_response_output_items.append(_item.model_dump(exclude_none=True))
-        else:
-            first_response_output_items.append(_item)
+    first_response_output_items: Final[tuple[object, ...]] = tuple(
+        _item
+        if isinstance(_item, dict)
+        else (_item.model_dump(exclude_none=True) if hasattr(_item, "model_dump") else _item)
+        for _item in first_response.output
+    )
 
-    return original_input_items + first_response_output_items + tool_results
+    return [*original_input_items, *first_response_output_items, *tool_results]
 
 
 async def aresponses_with_emulated_file_search(
-    input: Any,
+    input: object,
     model: str,
     tools: Iterable[ToolParam] | None = None,
     # Pass-through params â€” forwarded as-is to the underlying aresponses call
@@ -504,7 +528,7 @@ async def aresponses_with_emulated_file_search(
     runs vector search, and synthesizes an OpenAI-format response.
     """
     # Determine whether caller wants search_results populated in the output.
-    _include_search_results, kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
+    _include_search_results, call_kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
 
     # 1. Replace file_search tools with function tool
     transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
@@ -521,7 +545,7 @@ async def aresponses_with_emulated_file_search(
                 input=input,
                 model=model,
                 tools=transformed_tools or None,
-                **kwargs,
+                **call_kwargs,
             ),
         )
     finally:
@@ -585,7 +609,7 @@ async def aresponses_with_emulated_file_search(
                 input=follow_up_input,
                 model=model,
                 tools=None,  # no tools needed for the answer step
-                **kwargs,
+                **call_kwargs,
             ),
         )
     finally:
