@@ -1298,6 +1298,82 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
     ), f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
 
 
+@pytest.mark.asyncio
+async def test_ageneric_api_call_resolves_realtime_session_model():
+    """
+    Regression for #36742: realtime client secret requests carry the model inside `session` too, and the proxy
+    fills it with the pre-routing model group name. The underlying litellm function reads session.model first,
+    so it must see the resolved deployment, while a caller's nested transcription model stays untouched.
+    """
+    captured: dict = {}
+
+    async def capture_kwargs(**kwargs):
+        captured.update(kwargs)
+        return {"result": "ok"}
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-realtime-group",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime-2.1-mini",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"mode": "realtime"},
+            }
+        ]
+    )
+
+    await router._ageneric_api_call_with_fallbacks(
+        model="my-realtime-group",
+        original_function=capture_kwargs,
+        session={
+            "type": "realtime",
+            "model": "my-realtime-group",
+            "audio": {"input": {"transcription": {"model": "gpt-4o-transcribe"}}},
+        },
+    )
+
+    assert captured["model"] == "openai/gpt-realtime-2.1-mini"
+    assert captured["session"]["model"] == "openai/gpt-realtime-2.1-mini"
+    assert captured["session"]["audio"]["input"]["transcription"]["model"] == "gpt-4o-transcribe"
+
+
+@pytest.mark.asyncio
+async def test_ageneric_api_call_does_not_add_session_model():
+    """
+    A session that never carried a model must not gain one from routing: the underlying function then falls back
+    to the resolved `model` kwarg itself, and the outgoing session body keeps the caller's shape.
+    """
+    captured: dict = {}
+
+    async def capture_kwargs(**kwargs):
+        captured.update(kwargs)
+        return {"result": "ok"}
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-realtime-group",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime-2.1-mini",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"mode": "realtime"},
+            }
+        ]
+    )
+
+    await router._ageneric_api_call_with_fallbacks(
+        model="my-realtime-group",
+        original_function=capture_kwargs,
+        session={"type": "realtime"},
+    )
+
+    assert captured["model"] == "openai/gpt-realtime-2.1-mini"
+    assert captured["session"] == {"type": "realtime"}
+
+
 def test_router_get_model_access_groups_team_only_models():
     """
     Test that Router.get_model_access_groups returns the correct response for team-only models
