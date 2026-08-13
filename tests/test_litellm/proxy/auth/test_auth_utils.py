@@ -3200,3 +3200,121 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             )
             is True
         )
+
+
+class TestClientsideApiKeyRequiresAdminOptIn:
+    """A caller-supplied body ``api_key`` overrides the deployment's
+    admin-configured provider credential, so it needs the same opt-in as
+    ``api_base``. Before this fix the proxy silently signed the upstream
+    call with the caller's key on every LLM route."""
+
+    @pytest.mark.parametrize(
+        "route",
+        ["/v1/chat/completions", "/chat/completions", "/v1/messages", "/v1/embeddings", "/v1/responses"],
+    )
+    def test_body_api_key_rejected_on_llm_routes(self, route):
+        with pytest.raises(ValueError, match="api_key"):
+            is_request_body_safe(
+                request_body={"model": "gemini-flash", "api_key": "caller-supplied-key"},
+                general_settings={},
+                llm_router=None,
+                model="gemini-flash",
+                route=route,
+            )
+
+    def test_extra_body_api_key_rejected(self):
+        with pytest.raises(ValueError, match="api_key"):
+            is_request_body_safe(
+                request_body={"model": "gemini-flash", "extra_body": {"api_key": "caller-supplied-key"}},
+                general_settings={},
+                llm_router=None,
+                model="gemini-flash",
+                route="/v1/chat/completions",
+            )
+
+    def test_proxy_wide_opt_in_allows_body_api_key(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-flash", "api_key": "caller-supplied-key"},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gemini-flash",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+
+    def test_per_deployment_opt_in_allows_body_api_key(self):
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gemini-flash",
+                    "litellm_params": {
+                        "model": "gemini/gemini-2.5-flash",
+                        "configurable_clientside_auth_params": ["api_key"],
+                    },
+                }
+            ]
+        )
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-flash", "api_key": "caller-supplied-key"},
+                general_settings={},
+                llm_router=router,
+                model="gemini-flash",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+
+    def test_body_without_api_key_still_accepted(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-flash", "messages": [{"role": "user", "content": "hi"}]},
+                general_settings={},
+                llm_router=None,
+                model="gemini-flash",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+
+    def test_control_plane_route_still_accepts_body_api_key(self):
+        # /cloudzero/init and friends store a third-party credential sent in
+        # the body; they must not be caught by the LLM-route-only ban.
+        assert (
+            is_request_body_safe(
+                request_body={"api_key": "cz-key", "connection_id": "conn-1"},
+                general_settings={},
+                llm_router=None,
+                model="",
+                route="/cloudzero/init",
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_pre_db_read_auth_checks_rejects_body_api_key_on_llm_route():
+    """The route has to be plumbed through to ``is_request_body_safe``, otherwise
+    the ban never applies to a real request."""
+    from litellm.proxy.auth.auth_utils import pre_db_read_auth_checks
+
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [],
+            "client": ("1.2.3.4", 1234),
+        }
+    )
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        with pytest.raises(ValueError, match="api_key"):
+            await pre_db_read_auth_checks(
+                request=request,
+                request_data={"model": "gemini-flash", "api_key": "caller-supplied-key"},
+                route="/v1/chat/completions",
+            )

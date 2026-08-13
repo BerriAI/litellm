@@ -2,7 +2,7 @@ import os
 import re
 import sys
 from collections.abc import Collection, Iterator, Mapping
-from functools import lru_cache
+from functools import lru_cache, partial
 from logging import Logger
 from typing import Any, Final, Protocol
 
@@ -315,19 +315,36 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
 )
 
+# Banned only on LLM-invocation routes. ``api_key`` overrides the
+# deployment's admin-configured provider credential (see the clientside
+# precedence check in ``litellm_pre_call_utils``), so it needs the same
+# opt-in as ``api_base``. It cannot join the list above because it is a
+# legitimate body field on control-plane routes that store third-party
+# credentials (e.g. POST /cloudzero/init) and on /health/test_connection.
+_LLM_ROUTE_BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = ("api_key",)
+
+
+def _banned_params_for_route(route: str) -> tuple[str, ...]:
+    from litellm.proxy.auth.route_checks import RouteChecks  # noqa: PLC0415  # auth_utils participates in a proxy import cycle
+
+    if RouteChecks.is_llm_api_route(route):
+        return _BANNED_REQUEST_BODY_PARAMS + _LLM_ROUTE_BANNED_REQUEST_BODY_PARAMS
+    return _BANNED_REQUEST_BODY_PARAMS
+
 
 def _check_banned_params(
     body: dict,
     general_settings: dict,
     llm_router: Router | None,
     model: str,
+    banned_params: tuple[str, ...] = _BANNED_REQUEST_BODY_PARAMS,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
     Shared between the root-level check and the nested-config check so a
     new banned param only needs to be added in one place.
     """
-    for param in _BANNED_REQUEST_BODY_PARAMS:
+    for param in banned_params:
         if param not in body:
             continue
         if general_settings.get("allow_client_side_credentials") is True:
@@ -413,7 +430,13 @@ def _reject_url_valued_fallback_target(value: str) -> None:
         )
 
 
-def is_request_body_safe(request_body: dict, general_settings: dict, llm_router: Router | None, model: str) -> bool:
+def is_request_body_safe(
+    request_body: dict,
+    general_settings: dict,
+    llm_router: Router | None,
+    model: str,
+    route: str = "",
+) -> bool:
     """
     Check if the request body is safe.
 
@@ -441,25 +464,27 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
     """
     if "model_list" in request_body:
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
-    _check_banned_params(request_body, general_settings, llm_router, model)
+    check_banned_params: Final = partial(
+        _check_banned_params,
+        general_settings=general_settings,
+        llm_router=llm_router,
+        model=model,
+        banned_params=_banned_params_for_route(route),
+    )
+    check_banned_params(request_body)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
-            _check_banned_params(nested, general_settings, llm_router, model)
+            check_banned_params(nested)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
-            _check_banned_params(metadata, general_settings, llm_router, model)
+            check_banned_params(metadata)
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
-            _check_banned_params(
-                extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
-                general_settings,
-                llm_router,
-                model,
-            )
+            check_banned_params(extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["))
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
-            _check_banned_params(target, general_settings, llm_router, model)
+            check_banned_params(target)
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
@@ -469,12 +494,7 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
     if litellm_params is not None:
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
-            _check_banned_params(
-                litellm_params_metadata,
-                general_settings,
-                llm_router,
-                model,
-            )
+            check_banned_params(litellm_params_metadata)
     return True
 
 
@@ -526,6 +546,7 @@ async def pre_db_read_auth_checks(
         general_settings=general_settings,
         llm_router=llm_router,
         model=request_data.get("model", ""),  # [TODO] use model passed in url as well (azure openai routes)
+        route=route,
     )
 
     # Check 3. Check if IP address is allowed
