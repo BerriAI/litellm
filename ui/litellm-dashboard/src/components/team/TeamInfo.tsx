@@ -762,15 +762,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <Text>Budget Status</Text>
                   <div className="mt-2">
-                    <Title>${formatNumberWithCommas(info.spend, 4)}</Title>
+                    <Title>${formatNumberWithCommas(info.spend, 2)}</Title>
                     <Text>
-                      of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 4)}`}
+                      of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}
                     </Text>
                     {info.budget_duration && <Text className="text-gray-500">Reset: {info.budget_duration}</Text>}
                     <br />
                     {info.team_member_budget_table && (
                       <Text className="text-gray-500">
-                        Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}
+                        Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
                       </Text>
                     )}
                   </div>

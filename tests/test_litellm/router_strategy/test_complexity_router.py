@@ -1157,8 +1157,8 @@ class TestPreRoutingStrategyRegistry:
                 TaggedPreRoutingStrategy(tags=("us",), strategy=us),
             ]
         }
-        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}) is us
-        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}) is cn
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}).strategy is us
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}).strategy is cn
         assert router._select_pre_routing_strategy("missing", {"metadata": {"tags": ["cn"]}}) is None
 
         router.complexity_routers = {
@@ -1167,14 +1167,49 @@ class TestPreRoutingStrategyRegistry:
                 TaggedPreRoutingStrategy(tags=("default",), strategy=fallback),
             ]
         }
-        assert router._select_pre_routing_strategy("smart", {}) is fallback
+        assert router._select_pre_routing_strategy("smart", {}).strategy is fallback
         router.complexity_routers = {
             "smart": [
                 TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
                 TaggedPreRoutingStrategy(tags=("us",), strategy=us),
             ]
         }
-        assert router._select_pre_routing_strategy("smart", {}) is cn
+        assert router._select_pre_routing_strategy("smart", {}).strategy is cn
+
+    @staticmethod
+    def _router_with_plain_smart_deployment(enable_tag_filtering: bool) -> Router:
+        return Router(
+            model_list=[{"model_name": "smart", "litellm_params": {"model": "openai/gpt-4o-mini"}}],
+            enable_tag_filtering=enable_tag_filtering,
+        )
+
+    def test_select_falls_through_to_plain_deployments_when_no_tag_matches_under_tag_filtering(self):
+        router = self._router_with_plain_smart_deployment(enable_tag_filtering=True)
+        cn, us = object(), object()
+
+        router.complexity_routers = {"smart": [TaggedPreRoutingStrategy(tags=("cn",), strategy=cn)]}
+        assert router._select_pre_routing_strategy("smart", {}) is None
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}).strategy is cn
+
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("us",), strategy=us),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {}) is None
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["row"]}}) is None
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}).strategy is us
+
+        router.complexity_routers["router-only"] = [TaggedPreRoutingStrategy(tags=("cn",), strategy=cn)]
+        assert router._select_pre_routing_strategy("router-only", {}).strategy is cn
+
+    def test_select_keeps_capturing_when_tag_filtering_is_disabled(self):
+        router = self._router_with_plain_smart_deployment(enable_tag_filtering=False)
+        cn = object()
+
+        router.complexity_routers = {"smart": [TaggedPreRoutingStrategy(tags=("cn",), strategy=cn)]}
+        assert router._select_pre_routing_strategy("smart", {}).strategy is cn
 
 
 class TestAsyncPreRoutingHookMultiFormat:
@@ -2041,14 +2076,54 @@ class TestRouterPreRoutingAliasOverrides:
         assert request_kwargs["cache_control_injection_points"] == [{"location": "message", "role": "system"}]
 
     @pytest.mark.asyncio
-    async def test_alias_overrides_exclude_only_model(self):
-        """`model` (the alias marker, e.g. auto_router/complexity_router) is
-        excluded since it's never a real provider model. Router-only fields
-        like complexity_router_config DO flow through into request_kwargs at
-        this layer - they're filtered from the actual outbound LLM call
-        downstream by litellm.types.utils.all_litellm_params instead, not by
-        the router's pre-routing hook. See test_router_init_only_params_are_
-        never_sent_to_a_provider for the guard on that downstream filter."""
+    async def test_alias_custom_pricing_is_not_applied_to_request_kwargs(self):
+        """Custom pricing on the alias prices the alias, not the tier deployment
+        the hook picked. Unlike the router-only fields, pricing fields are real
+        call params, so forwarding them would re-register the routed deployment
+        at the alias's price - an explicit 0 billing every request as free."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                        "input_cost_per_second": 0.0,
+                        "drop_params": True,
+                        "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
+                        "complexity_router_default_model": "gpt-4o",
+                    },
+                },
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+            ]
+        )
+        request_kwargs: dict = {}
+
+        result = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert result is not None
+        # Non-pricing alias params still carry over.
+        assert request_kwargs["drop_params"] is True
+        for field in ("input_cost_per_token", "output_cost_per_token", "input_cost_per_second"):
+            assert field not in request_kwargs
+
+    @pytest.mark.asyncio
+    async def test_alias_overrides_exclude_only_marker_and_connection_params(self):
+        """`model` (the alias marker, e.g. auto_router/complexity_router) and
+        provider-connection params (api_base/api_key/api_version) are excluded
+        since they never describe the tier deployment actually called.
+        Router-only fields like complexity_router_config DO flow through into
+        request_kwargs at this layer - they're filtered from the actual
+        outbound LLM call downstream by litellm.types.utils.all_litellm_params
+        instead, not by the router's pre-routing hook. See
+        test_router_init_only_params_are_never_sent_to_a_provider for the
+        guard on that downstream filter."""
         router = self._make_router()
         request_kwargs: Dict = {}
 
@@ -2068,9 +2143,10 @@ class TestRouterPreRoutingAliasOverrides:
         assert request_kwargs["complexity_router_default_model"] == "gpt-4o"
 
     def test_router_init_only_params_are_never_sent_to_a_provider(self):
-        """The router's pre-routing hook only excludes `model` (see
-        test_alias_overrides_exclude_only_model above) - every other alias
-        litellm_param, including router-init-only fields like
+        """The router's pre-routing hook only excludes `model` and
+        provider-connection params (see test_alias_overrides_exclude_only_
+        marker_and_connection_params above) - every other alias litellm_param,
+        including router-init-only fields like
         complexity_router_config, flows into request_kwargs unfiltered. That's
         only safe because litellm.completion()/acompletion() itself strips
         anything listed in all_litellm_params before building the provider
@@ -2161,6 +2237,154 @@ class TestRouterPreRoutingAliasOverrides:
         )
 
         assert request_kwargs["drop_params"] is True
+
+
+class TestRouterPreRoutingSharedAliasName:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/36619.
+
+    A plain deployment and an `auto_router/` marker can share a `model_name`.
+    The alias-param forwarding after a pre-routing rewrite must read the
+    marker entry, never whichever same-name entry happens to sit first in
+    `model_list` - otherwise the plain entry's api_base/api_key get grafted
+    onto the routed tier's call (a Gemini path under api.openai.com, 404).
+    """
+
+    @staticmethod
+    def _plain_entry() -> dict:
+        return {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": "sk-plain-entry",
+                "api_base": "https://plain-entry.example/v1",
+            },
+        }
+
+    @staticmethod
+    def _marker_entry() -> dict:
+        return {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "drop_params": True,
+                "complexity_router_config": {"tiers": {"SIMPLE": "gemini-flash", "MEDIUM": "gemini-flash"}},
+                "complexity_router_default_model": "gemini-flash",
+            },
+        }
+
+    @staticmethod
+    def _tier_entry() -> dict:
+        return {
+            "model_name": "gemini-flash",
+            "litellm_params": {"model": "gemini/gemini-3.6-flash", "api_key": "sk-tier"},
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("plain_entry_first", [True, False], ids=["plain_entry_first", "marker_entry_first"])
+    async def test_marker_params_forwarded_regardless_of_model_list_order(self, plain_entry_first):
+        """In either config order the routed call gets the marker's own params
+        (drop_params) and never the plain sibling's api_base/api_key."""
+        shared_name_entries = (
+            [self._plain_entry(), self._marker_entry()]
+            if plain_entry_first
+            else [self._marker_entry(), self._plain_entry()]
+        )
+        router = Router(model_list=[*shared_name_entries, self._tier_entry()])
+        request_kwargs: Dict = {}
+
+        result = await router.async_pre_routing_hook(
+            model="gpt4o",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+        )
+
+        assert result is not None
+        assert result.model == "gemini-flash"
+        assert "api_base" not in request_kwargs
+        assert "api_key" not in request_kwargs
+        assert request_kwargs["drop_params"] is True
+
+    @pytest.mark.asyncio
+    async def test_connection_params_on_the_marker_itself_are_not_forwarded(self):
+        """Even when the marker entry carries api_base/api_key/api_version,
+        they describe no real deployment and must not reach the routed call,
+        while the marker's other params still do."""
+        marker_with_connection_params = {
+            "model_name": "smart",
+            "litellm_params": {
+                **self._marker_entry()["litellm_params"],
+                "api_key": "sk-marker",
+                "api_base": "https://marker.example/v1",
+                "api_version": "2024-01-01",
+            },
+        }
+        router = Router(model_list=[marker_with_connection_params, self._tier_entry()])
+        request_kwargs: Dict = {}
+
+        result = await router.async_pre_routing_hook(
+            model="smart",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert result is not None
+        assert "api_base" not in request_kwargs
+        assert "api_key" not in request_kwargs
+        assert "api_version" not in request_kwargs
+        assert request_kwargs["drop_params"] is True
+
+    @pytest.mark.asyncio
+    async def test_tag_scoped_markers_forward_the_selected_markers_params(self):
+        """With two tag-scoped markers under one name, the forwarded params
+        come from the marker whose tags matched the request, not from the
+        first marker in the list."""
+
+        def tagged_marker(routed_model: str, tags: list, drop_params: bool | None) -> dict:
+            return {
+                "model_name": "smart",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_default_model": routed_model,
+                    "complexity_router_config": {"tiers": {"SIMPLE": [routed_model], "MEDIUM": [routed_model]}},
+                    "tags": tags,
+                    **({"drop_params": drop_params} if drop_params is not None else {}),
+                },
+            }
+
+        router = Router(
+            model_list=[
+                tagged_marker("gpt-cn", ["cn"], None),
+                tagged_marker("gpt-us", ["us"], True),
+            ]
+        )
+
+        us_kwargs: Dict = {"metadata": {"tags": ["us"]}}
+        us_result = await router.async_pre_routing_hook(
+            model="smart",
+            request_kwargs=us_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert us_result is not None and us_result.model == "gpt-us"
+        assert us_kwargs["drop_params"] is True
+
+        cn_kwargs: Dict = {"metadata": {"tags": ["cn"]}}
+        cn_result = await router.async_pre_routing_hook(
+            model="smart",
+            request_kwargs=cn_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert cn_result is not None and cn_result.model == "gpt-cn"
+        assert "drop_params" not in cn_kwargs
+
+    def test_forwardable_alias_marker_params_reads_the_marker_entry_only(self):
+        router = Router(model_list=[self._plain_entry(), self._marker_entry(), self._tier_entry()])
+
+        forwarded = dict(router._forwardable_alias_marker_params(model="gpt4o", strategy_tags=()))
+
+        assert forwarded["drop_params"] is True
+        assert "api_key" not in forwarded and "api_base" not in forwarded
+        assert router._forwardable_alias_marker_params(model="gemini-flash", strategy_tags=()) == ()
 
 
 class TestAdaptiveSoftFloors:

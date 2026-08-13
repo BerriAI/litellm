@@ -311,6 +311,8 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByText("Budget Status")).toBeInTheDocument();
       });
+      expect(screen.getByText("$250.50")).toBeInTheDocument();
+      expect(screen.getByText(/of \$1,000\.00/)).toBeInTheDocument();
     });
 
     it("should display guardrails in overview when present", async () => {
@@ -363,6 +365,7 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByText("Budget Status")).toBeInTheDocument();
       });
+      expect(screen.getByText("Team Member Budget: $500.00")).toBeInTheDocument();
     });
 
     it("should display virtual keys information", async () => {

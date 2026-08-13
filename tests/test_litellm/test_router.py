@@ -7475,6 +7475,102 @@ def test_pre_call_checks_keeps_deployment_when_provider_is_unresolvable(monkeypa
     assert len(result) == 1
 
 
+class TestConsumedRequestTagsStamp:
+    """Issue #36621: when a request's tags select a tagged pre-routing strategy, those
+    tags are consumed by the selection; the hook must stamp the rewritten model group so
+    tag filtering skips request-body tags there, and must clear the stamp on every
+    re-entry (fallbacks reuse the same request_kwargs) so it cannot leak elsewhere."""
+
+    class _RewriteStrategy:
+        def __init__(self, rewrite_to: str):
+            self.rewrite_to = rewrite_to
+
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            return PreRoutingHookResponse(model=self.rewrite_to, messages=messages)
+
+    @classmethod
+    def _router(cls, marker_tags=("route",)) -> "litellm.Router":
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}},
+            ],
+            enable_tag_filtering=True,
+        )
+        router.auto_routers = {
+            "gpt4o": [TaggedPreRoutingStrategy(tags=marker_tags, strategy=cls._RewriteStrategy("gemini-flash"))]
+        }
+        return router
+
+    @pytest.mark.asyncio
+    async def test_stamps_the_rewritten_group_when_request_tags_selected_the_router(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+        from litellm.types.router import ConsumedRequestTagsStamp
+
+        router = self._router()
+        request_kwargs = {"metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert request_kwargs["metadata"][CONSUMED_REQUEST_TAGS_METADATA_KEY] == ConsumedRequestTagsStamp(
+            model_group="gemini-flash", tags=("route",)
+        )
+
+    @pytest.mark.asyncio
+    async def test_stamps_into_litellm_metadata_when_the_request_uses_that_bucket(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+        from litellm.types.router import ConsumedRequestTagsStamp
+
+        router = self._router()
+        request_kwargs = {"litellm_metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert request_kwargs["litellm_metadata"][CONSUMED_REQUEST_TAGS_METADATA_KEY] == ConsumedRequestTagsStamp(
+            model_group="gemini-flash", tags=("route",)
+        )
+
+    @pytest.mark.asyncio
+    async def test_fallback_reentry_with_a_plain_group_clears_the_stale_stamp(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+
+        router = self._router()
+        request_kwargs = {"metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_when_the_request_is_untagged(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+
+        router = self._router()
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_when_the_selected_strategy_carries_no_tags(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+
+        router = self._router(marker_tags=())
+        request_kwargs = {"metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
+
+
 class TestAutoRouterMaxInputCharsWiring:
     """`auto_router_max_input_chars` on the deployment has to reach the AutoRouter that embeds prompts.
 
@@ -7519,6 +7615,104 @@ class TestAutoRouterMaxInputCharsWiring:
         router = self._router()
 
         assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+
+
+class TestTaggedAutoRouterOnSharedModelName:
+    """A tagged auto-router marker sharing its model_name with a plain deployment must not
+    capture requests whose tags don't match it when tag filtering is enabled (#36620)."""
+
+    class _FixedRouteLayer:
+        def __call__(self, text: str):
+            from semantic_router.schema import RouteChoice
+
+            return RouteChoice(name="gemini-flash")
+
+    @classmethod
+    def _router(cls, marker_tags, include_plain_sibling: bool, enable_tag_filtering: bool) -> "litellm.Router":
+        pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+        marker = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "auto_router/gpt4o-router",
+                "auto_router_config": json.dumps(
+                    {"routes": [{"name": "gemini-flash", "utterances": ["capital city questions"]}]}
+                ),
+                "auto_router_default_model": "gemini-flash",
+                "auto_router_embedding_model": "text-embedding-3-small",
+                **({"tags": marker_tags} if marker_tags else {}),
+            },
+        }
+        plain = {"model_name": "gpt4o", "litellm_params": {"model": "openai/gpt-4o"}}
+        tier = {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}}
+        router = litellm.Router(
+            model_list=[plain, marker, tier] if include_plain_sibling else [marker, tier],
+            enable_tag_filtering=enable_tag_filtering,
+        )
+        router.auto_routers["gpt4o"][0].strategy.routelayer = cls._FixedRouteLayer()
+        return router
+
+    @staticmethod
+    async def _hook_response(router: "litellm.Router", request_kwargs: dict):
+        return await router.async_pre_routing_hook(
+            model="gpt4o",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_untagged_request_bypasses_the_tagged_marker_when_a_plain_deployment_shares_the_name(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        assert await self._hook_response(router, {}) is None
+
+    @pytest.mark.asyncio
+    async def test_request_tagged_for_the_marker_is_still_semantically_routed(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {"metadata": {"tags": ["route"]}})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_marker_only_alias_still_captures_untagged_requests(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_untagged_marker_sharing_the_name_still_captures_untagged_requests(self):
+        router = self._router(marker_tags=None, include_plain_sibling=True, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_untagged_selection_never_lands_on_the_marker_deployment(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        for _ in range(20):
+            deployment = await router.async_get_available_deployment(
+                model="gpt4o",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
+            )
+            assert deployment["litellm_params"]["model"] == "openai/gpt-4o"
+
+    def test_deployment_without_litellm_params_mapping_is_not_a_marker(self):
+        assert litellm.Router._is_strategy_marker_deployment({"model_name": "gpt4o"}) is False
+
+    def test_model_name_has_plain_deployments_reflects_the_pool(self):
+        mixed = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+        marker_only = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
+
+        assert mixed._model_name_has_plain_deployments("gpt4o") is True
+        assert marker_only._model_name_has_plain_deployments("gpt4o") is False
 
 
 class TestGetAllowedFailsFromPolicy:

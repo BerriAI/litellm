@@ -13,7 +13,9 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from litellm._logging import verbose_logger
-from litellm.types.router import RouterErrors
+from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.types.router import ConsumedRequestTagsStamp, RouterErrors
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -46,7 +48,9 @@ def _is_valid_deployment_tag_regex(
     return None
 
 
-def is_valid_deployment_tag(deployment_tags: list[str], request_tags: list[str], match_any: bool = True) -> bool:
+def is_valid_deployment_tag(
+    deployment_tags: Sequence[str], request_tags: Sequence[str], match_any: bool = True
+) -> bool:
     """
     Check if a tag is valid, the matching can be either any or all based on `match_any` flag
     """
@@ -389,6 +393,25 @@ def _tag_known_to_group(
     )
 
 
+def _request_tags_after_router_consumption(metadata: Mapping[Any, Any], model: str) -> Sequence[str] | None:
+    # The pre-routing hook stamps which tags selected the router it rewrote the request
+    # to: those tags already did their job and must not also constrain deployment choice
+    # inside the routed group. The request's other tags still apply there, on top of the
+    # inherited_tags snapshot that keeps key/team policy applying. Every other model
+    # group keeps the full list.
+    stamp: Final = metadata.get(CONSUMED_REQUEST_TAGS_METADATA_KEY)
+    if not isinstance(stamp, ConsumedRequestTagsStamp) or stamp.model_group != model:
+        return metadata.get("tags")
+    request_tags: Final = metadata.get("tags")
+    leftover: Final = tuple(
+        tag for tag in (request_tags if isinstance(request_tags, (list, tuple)) else ()) if tag not in stamp.tags
+    )
+    inherited_tags: Final = metadata.get("inherited_tags")
+    if not isinstance(inherited_tags, (list, tuple)):
+        return leftover or None
+    return tuple(dict.fromkeys((*leftover, *inherited_tags)))
+
+
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
@@ -429,7 +452,7 @@ async def get_deployments_for_tag(
     verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
     if metadata_variable_name in request_kwargs:
         metadata: Final = request_kwargs[metadata_variable_name]
-        request_tags: Final = metadata.get("tags")
+        request_tags: Final = _request_tags_after_router_consumption(metadata, model)
         match_any: Final = llm_router_instance.tag_filtering_match_any
         routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
 
@@ -561,28 +584,49 @@ async def get_deployments_for_tag(
     return healthy_deployments
 
 
+def _tags_in_metadata(metadata: object) -> list[str]:
+    """
+    Tags out of a metadata bucket the caller controls the shape of.
+
+    A request can send its metadata (and its ``tags``) as anything the JSON body
+    allowed, an unparsed string or null included, so any shape that is not a list
+    of string tags carries no tags rather than raising.
+    """
+    if not isinstance(metadata, Mapping):
+        return []
+    typed_metadata: Final[Mapping[str, object]] = metadata
+    tags: Final = typed_metadata.get("tags")
+    if isinstance(tags, str) or not isinstance(tags, Sequence):
+        return []
+    typed_tags: Final[Sequence[object]] = tags
+    return [tag for tag in typed_tags if isinstance(tag, str)]
+
+
 def _get_tags_from_request_kwargs(
-    request_kwargs: dict[Any, Any] | None = None,
-    metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
+    request_kwargs: Mapping[Any, Any] | None = None,
+    metadata_variable_name: Literal["metadata", "litellm_metadata"] | None = None,
 ) -> list[str]:
     """
     Helper to get tags from request kwargs
 
     Args:
         request_kwargs: The request kwargs to get tags from
+        metadata_variable_name: Which metadata dict holds proxy metadata; resolved
+            from the kwargs when not pinned, so /v1/messages-shaped requests
+            (``litellm_metadata``) read the same bucket the proxy wrote tags to
 
     Returns:
         List[str]: The tags from the request kwargs
     """
     if request_kwargs is None:
         return []
-    if metadata_variable_name in request_kwargs:
-        metadata: Final = request_kwargs[metadata_variable_name] or {}
-        tags = metadata.get("tags", [])
-        return tags if tags is not None else []
-    elif "litellm_params" in request_kwargs:
-        litellm_params: Final = request_kwargs["litellm_params"] or {}
-        _metadata: Final = litellm_params.get(metadata_variable_name, {}) or {}
-        tags = _metadata.get("tags", [])
-        return tags if tags is not None else []
+    resolved_variable_name: Final = metadata_variable_name or get_metadata_variable_name_from_kwargs(request_kwargs)
+    if resolved_variable_name in request_kwargs:
+        return _tags_in_metadata(request_kwargs[resolved_variable_name])
+    if "litellm_params" in request_kwargs:
+        litellm_params: Final = request_kwargs["litellm_params"]
+        if not isinstance(litellm_params, Mapping):
+            return []
+        typed_litellm_params: Final[Mapping[str, object]] = litellm_params
+        return _tags_in_metadata(typed_litellm_params.get(resolved_variable_name))
     return []
