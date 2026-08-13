@@ -857,7 +857,7 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
             db_writer_client=db_writer_client,
             proxy_logging_obj=proxy_logging_obj,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
