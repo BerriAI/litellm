@@ -982,3 +982,71 @@ def test_openai_handler_repairs_github_copilot_empty_choices(
     assert result.choices[0].message.content == "Hi there"
     assert result.choices[0].finish_reason == "stop"
     mock_request.assert_called_once()
+
+
+def test_map_openai_params_forwards_reasoning_effort_for_claude():
+    """Claude reasoning params must survive map_openai_params, not just be advertised.
+
+    Regression test for the gap behind #25666: GithubCopilotConfig overrode
+    get_supported_openai_params() to advertise ``thinking``/``reasoning_effort``
+    for extended-thinking Claude models, but never overrode map_openai_params().
+    Mapping therefore fell through to OpenAIConfig -> OpenAIGPTConfig, whose
+    supported-param whitelist has neither key, so both were silently discarded
+    and never reached the Copilot API. The advertise-only assertions in
+    test_get_supported_openai_params_claude_model passed the whole time, because
+    they never inspect the mapped output.
+    """
+    config = GithubCopilotConfig()
+    model = "claude-sonnet-4-20250514"
+
+    # Guard the premise: the param is advertised as supported for this model.
+    assert "reasoning_effort" in config.get_supported_openai_params(model)
+
+    mapped = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert mapped.get("reasoning_effort") == "high"
+
+    mapped_thinking = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert mapped_thinking.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": 4096,
+    }
+
+
+def test_map_openai_params_does_not_forward_reasoning_for_unsupported_claude():
+    """A Claude model without extended thinking must not gain reasoning params."""
+    config = GithubCopilotConfig()
+    model = "claude-3.5-sonnet"
+
+    assert "reasoning_effort" not in config.get_supported_openai_params(model)
+
+    mapped = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in mapped
+
+
+def test_map_openai_params_preserves_standard_openai_params_for_claude():
+    """The Claude passthrough must not regress ordinary OpenAI param mapping."""
+    config = GithubCopilotConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "max_tokens": 128},
+        optional_params={},
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+    assert mapped.get("temperature") == 0.5
+    assert mapped.get("max_tokens") == 128

@@ -17,6 +17,8 @@ from ..common_utils import (
     get_copilot_default_headers,
 )
 
+_CLAUDE_REASONING_PARAMS: Final = frozenset({"thinking", "reasoning_effort"})
+
 
 class GithubCopilotConfig(OpenAIConfig):
     def __init__(
@@ -133,6 +135,26 @@ class GithubCopilotConfig(OpenAIConfig):
                 base_params.append("reasoning_effort")
 
         return base_params
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        # OpenAIConfig routes non-o-series/non-gpt-5 models to OpenAIGPTConfig, whose
+        # whitelist has neither key, so advertising them alone dropped them (#25666)
+        supported: Final = frozenset(self.get_supported_openai_params(model)) & _CLAUDE_REASONING_PARAMS
+        claude_params: Final = {k: v for k, v in non_default_params.items() if k in supported}
+        remaining: Final = {k: v for k, v in non_default_params.items() if k not in supported}
+
+        return super().map_openai_params(
+            non_default_params=remaining,
+            optional_params={**optional_params, **claude_params},
+            model=model,
+            drop_params=drop_params,
+        )
 
     def _determine_initiator(self, messages: list[AllMessageValues]) -> str:
         """
