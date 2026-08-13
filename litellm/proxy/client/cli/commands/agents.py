@@ -2,12 +2,22 @@ import os
 import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 import click
 import requests
 
 from .auth import get_stored_api_key, login
+from .pi import (
+    LITELLM_PROXY_API_KEY_ENV,
+    PI_PROVIDER_NAME,
+    PiSyncError,
+    fetch_model_ids,
+    fetch_model_limits,
+    models_json_path,
+    sync_models_json,
+)
 
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
@@ -17,17 +27,20 @@ OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 
 PROFILE_ANTHROPIC: Final = "anthropic"
 PROFILE_OPENAI: Final = "openai"
+PROFILE_LITELLM: Final = "litellm"
 
 _KNOWN_AGENTS: Final[dict[str, tuple[str, frozenset[str]]]] = {
     "claude": ("Claude Code", frozenset({PROFILE_ANTHROPIC})),
     "codex": ("Codex", frozenset({PROFILE_OPENAI})),
     "opencode": ("OpenCode", frozenset({PROFILE_OPENAI})),
+    "pi": ("pi", frozenset({PROFILE_LITELLM})),
 }
 
 _INSTALL_DOCS: Final[dict[str, str]] = {
     "claude": "https://docs.claude.com/en/docs/claude-code/setup",
     "codex": "https://developers.openai.com/codex/cli",
     "opencode": "https://opencode.ai/docs",
+    "pi": "https://pi.dev",
 }
 
 CODEX_PROXY_PROVIDER: Final = "litellm"
@@ -60,7 +73,9 @@ def build_agent_env(
     Anthropic clients (Claude Code) append /v1/messages to ANTHROPIC_BASE_URL,
     so it stays the bare proxy root; OpenAI clients (Codex, OpenCode) expect the
     /v1 suffix on OPENAI_BASE_URL. ANTHROPIC_API_KEY is dropped so a stray
-    Anthropic key cannot win over the bearer token we set.
+    Anthropic key cannot win over the bearer token we set. pi ignores both base
+    URL variables and instead resolves $LITELLM_PROXY_API_KEY from its synced
+    models.json provider entry.
     """
     env: Final = dict(base_env)
     root: Final = base_url.rstrip("/")
@@ -71,6 +86,8 @@ def build_agent_env(
     if PROFILE_OPENAI in profiles:
         env[OPENAI_BASE_URL_ENV] = root + "/v1"
         env[OPENAI_API_KEY_ENV] = api_key
+    if PROFILE_LITELLM in profiles:
+        env[LITELLM_PROXY_API_KEY_ENV] = api_key
     return env
 
 
@@ -103,6 +120,38 @@ def _codex_proxy_args(base_url: str) -> list[str]:
 
 _PROXY_ARGS: Final[dict[str, Callable[[str], list[str]]]] = {
     "codex": _codex_proxy_args,
+}
+
+
+def prepare_pi(
+    base_url: str,
+    api_key: str,
+    base_env: Mapping[str, str],
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+) -> list[str]:
+    """Sync the proxy's model list into pi's models.json before handoff.
+
+    pi has no base-URL env vars, so this file is the only way to point it at the
+    proxy. Only the litellm provider entry is touched; the synced entry references
+    the key as $LITELLM_PROXY_API_KEY, which build_agent_env exports. The returned
+    --model pin is needed because pi ignores a bare --provider when picking the
+    interactive startup model; a user-supplied --model comes later in argv and wins.
+    """
+    ids: Final = fetch_model_ids(base_url, api_key, get=get)
+    if isinstance(ids, PiSyncError):
+        raise AgentRunError(ids.message)
+    limits: Final = fetch_model_limits(base_url, api_key, get=get)
+    path: Final = models_json_path(base_env)
+    error: Final = sync_models_json(path, base_url, ids, limits)
+    if error is not None:
+        raise AgentRunError(error.message)
+    click.echo(f"litellm: synced {len(ids)} proxy models into {path}")
+    return ["--model", f"{PI_PROVIDER_NAME}/{ids[0]}"]
+
+
+_PREPARERS: Final[dict[str, Callable[[str, str, Mapping[str, str]], Sequence[str]]]] = {
+    "pi": prepare_pi,
 }
 
 
@@ -177,12 +226,14 @@ def run_agent(
     verify: Callable[[str, str], None] = verify_proxy_key,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _exec,
     reattach_terminal: Callable[[], None] | None = None,
+    preparers: Mapping[str, Callable[[str, str, Mapping[str, str]], Sequence[str]]] = MappingProxyType(_PREPARERS),
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
     On success this replaces the current process and never returns. Raises
-    AgentRunError for missing binaries, an unreachable proxy, or a rejected key.
-    reattach_terminal, when given, runs just before handoff to restore stdin.
+    AgentRunError for missing binaries, an unreachable proxy, a rejected key, or
+    a failed pre-launch config sync (pi). reattach_terminal, when given, runs
+    just before handoff to restore stdin.
     """
     if not command:
         raise AgentRunError("Nothing to run.")
@@ -197,13 +248,12 @@ def run_agent(
     if not skip_verify:
         verify(base_url, api_key)
 
-    env: Final = build_agent_env(
-        base_env if base_env is not None else os.environ,
-        base_url,
-        api_key,
-        profiles,
-    )
-    extra_args: Final = agent_launch_args(command[0], base_url)
+    source_env: Final = base_env if base_env is not None else os.environ
+    prepare: Final = preparers.get(os.path.basename(command[0]))
+    prepared_args: Final = list(prepare(base_url, api_key, source_env)) if prepare is not None else []
+
+    env: Final = build_agent_env(source_env, base_url, api_key, profiles)
+    extra_args: Final = [*agent_launch_args(command[0], base_url), *prepared_args]
     if reattach_terminal is not None:
         reattach_terminal()
     launcher(binary, [command[0], *extra_args, *command[1:]], env)
@@ -288,6 +338,7 @@ __all__ = [
     "agent_launch_args",
     "agent_profile",
     "build_agent_env",
+    "prepare_pi",
     "resolve_api_key",
     "run_agent",
     "verify_proxy_key",

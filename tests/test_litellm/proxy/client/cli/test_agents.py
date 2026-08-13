@@ -34,6 +34,15 @@ class _FakeResponse:
         self.status_code = status_code
 
 
+class _FakeJsonResponse:
+    def __init__(self, status_code, payload=None):
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
 class TestAgentProfile:
     def test_claude_is_anthropic(self):
         name, profiles = agent_profile("claude")
@@ -48,6 +57,9 @@ class TestAgentProfile:
     def test_codex_and_opencode_are_openai(self):
         assert agent_profile("codex") == ("Codex", frozenset({"openai"}))
         assert agent_profile("opencode") == ("OpenCode", frozenset({"openai"}))
+
+    def test_pi_is_litellm(self):
+        assert agent_profile("pi") == ("pi", frozenset({"litellm"}))
 
     def test_unknown_command_gets_both_profiles(self):
         name, profiles = agent_profile("mytool")
@@ -91,6 +103,15 @@ class TestBuildAgentEnv:
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
         assert env["OPENAI_API_KEY"] == "sk-key"
 
+    def test_litellm_profile_exports_only_the_proxy_key(self):
+        env = build_agent_env(
+            {}, "http://localhost:4000/", "sk-key", frozenset({"litellm"})
+        )
+        assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
+        assert "ANTHROPIC_BASE_URL" not in env
+        assert "OPENAI_BASE_URL" not in env
+        assert "OPENAI_API_KEY" not in env
+
     def test_preserves_unrelated_env_and_does_not_mutate_input(self):
         base = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
         env = build_agent_env(
@@ -122,6 +143,9 @@ class TestAgentLaunchArgs:
         assert agent_launch_args("/usr/local/bin/codex", "http://localhost:4000") == (
             agent_launch_args("codex", "http://localhost:4000")
         )
+
+    def test_pi_gets_no_static_args(self):
+        assert agent_launch_args("pi", "http://localhost:4000") == []
 
 
 class TestVerifyProxyKey:
@@ -223,6 +247,127 @@ class TestRunAgent:
         # overrides must precede the codex subcommand so codex parses them
         assert args.index('model_provider="litellm"') < args.index("exec")
 
+    def test_pi_preparer_runs_after_verify_and_before_launch(self):
+        order = []
+        captured = {}
+
+        def fake_prepare(base_url, api_key, base_env):
+            order.append("prepare")
+            captured["args"] = (base_url, api_key, dict(base_env))
+            return []
+
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["pi"],
+            base_env={"HOME": "/home/u"},
+            which=lambda name: "/usr/local/bin/pi",
+            verify=lambda *a: order.append("verify"),
+            launcher=lambda *a: order.append("launch"),
+            preparers={"pi": fake_prepare},
+        )
+        assert order == ["verify", "prepare", "launch"]
+        assert captured["args"] == (
+            "http://localhost:4000",
+            "sk-key",
+            {"HOME": "/home/u"},
+        )
+
+    def test_pi_prepared_args_precede_user_args_and_env_has_proxy_key(self):
+        calls = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["pi", "-p", "hello"],
+            base_env={},
+            which=lambda name: "/usr/local/bin/pi",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(args=tuple(a), env=dict(e)),
+            preparers={"pi": lambda *a: ["--model", "litellm/m-1"]},
+        )
+        # user args come last so a user-supplied --model wins in pi's parser
+        assert calls["args"] == ("pi", "--model", "litellm/m-1", "-p", "hello")
+        assert calls["env"]["LITELLM_PROXY_API_KEY"] == "sk-key"
+        assert "OPENAI_API_KEY" not in calls["env"]
+        assert "ANTHROPIC_BASE_URL" not in calls["env"]
+
+    def test_failed_preparer_aborts_before_launch(self):
+        launched = []
+
+        def boom(*a):
+            raise AgentRunError("sync failed")
+
+        with pytest.raises(AgentRunError, match="sync failed"):
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["pi"],
+                base_env={},
+                which=lambda name: "/usr/local/bin/pi",
+                verify=lambda *a: None,
+                launcher=lambda *a: launched.append(a),
+                preparers={"pi": boom},
+            )
+        assert launched == []
+
+    def test_prepare_pi_syncs_models_json_and_pins_first_model(self, tmp_path):
+        from litellm.proxy.client.cli.commands.agents import prepare_pi
+
+        def fake_get(url, headers, timeout):
+            if url.endswith("/model_group/info"):
+                return _FakeJsonResponse(
+                    200,
+                    {"data": [{"model_group": "m-first", "max_input_tokens": 131072, "max_output_tokens": 8192}]},
+                )
+            return _FakeJsonResponse(200, {"data": [{"id": "m-first"}, {"id": "m-second"}]})
+
+        pin = prepare_pi(
+            "http://localhost:4000",
+            "sk-key",
+            {"PI_CODING_AGENT_DIR": str(tmp_path)},
+            get=fake_get,
+        )
+
+        assert pin == ["--model", "litellm/m-first"]
+        import json
+
+        written = json.loads((tmp_path / "models.json").read_text())
+        assert written["providers"]["litellm"]["apiKey"] == "$LITELLM_PROXY_API_KEY"
+        assert written["providers"]["litellm"]["models"] == [
+            {"id": "m-first", "contextWindow": 131072, "maxTokens": 8192},
+            {"id": "m-second"},
+        ]
+
+    def test_prepare_pi_surfaces_fetch_failure_as_agent_error(self, tmp_path):
+        from litellm.proxy.client.cli.commands.agents import prepare_pi
+
+        with pytest.raises(AgentRunError, match="HTTP 500"):
+            prepare_pi(
+                "http://localhost:4000",
+                "sk-key",
+                {"PI_CODING_AGENT_DIR": str(tmp_path)},
+                get=lambda *a, **k: _FakeJsonResponse(500),
+            )
+
+    def test_claude_has_no_preparer(self):
+        prepared = []
+
+        def fake_prepare(*a):
+            prepared.append(a)
+            return []
+
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            verify=lambda *a: None,
+            launcher=lambda *a: None,
+            preparers={"pi": fake_prepare},
+        )
+        assert prepared == []
+
     def test_claude_launches_without_injected_args(self):
         calls = {}
         run_agent(
@@ -319,7 +464,7 @@ class TestAgentCommands:
         self.runner = CliRunner()
 
     def test_one_command_per_known_agent(self):
-        assert {c.name for c in agent_commands()} == {"claude", "codex", "opencode"}
+        assert {c.name for c in agent_commands()} == {"claude", "codex", "opencode", "pi"}
 
     def test_claude_launches_with_stored_key_and_forwards_args(self):
         captured = {}
