@@ -137,11 +137,11 @@ class GithubCopilotConfig(OpenAIConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: matches the BaseConfig override signature
+        optional_params: dict,  # mutable-ok: matches the BaseConfig override signature
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: matches the BaseConfig override signature
         # OpenAIConfig routes non-o-series/non-gpt-5 models to OpenAIGPTConfig, whose
         # whitelist has neither key, so advertising them alone dropped them (#25666)
         supported: Final = frozenset(self.get_supported_openai_params(model)) & _REASONING_PARAMS
