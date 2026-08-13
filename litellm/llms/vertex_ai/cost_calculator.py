@@ -7,6 +7,7 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _is_above_128k,
     generic_cost_per_token,
+    get_vertex_regional_endpoint_uplift,
 )
 from litellm.types.utils import ModelInfo, Usage
 
@@ -25,22 +26,6 @@ Google AI Studio -> token based pricing
 """
 
 models_without_dynamic_pricing: Final = ["gemini-1.0-pro", "gemini-pro", "gemini-2"]
-
-GLOBAL_VERTEX_LOCATION: Final = "global"
-
-
-def _regional_endpoint_uplift(model_info: ModelInfo, vertex_location: str | None) -> float:
-    """
-    Vertex bills a flat premium (currently +10%) on every token type when a request is served
-    from a regional or multi-region endpoint instead of the global one, so the location the
-    request was routed to decides the rate, not just the model.
-    """
-    if vertex_location is None or vertex_location.lower() == GLOBAL_VERTEX_LOCATION:
-        return 1.0
-    multiplier: Final = model_info.get("regional_endpoint_uplift_multiplier")
-    if multiplier is None:
-        return 1.0
-    return float(multiplier)
 
 
 def cost_router(
@@ -253,5 +238,5 @@ def cost_per_token(
             service_tier=service_tier,
         )
 
-    uplift: Final = _regional_endpoint_uplift(model_info=model_info, vertex_location=vertex_location)
+    uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
     return prompt_cost * uplift, completion_cost * uplift

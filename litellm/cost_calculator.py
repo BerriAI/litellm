@@ -1661,6 +1661,7 @@ def completion_cost(
                             usage=cost_per_token_usage_object,
                             service_tier=service_tier,
                             data_residency=data_residency,
+                            vertex_location=vertex_location,
                         )
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
                         _cache_read_cost = _token_type_breakdown.cache_read_cost

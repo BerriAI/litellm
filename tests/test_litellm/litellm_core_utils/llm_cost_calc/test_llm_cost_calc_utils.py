@@ -2207,6 +2207,31 @@ def test_token_type_cost_breakdown_matches_real_gemini_numbers():
     assert breakdown.cache_creation_cost == 0.0
 
 
+@pytest.mark.parametrize("vertex_location, uplift", [("global", 1.0), ("us-east5", 1.1)])
+def test_token_type_cost_breakdown_applies_vertex_regional_uplift(vertex_location, uplift):
+    """Component costs must carry the same regional uplift as the total, or spend logs stop adding up."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=2500,
+        completion_tokens=200,
+        total_tokens=2700,
+        cache_creation_input_tokens=500,
+        cache_read_input_tokens=2000,
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model="claude-sonnet-4-6",
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+        vertex_location=vertex_location,
+    )
+
+    assert breakdown.cache_read_cost == pytest.approx(2000 * 3e-07 * uplift)
+    assert breakdown.cache_creation_cost == pytest.approx(500 * 3.75e-06 * uplift)
+
+
 def test_token_type_cost_breakdown_xai_at_exactly_200k_uses_higher_tier_rates():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

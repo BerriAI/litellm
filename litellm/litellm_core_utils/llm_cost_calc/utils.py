@@ -694,6 +694,23 @@ def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str |
         return 1.0
 
 
+GLOBAL_VERTEX_LOCATION: Final = "global"
+
+
+def get_vertex_regional_endpoint_uplift(model_info: ModelInfo, vertex_location: str | None) -> float:
+    """
+    Vertex bills a flat premium (currently +10%) on every token type when a request is served
+    from a regional or multi-region endpoint instead of the global one, so the location the
+    request was routed to decides the rate, not just the model.
+    """
+    if vertex_location is None or vertex_location.lower() == GLOBAL_VERTEX_LOCATION:
+        return 1.0
+    multiplier: Final = model_info.get("regional_endpoint_uplift_multiplier")
+    if multiplier is None:
+        return 1.0
+    return float(multiplier)
+
+
 def _resolve_reasoning_token_cost(
     model_info: ModelInfo,
     service_tier: str | None,
@@ -903,6 +920,7 @@ def get_token_type_cost_breakdown(
     usage: Usage,
     service_tier: str | None = None,
     data_residency: str | None = None,
+    vertex_location: str | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -975,7 +993,9 @@ def get_token_type_cost_breakdown(
 
     # Apply the same flat regional-processing uplift the totals get, so per-type
     # costs stay reconciled with input_cost/output_cost for regionalized OpenAI hosts.
-    uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency)
+    uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency) * get_vertex_regional_endpoint_uplift(
+        model_info, vertex_location
+    )
     if uplift != 1.0:
         reasoning_cost *= uplift
         cache_read_cost *= uplift
