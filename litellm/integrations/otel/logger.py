@@ -279,43 +279,37 @@ class OpenTelemetryV2(CustomLogger):
         if call_id in self._open_llm_calls:
             return
         start_time_ns: Final = to_ns(datetime.now())
-        span: Span | None = None
         # Parent to the request's anchored root span (stable across the request),
         # falling back to ambient on the SDK path. Open the span live only when
         # that resolves to a recordable parent; otherwise defer to the close
         # callback (the thread-pool case, where the anchor isn't visible here).
+        # Do not route on the deferred path: creating or LRU-touching a tenant
+        # provider here would evict idle ones even though close re-routes.
+        parent_context: Final = resolve_request_span_context()
+        if not is_recordable_span(get_current_span(parent_context)):
+            self._store_open_call(call_id, _LLMCallSpan(span=None, start_time_ns=start_time_ns))
+            return
         # A detached route roots its own trace instead (linked to the request
         # trace) — see ``TenantRoute.detached``.
         route: Final = self._tenant_tracers.route_for(self.tracer, call.dynamic_params, call.auth_metadata)
-        parent_context: Final = resolve_request_span_context()
         try:
-            if is_recordable_span(get_current_span(parent_context)):
-                span = self._emitter.start_span(
-                    SpanRole.LLM_CALL,
-                    call.provisional_span_name,
-                    parent_context=(
-                        set_span_in_context(INVALID_SPAN, parent_context) if route.detached else parent_context
-                    ),
-                    start_time_ns=start_time_ns,
-                    tracer=route.tracer,
-                    links=_request_trace_links(parent_context) if route.detached else None,
-                )
-        finally:
-            # No span means route_for's hold has no owner (creation deferred to
-            # the close callback, which re-routes) — drop it here.
-            if span is None:
-                self._tenant_tracers.release(route.provider)
-        self._open_llm_calls[call_id] = _LLMCallSpan(
-            span=span,
-            start_time_ns=start_time_ns,
-            provider=route.provider if span is not None else None,
+            span: Final = self._emitter.start_span(
+                SpanRole.LLM_CALL,
+                call.provisional_span_name,
+                parent_context=(
+                    set_span_in_context(INVALID_SPAN, parent_context) if route.detached else parent_context
+                ),
+                start_time_ns=start_time_ns,
+                tracer=route.tracer,
+                links=_request_trace_links(parent_context) if route.detached else None,
+            )
+        except BaseException:
+            self._tenant_tracers.release(route.provider)
+            raise
+        self._store_open_call(
+            call_id,
+            _LLMCallSpan(span=span, start_time_ns=start_time_ns, provider=route.provider),
         )
-        # Evict the oldest open call if the map is over budget. A call that opens
-        # but never closes (a stream that only fires stream events) would linger
-        # otherwise; the evicted span is simply dropped (never exported).
-        if len(self._open_llm_calls) > _OPEN_CALLS_MAX:
-            _, evicted = self._open_llm_calls.popitem(last=False)
-            self._release_carrier(evicted)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
@@ -494,6 +488,18 @@ class OpenTelemetryV2(CustomLogger):
             # force-flushes it out rather than racing its enqueue.
             self._release_carrier(carrier)
 
+    def _store_open_call(self, call_id: str, carrier: _LLMCallSpan) -> None:
+        """Remember an in-flight LLM call, evicting the oldest if over budget.
+
+        A call that opens but never closes (a stream that only fires stream
+        events) would linger otherwise; the evicted span is simply dropped
+        (never exported).
+        """
+        self._open_llm_calls[call_id] = carrier
+        if len(self._open_llm_calls) > _OPEN_CALLS_MAX:
+            _, evicted = self._open_llm_calls.popitem(last=False)
+            self._release_carrier(evicted)
+
     def _release_carrier(self, carrier: "_LLMCallSpan | None") -> None:
         """Release the routed provider a removed carrier was holding open."""
         if carrier is not None:
@@ -531,7 +537,9 @@ class OpenTelemetryV2(CustomLogger):
         # consistently. A detached route roots its own trace instead, linked back.
         route: Final = self._tenant_tracers.route_for(self.tracer, call.dynamic_params, call.auth_metadata)
         try:
-            parent_ctx = self._seed_identity_baggage(data.identity, data.request_model, resolve_request_span_context())
+            parent_ctx: Final = self._seed_identity_baggage(
+                data.identity, data.request_model, resolve_request_span_context()
+            )
             return self._emitter.emit(
                 SpanRole.LLM_CALL,
                 data,

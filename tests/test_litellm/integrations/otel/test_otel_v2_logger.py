@@ -2439,3 +2439,54 @@ def test_evicted_provider_still_exports_span_opened_before_eviction(monkeypatch)
 
     headers_a = next(h for h in captured if "proj-a" in h)
     assert [s.name for s in captured[headers_a].get_finished_spans()] == ["chat gpt-4o"]
+
+
+def test_deferred_pre_call_does_not_churn_tenant_cache(monkeypatch):
+    """Deferred ``pre_call`` must not create or LRU-touch a tenant provider.
+
+    ``route_for`` used to run before the recordable-parent check, so a
+    thread-pool ``pre_call`` that immediately released its hold still built a
+    provider and could evict an idle one. Close re-routes when the span
+    actually opens.
+    """
+    from litellm.integrations.otel.plumbing import routing as routing_mod
+
+    monkeypatch.setattr(routing_mod, "_MAX_CACHED_PROVIDERS", 1)
+    shut_down = []
+    monkeypatch.setattr(routing_mod, "_shutdown_provider", lambda p: shut_down.append(p))
+    logger, _default, captured = _phoenix_routing_logger("capture_deferred_churn")
+    md_a = {"user_api_key_auth_metadata": {"phoenix_project_name": "proj-a"}}
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    with trace.use_span(server, end_on_exit=False):
+        _emit_llm(
+            logger,
+            {
+                "standard_logging_object": _payload(litellm_call_id="call_a", metadata=md_a),
+                "litellm_params": {"metadata": md_a},
+            },
+            ambient=server,
+        )
+    assert len(logger._tenant_tracers._providers) == 1
+    idle = next(iter(logger._tenant_tracers._providers.values()))
+    assert shut_down == []
+
+    md_b = {"user_api_key_auth_metadata": {"phoenix_project_name": "proj-b"}}
+    deferred_kwargs = {
+        "litellm_call_id": "call_b",
+        "standard_logging_object": _payload(litellm_call_id="call_b", metadata=md_b),
+        "litellm_params": {"metadata": md_b},
+    }
+    logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=deferred_kwargs)
+    carrier = logger._open_llm_calls["call_b"]
+    assert carrier.span is None
+    assert carrier.provider is None
+    assert list(logger._tenant_tracers._providers.values()) == [idle]
+    assert shut_down == []
+    assert captured and all("proj-b" not in headers for headers in captured)
+
+    asyncio.run(logger.async_log_success_event(deferred_kwargs, None, None, None))
+    server.end()
+    headers_b = next(h for h in captured if "proj-b" in h)
+    assert [s.name for s in captured[headers_b].get_finished_spans()] == ["chat gpt-4o"]
