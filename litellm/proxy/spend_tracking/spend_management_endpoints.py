@@ -3126,7 +3126,6 @@ async def global_spend_refresh():
         sql_query: Final = """
         REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";    
         """
-        new_client = None
         try:
             from litellm.proxy._types import CommonProxyErrors
             from litellm.proxy.proxy_server import proxy_logging_obj
@@ -3142,13 +3141,19 @@ async def global_spend_refresh():
                     "timeout": 6000,
                 },
             )
-            await new_client.db.connect()
-            await _query_raw(new_client, sql_query)
-            verbose_proxy_logger.info("MonthlyGlobalSpend view refreshed")
-            return {
-                "message": "MonthlyGlobalSpend view refreshed",
-                "status": "success",
-            }
+            try:
+                await new_client.db.connect()
+                await _query_raw(new_client, sql_query)
+                verbose_proxy_logger.info("MonthlyGlobalSpend view refreshed")
+                return {
+                    "message": "MonthlyGlobalSpend view refreshed",
+                    "status": "success",
+                }
+            finally:
+                try:
+                    await new_client.disconnect()
+                except Exception:
+                    verbose_proxy_logger.exception("Failed to disconnect MonthlyGlobalSpend refresh client")
 
         except Exception as e:
             verbose_proxy_logger.exception("Failed to refresh materialized view - %s", e)
@@ -3156,12 +3161,6 @@ async def global_spend_refresh():
                 "message": "Failed to refresh materialized view",
                 "status": "failure",
             }
-        finally:
-            if new_client is not None:
-                try:
-                    await new_client.disconnect()
-                except Exception:
-                    verbose_proxy_logger.exception("Failed to disconnect MonthlyGlobalSpend refresh client")
 
 
 async def global_spend_for_internal_user(
