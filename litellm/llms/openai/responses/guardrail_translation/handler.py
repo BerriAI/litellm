@@ -117,7 +117,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if tools_to_check:
                     inputs["tools"] = tools_to_check
             if structured_messages:
-                inputs["structured_messages"] = structured_messages  # type: ignore
+                inputs["structured_messages"] = structured_messages
             # Include model information if available
             model = data.get("model")
             if model:
@@ -166,7 +166,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             if tools_to_check:
                 inputs["tools"] = tools_to_check
             if structured_messages:
-                inputs["structured_messages"] = structured_messages  # type: ignore
+                inputs["structured_messages"] = structured_messages
             # Include model information if available
             model = data.get("model")
             if model:
@@ -225,9 +225,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             (
                 transformed_tools,
                 _,
-            ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools  # type: ignore
-            )
+            ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools)
             tools_to_check.extend(cast(list[ChatCompletionToolParam], transformed_tools))
 
     def _remap_tools_to_responses_api_format(self, guardrailed_tools: list[Any]) -> list[dict[str, Any]]:
@@ -236,7 +234,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         Responses API request tool format.
         """
         return LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
-            guardrailed_tools  # type: ignore
+            guardrailed_tools
         )
 
     def _merge_tools_after_guardrail(
@@ -696,8 +694,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                     content = generic_response_output_item.content
             except Exception:
                 # Try to extract content directly from output_item if validation fails
-                if hasattr(output_item, "content") and output_item.content:  # type: ignore
-                    content = output_item.content  # type: ignore
+                if hasattr(output_item, "content") and output_item.content:
+                    content = output_item.content
                 else:
                     return
         elif isinstance(output_item, dict):
@@ -770,10 +768,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                         if isinstance(content_item, OutputText):
                             content_item.text = guardrail_response
                             # Update the original response output
-                            if hasattr(output_item, "content") and output_item.content:  # type: ignore
-                                original_content = output_item.content[content_idx]  # type: ignore
+                            if hasattr(output_item, "content") and output_item.content:
+                                original_content = output_item.content[content_idx]
                                 if hasattr(original_content, "text"):
-                                    original_content.text = guardrail_response  # type: ignore
+                                    original_content.text = guardrail_response
                 except Exception:
                     pass
             elif isinstance(output_item, dict):

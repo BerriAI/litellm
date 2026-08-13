@@ -93,9 +93,9 @@ class FileContentStreamingResponse:
         # are released promptly on client disconnects.
         with anyio.CancelScope(shield=True):
             if hasattr(stream_to_close, "aclose"):
-                await cast(AsyncIterator[bytes], stream_to_close).aclose()  # type: ignore[attr-defined]
+                await cast(AsyncIterator[bytes], stream_to_close).aclose()
             elif hasattr(stream_to_close, "close"):
-                result: Final = cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+                result: Final = cast(Iterator[bytes], stream_to_close).close()
                 if result is not None:
                     await result
 
@@ -109,7 +109,7 @@ class FileContentStreamingResponse:
         self.stream_iterator = cast(Iterator[bytes] | AsyncIterator[bytes], iter(()))
 
         if hasattr(stream_to_close, "close"):
-            cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+            cast(Iterator[bytes], stream_to_close).close()
 
     def _build_logging_response(self) -> dict[str, str]:
         response: Final = {

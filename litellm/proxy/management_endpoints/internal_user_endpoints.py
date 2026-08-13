@@ -17,7 +17,7 @@ import json
 import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -42,6 +42,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
     require_caller_user_id_for_non_admin,
+    validate_budget_duration,
     validate_finite_spend,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -506,6 +507,8 @@ async def new_user(
                 status_code=500,
                 detail=CommonProxyErrors.db_not_connected_error.value,
             )
+        validate_budget_duration(data.budget_duration)
+
         # Check for duplicate user_id or email
         await _check_duplicate_user_id(data.user_id, prisma_client)
         await _check_duplicate_user_email(data.user_email, prisma_client)
@@ -536,7 +539,7 @@ async def new_user(
             user_api_key_dict=user_api_key_dict,
         )
 
-        data_json = data.json()  # type: ignore
+        data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
@@ -584,7 +587,7 @@ async def new_user(
         special_keys: Final = ["token", "token_id"]
         response_dict: Final = {}
         for key, value in response.items():
-            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
+            if key in NewUserResponse.model_fields and key not in special_keys:
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
@@ -714,11 +717,10 @@ def _enforce_user_info_access(user_id: str | None, user_api_key_dict: UserAPIKey
     """
     if user_id is None:
         return
-    # Only true proxy admin bypasses ownership. PROXY_ADMIN_VIEW_ONLY is
-    # subject to the same `user_id == valid_token.user_id` rule that
-    # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream
-    # for the `/user/info` route.
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+    # Admin-view roles (PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY) bypass
+    # ownership, mirroring the `/user/info` carve-out that
+    # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream.
+    if _user_has_admin_view(user_api_key_dict):
         return
     if user_id == user_api_key_dict.user_id:
         return
@@ -862,7 +864,7 @@ async def user_info(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if user_id is None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        if user_id is None and _user_has_admin_view(user_api_key_dict):
             return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
         elif user_id is None:
             user_id = user_api_key_dict.user_id
@@ -1186,6 +1188,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     if "budget_duration" in non_default_values:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
+        validate_budget_duration(non_default_values["budget_duration"])
         non_default_values["budget_reset_at"] = get_budget_reset_time(
             budget_duration=non_default_values["budget_duration"]
         )
@@ -1816,7 +1819,7 @@ async def bulk_user_update(
             for user in all_users_in_db:
                 user_update_request = data.user_updates.model_copy()
                 user_update_request.user_id = user.user_id
-                users_to_update.append(user_update_request)  # type: ignore
+                users_to_update.append(user_update_request)
 
         if successful_updates > 0:
             return BulkUpdateUserResponse(
@@ -2651,6 +2654,13 @@ async def get_user_daily_activity(
         description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
         "Matches JavaScript's Date.getTimezoneOffset() convention.",
     ),
+    include_current_utc_day: bool = fastapi.Query(
+        default=False,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
     """
@@ -2712,6 +2722,7 @@ async def get_user_daily_activity(
             page=page,
             page_size=page_size,
             timezone_offset_minutes=timezone,
+            include_current_utc_day=include_current_utc_day,
             resolve_entity_metadata=lambda records: _resolve_user_email_metadata(prisma_client, records),
         )
 

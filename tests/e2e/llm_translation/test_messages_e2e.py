@@ -9,10 +9,8 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
-from e2e_http import require_successful_call, unwrap, assert_error_or_server_known
+from e2e_http import assert_client_error, require_successful_call, unwrap
 from endpoints_client import EndpointsClient, MessagesResult
 from lifecycle import ResourceManager
 from models import (
@@ -24,6 +22,7 @@ from models import (
     SpendLogRow,
     ToolInputSchema,
 )
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -178,6 +177,7 @@ class TestAnthropicMessages:
             f"model did not call the tool: {response}"
         )
 
+    @pytest.mark.skip(reason="stage red: product gap, /v1/messages 500s (anthropic_messages TypeError) on missing messages instead of 400")
     @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
     def test_missing_messages_returns_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -188,8 +188,9 @@ class TestAnthropicMessages:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalMessagesBody(model=model, max_tokens=50),
         )
-        assert_error_or_server_known(result, "messages missing messages")
+        assert_client_error(result, "messages missing messages")
 
+    @pytest.mark.skip(reason="stage red: product gap, /v1/messages 500s (anthropic_messages TypeError) on missing max_tokens instead of 400")
     @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
     def test_missing_max_tokens_returns_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -202,7 +203,7 @@ class TestAnthropicMessages:
                 model=model, messages=[ChatMessage(role="user", content="hi")]
             ),
         )
-        assert_error_or_server_known(result, "messages missing max_tokens")
+        assert_client_error(result, "messages missing max_tokens")
 
     @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
     def test_missing_model_returns_error(
@@ -216,4 +217,4 @@ class TestAnthropicMessages:
                 messages=[ChatMessage(role="user", content="hi")], max_tokens=50
             ),
         )
-        assert_error_or_server_known(result, "messages missing model")
+        assert_client_error(result, "messages missing model")

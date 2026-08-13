@@ -254,7 +254,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             if "duration" in request_data:
                 video_data["seconds"] = str(request_data["duration"])
 
-        video_obj: Final = VideoObject(**video_data)  # type: ignore[arg-type]
+        video_obj: Final = VideoObject(**video_data)
 
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
@@ -501,7 +501,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             object="video",
             status="cancelled",
             created_at=self._parse_runway_timestamp(response_data.get("createdAt")),
-        )  # type: ignore[arg-type]
+        )
 
         return video_obj
 
@@ -565,7 +565,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
                 "message": response_data.get("failure", "Video generation failed"),
             }
 
-        video_obj: Final = VideoObject(**video_data)  # type: ignore[arg-type]
+        video_obj: Final = VideoObject(**video_data)
 
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)

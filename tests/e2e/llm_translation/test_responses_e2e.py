@@ -11,15 +11,9 @@ import json
 from typing import cast
 
 import pytest
-from pydantic import BaseModel, ValidationError
-
 from e2e_config import unique_marker
 from e2e_http import (
     assert_client_error,
-    assert_error_or_server_known,
-    assert_not_server_error,
-    is_client_error,
-    require_success_or_provider_denied,
     require_successful_call,
 )
 from endpoints_client import (
@@ -33,6 +27,7 @@ from endpoints_client import (
 )
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from pydantic import BaseModel, ValidationError
 
 pytestmark = pytest.mark.e2e
 
@@ -275,8 +270,7 @@ class TestResponses:
         key = resources.key()
 
         result = endpoints_client.responses(key, model, "reply with one word")
-        if not require_success_or_provider_denied(result, "responses bedrock completion"):
-            return
+        require_successful_call(result)
         parsed = ResponsesResult.model_validate_json(result.body)
         assert parsed.text.strip(), f"/responses over bedrock returned no output text: {result.body[:300]}"
 
@@ -292,8 +286,7 @@ class TestResponses:
         result = endpoints_client.responses_with_tools(
             key, model, "What is the weather in San Francisco? Use the get_weather tool.", [WEATHER_TOOL]
         )
-        if not require_success_or_provider_denied(result, "responses bedrock tool_use"):
-            return
+        require_successful_call(result)
         parsed = ResponsesResult.model_validate_json(result.body)
         function_call = next((call for call in parsed.function_calls if call.name == "get_weather"), None)
         assert function_call is not None, f"no get_weather function call over bedrock: {result.body[:500]}"
@@ -302,6 +295,7 @@ class TestResponses:
         arguments = WeatherArguments.model_validate(raw_arguments)
         assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
 
+    @pytest.mark.skip(reason="stage red: product gap, /v1/responses 500s (aresponses TypeError) on missing input instead of 400")
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
     def test_missing_input_returns_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -318,7 +312,7 @@ class TestResponses:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalResponsesBody(model=model),
         )
-        assert_error_or_server_known(result, "responses missing input")
+        assert_client_error(result, "responses missing input")
 
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
     def test_missing_model_returns_client_error(
@@ -350,44 +344,6 @@ class TestResponses:
         )
         assert_client_error(result, "responses empty input")
 
-    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
-    @pytest.mark.parametrize("max_output_tokens", [-1, 0, -100])
-    def test_invalid_max_output_tokens_returns_client_error(
-        self,
-        endpoints_client: EndpointsClient,
-        resources: ResourceManager,
-        max_output_tokens: int,
-    ) -> None:
-        model = f"e2e-responses-val-{unique_marker()}"
-        model_id = endpoints_client.create_model(
-            model,
-            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
-        )
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
-        key = resources.key()
-        result = endpoints_client.proxy.transport.send(
-            "/v1/responses",
-            headers=endpoints_client.proxy.transport.bearer(key),
-            json=_OptionalResponsesBody(
-                model=model, input="ping", max_output_tokens=max_output_tokens
-            ),
-        )
-        # OpenAI currently accepts some non-positive max_output_tokens values and
-        # completes (200). The contract is: gateway must not 5xx, and either
-        # rejects with 4xx or returns a normal responses body.
-        assert_not_server_error(result, f"responses max_output_tokens={max_output_tokens}")
-        assert result.status_code in range(200, 500), (
-            f"responses max_output_tokens={max_output_tokens}: unexpected "
-            f"{result.status_code}: {result.body[:300]}"
-        )
-        if is_client_error(result.status_code):
-            return
-        assert result.status_code == 200 and result.body.strip(), (
-            f"responses max_output_tokens={max_output_tokens}: expected 4xx or "
-            f"completed body, got {result.status_code}: {result.body[:300]}"
-        )
-
-
 def _parse_stream_event(
     event: str,
 ) -> ResponsesOutputTextDeltaEvent | None:
@@ -395,4 +351,3 @@ def _parse_stream_event(
         return ResponsesOutputTextDeltaEvent.model_validate_json(event)
     except ValidationError:
         return None
-

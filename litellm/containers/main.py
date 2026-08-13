@@ -187,7 +187,7 @@ def create_container(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -405,7 +405,7 @@ def list_containers(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -596,7 +596,7 @@ def retrieve_container(
     local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -811,7 +811,7 @@ def delete_container(
     local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -1040,7 +1040,7 @@ def list_container_files(
     local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -1291,7 +1291,7 @@ def upload_container_file(
     local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 

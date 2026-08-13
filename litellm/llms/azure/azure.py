@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any, Final
 
-import httpx  # type: ignore
+import httpx
 from openai import (
     APITimeoutError,
     AsyncAzureOpenAI,
@@ -228,7 +228,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     litellm_params=litellm_params,
                 )
 
-                data = {"model": None, "messages": messages, **optional_params}
+                data: dict[str, object] = {"model": None, "messages": messages, **optional_params}
             elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=litellm_params.get("base_model") or model):
                 data = litellm.AzureOpenAIGPT5Config().transform_request(
                     model=model,
@@ -482,12 +482,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     def streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_base: str,
         api_key: str | None,
         api_version: str,
         dynamic_params: bool,
-        data: dict,
+        data: dict[str, object],
         model: str,
         timeout: Any,
         max_retries: int,
@@ -790,7 +790,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
             ## COMPLETION CALL
-            raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)
             headers = dict(raw_response.headers)
             response: Final = raw_response.parse()
             if isinstance(response, str):
@@ -811,7 +811,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 model_response_object=model_response,
                 response_type="embedding",
                 _response_headers=process_azure_headers(headers),
-            )  # type: ignore
+            )
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
@@ -853,7 +853,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 params=_params,
             )
         else:
-            async_handler = client  # type: ignore
+            async_handler = client
 
         if (
             "images/generations" in api_base
@@ -975,9 +975,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            sync_handler = HTTPHandler(**_params, client=litellm.client_session)  # type: ignore
+            sync_handler = HTTPHandler(**_params, client=litellm.client_session)
         else:
-            sync_handler = client  # type: ignore
+            sync_handler = client
 
         if (
             "images/generations" in api_base
@@ -1180,7 +1180,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     additional_args={"complete_input_dict": data},
                     original_response=stringified_response,
                 )
-                return convert_to_model_response_object(  # type: ignore
+                return convert_to_model_response_object(
                     response_object=stringified_response,
                     model_response_object=model_response,
                     response_type="image_generation",
@@ -1263,7 +1263,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     timeout=timeout,
                     headers=headers,
                     model=model,
-                )  # type: ignore
+                )
 
             img_gen_api_base: Final = self.create_azure_base_url(
                 azure_client_params=azure_client_params,
@@ -1317,7 +1317,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 response_object=response,
                 model_response_object=model_response,
                 response_type="image_generation",
-            )  # type: ignore
+            )
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
@@ -1362,7 +1362,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 timeout=timeout,
                 client=client,
                 litellm_params=litellm_params,
-            )  # type: ignore
+            )
 
         azure_client: Final[AzureOpenAI] = self.get_azure_openai_client(
             api_base=api_base,
@@ -1372,11 +1372,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             _is_async=False,
             client=client,
             litellm_params=litellm_params,
-        )  # type: ignore
+        )
 
         response: Final = azure_client.audio.speech.create(
             model=model,
-            voice=voice,  # type: ignore
+            voice=voice,
             input=input,
             **optional_params,
         )
@@ -1406,11 +1406,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             _is_async=True,
             client=client,
             litellm_params=litellm_params,
-        )  # type: ignore
+        )
 
         azure_response: Final = await azure_client.audio.speech.create(
             model=model,
-            voice=voice,  # type: ignore
+            voice=voice,
             input=input,
             **optional_params,
         )
@@ -1463,8 +1463,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             messages = [{"role": "user", "content": "Hey"}]
         try:
             completion = client.chat.completions.with_raw_response.create(
-                model=model,  # type: ignore
-                messages=messages,  # type: ignore
+                model=model,
+                messages=messages,
             )
         except Exception as e:
             raise e

@@ -611,7 +611,7 @@ async def delete_access_group(
             access_group_id,
             e,
         )
-        if PrismaDBExceptionHandler.is_database_connection_error(e):
+        if PrismaDBExceptionHandler.is_database_infrastructure_error(e):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=CommonProxyErrors.db_not_connected_error.value,

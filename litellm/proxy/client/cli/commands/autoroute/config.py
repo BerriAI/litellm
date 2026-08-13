@@ -1,4 +1,4 @@
-from typing import Final, Literal, Union
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
@@ -56,7 +56,7 @@ class LLMClassifier(BaseModel):
     timeout_ms: int = 3000
 
 
-ClassifierChoice = Union[HeuristicClassifier, LLMClassifier]
+ClassifierChoice = HeuristicClassifier | LLMClassifier
 
 
 class NoSemanticMatching(BaseModel):
@@ -88,7 +88,7 @@ class SemanticMatching(BaseModel):
     keyword_tier_rules: tuple[KeywordTierRule, ...] = DEFAULT_KEYWORD_TIER_RULES
 
 
-SemanticMatchingChoice = Union[NoSemanticMatching, SemanticMatching]
+SemanticMatchingChoice = NoSemanticMatching | SemanticMatching
 
 
 class AutorouteConfig(BaseModel):

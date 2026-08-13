@@ -9,9 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
-
-from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation, unique_marker
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from lifecycle import ResourceManager
 from models import (
@@ -30,6 +28,7 @@ from models import (
     TeamNewResponse,
 )
 from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 GuardrailMode = Literal["pre_call", "post_call", "during_call", "logging_only"]
 BlockedWordAction = Literal["BLOCK", "MASK"]
@@ -112,25 +111,14 @@ class GuardrailsClient:
     proxy: ProxyClient
 
     def create_content_filter_guardrail(self, name: str, blocked_keyword: str) -> str:
-        return unwrap(
-            self.proxy.transport.post(
-                "/guardrails",
-                headers=self.proxy.transport.master,
-                json=GuardrailCreateBody(
-                    guardrail=GuardrailSpecBody(
-                        guardrail_name=name,
-                        litellm_params=ContentFilterParamsBody(
-                            mode="pre_call",
-                            default_on=True,
-                            blocked_words=[
-                                BlockedWordBody(keyword=blocked_keyword, action="BLOCK")
-                            ],
-                        ),
-                    )
-                ),
-                response_type=GuardrailCreateResponse,
-            )
-        ).guardrail_id
+        return self.register(
+            name,
+            ContentFilterParamsBody(
+                mode="pre_call",
+                default_on=True,
+                blocked_words=[BlockedWordBody(keyword=blocked_keyword, action="BLOCK")],
+            ),
+        )
 
     def create_bedrock_guardrail(
         self,
@@ -149,24 +137,15 @@ class GuardrailsClient:
         test takes out whatever else is running. Callers select the guardrail
         per-request instead, which keeps the blast radius to the test that wants it.
         """
-        return unwrap(
-            self.proxy.transport.post(
-                "/guardrails",
-                headers=self.proxy.transport.master,
-                json=GuardrailCreateBody(
-                    guardrail=GuardrailSpecBody(
-                        guardrail_name=name,
-                        litellm_params=BedrockGuardrailParamsBody(
-                            mode="pre_call",
-                            default_on=default_on,
-                            guardrailIdentifier=identifier,
-                            guardrailVersion=version,
-                        ),
-                    )
-                ),
-                response_type=GuardrailCreateResponse,
-            )
-        ).guardrail_id
+        return self.register(
+            name,
+            BedrockGuardrailParamsBody(
+                mode="pre_call",
+                default_on=default_on,
+                guardrailIdentifier=identifier,
+                guardrailVersion=version,
+            ),
+        )
 
     def create_backend_model(
         self,
@@ -189,11 +168,19 @@ class GuardrailsClient:
         return model_name
 
     def register(self, name: str, params: GuardrailParamsBody) -> str:
-        """Register any guardrail via POST /guardrails and return its id. New
-        built-ins register with default_on=False and are opted into per request
-        via the chat body's `guardrails` list, so one guardrail under test never
-        intercepts unrelated traffic on the shared proxy."""
-        return unwrap(
+        """Register any guardrail via POST /guardrails and return its id, once every
+        replica can be expected to serve it. New built-ins register with
+        default_on=False and are opted into per request via the chat body's
+        `guardrails` list, so one guardrail under test never intercepts unrelated
+        traffic on the shared proxy.
+
+        /guardrails is a control-plane route and guardrails reach the data plane on
+        the config reload, so a request naming this guardrail the instant the POST
+        returns can 404 with "Guardrail not found" on a replica that has not
+        reloaded. There is no data-plane read that lists guardrails, so unlike
+        ProxyClient.create_model this settles on the propagation budget alone with
+        nothing to poll first."""
+        guardrail_id = unwrap(
             self.proxy.transport.post(
                 "/guardrails",
                 headers=self.proxy.transport.master,
@@ -203,6 +190,8 @@ class GuardrailsClient:
                 response_type=GuardrailCreateResponse,
             )
         ).guardrail_id
+        settle_propagation(time.monotonic())
+        return guardrail_id
 
     def delete_guardrail(self, guardrail_id: str) -> None:
         _ = self.proxy.transport.delete(

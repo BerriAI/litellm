@@ -2,7 +2,7 @@ import base64
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -18,7 +18,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -74,7 +74,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 LangFuseLogger as _LFLogger,
             )
 
-            metadata = _LFLogger.add_metadata_from_header(litellm_params, metadata)  # type: ignore
+            metadata = _LFLogger.add_metadata_from_header(litellm_params, metadata)
         except Exception:
             # Fallback silently if import fails; header enrichment just won't happen
             pass

@@ -9,15 +9,15 @@ Also pins missing file/model negatives.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
-from e2e_http import Success, UnknownApiError, unwrap
+from e2e_http import UnknownApiError, unwrap
 from endpoints_client import EndpointsClient, TranscriptionForm, TranscriptionResult
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -77,14 +77,12 @@ class TestAudioTranscriptions:
             response_type=TranscriptionResult,
         )
         match result:
-            case Success():
-                pytest.fail("empty audio file must not succeed as a transcript")
-            case UnknownApiError(status_code=status) if 400 <= status < 500:
-                return
-            case UnknownApiError(status_code=status):
-                pytest.fail(f"empty audio expected 4xx, got {status}: {result}")
-            case _:
-                pytest.fail(f"empty audio unexpected result: {result}")
+            case UnknownApiError(status_code=400, body=body):
+                assert "file" in body.lower() or "audio" in body.lower(), (
+                    f"empty audio error must identify the invalid file: {body[:300]}"
+                )
+            case other:
+                pytest.fail(f"empty audio expected a file-specific 400, got {other!r}")
 
     @pytest.mark.covers("llm.audio_transcriptions.openai.input_validation.nonstream.works")
     def test_missing_model_returns_error(
@@ -101,11 +99,10 @@ class TestAudioTranscriptions:
             response_type=TranscriptionResult,
         )
         match result:
-            case Success():
-                pytest.fail("transcription without model must not succeed")
-            case UnknownApiError(status_code=status) if 400 <= status < 500:
-                return
-            case UnknownApiError(status_code=status):
-                pytest.fail(f"missing model expected 4xx, got {status}: {result}")
-            case _:
-                pytest.fail(f"missing model unexpected result: {result}")
+            case UnknownApiError(status_code=400, body=body):
+                lowered: Final = body.lower()
+                assert "model" in lowered and ("required" in lowered or "invalid model" in lowered), (
+                    f"missing model error must identify the required model: {body[:300]}"
+                )
+            case other:
+                pytest.fail(f"missing model expected a model-specific 400, got {other!r}")

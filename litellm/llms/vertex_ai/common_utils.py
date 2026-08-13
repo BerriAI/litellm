@@ -763,10 +763,7 @@ def filter_schema_fields(schema_dict: dict[str, Any], valid_fields: set[str], pr
         elif key == "items" and isinstance(value, dict):
             result[key] = filter_schema_fields(value, valid_fields, processed)
         elif key == "anyOf" and isinstance(value, list):
-            result[key] = [
-                filter_schema_fields(item, valid_fields, processed)
-                for item in value  # type: ignore
-            ]
+            result[key] = [filter_schema_fields(item, valid_fields, processed) for item in value]
         else:
             result[key] = value
 

@@ -134,15 +134,12 @@ class StreamingResponse(BaseModel):
     body: str
     chunks: int = 0  # streamed events (0 for non-streaming)
     stream_events: list[str] = []
-    # True when the OpenAI SSE stream sent the terminal data: [DONE] line.
-    # Body is elided to "<streamed>" after consumption, so callers must use this
-    # flag (or stream_events) rather than searching body for [DONE].
-    stream_done: bool = False
     # First in-stream error event, if any. A streamed call commits its HTTP 200
     # before the upstream completes, so upstream failures (e.g. insufficient
     # quota) arrive as SSE error events inside an otherwise-successful response;
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
+    stream_done: bool = False
 
     @property
     def ok(self) -> bool:
@@ -222,74 +219,16 @@ def require_successful_call(result: StreamingResponse) -> None:
     )
 
 
-def is_client_error(status: int) -> bool:
-    return 400 <= status < 500
-
-
-def is_auth_denied(status: int) -> bool:
-    return status in (401, 403)
-
-
-def assert_not_server_error(result: StreamingResponse, context: str) -> None:
-    assert result.status_code not in (500, 502, 503), (
-        f"{context}: proxy must not 5xx, got {result.status_code}: {result.body[:300]}"
-    )
-
-
 def assert_client_error(result: StreamingResponse, context: str) -> None:
-    assert is_client_error(result.status_code), (
+    assert 400 <= result.status_code < 500, (
         f"{context}: expected 4xx, got {result.status_code}: {result.body[:300]}"
     )
 
 
-def assert_error_or_server_known(result: StreamingResponse, context: str) -> None:
-    """Require a deliberate client error; 5xx crashes must not count as validation coverage."""
-    assert_client_error(result, context)
-
-
 def assert_auth_denied(result: StreamingResponse, context: str) -> None:
-    assert is_auth_denied(result.status_code), (
+    assert result.status_code in (401, 403), (
         f"{context}: expected 401/403, got {result.status_code}: {result.body[:300]}"
     )
-
-
-def is_provider_account_denied(result: StreamingResponse) -> bool:
-    """True when the gateway reached the provider and the account/model is disabled."""
-    body = result.body.lower()
-    stream_err = (result.stream_error or "").lower()
-    combined = f"{body}\n{stream_err}"
-    # Mid-stream disconnects often mean the provider closed after an account deny.
-    if result.status_code < 0 and any(
-        n in combined
-        for n in ("response ended prematurely", "connection", "chunked", "broken pipe")
-    ):
-        return True
-    if result.status_code not in (400, 403, 404):
-        return False
-    needles = (
-        "operation not allowed",
-        "end of its life",
-        "accessdenied",
-        "not authorized",
-        "model use case details have not been submitted",
-        "you don't have access",
-        "do not have access",
-    )
-    return any(n in body for n in needles)
-
-
-def require_success_or_provider_denied(result: StreamingResponse, context: str) -> bool:
-    """Return True on success; return False when the provider denied the account.
-
-    Raises on unexpected failures so real product regressions still fail hard.
-    """
-    if result.ok and not result.stream_error:
-        return True
-    if is_provider_account_denied(result):
-        return False
-    require_successful_call(result)
-    return True
-
 
 def _headers(headers: BaseModel) -> dict[str, str]:
     dumped: dict[str, object] = headers.model_dump(by_alias=True, exclude_none=True)
@@ -539,40 +478,24 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
     stream_error: str | None = None
     stream_events: list[str] = []
     stream_done = False
-    try:
-        for line in lines:
-            if not line:
-                continue
-            chunks += 1
-            decoded_line = line.decode(errors="replace")
-            if decoded_line.startswith("data: "):
-                payload = decoded_line.removeprefix("data: ")
-                if payload == "[DONE]":
-                    stream_done = True
-                else:
-                    stream_events.append(payload)
-            if stream_error is None and (
-                line.startswith(b"event: error")
-                or b'"type":"error"' in line
-                or b'"type": "error"' in line
-                or line.startswith(b'data: {"error"')
-            ):
-                stream_error = line.decode(errors="replace")[:300]
-    except requests.RequestException as exc:
-        # Mid-stream disconnects (e.g. ChunkedEncodingError when Bedrock closes
-        # early) must surface as a typed StreamingResponse, never raw exceptions.
-        return StreamingResponse(
-            status_code=-1,
-            call_id=call_id,
-            response_cost=response_cost,
-            content_type=content_type,
-            headers=headers,
-            body=str(exc),
-            chunks=chunks,
-            stream_events=stream_events,
-            stream_done=stream_done,
-            stream_error=str(exc)[:300],
-        )
+    for line in lines:
+        if not line:
+            continue
+        chunks += 1
+        decoded_line = line.decode(errors="replace")
+        if decoded_line.startswith("data: "):
+            payload = decoded_line.removeprefix("data: ")
+            if payload == "[DONE]":
+                stream_done = True
+            else:
+                stream_events.append(payload)
+        if stream_error is None and (
+            line.startswith(b"event: error")
+            or b'"type":"error"' in line
+            or b'"type": "error"' in line
+            or line.startswith(b'data: {"error"')
+        ):
+            stream_error = line.decode(errors="replace")[:300]
     return StreamingResponse(
         status_code=resp.status_code,
         call_id=call_id,

@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING, Any, Final, Optional
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
@@ -309,7 +313,7 @@ def initialize_callbacks_on_proxy(
         if isinstance(litellm.callbacks, list):
             litellm.callbacks.extend(imported_list)
         else:
-            litellm.callbacks = imported_list  # type: ignore
+            litellm.callbacks = imported_list
 
         if "prometheus" in value:
             from litellm.integrations.prometheus import PrometheusLogger
@@ -425,6 +429,8 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+        SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        CONSUMED_REQUEST_TAGS_METADATA_KEY,
         "disable_global_guardrails",
         "disable_global_guardrail",
         "opted_out_global_guardrails",

@@ -1,8 +1,10 @@
 import asyncio
+import io
 import traceback
+from typing import Final
 
 import orjson
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import ORJSONResponse
 
 import litellm
@@ -17,11 +19,6 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
-
-import io
-from typing import Final
-
-from fastapi import UploadFile
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -70,6 +67,7 @@ async def image_generation(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: str | None = None,
 ):
+    from litellm.proxy.litellm_pre_call_utils import reject_url_valued_destination
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
@@ -95,6 +93,9 @@ async def image_generation(
             version=version,
             proxy_config=proxy_config,
         )
+
+        if isinstance(model, str):
+            reject_url_valued_destination("model", model)
 
         data["model"] = (
             model

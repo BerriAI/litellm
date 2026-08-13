@@ -1,9 +1,9 @@
 import enum
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Union
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 import httpx
 from pydantic import (
@@ -11,13 +11,14 @@ from pydantic import (
     ConfigDict,
     Field,
     Json,
+    PositiveInt,
     field_validator,
     model_validator,
 )
 from typing_extensions import NotRequired, Required, TypedDict
 
 from litellm._uuid import uuid
-from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
@@ -67,9 +68,30 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
+
+
+class ReconcileOutcome(NamedTuple):
+    """What a model reconcile observed, captured while it still held the reconcile
+    lock.
+
+    Both fields have to be read under that lock to be worth anything. ``live_after``
+    in particular is the router's serving state the instant this reconcile finished,
+    which is NOT the same as what a later snapshot would see: any other model write
+    admitted in between briefly un-serves every db model (see ``clear_cache``), so a
+    caller that re-snapshots at verdict time can observe that hole and blame its own
+    reload for it.
+
+    - ``still_desired``: the db + config ids the reconcile reconciled against, or None
+      when no reconcile ran and the desired set is therefore unknown.
+    - ``live_after``: the ids the router served immediately after the reconcile, or
+      None when no reconcile ran.
+    """
+
+    still_desired: frozenset[str] | None
+    live_after: frozenset[str] | None
 
 
 class SupportedDBObjectType(str, enum.Enum):
@@ -386,12 +408,16 @@ class LiteLLMRoutes(enum.Enum):
         # responses API
         "/responses",
         "/v1/responses",
+        "/openai/v1/responses",
         "/responses/{response_id}",
         "/v1/responses/{response_id}",
+        "/openai/v1/responses/{response_id}",
         "/responses/{response_id}/input_items",
         "/v1/responses/{response_id}/input_items",
+        "/openai/v1/responses/{response_id}/input_items",
         "/responses/{response_id}/cancel",
         "/v1/responses/{response_id}/cancel",
+        "/openai/v1/responses/{response_id}/cancel",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -618,6 +644,8 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_update",
             "/team/permissions_bulk_update",
             "/team/daily/activity",
+            # gateway request counts (SGR); deployment-wide, admin-only
+            "/gateway/daily/activity",
             # model
             "/model/new",
             "/model/update",
@@ -643,6 +671,10 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/session/ui",
+        "/key/spend/report",
+        "/user/spend/report",
+        "/team/spend/report",
+        "/organization/spend/report",
         # Reads end users out of spend logs, scoped to the caller's own rows and
         # permitted teams exactly like /spend/logs/ui — it belongs to the same
         # access tier, not to customer management.
@@ -707,6 +739,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/tags",
         "/global/predict/spend/logs",
         "/global/activity",
+        "/gateway/daily/activity",
         "/health/services",
     ] + info_routes
 
@@ -770,6 +803,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
+        "/user/daily/activity/aggregated",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
@@ -1090,9 +1124,12 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: str | None = None
+    default_estimated_output_tokens: PositiveInt | None = None
+    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     budget_id: str | None = None
     tags: list[str] | None = None
     disable_global_guardrails: bool | None = None
+    enable_prompt_caching: bool | None = None
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
     allowed_routes: list | None = []
@@ -1136,7 +1173,7 @@ class GenerateKeyRequest(KeyRequestBase):
 
 
 class GenerateKeyResponse(KeyRequestBase):
-    key: str  # type: ignore
+    key: str
     key_name: str | None = None
     key_type: str | None = None
     expires: datetime | None = None
@@ -1807,6 +1844,8 @@ class NewTeamRequest(TeamBase):
     )
 
     model_tpm_limit: dict[str, int] | None = None
+    default_estimated_output_tokens: PositiveInt | None = None
+    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
     team_member_budget: float | None = None  # allow user to set a budget for all team members
     team_member_rpm_limit: int | None = None  # allow user to set RPM limit for all team members
@@ -1871,6 +1910,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
     model_tpm_limit: dict[str, int] | None = None
+    default_estimated_output_tokens: PositiveInt | None = None
+    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
@@ -2231,6 +2272,39 @@ class CoordinationRedisParams(LiteLLMPydanticObjectBase):
         return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
 
 
+class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
+    """
+    Spreads the proxy's scheduled background jobs across a window instead of firing them
+    all on one instant, on every replica, forever.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", protected_namespaces=())
+
+    enabled: bool = Field(default=True, description="apply deterministic phase offsets to scheduled background jobs")
+    window_seconds: int = Field(
+        default=DEFAULT_STAGGER_WINDOW_SECONDS,
+        ge=0,
+        description=(
+            "width of the window jobs are spread over. An interval job is never offset by "
+            "more than one of its own periods, so it is not delayed past the wait it already has"
+        ),
+    )
+    identity: str | None = Field(
+        default=None,
+        description=(
+            "replaces the POD_NAME/HOSTNAME-derived component of the offset hash. Set this "
+            "when replicas share a hostname and would otherwise land on the same offset"
+        ),
+    )
+    offsets: Mapping[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "explicit offset in seconds per scheduler job id, overriding the derived value. "
+            "0 pins a job to its unshifted schedule"
+        ),
+    )
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2417,9 +2491,21 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
     )
+    scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
+        None,
+        description=(
+            "Spreads the proxy's scheduled background jobs (spend flushes, budget resets, "
+            "config reloads, exports) across a window instead of firing them together on "
+            "every replica. On by default; set to tune the window, pin a job, or turn it off."
+        ),
+    )
     maximum_spend_logs_retention_period: str | None = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
+    )
+    maximum_autorouter_session_retention_period: str | None = Field(
+        None,
+        description="Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.",
     )
     use_spend_logs_partitioning: bool | None = Field(
         None,
@@ -2470,6 +2556,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #27639). "
             "A proxy-level WARNING is logged on every request while this flag "
             "is active as a reminder that hard enforcement is relaxed."
+        ),
+    )
+    apply_user_budget_to_team_keys: bool | None = Field(
+        None,
+        description=(
+            "If True, a user's personal max_budget is enforced on every request they "
+            "make, including requests made with a team-scoped key. Defaults to False, "
+            "where a team-scoped key is governed only by the team and team-member "
+            "budgets and the key owner's personal max_budget does not apply "
+            "(see GitHub issue #12905)."
         ),
     )
     user_url_validation: bool | None = Field(
@@ -2861,7 +2957,7 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
-    organization_id: str  # type: ignore
+    organization_id: str
     created_at: datetime
     updated_at: datetime
 
@@ -3868,12 +3964,19 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 ##########################################
 
 
+class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
+    access_group_id: str
+    access_group_name: str
+    models: tuple[str, ...]
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -3985,6 +4088,13 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     stream_timeout: float | None
     user: str | None
     num_retries: int | None
+    # True when the effective timeout came from a caller-controlled source (the
+    # `x-litellm-timeout`/`x-litellm-stream-timeout` headers, or a `timeout`/`request_timeout`/
+    # `stream_timeout` field in the request body) rather than deployment config, so a
+    # deliberately tiny value isn't treated as a deployment health signal (see
+    # cooldown_handlers._trigger_cooldown_for_failed_deployment).
+    client_side_timeout: bool
+    keepalive_seconds: float | None
 
 
 class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
@@ -4002,7 +4112,7 @@ class JWTKeyItem(TypedDict, total=False):
     kid: str
 
 
-JWKKeyValue = Union[list[JWTKeyItem], JWTKeyItem]
+JWKKeyValue = list[JWTKeyItem] | JWTKeyItem
 
 
 class JWKUrlResponse(TypedDict, total=False):
@@ -4045,15 +4155,15 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     duration_doc_str = """Optional[str] - Duration for the key auto-created on `/user/new`. Default is None."""
 
 
-PassThroughEndpointLoggingResultValues = Union[
-    ModelResponse,
-    TextCompletionResponse,
-    ImageResponse,
-    EmbeddingResponse,
-    VideoObject,
-    StandardPassThroughResponseObject,
-    ResponsesAPIResponse,
-]
+PassThroughEndpointLoggingResultValues = (
+    ModelResponse
+    | TextCompletionResponse
+    | ImageResponse
+    | EmbeddingResponse
+    | VideoObject
+    | StandardPassThroughResponseObject
+    | ResponsesAPIResponse
+)
 
 
 class PassThroughEndpointLoggingTypedDict(TypedDict):
@@ -4064,6 +4174,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "default_estimated_output_tokens",
+    "default_estimated_output_tokens_per_model",
     "mcp_rpm_limit",
     "tag_rpm_limit",
     "rpm_limit_type",
@@ -4075,6 +4187,7 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "enforced_batch_output_expires_after",
     "enforced_file_expires_after",
     "throttle_on_budget_exceeded",
+    "enable_prompt_caching",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [
@@ -4154,7 +4267,7 @@ class ClientSideFallbackModel(TypedDict, total=False):
     messages: list[AllMessageValues]
 
 
-ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]
+ALL_FALLBACK_MODEL_VALUES = str | ClientSideFallbackModel
 
 
 RBAC_ROLES = Literal[
@@ -4524,10 +4637,10 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
 
     user_role: (
         Literal[
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
         | None
     ) = Field(

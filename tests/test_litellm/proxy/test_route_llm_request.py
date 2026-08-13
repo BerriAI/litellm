@@ -1136,3 +1136,27 @@ def test_raise_if_required_body_param_missing_ignores_unlisted_route():
     from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 
     raise_if_required_body_param_missing("asome_unlisted_route", {})
+
+
+@pytest.mark.asyncio
+async def test_route_request_routing_group_name_passes_model_gate():
+    from unittest.mock import AsyncMock, patch
+
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "member-a", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+            {"model_name": "member-b", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}},
+        ],
+        routing_groups=[
+            {"group_name": "grouped-quality", "models": ["member-a", "member-b"], "routing_strategy": "simple-shuffle"}
+        ],
+    )
+    data = {"model": "grouped-quality", "messages": [{"role": "user", "content": "hi"}]}
+
+    with patch.object(router, "acompletion", new=AsyncMock(return_value="group_response")) as spy:
+        response = await (await route_request(data, router, None, "acompletion"))
+
+    assert response == "group_response"
+    spy.assert_called_once_with(**data)

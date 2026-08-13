@@ -9,18 +9,15 @@ covered by tests/e2e/quota_management/spend_tracking/.
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
 from e2e_http import (
     assert_client_error,
-    assert_error_or_server_known,
-    require_success_or_provider_denied,
     require_successful_call,
 )
 from endpoints_client import EmbeddingsResult, EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -71,8 +68,7 @@ class TestEmbeddingsEndpoint:
         key = resources.key()
 
         result = endpoints_client.embeddings(key, model, "Say this is a test!")
-        if not require_success_or_provider_denied(result, "bedrock embeddings"):
-            return
+        require_successful_call(result)
         parsed = EmbeddingsResult.model_validate_json(result.body)
         assert parsed.first_vector, f"/embeddings returned no vector: {result.body[:300]}"
         assert any(component != 0.0 for component in parsed.first_vector), (
@@ -83,14 +79,13 @@ class TestEmbeddingsEndpoint:
     def test_vertex_embeddings_returns_vector(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        # Vertex ADC is often missing in local dev; Gemini AI Studio embeddings
-        # exercise the same /embeddings gateway path with a working key.
         model = f"e2e-embeddings-vertex-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
             LiteLLMParamsBody(
-                model="gemini/gemini-embedding-001",
-                api_key="os.environ/GEMINI_API_KEY",
+                model="vertex_ai/text-embedding-005",
+                vertex_project="os.environ/VERTEXAI_PROJECT",
+                vertex_location="us-central1",
             ),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
@@ -156,4 +151,4 @@ class TestEmbeddingsEndpoint:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalEmbeddingsBody(model=model),
         )
-        assert_error_or_server_known(result, "embeddings missing input")
+        assert_client_error(result, "embeddings missing input")

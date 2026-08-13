@@ -258,9 +258,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 }
             elif isinstance(content_item["image_url"], dict):
                 new_image_url_obj: Final = ChatCompletionImageUrlObject(
-                    **{  # type: ignore
-                        k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params
-                    }
+                    **{k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params}
                 )
                 content_item["image_url"] = new_image_url_obj
         elif content_item.get("type") == "file":
@@ -273,9 +271,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     llm_provider="openai",
                 )
             new_file_obj: Final = ChatCompletionFileObjectFile(
-                **{  # type: ignore
-                    k: v for k, v in file_obj.items() if k not in litellm_specific_params
-                }
+                **{k: v for k, v in file_obj.items() if k not in litellm_specific_params}
             )
             content_item["file"] = new_file_obj
 
@@ -379,13 +375,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for i, message in enumerate(messages):
             messages[i] = cast(
                 AllMessageValues,
-                filter_value_from_dict(message, "cache_control"),  # type: ignore
+                filter_value_from_dict(message, "cache_control"),
             )
         if tools is not None:
             for i, tool in enumerate(tools):
                 tools[i] = cast(
                     ChatCompletionToolParam,
-                    filter_value_from_dict(tool, "cache_control"),  # type: ignore
+                    filter_value_from_dict(tool, "cache_control"),
                 )
         return messages, tools
 

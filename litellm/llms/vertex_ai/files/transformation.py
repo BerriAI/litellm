@@ -466,7 +466,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         response_json: Final = raw_response.json()
 
         try:
-            response_object: Final = GcsBucketResponse(**response_json)  # type: ignore
+            response_object: Final = GcsBucketResponse(**response_json)
         except Exception as e:
             raise VertexAIError(
                 status_code=raw_response.status_code,

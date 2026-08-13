@@ -10,6 +10,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
     accessToken: "sk-test",
     userId: "user-1",
     userRole: authState.userRole,
+    isViewOnly: ["Admin Viewer", "Internal Viewer"].includes(authState.userRole),
     disabledPersonalKeyCreation: false,
   }),
 }));

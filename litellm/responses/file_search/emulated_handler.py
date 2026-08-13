@@ -483,7 +483,7 @@ def _build_follow_up_input(
         if isinstance(_item, dict):
             first_response_output_items.append(_item)
         elif hasattr(_item, "model_dump"):
-            first_response_output_items.append(_item.model_dump(exclude_none=True))  # type: ignore[union-attr]
+            first_response_output_items.append(_item.model_dump(exclude_none=True))
         else:
             first_response_output_items.append(_item)
 

@@ -28,9 +28,7 @@ class Supabase:
             raise ValueError(
                 "LiteLLM Error, trying to use Supabase but url or key not passed. Create a table and set `litellm.supabase_url=<your-url>` and `litellm.supabase_key=<your-key>`"
             )
-        self.supabase_client = supabase.create_client(  # type: ignore
-            self.supabase_url, self.supabase_key
-        )
+        self.supabase_client = supabase.create_client(self.supabase_url, self.supabase_key)
 
     def input_log_event(self, model, messages, end_user, litellm_call_id, print_verbose):
         try:

@@ -15,7 +15,7 @@ try:
 
     ULID_AVAILABLE = True
 except ImportError:
-    ulid = None  # type: ignore
+    ulid = None
     ULID_AVAILABLE = False
 
 try:
@@ -23,7 +23,7 @@ try:
 
     HTTPX_AVAILABLE = True
 except ImportError:
-    httpx = None  # type: ignore
+    httpx = None
     HTTPX_AVAILABLE = False
 
 from fastapi import HTTPException
@@ -163,7 +163,7 @@ class LassoGuardrail(CustomGuardrail):
         Falls back to UUID if ULID library is not available.
         """
         if ULID_AVAILABLE and ulid is not None:
-            return str(ulid.ULID())  # type: ignore
+            return str(ulid.ULID())
         else:
             verbose_proxy_logger.debug("ULID library not available, using UUID")
             return str(uuid.uuid4())

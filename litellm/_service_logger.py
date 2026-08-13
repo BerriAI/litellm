@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy._types import UserAPIKeyAuth
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     OTELClass = OpenTelemetry
 else:
     Span = Any

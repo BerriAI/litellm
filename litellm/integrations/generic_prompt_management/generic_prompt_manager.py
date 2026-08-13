@@ -366,14 +366,14 @@ class GenericPromptManager(CustomPromptManagement):
         # Create a copy of the prompt template with variables applied
         updated_messages: Final[list[AllMessageValues]] = []
         for message in prompt_client["prompt_template"]:
-            updated_message = dict(message)  # type: ignore
+            updated_message = dict(message)
             if "content" in updated_message and isinstance(updated_message["content"], str):
                 content = updated_message["content"]
                 for key, value in variables.items():
                     content = content.replace(f"{{{key}}}", str(value))
                     content = content.replace(f"{{{{{key}}}}}", str(value))  # Also support {{key}}
                 updated_message["content"] = content
-            updated_messages.append(updated_message)  # type: ignore
+            updated_messages.append(updated_message)
 
         return PromptManagementClient(
             prompt_id=prompt_client["prompt_id"],

@@ -333,7 +333,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (!pendingRestoredValues) {
       return;
     }
-    const transportReady = transportType || pendingRestoredValues.transport || "";
     if (pendingRestoredValues.transport && !transportType) {
       // wait until transportType state catches up so the URL field is mounted
       return;

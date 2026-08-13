@@ -12,18 +12,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
-
-from proxy_client import ProxyClient
 from e2e_http import BinaryStream, Result, StreamingResponse
 from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
+from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 __all__ = [
     "CacheControl",
-    "RichMessage",
-    "TextBlock",
     "ImageEditForm",
     "ImagesResult",
+    "RichMessage",
+    "TextBlock",
     "TranscriptionForm",
     "TranscriptionResult",
 ]
@@ -135,6 +134,19 @@ class TranscriptionForm(BaseModel):
 class ModerationRequest(BaseModel):
     model: str
     input: str
+
+
+class GenerateContentPart(BaseModel):
+    text: str
+
+
+class GenerateContentContent(BaseModel):
+    role: Literal["user"] = "user"
+    parts: tuple[GenerateContentPart, ...]
+
+
+class GenerateContentBody(BaseModel):
+    contents: tuple[GenerateContentContent, ...]
 
 
 class ResponsesOutputContent(BaseModel):
@@ -433,6 +445,19 @@ class EndpointsClient:
             file_content_type="image/png",
             file_field="image",
             response_type=ImagesResult,
+        )
+
+    def generate_content(
+        self, key: str, model: str, text: str, *, stream: bool = False
+    ) -> StreamingResponse:
+        operation = "streamGenerateContent" if stream else "generateContent"
+        return self._send(
+            f"/v1beta/models/{model}:{operation}",
+            key,
+            GenerateContentBody(
+                contents=(GenerateContentContent(parts=(GenerateContentPart(text=text),)),)
+            ),
+            stream=stream,
         )
 
 

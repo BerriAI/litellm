@@ -293,7 +293,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             import hashlib
 
             import requests
-            from botocore.auth import SigV4Auth
+            from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
@@ -359,7 +359,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 headers=prepped.headers,
             )
             aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=self.s3_region_name)
-            SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
+            S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())
@@ -479,7 +479,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             import hashlib
 
             import requests
-            from botocore.auth import SigV4Auth
+            from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
         except ImportError:
@@ -536,7 +536,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 headers=prepped.headers,
             )
             aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=self.s3_region_name)
-            SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
+            S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())
@@ -583,7 +583,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             import hashlib
 
             import requests
-            from botocore.auth import SigV4Auth
+            from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
             raise ImportError("Missing boto3 to call S3. Run 'pip install boto3'.")
@@ -635,7 +635,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 url=prepped.url,
                 headers=prepped.headers,
             )
-            SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+            S3SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())

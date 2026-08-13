@@ -88,6 +88,29 @@ commands:
             rm -f /tmp/uv-install.sh
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
             export PATH="$HOME/.local/bin:$PATH"
+  install_node:
+    description: "Install the Node.js version pinned in ui/litellm-dashboard/.nvmrc (24.19.0, which bundles npm 11.17.0) with checksum verification, and prepend it to PATH. Run this on any executor whose image does not already ship that version, or `npm ci` in ui/litellm-dashboard fails EBADENGINE against the engines floor. Installs into /opt/node rather than over /usr/local on purpose: cimg/python:*-browsers ships its own node there, and unpacking the tarball on top of it leaves npm 11.17 files merged with the image's npm 11.9 tree, which reports the new version and then exits 1 on `npm ci` with no error text at all. Requires checkout, which the .nvmrc drift check reads."
+    steps:
+      - run:
+          name: Install Node.js 24.19.0
+          command: |
+            NODE_VERSION="24.19.0"
+            NODE_TARBALL="node-v${NODE_VERSION}-linux-x64.tar.xz"
+            NODE_EXPECTED_SHA="14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
+            NVMRC_VERSION="$(tr -d '[:space:]' < ui/litellm-dashboard/.nvmrc)"
+            if [ "$NVMRC_VERSION" != "$NODE_VERSION" ]; then
+              echo "install_node: ui/litellm-dashboard/.nvmrc pins ${NVMRC_VERSION} but this command pins ${NODE_VERSION}; update NODE_VERSION and NODE_EXPECTED_SHA together" >&2
+              exit 1
+            fi
+            curl -sSLf -o "/tmp/${NODE_TARBALL}" "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL}"
+            echo "${NODE_EXPECTED_SHA}  /tmp/${NODE_TARBALL}" | sha256sum -c -
+            sudo mkdir -p /opt/node
+            sudo tar -xJf "/tmp/${NODE_TARBALL}" -C /opt/node --strip-components=1
+            rm -f "/tmp/${NODE_TARBALL}"
+            echo 'export PATH="/opt/node/bin:$PATH"' >> "$BASH_ENV"
+            export PATH="/opt/node/bin:$PATH"
+            node --version
+            npm --version
   install_rust:
     description: "Install pinned rustup (1.28.2) and Rust toolchain (1.97.1) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself."
     steps:
@@ -2594,18 +2617,7 @@ jobs:
       # Install Node.js directly from nodejs.org with SHA256 verification,
       # instead of piping NodeSource's setup_24.x apt-repo installer into
       # sudo bash (which runs a mutable upstream script unattended).
-      - run:
-          name: Install Node.js 24.19.0
-          command: |
-            NODE_VERSION="24.19.0"
-            NODE_TARBALL="node-v${NODE_VERSION}-linux-x64.tar.xz"
-            NODE_EXPECTED_SHA="14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
-            curl -sSLf -o "/tmp/${NODE_TARBALL}" "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL}"
-            echo "${NODE_EXPECTED_SHA}  /tmp/${NODE_TARBALL}" | sha256sum -c -
-            sudo tar -xJf "/tmp/${NODE_TARBALL}" -C /usr/local --strip-components=1
-            rm -f "/tmp/${NODE_TARBALL}"
-            node --version
-            npm --version
+      - install_node
 
       - run:
           name: Install Node.js test dependencies
@@ -2836,6 +2848,7 @@ jobs:
       - skip_if_unrelated_changes:
           category: client
       - setup_google_dns
+      - install_node
       - install_uv
       - install_rust
       - restore_cache:
@@ -2852,7 +2865,7 @@ jobs:
             - ~/.cache/uv
       - restore_cache:
           keys:
-            - ui-e2e-node-deps-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+            - ui-e2e-node-deps-v4-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
       - run:
           name: Install Node dependencies and Playwright
           # The cimg/python:3.12-browsers image already ships the Chromium system
@@ -2867,7 +2880,7 @@ jobs:
             npm ci
             npx playwright install chromium
       - save_cache:
-          key: ui-e2e-node-deps-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+          key: ui-e2e-node-deps-v4-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
           paths:
             - ui/litellm-dashboard/node_modules
             - tests/e2e/ui/node_modules
@@ -2979,6 +2992,7 @@ jobs:
       - skip_if_unrelated_changes:
           category: client
       - setup_google_dns
+      - install_node
       - install_uv
       - install_rust
       - restore_cache:
@@ -2995,7 +3009,7 @@ jobs:
             - ~/.cache/uv
       - restore_cache:
           keys:
-            - ui-e2e-node-deps-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+            - ui-e2e-node-deps-v4-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
       - run:
           name: Install Node dependencies and Playwright
           command: |
@@ -3005,7 +3019,7 @@ jobs:
             npm ci
             npx playwright install chromium
       - save_cache:
-          key: ui-e2e-node-deps-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+          key: ui-e2e-node-deps-v4-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
           paths:
             - ui/litellm-dashboard/node_modules
             - tests/e2e/ui/node_modules

@@ -83,7 +83,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_TeamTable(TeamBase):
-    team_id: str  # type: ignore
+    team_id: str
     spend: float | None = None
     max_parallel_requests: int | None = None
     budget_duration: str | None = None

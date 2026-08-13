@@ -40,6 +40,7 @@ LlmEndpoint = Literal[
     "audio_transcriptions",
     "moderations",
     "realtime",
+    "google_native",
     "vector_stores",
     "ocr",
     "bedrock_native",
@@ -63,7 +64,6 @@ LlmCapability = Literal[
     "assume_role",
     "basic",
     "count_tokens",
-    "input_sanitization",
     "input_validation",
     "long_context_1m",
     "mid_conversation_system",
@@ -79,6 +79,7 @@ LlmCapability = Literal[
     "tool_use",
     "vision",
     "web_search",
+    "web_search_server_tool",
 ]
 
 

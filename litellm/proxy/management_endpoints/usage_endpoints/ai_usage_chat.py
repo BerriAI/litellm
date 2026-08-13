@@ -534,7 +534,7 @@ async def stream_usage_ai_chat(
             tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
         )
-        choice: Final = response.choices[0]  # type: ignore
+        choice: Final = response.choices[0]
 
         if not choice.message.tool_calls:
             if choice.message.content:

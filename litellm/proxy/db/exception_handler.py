@@ -1,5 +1,5 @@
 from collections.abc import Awaitable, Callable
-from typing import Any, Final
+from typing import Any, Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -35,21 +35,52 @@ class PrismaDBExceptionHandler:
 
     @staticmethod
     def is_database_connection_error(e: Exception) -> bool:
-        """True iff the exception is (or could be) a DB-connectivity
-        failure, i.e. something that justifies the
-        ``allow_requests_on_db_unavailable`` HA fallback.
+        """True only for a database that is temporarily unreachable and is
+        expected to come back on its own.
+
+        This is the gate for ``allow_requests_on_db_unavailable``, which lets
+        the proxy keep serving, and issue fallback identities, without a
+        verified database. Only a transient outage justifies that. A fault that
+        will never resolve by itself, such as a query engine that is missing or
+        version-skewed, a malformed query the client library built, or a
+        transaction used incorrectly, must surface rather than be absorbed into
+        an indefinite degraded mode.
+
+        Membership is an allowlist, so an unrecognized failure is treated as
+        permanent. A genuine outage reaches the caller as one of
+        ``DB_CONNECTION_ERROR_TYPES``: the engine is a local HTTP server, and an
+        unreachable database surfaces as a transport error against it rather
+        than as a prisma type.
+
+        Reporting decisions want the opposite breadth; use
+        ``is_database_infrastructure_error`` for those.
+        """
+        import prisma.engine.errors
+
+        if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+            return True
+        if isinstance(e, prisma.engine.errors.EngineConnectionError):
+            return True
+        return isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection
+
+    @staticmethod
+    def is_database_infrastructure_error(e: Exception) -> bool:
+        """True when the failure came from the database or its query engine
+        rather than from the caller's request.
+
+        This answers a reporting question, not a serving one: should the caller
+        be told the service is at fault, or that their request was. It stays
+        deliberately broad, because a permanently faulted engine is still a
+        service problem, and reporting one as a credential failure sends an
+        operator looking in the wrong place. Widening it can only change which
+        error a caller sees; it never grants access.
 
         Known data-layer PrismaError subclasses (``UniqueViolationError``,
-        ``RecordNotFoundError``, etc.) are explicitly excluded — the DB IS
-        reachable, so a fallback that grants an anonymous token would be
-        an auth bypass. Unknown / bare ``PrismaError`` instances default
-        to True so genuine outages that don't match a specific subclass
-        still trigger the fallback.
+        ``RecordNotFoundError``, etc.) are excluded — the DB IS reachable and
+        the request itself is what failed.
         """
         import prisma
 
-        # Explicit data-layer exclusion: DB IS reachable, fallback must
-        # NOT fire.
         data_layer_errors: Final = (
             prisma.errors.DataError,
             prisma.errors.UniqueViolationError,
@@ -194,7 +225,7 @@ class PrismaDBExceptionHandler:
         """
         import asyncio
 
-        if PrismaDBExceptionHandler.is_database_connection_error(e):
+        if PrismaDBExceptionHandler.is_database_infrastructure_error(e):
             return True
         if PrismaDBExceptionHandler.is_database_transport_error(e):
             return True
@@ -280,14 +311,17 @@ def _coerce_timeout(value: Any, fallback: float) -> float:
     return fallback
 
 
+_ReadResultT: Final = TypeVar("_ReadResultT")
+
+
 async def call_with_db_reconnect_retry(
     prisma_client: Any,
-    coro_factory: Callable[[], Awaitable[Any]],
+    coro_factory: Callable[[], Awaitable[_ReadResultT]],
     *,
     reason: str,
     timeout_seconds: float | None = None,
     lock_timeout_seconds: float | None = None,
-) -> Any:
+) -> _ReadResultT:
     """Run a Prisma read coroutine with one transport-reconnect-and-retry.
 
     The canonical "self-heal a transient DB transport blip" wrapper used by

@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test": "vitest",
     "test:dot": "vitest --reporter=dot",
+    "test:types": "vitest --run --typecheck.only",
     "test:watch": "vitest -w",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
@@ -40,6 +41,7 @@
     "lucide-react": "0.513.0",
     "moment": "2.30.1",
     "next": "16.2.11",
+    "nuqs": "^2.9.4",
     "openai": "4.104.0",
     "openapi-fetch": "^0.17.0",
     "openapi-react-query": "^0.5.4",
@@ -89,7 +91,7 @@
   },
   "overrides": {
     "prismjs": "1.30.0",
-    "js-yaml": "4.3.0",
+    "js-yaml": "4.3.1",
     "brace-expansion": "5.0.9",
     "glob": "13.0.0",
     "minimatch": "10.2.4",
@@ -102,7 +104,7 @@
     "sharp": "^0.35.0"
   },
   "engines": {
-    "node": ">=24.0.0",
+    "node": ">=24.14.1",
     "npm": ">=11.10.0"
   }
 }

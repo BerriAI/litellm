@@ -7,7 +7,6 @@ and terminates with the OpenAI [DONE] sentinel.
 from __future__ import annotations
 
 import pytest
-
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
@@ -19,9 +18,7 @@ pytestmark = pytest.mark.e2e
 
 class TestChatStreamContract:
     @pytest.mark.covers("llm.chat_completions.openai.basic.stream.works")
-    def test_chat_stream_is_sse_and_ends_with_done(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_chat_stream_is_sse_and_ends_with_done(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = f"e2e-chat-stream-{unique_marker()}"
         model_id = proxy.create_model(
             model,
@@ -46,11 +43,9 @@ class TestChatStreamContract:
             ),
         )
         require_successful_call(result)
-        assert result.is_streaming or "text/event-stream" in (result.content_type or ""), (
-            f"expected SSE content-type, got {result.content_type!r}"
-        )
-        assert result.stream_events or result.chunks > 0, "stream returned no events"
-        assert result.stream_done or result.stream_events, (
-            f"stream must terminate with [DONE] or deliver events; "
+        assert result.is_streaming, f"expected SSE content-type, got {result.content_type!r}"
+        assert result.stream_events, "stream returned no data events"
+        assert result.stream_done, (
+            f"stream must terminate with [DONE]; "
             f"chunks={result.chunks} done={result.stream_done} events={len(result.stream_events)}"
         )
