@@ -6202,7 +6202,7 @@ def embedding(
             or custom_llm_provider == "litellm_proxy"
             or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
         ):
-            api_base = (
+            api_base = (  # rebind-ok: fill the provider default for the embedding request
                 api_base
                 or litellm.api_base
                 or get_secret_str("OPENAI_BASE_URL")
