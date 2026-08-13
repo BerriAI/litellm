@@ -134,6 +134,7 @@ class SupportedGuardrailIntegrations(Enum):
     HEADROOM = "headroom"
     COMPRESR = "compresr"
     STRAIKER = "straiker"
+    ALIYUN_AI_GUARDRAIL = "aliyun_ai_guardrail"
 
 
 class Role(Enum):
@@ -654,6 +655,55 @@ class JavelinGuardrailConfigModel(BaseModel):
     config: dict | None = Field(default=None, description="Additional configuration for the guardrail")
 
 
+class AliyunAIGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Aliyun AI Security guardrail."""
+
+    level: str | None = Field(
+        default=None,
+        description="Protection level. 'low': block all risks (high protection), 'medium': block medium+high risks, 'high': block high only, 'max': observe mode. Default: medium",
+    )
+    max_text_length: int | None = Field(
+        default=None,
+        description="Maximum text length for a single API call. Text longer than this will be split.",
+    )
+    stream_window_size: int | None = Field(
+        default=None,
+        description="Sliding window size (in chars) for streaming output guardrail checks. Default: 500",
+    )
+    stream_slide_step: int | None = Field(
+        default=None,
+        description="Sliding step (in chars) for streaming output guardrail checks. Default: 300",
+    )
+    stream_first_check_step: int | None = Field(
+        default=None,
+        description="First check threshold (in chars) to reduce first-token latency. Default: 50",
+    )
+    region_id: str | None = Field(
+        default=None,
+        description="Aliyun region ID. Default: cn-shanghai",
+    )
+    service_input: str | None = Field(
+        default=None,
+        description="Service code for input (pre-call) detection. Default: query_security_check",
+    )
+    service_output: str | None = Field(
+        default=None,
+        description="Service code for output (post-call) detection. Default: response_security_check",
+    )
+    service_mcp: str | None = Field(
+        default=None,
+        description="Service code for MCP tool call detection (pre/post MCP call). Default: query_security_check",
+    )
+    access_key_id: str | None = Field(
+        default=None,
+        description="Aliyun Access Key ID for the guardrail. Configure in config.yaml, supports os.environ/ reference",
+    )
+    access_key_secret: str | None = Field(
+        default=None,
+        description="Aliyun Access Key Secret for the guardrail. Configure in config.yaml, supports os.environ/ reference",
+    )
+
+
 class ContentFilterAction(str, Enum):
     """Action to take when content filter detects a match"""
 
@@ -999,6 +1049,7 @@ class LitellmParams(
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
+    AliyunAIGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: str | list[str] | Mode = Field(
@@ -1126,3 +1177,4 @@ class PatchGuardrailRequest(BaseModel):
     guardrail_name: str | None = None
     litellm_params: BaseLitellmParams | None = None
     guardrail_info: dict[str, Any] | None = None
+
