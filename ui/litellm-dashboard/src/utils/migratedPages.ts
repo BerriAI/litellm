@@ -10,6 +10,7 @@ import { serverRootPath } from "@/components/networking";
  */
 export const MIGRATED_PAGES: Record<string, string> = {
   "api-keys": "api-keys",
+  "cli-sessions": "cli-sessions",
   models: "models-and-endpoints",
   api_ref: "api-reference",
   // Legacy alias: older bookmarks used the hyphenated ?page=api-reference form.

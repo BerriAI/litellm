@@ -12,6 +12,11 @@ export const old_admin_roles = ["Admin", "Admin Viewer"];
 export const v2_admin_role_names = ["proxy_admin", "proxy_admin_viewer", "org_admin"];
 export const all_admin_roles = [...old_admin_roles, ...v2_admin_role_names];
 
+// The roles the proxy's own admin-view check accepts: proxy admin and proxy admin
+// viewer only. `all_admin_roles` is wider because it also carries org_admin, who the
+// proxy refuses on tenant-wide reads.
+export const proxyAdminTierRoles = [...old_admin_roles, "proxy_admin", "proxy_admin_viewer"];
+
 export const internalUserRoles = ["Internal User", "Internal Viewer", "internal_user", "internal_user_viewer"];
 export const rolesAllowedToSeeUsage = ["Admin", "Admin Viewer", "Internal User", "Internal Viewer"];
 export const rolesWithWriteAccess = ["Internal User", "Admin", "proxy_admin"];

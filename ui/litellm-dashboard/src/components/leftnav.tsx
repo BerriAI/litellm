@@ -67,6 +67,7 @@ import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
+  proxyAdminTierRoles,
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
@@ -120,6 +121,13 @@ const menuGroups: MenuGroup[] = [
     groupLabel: "AI GATEWAY",
     items: [
       { key: "api-keys", page: "api-keys", label: "Virtual Keys", icon: <KeyRound {...ICON} /> },
+      {
+        key: "cli-sessions",
+        page: "cli-sessions",
+        label: "CLI Sessions",
+        icon: <Terminal {...ICON} />,
+        roles: proxyAdminTierRoles,
+      },
       {
         key: "llm-playground",
         page: "llm-playground",
