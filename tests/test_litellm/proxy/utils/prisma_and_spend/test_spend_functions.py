@@ -328,10 +328,11 @@ async def test_update_spend_logs_job_requeues_batch_when_cancelled_mid_write(
     assert [row["request_id"] for row in written[0]] == ["r1", "r2"]
 
 
-@pytest.mark.asyncio
-async def test_update_spend_logs_job_requeues_tool_usage_when_cancelled_mid_flush(
-    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def _cancel_job_during_tool_flush(
+    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch, flush_error: Exception | None
+) -> list[Any]:
+    """Run a flush that is cancelled while the tool usage write is in flight, let the
+    shielded write finish with ``flush_error`` (or succeed), and return the queue."""
     import litellm.proxy.db.spend_log_tool_index as tool_mod
     import litellm.proxy.guardrails.usage_tracking as guard_mod
 
@@ -339,18 +340,18 @@ async def test_update_spend_logs_job_requeues_tool_usage_when_cancelled_mid_flus
 
     flush_started = asyncio.Event()
     release_flush = asyncio.Event()
-    flushed: List[Any] = []
+    flush_done = asyncio.Event()
 
     async def _slow_flush(prisma_client: Any, transactions: Any) -> None:
         flush_started.set()
         await release_flush.wait()
-        flushed.append(list(transactions))
+        flush_done.set()
+        if flush_error is not None:
+            raise flush_error
 
     monkeypatch.setattr(tool_mod, "flush_tool_usage_transactions", _slow_flush, raising=False)
 
-    tool_transaction = MagicMock()
     mock_prisma_client.spend_log_transactions = []
-    mock_prisma_client.tool_usage_transactions = [tool_transaction]
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
 
@@ -368,12 +369,38 @@ async def test_update_spend_logs_job_requeues_tool_usage_when_cancelled_mid_flus
     with pytest.raises(asyncio.CancelledError):
         await job
 
-    requeued = list(mock_prisma_client.tool_usage_transactions)
-
     release_flush.set()
-    await _wait_for(lambda: bool(flushed))
+    await flush_done.wait()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    return list(mock_prisma_client.tool_usage_transactions)
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_requeues_tool_usage_when_cancelled_flush_fails(
+    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool_transaction = MagicMock()
+    mock_prisma_client.tool_usage_transactions = [tool_transaction]
+
+    requeued = await _cancel_job_during_tool_flush(mock_prisma_client, monkeypatch, ValueError("boom"))
 
     assert requeued == [tool_transaction]
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_keeps_tool_usage_dequeued_when_cancelled_flush_commits(
+    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: LiteLLM_DailyToolSpend rolls up with ``increment`` upserts, so a
+    batch whose shielded flush committed after the cancellation must not be requeued,
+    or the next flush doubles that day's spend, tokens and request count.
+    """
+    mock_prisma_client.tool_usage_transactions = [MagicMock()]
+
+    requeued = await _cancel_job_during_tool_flush(mock_prisma_client, monkeypatch, None)
+
+    assert requeued == []
 
 
 @pytest.mark.asyncio

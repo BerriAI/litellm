@@ -5716,13 +5716,29 @@ async def _requeue_spend_log_transactions(prisma_client: PrismaClient, logs: Seq
         prisma_client.spend_log_transactions = [*logs, *prisma_client.spend_log_transactions]
 
 
-async def _requeue_tool_usage_transactions(
-    prisma_client: PrismaClient, transactions: Sequence["ToolUsageTransaction"]
+def _requeue_tool_usage_transactions_if_flush_failed(
+    prisma_client: PrismaClient,
+    flush_task: "asyncio.Future[None]",
+    transactions: Sequence["ToolUsageTransaction"],
 ) -> None:
+    """Requeue a cancelled tool-usage batch, but only once its shielded flush is known to have failed.
+
+    The LiteLLM_DailyToolSpend rollup upserts with ``increment`` instead of skipping
+    duplicates, so replaying a batch whose flush did commit would double-count spend,
+    tokens and request_count. The shield keeps that flush running past the cancellation,
+    so the retry decision has to wait for its outcome. The done callback runs between
+    coroutine steps and a drain has no await between its read and its rebind, so the
+    single slice assignment cannot interleave with one and needs no lock.
+    """
     if not transactions:
         return
-    async with prisma_client._tool_usage_transactions_lock:
-        prisma_client.tool_usage_transactions = [*transactions, *prisma_client.tool_usage_transactions]
+
+    def _requeue_if_failed(done: "asyncio.Future[None]") -> None:
+        if not done.cancelled() and done.exception() is None:
+            return
+        prisma_client.tool_usage_transactions[:0] = transactions
+
+    flush_task.add_done_callback(_requeue_if_failed)
 
 
 async def update_spend_logs_job(
@@ -5805,8 +5821,7 @@ async def update_spend_logs_job(
         try:
             await asyncio.shield(tool_flush_task)
         except asyncio.CancelledError:
-            tool_flush_task.add_done_callback(_consume_task_exception)
-            await _requeue_tool_usage_transactions(prisma_client, tool_usage_to_process)
+            _requeue_tool_usage_transactions_if_flush_failed(prisma_client, tool_flush_task, tool_usage_to_process)
             raise
     except Exception as tool_tracking_err:
         verbose_proxy_logger.error(
