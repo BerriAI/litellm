@@ -38,8 +38,6 @@ vi.mock("@/components/molecules/notifications_manager", () => ({
   default: { success: vi.fn(), fromBackend: vi.fn() },
 }));
 
-// Both tab bodies keep their own state, which is what the tab container has to
-// preserve when the user moves away and comes back.
 const StatefulPanel = ({ label }: { label: string }) => {
   const [draft, setDraft] = useState("");
   return <input aria-label={label} value={draft} onChange={(event) => setDraft(event.target.value)} />;
@@ -73,8 +71,6 @@ const props = {
   userRole: "Admin",
 };
 
-// The labels in the configure panel are not wired to their controls, so reach
-// the control through the field that the label heads.
 const controlUnder = (label: string): HTMLElement =>
   within(screen.getByText(label).parentElement!).getByRole("combobox");
 
@@ -212,8 +208,6 @@ describe("AgentBuilderView", () => {
     expect(await screen.findByText(/Are you sure you want to delete "support-agent"/)).toBeInTheDocument();
     expect(modelDeleteCall).not.toHaveBeenCalled();
 
-    // The trigger and the confirmation share a label; the confirmation is the
-    // one rendered last, in the overlay.
     const confirmations = screen.getAllByRole("button", { name: /Delete$/ });
     await user.click(confirmations[confirmations.length - 1]);
 

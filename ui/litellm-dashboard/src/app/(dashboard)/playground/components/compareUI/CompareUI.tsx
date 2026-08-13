@@ -739,7 +739,6 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                 Clear All Chats
               </Button>
               <Tooltip>
-                {/* A disabled button emits no pointer events, so the hover target has to be a wrapper */}
                 <TooltipTrigger render={<span className="inline-flex" />}>
                   <Button variant="outline" onClick={addComparison} disabled={comparisons.length >= maxComparisons}>
                     <Plus />

@@ -752,7 +752,6 @@ export default function AgentBuilderView({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogAction variant="outline">Cancel</AlertDialogAction>
-            {/* Not AlertDialogAction: that closes on click, and the dialog must stay up while the delete is in flight */}
             <Button variant="destructive" onClick={handleConfirmDelete} disabled={deleting}>
               Delete
             </Button>

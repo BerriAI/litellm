@@ -76,8 +76,6 @@ const mockProps = {
   apiKey: "test-api-key",
 };
 
-// Both the settings and the remove control are icon-only buttons whose lucide
-// icon survives the migration, so locate them by that icon.
 const buttonWithIcon = (icon: string): HTMLButtonElement => {
   const match = Array.from(document.querySelectorAll("button")).find((button) =>
     button.querySelector(`svg.lucide-${icon}`),
