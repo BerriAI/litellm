@@ -4420,7 +4420,7 @@ export interface paths {
         };
         /**
          * Get Default Team Settings
-         * @description Get all SSO settings from the litellm_settings configuration.
+         * @description Get the default team parameters (litellm_settings.default_team_params).
          *     Returns a structured object with values and descriptions for UI display.
          */
         get: operations["get_default_team_settings_get_default_team_settings_get"];
@@ -14810,8 +14810,9 @@ export interface paths {
         head?: never;
         /**
          * Update Default Team Settings
-         * @description Update the default team parameters for SSO users.
-         *     These settings will be applied to new teams created from SSO.
+         * @description Update the default team parameters (litellm_settings.default_team_params).
+         *     Applied to every new team for fields not explicitly provided in the create request;
+         *     `models` only applies to teams automatically created via SSO Groups.
          */
         patch: operations["update_default_team_settings_update_default_team_settings_patch"];
         trace?: never;
@@ -24431,22 +24432,23 @@ export interface components {
         };
         /**
          * DefaultTeamSSOParams
-         * @description Default parameters to apply when a new team is automatically created by LiteLLM via SSO Groups
+         * @description Default parameters applied to every /team/new call for fields not explicitly provided in the request.
+         *     `models` is the exception: it only applies to teams automatically created by LiteLLM via SSO Groups.
          */
         DefaultTeamSSOParams: {
             /**
              * Budget Duration
-             * @description Default budget duration for new automatically created teams (e.g. 'daily', 'weekly', 'monthly')
+             * @description Default budget duration for new teams, when not explicitly provided (e.g. '24h', '7d', '30d')
              */
             budget_duration?: string | null;
             /**
              * Max Budget
-             * @description Default maximum budget (in USD) for new automatically created teams
+             * @description Default maximum budget (in USD) for new teams, when not explicitly provided
              */
             max_budget?: number | null;
             /**
              * Models
-             * @description Default list of models that new automatically created teams can access
+             * @description Default list of models for teams automatically created via SSO Groups
              * @default []
              */
             models: string[];
@@ -24457,7 +24459,7 @@ export interface components {
             organization_id?: string | null;
             /**
              * Rpm Limit
-             * @description Default rpm limit for new automatically created teams
+             * @description Default rpm limit for new teams, when not explicitly provided
              */
             rpm_limit?: number | null;
             /**
@@ -24467,7 +24469,7 @@ export interface components {
             team_member_permissions?: components["schemas"]["KeyManagementRoutes"][] | null;
             /**
              * Tpm Limit
-             * @description Default tpm limit for new automatically created teams
+             * @description Default tpm limit for new teams, when not explicitly provided
              */
             tpm_limit?: number | null;
         };
