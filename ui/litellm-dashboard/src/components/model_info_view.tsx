@@ -504,9 +504,8 @@ export default function ModelInfoView({
         return;
       }
 
-      // A param the user deleted from the editor is absent from updatedLitellmParams;
-      // send it as an explicit null so the backend clears it, since the PATCH merge is
-      // additive and would otherwise keep the stored value.
+      // The additive PATCH merge keeps omitted keys, so a deleted param needs an
+      // explicit null to actually clear on the backend.
       for (const removedKey of computeRemovedLitellmParamKeys(
         localModelData.litellm_params ?? {},
         updatedLitellmParams,

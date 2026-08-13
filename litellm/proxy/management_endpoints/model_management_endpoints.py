@@ -386,14 +386,16 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     #
     # A litellm_params field the caller explicitly sets to null is removed from the
     # stored params, so the UI can drop a param (e.g. reasoning_effort) instead of
-    # only overwriting it. The cross-blob mirror stays scoped to SPECIAL_MODEL_INFO_PARAMS
-    # (input/output cost per token/character and cache read/write costs), which
-    # Deployment.__init__ mirrors between litellm_params and model_info. The model_info
-    # loop below stays restricted to SPECIAL params so this path cannot null out
-    # privileged model_info fields like team_id or access groups.
+    # only overwriting it. `model` is exempt: it is required to reconstruct the
+    # deployment, so a null there is ignored rather than persisting a modelless row.
+    # The cross-blob mirror stays scoped to SPECIAL_MODEL_INFO_PARAMS (input/output
+    # cost per token/character and cache read/write costs), which Deployment.__init__
+    # mirrors between litellm_params and model_info. The model_info loop below stays
+    # restricted to SPECIAL params so this path cannot null out privileged model_info
+    # fields like team_id or access groups.
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
-            if getattr(updated_patch.litellm_params, field) is None:
+            if field != "model" and getattr(updated_patch.litellm_params, field) is None:
                 merged_litellm_params.pop(field, None)
                 if field in SPECIAL_MODEL_INFO_PARAMS:
                     merged_model_info.pop(field, None)

@@ -3296,6 +3296,25 @@ class TestUpdateDBModelClearParam:
         info = json.loads(result["model_info"])
         assert info.get("team_id") == "team-keep-me"
 
+    def test_null_model_field_is_not_cleared(self):
+        """`model` is required to rebuild the deployment, so an explicit null for it
+        must be ignored, not persisted as a modelless (invalid) row. Other nulled
+        params in the same patch are still cleared."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._db_model(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(model=None, reasoning_effort=None)
+            ),
+        )
+        params = json.loads(result["litellm_params"])
+        assert params.get("model") == "gpt-5.6-sol"
+        assert "reasoning_effort" not in params
+
 
 class TestGetModelInfoWithIdBlocked:
     """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`
