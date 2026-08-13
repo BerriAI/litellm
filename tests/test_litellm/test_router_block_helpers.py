@@ -90,24 +90,22 @@ class TestHasReachableFallback:
             model_list=[
                 _deployment("primary", "p0", blocked=True),
                 _deployment("fallback", "f0", blocked=False),
-            ],
-            fallbacks=[{"primary": ["fallback"]}],
+            ]
         )
-        assert router._has_reachable_fallback("primary") is True
+        assert router._has_reachable_fallback("primary", fallbacks=[{"primary": ["fallback"]}]) is True
 
     def test_not_reachable_when_fallback_also_fully_blocked(self):
         router = Router(
             model_list=[
                 _deployment("primary", "p0", blocked=True),
                 _deployment("fallback", "f0", blocked=True),
-            ],
-            fallbacks=[{"primary": ["fallback"]}],
+            ]
         )
-        assert router._has_reachable_fallback("primary") is False
+        assert router._has_reachable_fallback("primary", fallbacks=[{"primary": ["fallback"]}]) is False
 
     def test_not_reachable_without_fallbacks(self):
         router = Router(model_list=[_deployment("primary", "p0", blocked=True)])
-        assert router._has_reachable_fallback("primary") is False
+        assert router._has_reachable_fallback("primary", fallbacks=[]) is False
 
     def test_reachable_through_multi_level_chain(self):
         router = Router(
@@ -115,36 +113,35 @@ class TestHasReachableFallback:
                 _deployment("primary", "p0", blocked=True),
                 _deployment("mid", "m0", blocked=True),
                 _deployment("healthy", "h0", blocked=False),
-            ],
-            fallbacks=[{"primary": ["mid"]}, {"mid": ["healthy"]}],
+            ]
         )
-        assert router._has_reachable_fallback("primary") is True
+        chain = [{"primary": ["mid"]}, {"mid": ["healthy"]}]
+        assert router._has_reachable_fallback("primary", fallbacks=chain) is True
 
     def test_self_referential_chain_terminates(self):
         router = Router(
             model_list=[
                 _deployment("primary", "p0", blocked=True),
                 _deployment("fallback", "f0", blocked=True),
-            ],
-            fallbacks=[{"primary": ["fallback"]}, {"fallback": ["primary"]}],
+            ]
         )
-        assert router._has_reachable_fallback("primary") is False
+        chain = [{"primary": ["fallback"]}, {"fallback": ["primary"]}]
+        assert router._has_reachable_fallback("primary", fallbacks=chain) is False
 
     def test_generic_star_fallback_is_honored(self):
         router = Router(
             model_list=[
                 _deployment("primary", "p0", blocked=True),
                 _deployment("fallback", "f0", blocked=False),
-            ],
-            fallbacks=[{"*": ["fallback"]}],
+            ]
         )
-        assert router._has_reachable_fallback("primary") is True
+        assert router._has_reachable_fallback("primary", fallbacks=[{"*": ["fallback"]}]) is True
 
-    def test_request_level_fallbacks_are_honored(self):
+    def test_string_form_fallback_is_honored(self):
         router = Router(
             model_list=[
                 _deployment("primary", "p0", blocked=True),
                 _deployment("fallback", "f0", blocked=False),
             ]
         )
-        assert router._has_reachable_fallback("primary", request_fallbacks=[{"primary": ["fallback"]}]) is True
+        assert router._has_reachable_fallback("primary", fallbacks=["fallback"]) is True
