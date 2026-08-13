@@ -2,7 +2,7 @@
  * Core tests for Tools section
  */
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { parseToolsFromLog } from "./utils";
@@ -152,6 +152,8 @@ describe("ToolsSection", () => {
   });
 });
 
+const isShown = (text: string) => screen.queryAllByText(text).some((el) => el.closest("[hidden]") === null);
+
 describe("ToolsSection rendering", () => {
   it("summarises how many tools were provided and called", () => {
     render(<ToolsSection log={logWithTools(["get_weather", "search_web"], "get_weather")} />);
@@ -175,12 +177,25 @@ describe("ToolsSection rendering", () => {
   it("reveals the tool list only after the section is expanded", async () => {
     render(<ToolsSection log={logWithTools(["get_weather", "search_web"], "get_weather")} />);
 
-    expect(screen.queryByText("called")).not.toBeInTheDocument();
-    expect(screen.queryByText("not called")).not.toBeInTheDocument();
+    expect(isShown("called")).toBe(false);
+    expect(isShown("not called")).toBe(false);
 
     await userEvent.click(screen.getByText("Tools"));
 
-    expect(await screen.findByText("called")).toBeInTheDocument();
-    expect(screen.getByText("not called")).toBeInTheDocument();
+    await waitFor(() => expect(isShown("called")).toBe(true));
+    expect(isShown("not called")).toBe(true);
+  });
+
+  it("keeps a tool's expanded detail across a close and reopen", async () => {
+    render(<ToolsSection log={logWithTools(["get_weather", "search_web"], "get_weather")} />);
+
+    await userEvent.click(screen.getByText("Tools"));
+    await userEvent.click(await screen.findByText(/1\. get_weather/));
+    expect(isShown("Description")).toBe(true);
+
+    await userEvent.click(screen.getByText("Tools"));
+    await userEvent.click(screen.getByText("Tools"));
+
+    await waitFor(() => expect(isShown("Description")).toBe(true));
   });
 });
