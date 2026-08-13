@@ -1618,12 +1618,12 @@
       }
     },
     "nebius": {
-      "display_name": "Nebius AI Studio (`nebius`)",
+      "display_name": "Nebius Token Factory (`nebius`)",
       "url": "https://docs.litellm.ai/docs/providers/nebius",
       "endpoints": {
         "chat_completions": true,
-        "messages": true,
-        "responses": true,
+        "messages": false,
+        "responses": false,
         "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": false,
@@ -1631,8 +1631,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true,
-        "interactions": true
+        "a2a": false,
+        "interactions": false
       }
     },
     "neosantara": {
