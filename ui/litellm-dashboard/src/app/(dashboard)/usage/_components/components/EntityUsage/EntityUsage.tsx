@@ -37,7 +37,7 @@ import { Alert, Button, Tooltip } from "antd";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
-import { UsageExportHeader } from "@/components/EntityUsageExport";
+import { UsageExportHeader, type UsageFilterSelectProps } from "@/components/EntityUsageExport";
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import {
   agentDailyActivityCall,
@@ -97,6 +97,7 @@ interface EntityUsageProps {
   entityList: EntityList[] | null;
   premiumUser: boolean;
   dateValue: DateRangePickerValue;
+  filterSelectProps?: UsageFilterSelectProps;
 }
 
 const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
@@ -120,6 +121,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityList,
   userRole,
   dateValue,
+  filterSelectProps,
 }) => {
   const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -678,13 +680,17 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
-        showFilters={entityType !== "team" && entityList !== null && entityList.length > 0}
+        showFilters={
+          entityType !== "team" &&
+          (filterSelectProps?.showSearch === true || (entityList !== null && entityList.length > 0))
+        }
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
         filterMode={entityType === "user" ? "single" : "multiple"}
+        filterSelectProps={filterSelectProps}
         teams={teams || []}
       />
       <TabGroup>

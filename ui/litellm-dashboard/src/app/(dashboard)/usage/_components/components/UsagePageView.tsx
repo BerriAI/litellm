@@ -38,7 +38,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
-import EntityUsageExportModal from "@/components/EntityUsageExport";
+import EntityUsageExportModal, { type UsageFilterSelectProps } from "@/components/EntityUsageExport";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
@@ -159,6 +159,26 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     if (scrollRatio >= 0.8 && hasNextUsersPage && !isFetchingNextUsersPage) {
       fetchNextUsersPage();
     }
+  };
+
+  const userFilterSelectProps: UsageFilterSelectProps = {
+    showSearch: true,
+    filterOption: false,
+    onSearch: handleUserSearchChange,
+    searchValue: userSearchInput,
+    onPopupScroll: handleUserPopupScroll,
+    loading: isLoadingUsers,
+    notFoundContent: isLoadingUsers ? <LoadingOutlined spin /> : "No users found",
+    popupRender: (menu) => (
+      <>
+        {menu}
+        {isFetchingNextUsersPage && (
+          <div style={{ textAlign: "center", padding: 8 }}>
+            <LoadingOutlined spin />
+          </div>
+        )}
+      </>
+    ),
   };
 
   // For admins: null means global view (all users), a string means filter by that user
@@ -565,29 +585,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 <div className="mb-4">
                   <Text className="mb-2">Filter by user</Text>
                   <Select
-                    showSearch
+                    {...userFilterSelectProps}
                     allowClear
                     style={{ width: "100%" }}
                     placeholder="Select user to filter..."
                     value={selectedUserId}
                     onChange={(value) => setSelectedUserId(value ?? null)}
-                    filterOption={false}
-                    onSearch={handleUserSearchChange}
-                    searchValue={userSearchInput}
-                    onPopupScroll={handleUserPopupScroll}
-                    loading={isLoadingUsers}
-                    notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
                     options={userOptions}
-                    popupRender={(menu) => (
-                      <>
-                        {menu}
-                        {isFetchingNextUsersPage && (
-                          <div style={{ textAlign: "center", padding: 8 }}>
-                            <LoadingOutlined spin />
-                          </div>
-                        )}
-                      </>
-                    )}
                   />
                 </div>
               )}
@@ -1057,6 +1061,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               userID={userID}
               userRole={userRole}
               entityList={userOptions.length > 0 ? userOptions : null}
+              filterSelectProps={userFilterSelectProps}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />

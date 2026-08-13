@@ -46,7 +46,18 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
 }));
 
 vi.mock("./EntityUsage/EntityUsage", () => ({
-  default: () => <div>Entity Usage</div>,
+  default: ({
+    entityType,
+    filterSelectProps,
+  }: {
+    entityType?: string;
+    filterSelectProps?: { showSearch?: boolean };
+  }) => (
+    <div>
+      Entity Usage
+      {entityType === "user" && filterSelectProps?.showSearch && <span>Searchable user filter</span>}
+    </div>
+  ),
   EntityList: [],
 }));
 
@@ -76,6 +87,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
       React.createElement("option", { value: "customer" }, "Customer Usage"),
       tagOption,
       React.createElement("option", { value: "agent" }, "Agent Usage"),
+      React.createElement("option", { value: "user" }, "User Usage"),
       React.createElement("option", { value: "user-agent-activity" }, "User Agent Activity"),
     );
   };
@@ -922,6 +934,18 @@ describe("UsagePage", () => {
 
       // useInfiniteUsers should be called with default page size
       expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, undefined);
+    });
+
+    it("should reuse the searchable user filter in the user usage view", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "user" } });
+
+      expect(await screen.findByText("Searchable user filter")).toBeInTheDocument();
     });
 
     it("should deduplicate users across pages", async () => {

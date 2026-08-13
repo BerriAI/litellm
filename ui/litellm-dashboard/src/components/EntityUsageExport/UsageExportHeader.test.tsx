@@ -70,4 +70,29 @@ describe("UsageExportHeader", () => {
     );
     expect(screen.getByText("Team")).toBeInTheDocument();
   });
+
+  it("should keep a searchable single filter usable when no options match", async () => {
+    const user = userEvent.setup();
+    const onSearch = vi.fn();
+
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        entityType="user"
+        showFilters
+        filterMode="single"
+        filterLabel="User"
+        filterPlaceholder="Select user to filter..."
+        filterOptions={[]}
+        filterSelectProps={{ showSearch: true, filterOption: false, onSearch }}
+        onFiltersChange={vi.fn()}
+      />,
+    );
+
+    const userFilter = screen.getByRole("combobox");
+    await user.click(userFilter);
+    await user.type(userFilter, "alice");
+
+    expect(onSearch).toHaveBeenLastCalledWith("alice");
+  });
 });
