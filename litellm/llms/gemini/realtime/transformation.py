@@ -92,6 +92,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
         return True
 
+    def _strip_native_audio_speech_config(self) -> bool:
+        """Google AI Studio native-audio Live rejects ``speechConfig`` on setup; Vertex AI accepts it."""
+        return True
+
     @staticmethod
     def _usage_detail_alias(details: Any, defaults: dict[str, int]) -> dict[str, Any]:
         if not isinstance(details, dict):
@@ -382,8 +386,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         without_text: Final = [modality for modality in normalized if modality != "TEXT"]
         return without_text if without_text else ["AUDIO"]
 
-    @staticmethod
-    def _finalize_gemini_live_setup(model: str, setup: dict[str, Any]) -> dict[str, Any]:
+    def _finalize_gemini_live_setup(self, model: str, setup: dict[str, Any]) -> dict[str, Any]:
         """Drop fields Gemini Live native-audio rejects on ``setup``."""
         generation_config: Final = setup.get("generationConfig")
         if isinstance(generation_config, dict):
@@ -392,7 +395,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 generation_config["responseModalities"] = GeminiRealtimeConfig._coerce_response_modalities(
                     model, modalities
                 )
-            if GeminiRealtimeConfig._is_native_audio_model(model):
+            if self._strip_native_audio_speech_config() and GeminiRealtimeConfig._is_native_audio_model(model):
                 generation_config.pop("speechConfig", None)
         return setup
 
