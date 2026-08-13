@@ -561,6 +561,10 @@ class AWSEventStreamDecoder:
             elif "usage" in chunk_data:
                 usage = converse_config._transform_usage(chunk_data.get("usage", {}))
 
+            carries_message_content: Final = any(
+                key in chunk_data for key in ("start", "delta", "contentBlockIndex", "stopReason")
+            )
+
             model_response_provider_specific_fields: Final = {}
             if "trace" in chunk_data:
                 trace: Final = chunk_data.get("trace")
@@ -571,8 +575,8 @@ class AWSEventStreamDecoder:
                         finish_reason=finish_reason,
                         index=0,  # Always 0 - Bedrock never returns multiple choices
                         delta=Delta(
-                            content=text,
-                            role="assistant",
+                            content=text if carries_message_content else None,
+                            role="assistant" if carries_message_content else None,
                             tool_calls=[tool_use] if tool_use else None,
                             provider_specific_fields=(provider_specific_fields if provider_specific_fields else None),
                             thinking_blocks=thinking_blocks,
