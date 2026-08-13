@@ -412,6 +412,23 @@ model LiteLLM_SSOIdentityAssertion {
   updated_at    DateTime @default(now()) @updatedAt @map("updated_at")
 }
 
+// One row per `lite login` session. The CLI credential is a self-contained encrypted
+// blob rather than a virtual key, so this registry is what makes a session listable
+// and revocable. session_id is the sha256 of the session token, matching how
+// LiteLLM_VerificationToken stores its token.
+model LiteLLM_CLISessionTable {
+  session_id String    @id
+  user_id    String
+  team_id    String?
+  created_at DateTime  @default(now()) @map("created_at")
+  expires_at DateTime  @map("expires_at")
+  revoked_at DateTime? @map("revoked_at")
+  revoked_by String?
+
+  @@index([user_id])
+  @@index([expires_at])
+}
+
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
     token      String   @id

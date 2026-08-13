@@ -5631,8 +5631,12 @@ def _proxy_attrs_for_db_lookup():
     ``_user_api_key_auth_builder`` down to the DB key lookup."""
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    # A CLI session token is checked against the session registry on the way through,
+    # so the stand-in DB has to answer that read.
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_clisessiontable.find_unique = AsyncMock(return_value=None)
     return {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_client,
         "user_api_key_cache": DualCache(),
         "proxy_logging_obj": proxy_logging_obj,
         "master_key": "sk-test-master",
@@ -6735,3 +6739,80 @@ class TestLitellmReceivedAtStamping:
 
         assert result == earlier
         assert request.state.litellm_received_at == earlier
+
+
+def _mint_teamless_cli_session_token(monkeypatch, *, user_id="cli-admin"):
+    """A CLI session with no team, so the revocation check is exercised without the
+    team-grant resolution a team-bound token drags in."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+    user_info = LiteLLM_UserTable(
+        user_id=user_id,
+        user_email="cli@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        models=["gpt-3.5-turbo"],
+        max_budget=100.0,
+    )
+    return ExperimentalUIJWTToken.get_cli_jwt_auth_token(user_info)
+
+
+def _revocation_cache(session_id: str, revoked: bool) -> DualCache:
+    cache = DualCache()
+    cache.in_memory_cache.set_cache(f"cli_session_revoked:{session_id}", revoked, ttl=60)
+    return cache
+
+
+def _registry_id_for(cli_token: str) -> str:
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.auth.cli_session_registry import cli_session_id
+
+    decoded = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(cli_token)
+    assert decoded is not None and decoded.token is not None
+    return cli_session_id(decoded.token)
+
+
+async def _auth_with_cli_token(cli_token: str, cache: DualCache):
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {cli_token}"}
+    mock_request.query_params = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+    ):
+        return await user_api_key_auth(request=mock_request, api_key=f"Bearer {cli_token}")
+
+
+@pytest.mark.asyncio
+async def test_revoked_cli_session_token_is_refused(monkeypatch):
+    """The security half of CLI session revocation. A `lite login` credential is a
+    self-contained blob that decrypts successfully forever, so nothing refuses a
+    revoked session unless the auth path consults the session registry."""
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    cli_token = _mint_teamless_cli_session_token(monkeypatch)
+    cache = _revocation_cache(_registry_id_for(cli_token), revoked=True)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _auth_with_cli_token(cli_token, cache)
+
+    assert exc_info.value.type == ProxyErrorTypes.auth_error
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in exc_info.value.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_unrevoked_cli_session_token_still_authenticates(monkeypatch):
+    """Control for the revocation check: an unrevoked session must be unaffected,
+    so a passing revocation test cannot be a blanket refusal of CLI tokens."""
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    cli_token = _mint_teamless_cli_session_token(monkeypatch)
+    cache = _revocation_cache(_registry_id_for(cli_token), revoked=False)
+
+    result = await _auth_with_cli_token(cli_token, cache)
+
+    assert result.user_id == "cli-admin"
+    assert result.token is not None and result.token.startswith("cli-session-")

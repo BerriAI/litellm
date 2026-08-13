@@ -3146,6 +3146,7 @@ class ExperimentalUIJWTToken:
         team_models: Sequence[str] | None = None,
         team_model_aliases: Mapping[str, str] | None = None,
         max_budget: float | None = None,
+        session_id: str | None = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -3159,6 +3160,8 @@ class ExperimentalUIJWTToken:
             team_alias: Team alias for the selected team, if available
             team_models: Model allowlist granted by the selected team
             team_model_aliases: Team model aliases for the selected team
+            session_id: Session token to embed, so the caller can register the session
+                in the CLI session registry before handing the credential out
 
         Returns:
             Encrypted JWT token string
@@ -3185,7 +3188,7 @@ class ExperimentalUIJWTToken:
             # Use first team if user has teams
             _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
 
-        session_token: Final = f"{CLI_SESSION_KEY_PREFIX}-{secrets.token_urlsafe(16)}"
+        session_token: Final = session_id or f"{CLI_SESSION_KEY_PREFIX}-{secrets.token_urlsafe(16)}"
         session_alias: Final = f"{CLI_SESSION_KEY_PREFIX}-{user_info.user_id}"
 
         valid_token: Final = UserAPIKeyAuth(

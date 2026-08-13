@@ -70,6 +70,7 @@ from litellm.proxy.auth.auth_utils import (
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
 )
+from litellm.proxy.auth.cli_session_registry import is_cli_session_revoked
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
@@ -1725,6 +1726,23 @@ async def _user_api_key_auth_builder(
                 and get_secret_bool("EXPERIMENTAL_UI_LOGIN") is not False
             ):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(api_key)
+
+                if (
+                    valid_token is not None
+                    and valid_token.is_session_token
+                    and valid_token.token is not None
+                    and await is_cli_session_revoked(
+                        session_token=valid_token.token,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                    )
+                ):
+                    raise ProxyException(
+                        message="Authentication Error - This CLI session was revoked. Run `lite login` to start a new one.",
+                        type=ProxyErrorTypes.auth_error,
+                        code=status.HTTP_401_UNAUTHORIZED,
+                        param=abbreviate_api_key(api_key=api_key),
+                    )
 
         if (
             valid_token is not None

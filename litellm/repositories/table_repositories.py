@@ -146,6 +146,10 @@ class AccessGroupRepository(PrismaTableRepository):
     table_name = "litellm_accessgrouptable"
 
 
+class CLISessionRepository(PrismaTableRepository):
+    table_name = "litellm_clisessiontable"
+
+
 class SSOConfigRepository(PrismaTableRepository):
     table_name = "litellm_ssoconfig"
 

@@ -49,6 +49,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
+    CLI_SESSION_KEY_PREFIX,
     CLI_SSO_CLAIM_MAP,
     CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
     CLI_SSO_SESSION_CACHE_KEY_PREFIX,
@@ -92,6 +93,7 @@ from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
     _has_user_setup_sso,
 )
+from litellm.proxy.auth.cli_session_registry import record_cli_session
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
@@ -120,6 +122,7 @@ from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
     get_custom_url,
+    get_prisma_client_or_throw,
     get_server_root_path,
 )
 from litellm.repositories.table_repositories import SSOConfigRepository
@@ -2540,6 +2543,7 @@ async def cli_poll_key(
                 models=session_data.get("models", []),
             )
 
+            session_token: Final = f"{CLI_SESSION_KEY_PREFIX}-{secrets.token_urlsafe(16)}"
             jwt_token: Final = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
                 user_info=user_info,
                 team_id=team_id,
@@ -2547,6 +2551,16 @@ async def cli_poll_key(
                 team_models=selected_team.team_models,
                 team_model_aliases=selected_team.team_model_aliases,
                 max_budget=None,
+                session_id=session_token,
+            )
+
+            # A session we cannot register is a session no operator could ever revoke,
+            # so registration failing has to stop the credential being handed out.
+            await record_cli_session(
+                prisma_client=get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value),
+                session_token=session_token,
+                user_id=user_id,
+                team_id=team_id,
             )
 
             # Delete cache entry (single-use)

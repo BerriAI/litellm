@@ -1827,6 +1827,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cli/session/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Cli Sessions Endpoint */
+        get: operations["list_cli_sessions_endpoint_cli_session_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cli/session/{session_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Cli Session Endpoint */
+        post: operations["revoke_cli_session_endpoint_cli_session__session_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cloudzero/delete": {
         parameters: {
             query?: never;
@@ -23036,6 +23070,42 @@ export interface components {
             /** Total Requested */
             total_requested: number;
         };
+        /** CLISessionListResponse */
+        CLISessionListResponse: {
+            /** Sessions */
+            sessions: components["schemas"]["CLISessionResponse"][];
+            /** Total Count */
+            total_count: number;
+        };
+        /**
+         * CLISessionResponse
+         * @description An operator-visible `lite login` session.
+         *
+         *     ``session_id`` is the sha256 of the session token, so it identifies the session
+         *     without being usable as a credential.
+         */
+        CLISessionResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Revoked At */
+            revoked_at?: string | null;
+            /** Revoked By */
+            revoked_by?: string | null;
+            /** Session Id */
+            session_id: string;
+            /** Team Id */
+            team_id?: string | null;
+            /** User Id */
+            user_id: string;
+        };
         /** CacheActivityErrorBucket */
         CacheActivityErrorBucket: {
             /** Call Type */
@@ -39791,6 +39861,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_cli_sessions_endpoint_cli_session_list_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CLISessionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_cli_session_endpoint_cli_session__session_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CLISessionResponse"];
                 };
             };
             /** @description Validation Error */

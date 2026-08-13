@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2522,6 +2523,27 @@ class TestCustomUISSO:
                     assert result.status_code == 303
 
 
+def _cli_session_registry_prisma() -> MagicMock:
+    """`cli_poll_key` registers the session in LiteLLM_CLISessionTable before handing
+    the credential out, so the poll needs a DB whose CLI-session table accepts the write."""
+    prisma = MagicMock()
+    now = datetime.now(timezone.utc)
+    prisma.db.litellm_clisessiontable.create = AsyncMock(
+        return_value=SimpleNamespace(
+            model_dump=lambda: {
+                "session_id": "hashed-session-id",
+                "user_id": "registered-user",
+                "team_id": None,
+                "created_at": now,
+                "expires_at": now,
+                "revoked_at": None,
+                "revoked_by": None,
+            }
+        )
+    )
+    return prisma
+
+
 class TestCLIKeyRegenerationFlow:
     """Test the end-to-end CLI key regeneration flow"""
 
@@ -3501,7 +3523,7 @@ class TestCLIKeyRegenerationFlow:
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client"),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value=mock_jwt_token,
@@ -3654,6 +3676,7 @@ class TestCLIKeyRegenerationFlow:
 
         with (
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value="minted-token",
@@ -3718,6 +3741,7 @@ class TestCLIKeyRegenerationFlow:
 
         with (
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value="minted-token",
@@ -3760,6 +3784,7 @@ class TestCLIKeyRegenerationFlow:
 
         with (
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value="minted-token",
@@ -3813,7 +3838,7 @@ class TestCLIKeyRegenerationFlow:
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client"),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value=mock_jwt_token,
@@ -3870,6 +3895,7 @@ class TestCLIKeyRegenerationFlow:
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value=mock_jwt_token,
@@ -8099,7 +8125,7 @@ async def test_cli_poll_key_tolerates_missing_user_row():
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
         patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
         patch(
             "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
             return_value=mock_jwt_token,
@@ -8628,3 +8654,120 @@ class TestPersistReturnToCookieSharedHelper:
         resp = Response()
         _persist_return_to_cookie(resp, "https://cp.example.com/ui?page=models")
         assert "litellm_cp_return_to=" in self._cookie(resp)
+
+
+def _cli_poll_flow_cache(session_data: dict) -> MagicMock:
+    from litellm.proxy.management_endpoints.ui_sso import _hash_cli_sso_secret
+
+    cache = MagicMock(redis_cache=None)
+    cache.get_cache.return_value = {
+        "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+        "sso_complete": True,
+        "user_code_verified": True,
+        "session_data": session_data,
+    }
+    return cache
+
+
+@pytest.mark.asyncio
+async def test_cli_poll_key_registers_the_session_it_mints(monkeypatch):
+    """The registry row is what makes a CLI session listable and revocable, so the
+    poll must register the session token it actually handed out, keyed by its hash."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-registry")
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.auth.cli_session_registry import cli_session_id
+    from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
+
+    session_data = {
+        "user_id": "registered-user",
+        "user_role": "internal_user",
+        "teams": ["team-r"],
+        "team_details": [{"team_id": "team-r", "team_alias": "Team R", "team_models": []}],
+        "models": ["gpt-4"],
+    }
+    mock_cache = _cli_poll_flow_cache(session_data)
+    prisma = _cli_session_registry_prisma()
+
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+    ):
+        result = await cli_poll_key(
+            key_id="cli-registered-session",
+            team_id="team-r",
+            x_litellm_cli_poll_secret="poll-secret",
+        )
+
+    minted = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(result["key"])
+    assert minted is not None and minted.token is not None
+
+    prisma.db.litellm_clisessiontable.create.assert_awaited_once()
+    recorded = prisma.db.litellm_clisessiontable.create.await_args.kwargs["data"]
+    assert recorded["session_id"] == cli_session_id(minted.token)
+    assert recorded["session_id"] != minted.token
+    assert recorded["user_id"] == "registered-user"
+    assert recorded["team_id"] == "team-r"
+
+
+@pytest.mark.asyncio
+async def test_cli_poll_key_withholds_the_credential_when_registration_fails(monkeypatch):
+    """A session that cannot be registered is a session no operator could ever
+    revoke, so the poll must fail rather than hand out an unrevocable credential."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-registry")
+    from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
+
+    session_data = {
+        "user_id": "registered-user",
+        "user_role": "internal_user",
+        "teams": [],
+        "team_details": [],
+        "models": ["gpt-4"],
+    }
+    mock_cache = _cli_poll_flow_cache(session_data)
+    prisma = _cli_session_registry_prisma()
+    prisma.db.litellm_clisessiontable.create = AsyncMock(side_effect=Exception("registry write failed"))
+
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await cli_poll_key(
+                key_id="cli-unregistered-session",
+                team_id=None,
+                x_litellm_cli_poll_secret="poll-secret",
+            )
+
+    assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_cli_poll_key_registers_a_distinct_session_per_login(monkeypatch):
+    """Session ids are the registry's primary key and the unit of revocation, so two
+    logins sharing one id would collide on insert and make one revoke cut off both."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-registry")
+    from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
+
+    session_data = {
+        "user_id": "registered-user",
+        "user_role": "internal_user",
+        "teams": [],
+        "team_details": [],
+        "models": ["gpt-4"],
+    }
+    mock_cache = _cli_poll_flow_cache(session_data)
+    prisma = _cli_session_registry_prisma()
+
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+    ):
+        for key_id in ("cli-login-session-alpha", "cli-login-session-bravo"):
+            await cli_poll_key(key_id=key_id, team_id=None, x_litellm_cli_poll_secret="poll-secret")
+
+    registered = [call.kwargs["data"]["session_id"] for call in prisma.db.litellm_clisessiontable.create.await_args_list]
+    assert len(registered) == 2
+    assert len(set(registered)) == 2
