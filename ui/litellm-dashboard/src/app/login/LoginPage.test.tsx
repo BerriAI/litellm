@@ -370,4 +370,98 @@ describe("LoginPage", () => {
       expect(mockReplace).not.toHaveBeenCalledWith("/ui/?login=success");
     });
   });
+
+  describe("CLI login (lite login) hand-off to SSO", () => {
+    const originalLocation = window.location;
+    const validKey = "cli-abcdefghijkl0123";
+
+    const setLocationSearch = (search: string) => {
+      Object.defineProperty(window, "location", {
+        value: { ...originalLocation, search, pathname: "/ui/login" },
+        writable: true,
+      });
+    };
+
+    afterEach(() => {
+      Object.defineProperty(window, "location", {
+        value: originalLocation,
+        writable: true,
+      });
+    });
+
+    const renderPage = () => {
+      const queryClient = createQueryClient();
+      return render(
+        <QueryClientProvider client={queryClient}>
+          <LoginPage />
+        </QueryClientProvider>,
+      );
+    };
+
+    it("redirects to /sso/key/generate carrying source and key when SSO is configured", async () => {
+      setLocationSearch(`?source=litellm-cli&key=${validKey}`);
+      (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { auto_redirect_to_sso: false, server_root_path: "/", proxy_base_url: null, sso_configured: true },
+        isLoading: false,
+      });
+      (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+      renderPage();
+
+      await waitFor(() => {
+        expect(mockPush).toHaveBeenCalledWith(
+          `http://localhost:4000/sso/key/generate?source=litellm-cli&key=${validKey}`,
+        );
+      });
+    });
+
+    it("forwards user_code to the SSO redirect when present", async () => {
+      setLocationSearch(`?source=litellm-cli&key=${validKey}&user_code=ABCD-EFGH`);
+      (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { auto_redirect_to_sso: false, server_root_path: "/", proxy_base_url: null, sso_configured: true },
+        isLoading: false,
+      });
+      (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+      renderPage();
+
+      await waitFor(() => {
+        expect(mockPush).toHaveBeenCalledWith(
+          `http://localhost:4000/sso/key/generate?source=litellm-cli&key=${validKey}&user_code=ABCD-EFGH`,
+        );
+      });
+    });
+
+    it("shows the login form and does not redirect to SSO when SSO is not configured", async () => {
+      setLocationSearch(`?source=litellm-cli&key=${validKey}`);
+      (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { auto_redirect_to_sso: false, server_root_path: "/", proxy_base_url: null, sso_configured: false },
+        isLoading: false,
+      });
+      (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
+      });
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    it("does not redirect to SSO when the CLI key is malformed", async () => {
+      setLocationSearch("?source=litellm-cli&key=not-a-valid-login-id");
+      (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { auto_redirect_to_sso: false, server_root_path: "/", proxy_base_url: null, sso_configured: true },
+        isLoading: false,
+      });
+      (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+      renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
+      });
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+  });
 });
