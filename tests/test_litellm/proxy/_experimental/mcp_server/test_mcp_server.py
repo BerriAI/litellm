@@ -117,6 +117,55 @@ async def test_mcp_server_tool_call_body_contains_request_data():
 
 
 @pytest.mark.asyncio
+async def test_mcp_server_tool_call_forwards_client_headers_to_logging():
+    """The MCP protocol path must hand the connection's client headers to the pre-call
+    pipeline, so logging callbacks and guardrails see them the way the REST path does."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            mcp_server_tool_call,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    set_auth_context(
+        UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        raw_headers={
+            "x-nuid": "nuid-1",
+            "x-app-id": "app-1",
+            "content-length": "42",
+            "x-forwarded-for": "9.9.9.9",
+        },
+        client_ip="1.2.3.4",
+    )
+
+    captured_headers = {}
+
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
+        captured_headers.update(request.headers)
+        return data
+
+    async def mock_call_mcp_tool(*args, **kwargs):
+        return [{"type": "text", "text": "mocked response"}]
+
+    with patch(
+        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request",
+        mock_add_litellm_data_to_request,
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            mock_call_mcp_tool,
+        ):
+            with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
+                await mcp_server_tool_call("test_tool", {"param": "value"})
+
+    assert captured_headers.get("x-nuid") == "nuid-1"
+    assert captured_headers.get("x-app-id") == "app-1"
+    assert "content-length" not in captured_headers
+    assert captured_headers.get("x-forwarded-for") == "1.2.3.4"
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror():
     """The MCP session manager serializes handler exceptions as JSON-RPC errors, so a mid-session
     tool call cannot emit a raw 401 the way the REST path does. mcp_server_tool_call must turn an

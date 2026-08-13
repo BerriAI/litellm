@@ -7,11 +7,15 @@ import importlib
 import json
 import os
 import re
+import typing
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence
 from typing import Any, Final
 from urllib.parse import quote
 
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+if typing.TYPE_CHECKING:
+    from fastapi import Request
 
 # Constants
 #
@@ -837,3 +841,73 @@ def set_mcp_tool_result_structured_content(result: object, value: object) -> boo
         return True
     except (AttributeError, TypeError, ValueError):
         return False
+
+
+_HOP_BY_HOP_HEADERS: Final = frozenset(
+    {
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "upgrade",
+        "te",
+        "trailer",
+    }
+)
+
+_SYNTHETIC_REQUEST_EXCLUDED_HEADERS: Final = _HOP_BY_HOP_HEADERS | frozenset({"content-type", "x-forwarded-for"})
+
+_SYNTHETIC_REQUEST_SERVER: Final = ("127.0.0.1", 4000)
+
+
+def build_synthetic_mcp_request(
+    *,
+    path: str,
+    raw_headers: Mapping[str, str] | None = None,
+    client_ip: str | None = None,
+) -> "Request":
+    """A synthetic FastAPI ``Request`` carrying the MCP connection's HTTP headers.
+
+    The MCP protocol transports do not hand a per-call ``Request`` to the tool
+    handlers, so one is reconstructed from the connection's ``raw_headers``. That
+    lets ``add_litellm_data_to_request`` derive ``metadata.headers``,
+    ``proxy_server_request``, header-based tags, guardrails and trace correlation
+    exactly as on the chat completions path. Hop-by-hop headers describe the
+    original HTTP framing rather than the logical request, so they are dropped, and
+    ``x-forwarded-for`` comes from the resolved ``client_ip`` to avoid spoofing.
+    """
+    from fastapi import Request
+
+    forwarded: Final = tuple(
+        (
+            name.lower().encode("latin-1", errors="replace"),
+            value.encode("utf-8", errors="replace"),
+        )
+        for name, value in (raw_headers.items() if raw_headers else ())
+        if name.lower() not in _SYNTHETIC_REQUEST_EXCLUDED_HEADERS
+    )
+    xff: Final = ((b"x-forwarded-for", client_ip.encode("utf-8")),) if client_ip else ()
+    return Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "scheme": "http",
+            "server": _SYNTHETIC_REQUEST_SERVER,
+            "query_string": b"",
+            "root_path": "",
+            "headers": ((b"content-type", b"application/json"), *forwarded, *xff),
+            **({"client": (client_ip, 0)} if client_ip else {}),
+        }
+    )
+
+
+def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[str, str]:
+    """The MCP request's client headers, sanitized the way the chat completions path
+    sanitizes them before they reach a logging callback or a guardrail: proxy key
+    headers stripped, credential-bearing values masked."""
+    from starlette.datastructures import Headers
+
+    from litellm.proxy.litellm_pre_call_utils import clean_headers, redact_credential_headers
+
+    return redact_credential_headers(clean_headers(Headers(raw_headers)))

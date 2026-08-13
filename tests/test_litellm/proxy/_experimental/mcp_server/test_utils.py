@@ -2,6 +2,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.utils import (
+    logging_safe_mcp_headers,
     validate_and_normalize_mcp_server_payload,
     validate_tool_display_names,
 )
@@ -47,3 +48,24 @@ class TestValidateAndNormalizeMcpServerPayload:
             tool_name_to_display_name={"read_wiki_structure": "browse_repo_docs"},
         )
         validate_and_normalize_mcp_server_payload(payload)
+
+
+class TestLoggingSafeMcpHeaders:
+    def test_returns_empty_for_missing_headers(self):
+        assert logging_safe_mcp_headers(None) == {}
+        assert logging_safe_mcp_headers({}) == {}
+
+    def test_exposes_custom_headers_and_masks_credentials(self):
+        safe = logging_safe_mcp_headers(
+            {
+                "x-nuid": "nuid-1",
+                "x-app-id": "app-1",
+                "x-litellm-api-key": "sk-proxy",
+                "cookie": "session=secret",
+            }
+        )
+        assert safe == {
+            "x-nuid": "nuid-1",
+            "x-app-id": "app-1",
+            "cookie": "***REDACTED***",
+        }
