@@ -52,12 +52,12 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: base class signature
+        optional_params: dict,  # mutable-ok: base class signature
         model: str,
         drop_params: bool,
-    ) -> dict:
-        optional_params = super().map_openai_params(
+    ) -> dict:  # mutable-ok: base class signature
+        mapped_params = super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -66,11 +66,11 @@ class AzureAIStudioConfig(OpenAIConfig):
         reasoning_effort = non_default_params.get("reasoning_effort")
         if (
             reasoning_effort is not None
-            and "reasoning_effort" not in optional_params
+            and "reasoning_effort" not in mapped_params
             and supports_reasoning(model=f"azure_ai/{model}")
         ):
-            optional_params["reasoning_effort"] = reasoning_effort
-        return optional_params
+            mapped_params["reasoning_effort"] = reasoning_effort
+        return mapped_params
 
     def _supports_stop_reason(self, model: str) -> bool:
         """
