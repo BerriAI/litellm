@@ -18,7 +18,7 @@ prefixes, and claim shapes.
 import hashlib
 from datetime import datetime
 from functools import lru_cache
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
@@ -33,15 +33,15 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     open_session_token,
 )
 
-_SESSION_SIGNING_KEY_DOMAIN = b"litellm-mcp-gateway:session-signing:"
+_SESSION_SIGNING_KEY_DOMAIN: Final = b"litellm-mcp-gateway:session-signing:"
 
 # scrypt work factors (RFC 7914), identical to the envelope KDF: memory-hard so a captured
 # session token is not a cheap offline oracle for the master key.
-_SCRYPT_N = 2**15
-_SCRYPT_R = 8
-_SCRYPT_P = 1
-_SCRYPT_MAXMEM = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
-_DERIVED_KEY_BYTES = 32
+_SCRYPT_N: Final = 2**15
+_SCRYPT_R: Final = 8
+_SCRYPT_P: Final = 1
+_SCRYPT_MAXMEM: Final = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
+_DERIVED_KEY_BYTES: Final = 32
 
 
 @lru_cache(maxsize=8)
@@ -56,7 +56,7 @@ def session_keys_from_master_key(master_key: str) -> SessionKeys:
     ``master_key`` invalidates every outstanding session, which is the intended behavior
     for a signing-key change.
     """
-    signing = hashlib.scrypt(
+    signing: Final = hashlib.scrypt(
         master_key.encode(),
         salt=_SESSION_SIGNING_KEY_DOMAIN,
         n=_SCRYPT_N,
@@ -98,7 +98,7 @@ SessionBearerResult: TypeAlias = NotSessionBearer | SessionBearerAdmitted | Sess
 
 
 def _strip_bearer(value: str) -> str:
-    parts = value.split(None, 1)
+    parts: Final = value.split(None, 1)
     if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1]
     return value
@@ -110,7 +110,7 @@ def is_session_bearer_shaped(authorization_value: str) -> bool:
     for an access token (to admit) and for a refresh token (to reject it explicitly, since
     a refresh credential is never usable at the tool-call edge); anything else falls
     through to normal admission."""
-    candidate = _strip_bearer(authorization_value)
+    candidate: Final = _strip_bearer(authorization_value)
     return is_session_token(candidate) or is_session_refresh_token(candidate)
 
 
@@ -131,12 +131,12 @@ def resolve_session_bearer(
     only ever presented back to the token endpoint, so admission must fail it closed rather
     than let it fall through to another arm.
     """
-    candidate = _strip_bearer(authorization_value)
+    candidate: Final = _strip_bearer(authorization_value)
     if is_session_refresh_token(candidate):
         return SessionBearerInvalid()
     if not is_session_token(candidate):
         return NotSessionBearer()
-    opened = open_session_token(candidate, keys, now)
+    opened: Final = open_session_token(candidate, keys, now)
     if isinstance(opened, OpenedSessionToken):
         return SessionBearerAdmitted(principal=opened.principal)
     return SessionBearerInvalid(expired=isinstance(opened, SessionExpired))
@@ -180,10 +180,10 @@ def open_session_refresh_bearer(
     ``client_id`` is not a secret (the caller presents it), so a plain equality check is
     sufficient and, unlike ``hmac.compare_digest`` on ``str``, does not raise on non-ASCII.
     """
-    candidate = _strip_bearer(refresh_value)
+    candidate: Final = _strip_bearer(refresh_value)
     if not is_session_refresh_token(candidate):
         return SessionRefreshInvalid()
-    opened = open_session_refresh_token(candidate, keys, now)
+    opened: Final = open_session_refresh_token(candidate, keys, now)
     if not isinstance(opened, OpenedSessionToken):
         return SessionRefreshInvalid()
     if opened.principal.client_id != expected_client_id:

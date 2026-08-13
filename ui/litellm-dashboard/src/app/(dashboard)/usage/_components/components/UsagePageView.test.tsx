@@ -25,13 +25,16 @@ beforeAll(() => {
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
+  gatewayDailyActivityCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
 // Mock child components to simplify testing
 vi.mock("@/components/activity_metrics", () => ({
-  ActivityMetrics: () => <div>Activity Metrics</div>,
-  processActivityData: () => ({ data: [], metadata: {} }),
+  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: { __source?: string } }) => (
+    <div>{`activity-source:${modelMetrics?.__source ?? "none"}`}</div>
+  ),
+  processActivityData: (_data: unknown, key: string) => ({ __source: key }),
 }));
 
 vi.mock("@/components/view_user_spend", () => ({
@@ -82,9 +85,23 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
 
 vi.mock("@/components/shared/advanced_date_picker", async () => {
   const React = await import("react");
-  const AdvancedDatePicker = () => {
-    return React.createElement("div", { "data-testid": "advanced-date-picker" }, "Date Picker");
-  };
+  // The button is how a test drives a range change; the real picker's own UI is
+  // not what any test here is asserting on.
+  const AdvancedDatePicker = ({ onValueChange }: { onValueChange?: (value: unknown) => void }) =>
+    React.createElement(
+      "div",
+      { "data-testid": "advanced-date-picker" },
+      "Date Picker",
+      React.createElement(
+        "button",
+        {
+          "data-testid": "pick-a-different-range",
+          onClick: () =>
+            onValueChange?.({ from: new Date("2024-01-01T00:00:00Z"), to: new Date("2024-01-08T00:00:00Z") }),
+        },
+        "pick",
+      ),
+    );
   AdvancedDatePicker.displayName = "AdvancedDatePicker";
   return { default: AdvancedDatePicker };
 });
@@ -331,6 +348,7 @@ describe("UsagePage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
+  const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
   const mockUseAuthorized = vi.mocked(useAuthorized);
@@ -474,6 +492,32 @@ describe("UsagePage", () => {
     },
   ];
 
+  // The same session the suite runs as, minus the admin role. Named rather than
+  // inlined so the test reads as "this session, but not an admin".
+  const nonAdminSession = {
+    isLoading: false,
+    isAuthorized: true,
+    token: "mock-token",
+    accessToken: "test-token",
+    userId: "user-123",
+    userEmail: "test@example.com",
+    userRole: "Internal User",
+    userRoleLabel: "Internal User",
+    isViewOnly: false,
+    premiumUser: true,
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  };
+
+  // Counts deliberately unlike anything in mockSpendData: the gateway tile must be
+  // readable as coming from /gateway/daily/activity and from nothing else.
+  const mockGatewayActivity = {
+    total_successful_requests: 424242,
+    total_failed_requests: 909,
+    by_date: [{ date: "2025-01-01", successful_requests: 424242, failed_requests: 909 }],
+    by_route: [{ category: "llm", route: "/chat/completions", successful_requests: 424242, failed_requests: 909 }],
+  };
+
   const defaultProps = {
     teams: [
       {
@@ -520,7 +564,9 @@ describe("UsagePage", () => {
     mockUserDailyActivityAggregatedCall.mockClear();
     mockUserDailyActivityCall.mockClear();
     mockTagListCall.mockClear();
+    mockGatewayDailyActivityCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
+    mockGatewayDailyActivityCall.mockResolvedValue(mockGatewayActivity);
     mockUseInfiniteUsers.mockReturnValue({
       data: {
         pages: [
@@ -569,9 +615,80 @@ describe("UsagePage", () => {
     expect(screen.getByText("1,500")).toBeInTheDocument();
     const successfulRequestLabelElements = screen.getAllByText("Successful Requests");
     expect(successfulRequestLabelElements.length).toBeGreaterThan(0);
-    // Use getAllByText since this value appears in multiple places (metrics card + table)
-    const successfulRequestElements = screen.getAllByText("1,450");
-    expect(successfulRequestElements.length).toBeGreaterThan(0);
+    // Successful and Failed Requests both read the gateway counter, not the
+    // spend-derived 1,450 / 50 that the same payload carries for the per-key and
+    // per-model breakdowns. They must share a source, or the tiles contradict the
+    // endpoint breakdown chart below them.
+    await waitFor(() => {
+      expect(screen.getAllByText("424,242").length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText("909").length).toBeGreaterThan(0);
+    expect(screen.queryByText("1,450")).not.toBeInTheDocument();
+  });
+
+  it("should stop showing the previous range's totals while a new range is in flight", async () => {
+    // The request tiles read the gateway counts and fall through to the
+    // spend-derived ones. Withholding a superseded gateway result is only worth
+    // something if the fallback is withheld too, otherwise the tile keeps
+    // showing the previous range's number by the other route.
+    let releaseSecondFetch: () => void = () => {};
+    mockUserDailyActivityAggregatedCall.mockReset();
+    mockUserDailyActivityAggregatedCall.mockResolvedValueOnce(mockSpendData).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseSecondFetch = () => resolve(mockSpendData);
+        }),
+    );
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+    await waitFor(() => {
+      expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-a-different-range"));
+    });
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByText("1,500")).not.toBeInTheDocument();
+
+    await act(async () => {
+      releaseSecondFetch();
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should fall back to the spend-derived count when the gateway endpoint is unavailable", async () => {
+    mockGatewayDailyActivityCall.mockRejectedValue(new Error("gateway activity unavailable"));
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockGatewayDailyActivityCall).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("1,450").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("424,242")).not.toBeInTheDocument();
+    expect(screen.queryByText("909")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
+  });
+
+  it("should not request deployment-wide gateway counts for a non-admin", async () => {
+    mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+    expect(mockGatewayDailyActivityCall).not.toHaveBeenCalled();
+    expect(screen.queryByText("424,242")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
   });
 
   it("should display usage metrics and charts", async () => {
@@ -603,13 +720,20 @@ describe("UsagePage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
+    // The gateway endpoint breakdown is a separate chart with its own palette,
+    // so it is excluded rather than allowed to widen the expected fill set.
+    const spendBars = () => {
+      const gatewayCard = container.querySelector('[data-testid="gateway-requests-by-endpoint"]');
+      return Array.from(container.querySelectorAll("path.recharts-rectangle")).filter(
+        (rect) => !gatewayCard?.contains(rect),
+      );
+    };
+
     await waitFor(() => {
-      expect(container.querySelectorAll("path.recharts-rectangle")).toHaveLength(2);
+      expect(spendBars()).toHaveLength(2);
     });
 
-    const fills = new Set(
-      Array.from(container.querySelectorAll("path.recharts-rectangle")).map((rect) => rect.getAttribute("fill")),
-    );
+    const fills = new Set(spendBars().map((rect) => rect.getAttribute("fill")));
     expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
 
     expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
@@ -737,6 +861,27 @@ describe("UsagePage", () => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it.each(["organization", "agent"])("should not render the %s usage view for an internal user", async (usageView) => {
+    mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+    renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const usageSelect = screen.getByTestId("usage-view-select");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "team" } });
+    });
+    expect(screen.getAllByText("Entity Usage").length).toBeGreaterThan(0);
+
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: usageView } });
+    });
+    expect(screen.queryByText("Entity Usage")).not.toBeInTheDocument();
   });
 
   describe("admin user selector", () => {
@@ -914,6 +1059,47 @@ describe("UsagePage", () => {
       expect(screen.getByText("1,500")).toBeInTheDocument();
     });
 
+    it("should stop showing the previous range's paginated pages while a new range is in flight", async () => {
+      // Same rule as the aggregate, one fallback further down. The flag that
+      // decides whether these pages are read belongs to the range the failure
+      // happened on, or the previous range's pages reach the tile through it.
+      let releaseSecondAggregated: () => void = () => {};
+      mockUserDailyActivityAggregatedCall.mockReset();
+      mockUserDailyActivityAggregatedCall
+        .mockRejectedValueOnce(new Error("Aggregated endpoint not available"))
+        .mockImplementationOnce(
+          () =>
+            new Promise((_resolve, reject) => {
+              releaseSecondAggregated = () => reject(new Error("Aggregated endpoint not available"));
+            }),
+        );
+      mockUserDailyActivityCall.mockResolvedValue({
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, total_pages: 1, page: 1 },
+      });
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+      await waitFor(() => {
+        expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pick-a-different-range"));
+      });
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
+      });
+      expect(screen.queryByText("1,500")).not.toBeInTheDocument();
+
+      await act(async () => {
+        releaseSecondAggregated();
+      });
+      await waitFor(() => {
+        expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+      });
+    });
+
     it("should aggregate multiple pages when paginated endpoint has more than 1 page", async () => {
       mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Not available"));
 
@@ -1043,8 +1229,8 @@ describe("UsagePage", () => {
 
       // Default should be "groups" view showing "Top Public Model Names"
       expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
-      expect(screen.getByText("Public Model Name")).toBeInTheDocument();
-      expect(screen.getByText("Litellm Model Name")).toBeInTheDocument();
+      expect(screen.getAllByText("Public Model Name").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Litellm Model Name").length).toBeGreaterThan(0);
     });
 
     it("should switch to Litellm Model Name view on toggle click", async () => {
@@ -1055,7 +1241,7 @@ describe("UsagePage", () => {
       });
 
       // Click the "Litellm Model Name" toggle
-      const litellmToggle = screen.getByText("Litellm Model Name");
+      const litellmToggle = screen.getAllByText("Litellm Model Name")[0];
       act(() => {
         fireEvent.click(litellmToggle);
       });
@@ -1074,7 +1260,7 @@ describe("UsagePage", () => {
       });
 
       // Switch to individual first
-      const litellmToggle = screen.getByText("Litellm Model Name");
+      const litellmToggle = screen.getAllByText("Litellm Model Name")[0];
       act(() => {
         fireEvent.click(litellmToggle);
       });
@@ -1084,7 +1270,7 @@ describe("UsagePage", () => {
       });
 
       // Switch back to groups
-      const publicToggle = screen.getByText("Public Model Name");
+      const publicToggle = screen.getAllByText("Public Model Name")[0];
       act(() => {
         fireEvent.click(publicToggle);
       });
@@ -1092,6 +1278,34 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
       });
+    });
+
+    it("should feed the Model Activity tab from the model_groups breakdown by default", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(screen.getByText("activity-source:model_groups")).toBeInTheDocument();
+      expect(screen.queryByText("activity-source:models")).not.toBeInTheDocument();
+    });
+
+    it("should switch the Model Activity tab to the litellm models breakdown on toggle click", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      act(() => {
+        fireEvent.click(screen.getAllByText("Litellm Model Name")[0]);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("activity-source:models")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("activity-source:model_groups")).not.toBeInTheDocument();
     });
   });
 

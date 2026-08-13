@@ -176,6 +176,10 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
             description={
               <div>
                 <p>To use Vertex AI RAG Engine:</p>
+                <p style={{ marginTop: "4px", fontStyle: "italic" }}>
+                  Note: Google Cloud has renamed this to &quot;RAG Engine&quot; in its console — the steps below still
+                  apply.
+                </p>
                 <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
                   <li>
                     Set up your Vertex AI RAG Engine corpus following the guide:{" "}
@@ -188,7 +192,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                     </a>
                   </li>
                   <li>Create a corpus in your Google Cloud project</li>
-                  <li>Note the corpus ID from the Vertex AI console</li>
+                  <li>
+                    Note the corpus ID from the Vertex AI console (now labeled &quot;RAG Engine&quot; in Google Cloud)
+                  </li>
                   <li>Enter the corpus ID in the Vector Store ID field below</li>
                 </ol>
               </div>
@@ -206,6 +212,10 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
             description={
               <div>
                 <p>To use Vertex AI Search (Discovery Engine):</p>
+                <p style={{ marginTop: "4px", fontStyle: "italic" }}>
+                  Note: Google Cloud has renamed this to &quot;Agent Search&quot; in its console — the steps below still
+                  apply.
+                </p>
                 <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
                   <li>
                     Enable the Discovery Engine API on your Google Cloud project and create a data store following the
@@ -254,11 +264,11 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           <TextInput
             placeholder={
               selectedProvider === "vertex_rag_engine"
-                ? "6917529027641081856 (Get corpus ID from Vertex AI console)"
+                ? '6917529027641081856 (corpus ID from Vertex AI / "RAG Engine" console)'
                 : selectedProvider === "vertex_ai/search_api"
                   ? vertexEngineId
                     ? "Any identifier you'll use to reference this in LiteLLM"
-                    : "my-datastore_1234567890 (Get data store ID from Vertex AI Search console)"
+                    : 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)'
                   : "Enter vector store ID from your provider"
             }
           />

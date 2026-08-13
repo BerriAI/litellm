@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, Final
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -12,7 +12,7 @@ from ..common_utils import (
     get_copilot_default_headers,
 )
 
-_MESSAGES_PROXY_API_VERSION = "2026-06-01"
+_MESSAGES_PROXY_API_VERSION: Final = "2026-06-01"
 
 
 class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -26,7 +26,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self.authenticator = Authenticator()
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "github_copilot"
 
     def handles_web_search_natively(self) -> bool:
@@ -54,9 +54,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         """
         Validate environment for GitHub Copilot and add Copilot-specific headers.
 
@@ -68,9 +68,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         # session, never the caller-supplied api_base. rstrip so a
         # tenant-specific base with a trailing slash does not yield a
         # double-slash URL once "/v1/messages" is appended downstream.
-        dynamic_api_base = (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
+        dynamic_api_base: Final = (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
         try:
-            dynamic_api_key = self.authenticator.get_api_key()
+            dynamic_api_key: Final = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
             raise AuthenticationError(
                 model=model,
@@ -79,7 +79,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             )
 
         # Merge Copilot headers with provided headers
-        copilot_headers = get_copilot_default_headers(dynamic_api_key)
+        copilot_headers: Final = get_copilot_default_headers(dynamic_api_key)
         for key, value in copilot_headers.items():
             if key not in headers:
                 headers[key] = value
@@ -99,12 +99,12 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Return the complete URL for GitHub Copilot /v1/messages endpoint.

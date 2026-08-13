@@ -40,6 +40,7 @@ export const AUTH_TYPE = {
   BASIC: "basic",
   OAUTH2: "oauth2",
   OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
+  OAUTH2_ID_JAG: "oauth2_id_jag",
   AWS_SIGV4: "aws_sigv4",
   TRUE_PASSTHROUGH: "true_passthrough",
   OAUTH_DELEGATE: "oauth_delegate",
@@ -66,11 +67,12 @@ export const gatewayMintsClientFor = (server: { auth_type?: string | null; dcr_b
   (server.auth_type === AUTH_TYPE.OAUTH_DELEGATE && !server.dcr_bridge);
 
 // Auth modes that cannot be used through the gateway aggregate connect flow, where the client holds
-// only an identity-only session bearer and upstream credentials are resolved server-side from the
-// per-user vault. The vault is only populated by interactive authorization_code (oauth2). The
-// client-forwarded modes need the caller to present the upstream Authorization per call, and
+// only an identity-only session bearer and upstream credentials are resolved server-side per user.
+// The client-forwarded modes need the caller to present the upstream Authorization per call, and
 // oauth2_token_exchange (OBO) needs the caller's own IdP token as the subject to exchange; the
 // session bearer is neither, so none of these can complete a tool call on this connection.
+// oauth2_id_jag is deliberately NOT here: it falls back to the identity assertion captured for the
+// session's user at SSO login, so the identity-only bearer is enough to resolve it server-side.
 export const isUnsupportedOnGatewayConnect = (authType?: string | null): boolean =>
   isClientForwardedTokenMode(authType) || authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
 
@@ -436,6 +438,7 @@ export interface MCPServer {
   byok_description?: string[] | null;
   byok_api_key_help_url?: string | null;
   has_user_credential?: boolean | null;
+  connected_app_reachable?: boolean | null;
 
   /** GitHub / source repository URL */
   source_url?: string | null;

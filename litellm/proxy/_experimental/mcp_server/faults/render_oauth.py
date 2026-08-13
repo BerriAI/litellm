@@ -6,6 +6,8 @@ all derive from the fault tag; exhaustive matches keep a new fault arm from ship
 
 from __future__ import annotations
 
+from typing import Final
+
 from fastapi.responses import JSONResponse
 from typing_extensions import assert_never
 
@@ -40,7 +42,7 @@ def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
     blamed for, or shown the internals of, a failure only the operator can fix."""
     match fault.tag:
         case "caller_rejected":
-            content = {
+            content: Final = {
                 "error": fault.code,
                 **({"error_description": fault.description} if fault.description else {}),
                 **({"error_uri": fault.error_uri} if fault.error_uri else {}),
@@ -79,7 +81,7 @@ def dcr_fault_detail(fault: UpstreamOAuthFault) -> tuple[int, str]:
     regardless of the status the upstream chose; everything else is a 502 upstream fault."""
     match fault.tag:
         case "caller_rejected":
-            detail = f"{fault.code}: {fault.description}" if fault.description else fault.code
+            detail: Final = f"{fault.code}: {fault.description}" if fault.description else fault.code
             return 400, detail
         case "gateway_rejected":
             return 502, _gateway_rejected_description(fault.code)

@@ -1,4 +1,4 @@
-import { RobotOutlined, UserOutlined } from "@ant-design/icons";
+import { Bot, User } from "lucide-react";
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -41,9 +41,9 @@ function ChatMessageBubble({
   const isUser = message.role === "user";
 
   return (
-    <div className={`mb-4 ${isUser ? "text-right" : "text-left"}`}>
+    <div className={`mb-4 min-w-0 ${isUser ? "text-right" : "text-left"}`}>
       <div
-        className="inline-block max-w-[80%] rounded-lg shadow-xs p-3.5 px-4"
+        className="inline-block min-w-0 max-w-[92%] overflow-hidden rounded-lg p-3 shadow-xs sm:max-w-[85%] sm:px-4"
         style={{
           backgroundColor: isUser ? "#f0f8ff" : "#ffffff",
           border: isUser ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
@@ -51,7 +51,7 @@ function ChatMessageBubble({
         }}
       >
         {/* Header: role icon + name + model badge */}
-        <div className="flex items-center gap-2 mb-1.5">
+        <div className="mb-1.5 flex min-w-0 items-center gap-2">
           <div
             className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
             style={{
@@ -59,14 +59,14 @@ function ChatMessageBubble({
             }}
           >
             {isUser ? (
-              <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
+              <User className="size-3 text-blue-600" aria-hidden="true" />
             ) : (
-              <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
+              <Bot className="size-3 text-gray-600" aria-hidden="true" />
             )}
           </div>
           <strong className="text-sm capitalize">{message.role}</strong>
           {message.role === "assistant" && message.model && (
-            <span className="text-xs px-2 py-0.5 rounded-sm bg-gray-100 text-gray-600 font-normal">
+            <span className="max-w-48 truncate rounded-sm bg-gray-100 px-2 py-0.5 text-xs font-normal text-gray-600 sm:max-w-80">
               {message.model}
             </span>
           )}

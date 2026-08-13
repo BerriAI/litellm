@@ -1,12 +1,14 @@
 "use client";
 
-import { useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
 
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { fetchToolsList, ToolRow, updateToolPolicy } from "@/components/networking";
+import { ToolRow, updateToolPolicy } from "@/components/networking";
 
+import { toolPoliciesListOptions } from "./toolPoliciesQueries";
 import { ToolPoliciesTable } from "./ToolPoliciesTable";
 
 function getUTCDateKey(date: Date): string {
@@ -41,8 +43,6 @@ const withTool = (names: ReadonlySet<string>, toolName: string): ReadonlySet<str
 const withoutTool = (names: ReadonlySet<string>, toolName: string): ReadonlySet<string> =>
   new Set([...names].filter((name) => name !== toolName));
 
-const TOOLS_QUERY_KEY = "tool-policies";
-
 interface ToolPoliciesPanelProps {
   accessToken: string | null;
   onSelectTool: (toolName: string) => void;
@@ -50,19 +50,12 @@ interface ToolPoliciesPanelProps {
 
 export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToken, onSelectTool }) => {
   const queryClient = useQueryClient();
+  const canViewToolPolicies = useCan("viewToolPolicies");
   const [savingInput, setSavingInput] = useState<ReadonlySet<string>>(() => new Set());
   const [savingOutput, setSavingOutput] = useState<ReadonlySet<string>>(() => new Set());
 
-  const queryKey = useMemo(() => [TOOLS_QUERY_KEY, accessToken], [accessToken]);
-
-  const queryOptions: UseQueryOptions<ToolRow[]> = {
-    queryKey,
-    queryFn: async () => (accessToken === null ? [] : fetchToolsList(accessToken)),
-    enabled: accessToken !== null,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  };
-  const query = useQuery(queryOptions);
+  const listOptions = useMemo(() => toolPoliciesListOptions(accessToken), [accessToken]);
+  const query = useQuery({ ...listOptions, enabled: canViewToolPolicies && accessToken !== null });
 
   const tools = useMemo(() => query.data ?? [], [query.data]);
 
@@ -70,12 +63,12 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
   // and overwrite the row we just wrote with its pre-save snapshot.
   const patchTool = useCallback(
     async (toolName: string, patch: Partial<ToolRow>) => {
-      await queryClient.cancelQueries({ queryKey });
-      queryClient.setQueryData<ToolRow[]>(queryKey, (previous) =>
+      await queryClient.cancelQueries({ queryKey: listOptions.queryKey });
+      queryClient.setQueryData(listOptions.queryKey, (previous) =>
         (previous ?? []).map((tool) => (tool.tool_name === toolName ? { ...tool, ...patch } : tool)),
       );
     },
-    [queryClient, queryKey],
+    [queryClient, listOptions],
   );
 
   const handleInputPolicyChange = useCallback(

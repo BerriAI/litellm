@@ -1,6 +1,5 @@
 "use client";
 
-import { useKeyDetailRouting } from "@/app/(dashboard)/api-keys/detailNavigation";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -18,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { Team } from "../key_team_helpers/key_list";
@@ -49,7 +49,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const { data: fetchedTeams } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
-  const { keyId: selectedKeyId, openKey, close: closeKeyDetail } = useKeyDetailRouting();
+  const [selectedKeyId, setSelectedKeyId] = useQueryState("key", parseAsString.withOptions({ history: "push" }));
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -105,8 +105,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }, []);
 
   const columns = useMemo(
-    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: (key) => openKey(key.token) }),
-    [allTeams, organizations, openKey],
+    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: (key) => void setSelectedKeyId(key.token) }),
+    [allTeams, organizations, setSelectedKeyId],
   );
 
   const selectedKeyFromList = useMemo(
@@ -161,7 +161,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       <div className="w-full h-full overflow-hidden">
         <KeyInfoView
           keyId={selectedKeyId}
-          onClose={closeKeyDetail}
+          onClose={() => void setSelectedKeyId(null)}
           keyData={selectedKey}
           teams={allTeams}
           onDelete={refetch}

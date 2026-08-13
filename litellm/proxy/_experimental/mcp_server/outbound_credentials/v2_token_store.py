@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
+from typing import Final
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
@@ -40,11 +41,11 @@ def _to_scopes(raw: object) -> tuple[str, ...]:
 
 
 def _to_oauth_token(payload: Mapping[str, object]) -> OAuthToken | None:
-    access_token = payload.get("access_token")
+    access_token: Final = payload.get("access_token")
     if not isinstance(access_token, str):
         return None
-    refresh_token = payload.get("refresh_token")
-    expires_at = payload.get("expires_at")
+    refresh_token: Final = payload.get("refresh_token")
+    expires_at: Final = payload.get("expires_at")
     return OAuthToken(
         access_token=access_token,
         expires_at=_iso_to_epoch(expires_at) if isinstance(expires_at, str) else None,
@@ -69,7 +70,7 @@ class V2PerUserTokenStore:
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         if not user_id:
             return None
-        payload = await self._read_credential(user_id, server_id)
+        payload: Final = await self._read_credential(user_id, server_id)
         if payload is None:
             return None
         return _to_oauth_token(payload)
