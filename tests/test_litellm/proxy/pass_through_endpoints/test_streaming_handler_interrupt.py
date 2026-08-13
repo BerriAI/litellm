@@ -131,6 +131,98 @@ async def test_chunk_processor_does_not_schedule_success_logging_for_upstream_er
 
 
 @pytest.mark.asyncio
+async def test_chunk_processor_does_not_log_provider_error_event_as_success():
+    chunks = [
+        b'event: message_start\ndata: {"type":"message_start"}\n\nevent:err',
+        b'or\ndata:{"type":"error","error":{"type":"overloaded_error"}}\n\n',
+    ]
+    response = _make_streaming_response(chunks)
+
+    with patch.object(
+        PassThroughStreamingHandler,
+        "_route_streaming_logging_to_handler",
+        new=AsyncMock(),
+    ) as mock_route:
+        received = [
+            chunk
+            async for chunk in PassThroughStreamingHandler.chunk_processor(
+                response=response,
+                request_body={"model": "claude-3-haiku"},
+                litellm_logging_obj=MagicMock(),
+                endpoint_type=EndpointType.ANTHROPIC,
+                start_time=datetime.now(),
+                passthrough_success_handler_obj=MagicMock(),
+                url_route="/v1/messages",
+            )
+        ]
+
+    assert received == chunks
+    mock_route.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_logs_successful_anthropic_stream():
+    chunks = [
+        b'event: message_start\ndata: {"type":"message_start"}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]
+    response = _make_streaming_response(chunks)
+
+    with patch.object(
+        PassThroughStreamingHandler,
+        "_route_streaming_logging_to_handler",
+        new=AsyncMock(),
+    ) as mock_route:
+        received = [
+            chunk
+            async for chunk in PassThroughStreamingHandler.chunk_processor(
+                response=response,
+                request_body={"model": "claude-3-haiku"},
+                litellm_logging_obj=MagicMock(),
+                endpoint_type=EndpointType.ANTHROPIC,
+                start_time=datetime.now(),
+                passthrough_success_handler_obj=MagicMock(),
+                url_route="/v1/messages",
+            )
+        ]
+        await asyncio.sleep(0)
+
+    assert received == chunks
+    mock_route.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_does_not_log_transport_error_as_success():
+    response = _make_streaming_response([b"partial"])
+
+    async def broken_stream():
+        yield b"partial"
+        raise httpx.ReadError("connection reset")
+
+    response.aiter_bytes = broken_stream
+    with patch.object(
+        PassThroughStreamingHandler,
+        "_route_streaming_logging_to_handler",
+        new=AsyncMock(),
+    ) as mock_route:
+        with pytest.raises(httpx.ReadError):
+            _ = [
+                chunk
+                async for chunk in PassThroughStreamingHandler.chunk_processor(
+                    response=response,
+                    request_body={"model": "claude-3-haiku"},
+                    litellm_logging_obj=MagicMock(),
+                    endpoint_type=EndpointType.ANTHROPIC,
+                    start_time=datetime.now(),
+                    passthrough_success_handler_obj=MagicMock(),
+                    url_route="/v1/messages",
+                )
+            ]
+
+    mock_route.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_chunk_processor_does_not_schedule_logging_when_no_chunks():
     response = _make_streaming_response([])
 

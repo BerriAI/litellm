@@ -1,4 +1,4 @@
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from datetime import datetime
 from typing import Final, Protocol
 
@@ -47,6 +47,26 @@ class PassThroughStreamingHandler:
             litellm_logging_obj._update_completion_start_time(completion_start_time=datetime.now())
 
     @staticmethod
+    def _contains_provider_error_event(raw_bytes: Sequence[bytes]) -> bool:
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            AnthropicMessagesSSEDecoder,
+        )
+
+        decoder: Final = AnthropicMessagesSSEDecoder()
+        for chunk in raw_bytes:
+            for frame in decoder.feed(chunk):
+                event, payload = decoder.event_data(frame)
+                if event == "error" or (isinstance(payload, dict) and payload.get("type") == "error"):
+                    return True
+        trailing_frame: Final = decoder.flush_frame()
+        if trailing_frame is None:
+            return False
+        trailing_event, trailing_payload = decoder.event_data(trailing_frame)
+        return trailing_event == "error" or (
+            isinstance(trailing_payload, dict) and trailing_payload.get("type") == "error"
+        )
+
+    @staticmethod
     async def chunk_processor(
         response: httpx.Response,
         request_body: dict | None,
@@ -62,6 +82,7 @@ class PassThroughStreamingHandler:
         )
         raw_bytes: Final[list[bytes]] = []
         logging_scheduled = False
+        stream_failed = False  # rebind-ok: the finally block suppresses success logging after transport failure
         model_name: Final = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
             url_route=url_route,
@@ -111,6 +132,7 @@ class PassThroughStreamingHandler:
                 if pending:
                     yield pending
         except Exception as e:
+            stream_failed = True  # rebind-ok: the stream ended with a transport failure
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
             raise
         finally:
@@ -121,7 +143,13 @@ class PassThroughStreamingHandler:
             # the caller before this generator starts (see
             # _log_passthrough_upstream_failure); logging them again here as
             # a success would double-log the same request.
-            if not logging_scheduled and raw_bytes and response.status_code < 400:
+            if (
+                not logging_scheduled
+                and raw_bytes
+                and response.status_code < 400
+                and not stream_failed
+                and not PassThroughStreamingHandler._contains_provider_error_event(raw_bytes)
+            ):
                 logging_scheduled = True
                 try:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
