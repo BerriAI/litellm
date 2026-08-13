@@ -29,9 +29,24 @@ def cast_as_primitive_value_type(value) -> str | bool | int | float:
         return ""
 
 
+def is_recording(span: "Span | None") -> bool:
+    """
+    Whether ``span`` is a span that still accepts writes.
+
+    Caller-owned parent spans (a web framework's server span, for instance)
+    routinely end before LiteLLM's async logging handlers run, and the OTel SDK
+    drops every write to an ended span with a warning.
+    """
+    if span is None or not hasattr(span, "is_recording"):
+        return False
+    return bool(span.is_recording())
+
+
 def safe_set_attribute(span: "Span", key: str, value: Any):
     """
     Sets a span attribute safely with OTEL-compliant primitive typing for Arize/Phoenix.
     """
+    if not is_recording(span):
+        return
     primitive_value: Final = cast_as_primitive_value_type(value)
     span.set_attribute(key, primitive_value)

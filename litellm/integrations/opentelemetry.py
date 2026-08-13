@@ -11,6 +11,7 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import is_recording
 from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
     OTELGenAISemconvMixin,
@@ -1230,9 +1231,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             from opentelemetry.trace import Status, StatusCode
 
             span = None
-            # Only set attributes if the span is still recording (not closed)
-            # Note: parent_span is guaranteed to be not None here
-            if hasattr(parent_span, "set_status"):
+            if is_recording(parent_span):
                 parent_span.set_status(Status(StatusCode.OK))
                 self.set_attributes(parent_span, kwargs, response_obj)
             # Raw-request as direct child of parent_span
@@ -2547,7 +2546,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def safe_set_attribute(self, span: Span, key: str, value: Any):
         """
         Safely sets an attribute on the span, ensuring the value is a primitive type.
+
+        Writes to a span that already ended are dropped by the OTel SDK with a
+        warning per attribute, so skip them.
         """
+        if not is_recording(span):
+            return
         primitive_value: Final = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
