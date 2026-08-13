@@ -234,7 +234,7 @@ class OllamaChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        optional_params = optional_params.copy()
+        optional_params = optional_params.copy()  # mutable-ok: request-local copy protects caller-owned logging data
         stream: Final = optional_params.pop("stream", False)
         format: Final = optional_params.pop("format", None)
         keep_alive: Final = optional_params.pop("keep_alive", None)
