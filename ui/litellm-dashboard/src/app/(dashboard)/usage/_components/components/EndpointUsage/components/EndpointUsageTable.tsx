@@ -1,6 +1,7 @@
 import React from "react";
-import { Table, Progress } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import { Progress } from "antd";
+import type { ColumnDef } from "@tanstack/react-table";
+import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { MetricWithMetadata } from "@/components/UsagePage/types";
 
@@ -36,17 +37,17 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
     successRate: calculateSuccessRate(data.metrics.successful_requests, data.metrics.api_requests),
   }));
 
-  const columns: ColumnsType<EndpointRow> = [
+  const columns: ColumnDef<EndpointRow>[] = [
     {
-      title: "Endpoint",
-      dataIndex: "endpoint",
-      key: "endpoint",
-      render: (text: string) => <span className="font-medium">{text}</span>,
+      header: "Endpoint",
+      accessorKey: "endpoint",
+      cell: ({ row }) => <span className="font-medium">{row.original.endpoint}</span>,
     },
     {
-      title: "Successful / Failed",
-      key: "requests",
-      render: (_: any, record: EndpointRow) => {
+      header: "Successful / Failed",
+      id: "requests",
+      cell: ({ row }) => {
+        const record = row.original;
         const successPercentage =
           record.api_requests > 0 ? (record.successful_requests / record.api_requests) * 100 : 0;
         const failurePercentage = record.api_requests > 0 ? (record.failed_requests / record.api_requests) * 100 : 0;
@@ -76,16 +77,17 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
       },
     },
     {
-      title: "Total Request",
-      dataIndex: "api_requests",
-      key: "api_requests",
-      render: (value: number) => value.toLocaleString(),
+      header: "Total Request",
+      accessorKey: "api_requests",
+      meta: { numeric: true },
+      cell: ({ row }) => row.original.api_requests.toLocaleString(),
     },
     {
-      title: "Success Rate",
-      dataIndex: "successRate",
-      key: "successRate",
-      render: (value: number) => {
+      header: "Success Rate",
+      accessorKey: "successRate",
+      meta: { numeric: true },
+      cell: ({ row }) => {
+        const value = row.original.successRate;
         const successRateStr = value.toFixed(2);
         return (
           <span
@@ -103,20 +105,28 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
       },
     },
     {
-      title: "Total Tokens",
-      dataIndex: "total_tokens",
-      key: "total_tokens",
-      render: (value: number) => value.toLocaleString(),
+      header: "Total Tokens",
+      accessorKey: "total_tokens",
+      meta: { numeric: true },
+      cell: ({ row }) => row.original.total_tokens.toLocaleString(),
     },
     {
-      title: "Spend",
-      dataIndex: "spend",
-      key: "spend",
-      render: (value: number) => <MoneyCell value={value} decimals={2} />,
+      header: "Spend",
+      accessorKey: "spend",
+      meta: { numeric: true },
+      cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
     },
   ];
 
-  return <Table columns={columns} dataSource={dataSource} pagination={false} />;
+  return (
+    <DataTable
+      columns={columns}
+      data={dataSource}
+      getRowId={(row) => row.key}
+      noDataMessage="No endpoint usage data"
+      size="compact"
+    />
+  );
 };
 
 export default EndpointUsageTable;

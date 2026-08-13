@@ -584,8 +584,26 @@ async def get_deployments_for_tag(
     return healthy_deployments
 
 
+def _tags_in_metadata(metadata: object) -> list[str]:
+    """
+    Tags out of a metadata bucket the caller controls the shape of.
+
+    A request can send its metadata (and its ``tags``) as anything the JSON body
+    allowed, an unparsed string or null included, so any shape that is not a list
+    of string tags carries no tags rather than raising.
+    """
+    if not isinstance(metadata, Mapping):
+        return []
+    typed_metadata: Final[Mapping[str, object]] = metadata
+    tags: Final = typed_metadata.get("tags")
+    if isinstance(tags, str) or not isinstance(tags, Sequence):
+        return []
+    typed_tags: Final[Sequence[object]] = tags
+    return [tag for tag in typed_tags if isinstance(tag, str)]
+
+
 def _get_tags_from_request_kwargs(
-    request_kwargs: dict[Any, Any] | None = None,
+    request_kwargs: Mapping[Any, Any] | None = None,
     metadata_variable_name: Literal["metadata", "litellm_metadata"] | None = None,
 ) -> list[str]:
     """
@@ -604,12 +622,11 @@ def _get_tags_from_request_kwargs(
         return []
     resolved_variable_name: Final = metadata_variable_name or get_metadata_variable_name_from_kwargs(request_kwargs)
     if resolved_variable_name in request_kwargs:
-        metadata: Final = request_kwargs[resolved_variable_name] or {}
-        tags = metadata.get("tags", [])
-        return tags if tags is not None else []
-    elif "litellm_params" in request_kwargs:
-        litellm_params: Final = request_kwargs["litellm_params"] or {}
-        _metadata: Final = litellm_params.get(resolved_variable_name, {}) or {}
-        tags = _metadata.get("tags", [])
-        return tags if tags is not None else []
+        return _tags_in_metadata(request_kwargs[resolved_variable_name])
+    if "litellm_params" in request_kwargs:
+        litellm_params: Final = request_kwargs["litellm_params"]
+        if not isinstance(litellm_params, Mapping):
+            return []
+        typed_litellm_params: Final[Mapping[str, object]] = litellm_params
+        return _tags_in_metadata(typed_litellm_params.get(resolved_variable_name))
     return []

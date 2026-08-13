@@ -845,6 +845,22 @@ def cleanup_router_config_variables():
     prisma_client = None
 
 
+async def _flush_spend_logs_queue_on_shutdown() -> None:
+    if prisma_client is None:
+        return
+
+    try:
+        from litellm.proxy.utils import drain_spend_logs_queue
+
+        await drain_spend_logs_queue(
+            prisma_client=prisma_client,
+            db_writer_client=db_writer_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
+        verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
+
+
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
@@ -1254,6 +1270,8 @@ async def proxy_startup_event(app: FastAPI):
             await prisma_client.stop_db_health_watchdog_task()
         except Exception as e:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
+
+    await _flush_spend_logs_queue_on_shutdown()
 
     await proxy_config.stop_config_sync_subscriber()
 
@@ -8731,14 +8749,14 @@ class ProxyStartupEvent:
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
 
-            # Start background task to monitor spend logs queue size
-            asyncio.create_task(
+            monitor_task: Final = asyncio.create_task(
                 _monitor_spend_logs_queue(
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,
                     proxy_logging_obj=proxy_logging_obj,
                 )
             )
+            prisma_client.spend_logs_queue_monitor_task = monitor_task  # rebind-ok: the client owns its monitor handle
 
         ### ADD NEW MODELS ###
         store_model_in_db = get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
