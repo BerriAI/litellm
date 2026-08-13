@@ -138,6 +138,13 @@ describe("GuardrailsPanel", () => {
     expect(mockGetGuardrailsList).toHaveBeenCalledTimes(2);
   });
 
+  it("should mount every tab panel up front so panel state survives tab switches", async () => {
+    render(<GuardrailsPanel {...defaultProps} />);
+
+    expect(await screen.findByLabelText("playground draft")).toBeInTheDocument();
+    expect(screen.getByText("Mock Team Guardrails Tab")).toBeInTheDocument();
+  });
+
   it("should keep test playground state when switching tabs away and back", async () => {
     render(<GuardrailsPanel {...defaultProps} />);
 

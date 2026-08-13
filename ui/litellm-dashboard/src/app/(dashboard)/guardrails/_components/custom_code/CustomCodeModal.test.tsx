@@ -123,6 +123,17 @@ describe("CustomCodeModal", () => {
     expect(await screen.findByDisplayValue(/SSN detected/)).toBeInTheDocument();
   });
 
+  it("should narrow the mode options to the typed search text", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.keyboard("mcp");
+
+    expect(await screen.findByText("pre_mcp_call (Before MCP Tool Call)")).toBeInTheDocument();
+    expect(screen.queryByText("logging_only")).not.toBeInTheDocument();
+  });
+
   it("should expand the test section and run a test against the backend", async () => {
     const user = userEvent.setup();
     mockTest.mockResolvedValue({ success: true, result: { action: "allow" } } as never);

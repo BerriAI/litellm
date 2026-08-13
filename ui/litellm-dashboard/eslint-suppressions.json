@@ -326,28 +326,12 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/guardrails/_components/GuardrailTestPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/guardrails/_components/GuardrailTestPlayground.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/GuardrailTestResults.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/guardrails/_components/GuardrailsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -386,11 +370,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/guardrails/_components/content_filter/CategoryTable.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/guardrails/_components/content_filter/CompetitorIntentConfiguration.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -403,14 +382,8 @@
     }
   },
   "src/app/(dashboard)/guardrails/_components/content_filter/ContentCategoryConfiguration.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
     "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
+      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -419,61 +392,19 @@
   "src/app/(dashboard)/guardrails/_components/content_filter/ContentFilterConfiguration.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/content_filter/ContentFilterDisplay.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/content_filter/ContentFilterManager.tsx": {
     "max-params": {
       "count": 2
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/content_filter/CustomPatternModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/content_filter/KeywordModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/content_filter/KeywordTable.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/content_filter/PatternModal.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/content_filter/PatternTable.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/custom_code/CustomCodeModal.tsx": {
     "no-nested-ternary": {
       "count": 6
-    },
-    "no-restricted-imports": {
-      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -487,9 +418,6 @@
   "src/app/(dashboard)/guardrails/_components/guardrail_garden.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/guardrail_garden_card.tsx": {
@@ -499,9 +427,6 @@
   },
   "src/app/(dashboard)/guardrails/_components/guardrail_garden_detail.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -568,23 +493,14 @@
   "src/app/(dashboard)/guardrails/_components/pii_components.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/pii_configuration.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/tool_permission/ToolPermissionRulesEditor.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/purity": {
       "count": 1
     }

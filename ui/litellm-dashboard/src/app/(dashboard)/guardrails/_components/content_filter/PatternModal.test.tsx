@@ -70,6 +70,20 @@ describe("PatternModal", () => {
     expect(mockOnPatternNameChange.mock.calls[0][0]).toBe("us_ssn");
   });
 
+  it("should narrow the pattern options to the typed search text", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    expect(await screen.findByText("Add prebuilt pattern")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.keyboard("visa");
+
+    expect(await screen.findByText("Visa card")).toBeInTheDocument();
+    expect(screen.queryByText("Email address")).not.toBeInTheDocument();
+    expect(screen.queryByText("AWS access key")).not.toBeInTheDocument();
+  });
+
   it("should report the chosen action", async () => {
     const user = userEvent.setup();
     renderModal();
