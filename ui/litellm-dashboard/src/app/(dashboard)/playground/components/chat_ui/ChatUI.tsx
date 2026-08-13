@@ -407,6 +407,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     if (!userApiKey) {
       setModelInfo([]);
       setModelLoadError(false);
+      setIsLoadingModels(false);
       return;
     }
 
@@ -1240,7 +1241,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     }}
                   >
                     <SelectTrigger className="w-full" size="sm" aria-label="Virtual Key Source">
-                      <SelectValue />
+                      <SelectValue>{apiKeySource === "custom" ? "Virtual Key" : "Current UI Session"}</SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="session">Current UI Session</SelectItem>

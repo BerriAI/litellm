@@ -475,4 +475,71 @@ describe("ChatUI", () => {
 
     expect(await screen.findByText("clip.wav")).toBeInTheDocument();
   });
+
+  it("should name the virtual key source options instead of showing raw values", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const keySourceTrigger = screen.getByLabelText("Virtual Key Source");
+    expect(keySourceTrigger).toHaveTextContent("Current UI Session");
+    expect(keySourceTrigger).not.toHaveTextContent("session");
+
+    await user.click(keySourceTrigger);
+    await user.click(await screen.findByRole("option", { name: "Virtual Key" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Virtual Key Source")).toHaveTextContent("Virtual Key");
+    });
+    expect(screen.getByLabelText("Virtual Key Source")).not.toHaveTextContent("custom");
+  });
+
+  it("should re-enable the model selector when the virtual key is cleared mid-load", async () => {
+    const user = userEvent.setup();
+    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(() => {}),
+    );
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("Virtual Key Source"));
+    await user.click(await screen.findByRole("option", { name: "Virtual Key" }));
+
+    const keyField = await screen.findByPlaceholderText("Enter custom Virtual Key");
+    await user.type(keyField, "sk-test");
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Loading models...")).toBeInTheDocument();
+    });
+
+    await user.clear(keyField);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Select a Model")).not.toBeDisabled();
+    });
+  });
 });
