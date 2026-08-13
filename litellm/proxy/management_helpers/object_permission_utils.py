@@ -182,14 +182,22 @@ async def invalidate_cached_object_permissions(
     the entity's cache entry re-attaches the old grants until the management-object TTL expires. Pass both
     the outgoing and incoming ids, since a change can also mint a new row. Non-string ids, which untyped
     update payloads can carry, are ignored.
+
+    The local eviction only covers this worker and the shared backend, so each key is also broadcast:
+    other workers hold their own in-memory copy and would keep applying revoked grants until its TTL.
     """
-    for object_permission_id in dict.fromkeys(pid for pid in object_permission_ids if isinstance(pid, str)):
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+
+    cache_keys: Final = tuple(
+        object_permission_cache_key(object_permission_id)
+        for object_permission_id in dict.fromkeys(pid for pid in object_permission_ids if isinstance(pid, str))
+    )
+    for cache_key in cache_keys:
         try:
-            await user_api_key_cache.async_delete_cache(key=object_permission_cache_key(object_permission_id))
+            await user_api_key_cache.async_delete_cache(key=cache_key)
         except Exception as e:  # noqa: BLE001  # a cache we cannot clear still expires; never fail the write
-            verbose_proxy_logger.warning(
-                "Failed to invalidate cached object permission %r: %s", object_permission_id, e
-            )
+            verbose_proxy_logger.warning("Failed to invalidate cached object permission %r: %s", cache_key, e)
+        await publish_auth_cache_invalidation(cache_key=cache_key)
 
 
 async def _set_object_permission(

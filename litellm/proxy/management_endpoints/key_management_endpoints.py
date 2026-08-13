@@ -4733,6 +4733,13 @@ async def _execute_virtual_key_regeneration(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+    await invalidate_cached_object_permissions(
+        object_permission_ids=(
+            key_in_db.object_permission_id,
+            non_default_values.get("object_permission_id"),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
 
     response: Final = GenerateKeyResponse.model_validate(updated_token_dict)
     asyncio.create_task(
