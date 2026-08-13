@@ -70,7 +70,7 @@ async def background_streaming_task(
         # Pre-call checks (rate limits, guardrails, budget) were already run
         # before polling ID creation, so skip them here to avoid double-counting.
         response: Final = await processor.base_process_llm_request(
-            request=request,
+            request=None,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
             route_type="aresponses",
