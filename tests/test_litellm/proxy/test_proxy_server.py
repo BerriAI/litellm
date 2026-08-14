@@ -5278,19 +5278,17 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
     ``{litellm_proxy_admin_name}:spend`` cache entry between authoritative DB
     reloads, so keeping it pod-local would let traffic spread across replicas
     exceed the proxy budget by roughly a factor of the replica count within a
-    cache TTL. Sharing this scalar is safe because it carries no limits or
-    permissions, so it cannot resurrect an invalidated auth blob.
+    cache TTL. The scalar is updated via an atomic cache increment, which
+    remains shared across pods and avoids resurrecting a stale pre-reset value.
     """
     from litellm.caching.caching import DualCache
 
     admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
-    global_key = "{}:spend".format(admin_name)
+    global_key = f"{admin_name}:spend"
 
     async def fake_get(key, **kwargs):
         if key == "user-lit":
             return {"user_id": "user-lit", "spend": 1.0}
-        if key == global_key:
-            return 10.0
         return None
 
     original_cache = litellm.proxy.proxy_server.user_api_key_cache
@@ -5299,27 +5297,39 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
     try:
         with patch.object(cache, "async_get_cache", new=AsyncMock(side_effect=fake_get)):
             with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
-                await litellm.proxy.proxy_server.update_cache(
-                    token=None,
-                    user_id="user-lit",
-                    end_user_id=None,
-                    team_id=None,
-                    response_cost=5.0,
-                    parent_otel_span=None,
-                )
+                with patch.object(cache, "async_increment_cache", new=AsyncMock()) as mock_increment:
+                    await litellm.proxy.proxy_server.update_cache(
+                        token=None,
+                        user_id="user-lit",
+                        end_user_id=None,
+                        team_id=None,
+                        response_cost=5.0,
+                        parent_otel_span=None,
+                    )
 
-                pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-                if pending:
-                    await asyncio.wait(pending, timeout=5)
+                    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+                    if pending:
+                        await asyncio.wait(pending, timeout=5)
 
-                calls = mock_set_cache.await_args_list
-                local_keys = [k for c in calls if c.kwargs.get("local_only") is True for k, _ in c.kwargs["cache_list"]]
-                shared_keys = [
-                    k for c in calls if c.kwargs.get("local_only") is not True for k, _ in c.kwargs["cache_list"]
-                ]
-                assert "user-lit" in local_keys
-                assert global_key not in local_keys
-                assert shared_keys == [global_key]
+                    calls = mock_set_cache.await_args_list
+                    local_keys = [k for c in calls if c.kwargs.get("local_only") is True for k, _ in c.kwargs["cache_list"]]
+                    shared_keys = [
+                        k for c in calls if c.kwargs.get("local_only") is not True for k, _ in c.kwargs["cache_list"]
+                    ]
+                    assert "user-lit" in local_keys
+                    assert global_key not in local_keys
+                    assert shared_keys == []
+
+                    increment_calls = [
+                        c
+                        for c in mock_increment.await_args_list
+                        if (c.args[0] if c.args else c.kwargs.get("key")) == global_key
+                    ]
+                    assert len(increment_calls) == 1
+                    call = increment_calls[0]
+                    value = call.args[1] if len(call.args) >= 2 else call.kwargs.get("value")
+                    assert value == 5.0
+                    assert call.kwargs.get("refresh_ttl") is True
     finally:
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
 

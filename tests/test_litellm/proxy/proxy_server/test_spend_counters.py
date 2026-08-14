@@ -1270,3 +1270,65 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_update_cache_global_proxy_spend_starts_from_zero_after_reset(
+    monkeypatch,
+):
+    """Global proxy spend starts from zero after the cache key is reset."""
+    from litellm.caching.caching import DualCache
+
+    cache = DualCache(default_in_memory_ttl=300)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await cache.async_set_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY, value=50.0)
+    await cache.async_delete_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY)
+    await cache.async_set_cache(
+        key="user-lit",
+        value={"user_id": "user-lit", "spend": 0.0},
+    )
+    await ps.update_cache(
+        token=None,
+        user_id="user-lit",
+        end_user_id=None,
+        team_id=None,
+        response_cost=1.05,
+        parent_otel_span=None,
+    )
+
+    final_value = await cache.async_get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY)
+    assert final_value == 1.05
+
+
+@pytest.mark.asyncio
+async def test_update_cache_global_proxy_spend_concurrent_increments_after_reset(
+    monkeypatch,
+):
+    """Concurrent spend updates after a reset accumulate from zero."""
+    from litellm.caching.caching import DualCache
+
+    cache = DualCache(default_in_memory_ttl=300)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await cache.async_set_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY, value=100.0)
+    await cache.async_delete_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY)
+    await cache.async_set_cache(
+        key="user-concurrent",
+        value={"user_id": "user-concurrent", "spend": 0.0},
+    )
+
+    async def _update(cost: float) -> None:
+        await ps.update_cache(
+            token=None,
+            user_id="user-concurrent",
+            end_user_id=None,
+            team_id=None,
+            response_cost=cost,
+            parent_otel_span=None,
+        )
+
+    await asyncio.gather(*[_update(0.01) for _ in range(50)])
+
+    final_value = await cache.async_get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY)
+    assert final_value == pytest.approx(0.5)

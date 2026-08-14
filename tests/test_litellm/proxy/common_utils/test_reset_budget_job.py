@@ -1030,6 +1030,7 @@ def _make_counter_invalidation_job(monkeypatch):
 
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_delete_cache = AsyncMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
 
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
@@ -1088,14 +1089,11 @@ def test_reset_budget_for_users_invalidates_redis_counter(reset_budget_job, mock
     counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:user:alice", value=0.0, ttl=60)
 
 
-def test_reset_budget_for_proxy_budget_row_invalidates_global_spend_cache(
+def test_reset_budget_for_proxy_budget_row_resets_global_spend_cache(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
-    """Regression for LIT-4309: resetting the proxy-wide budget aggregate row
-    ("litellm-proxy-budget") must also drop the cached global-spend
-    accumulator ("{admin}:spend") that _global_proxy_budget_check enforces
-    against. Without the invalidation, the cached value survives the DB reset
-    and the global cap keeps blocking requests for the whole next window."""
+    """Resetting the proxy-wide budget aggregate row zeroes the cached
+    global-spend accumulator so the next period starts from a known floor."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
 
     now = datetime.now(timezone.utc)
@@ -1115,13 +1113,15 @@ def test_reset_budget_for_proxy_budget_row_invalidates_global_spend_cache(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
 
-    counter_cache.user_api_key_cache.async_delete_cache.assert_any_call(key="default_user_id:spend")
+    counter_cache.user_api_key_cache.async_set_cache.assert_any_call(
+        key="default_user_id:spend", value=0.0
+    )
 
 
 def test_reset_budget_for_ordinary_user_does_not_touch_global_spend_cache(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
-    """The global-spend accumulator must only be dropped when the proxy
+    """The global-spend accumulator must only be zeroed when the proxy
     budget aggregate row itself resets, not on every user reset."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
 
@@ -1145,6 +1145,10 @@ def test_reset_budget_for_ordinary_user_does_not_touch_global_spend_cache(
     assert not any(
         call.kwargs.get("key") == "default_user_id:spend"
         for call in counter_cache.user_api_key_cache.async_delete_cache.call_args_list
+    )
+    assert not any(
+        call.kwargs.get("key") == "default_user_id:spend"
+        for call in counter_cache.user_api_key_cache.async_set_cache.call_args_list
     )
 
 

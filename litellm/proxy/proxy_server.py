@@ -3079,7 +3079,7 @@ async def update_cache(
 
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
-        ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
+        ## UPDATE CACHE FOR USER ID
         if response_cost is None:
             return
         user_ids: Final = [user_id]
@@ -3110,20 +3110,35 @@ async def update_cache(
                         CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_UserTable),
                     )
                 )
-            ## UPDATE GLOBAL PROXY ##
-            global_proxy_spend: Final = await user_api_key_cache.async_get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
-            if global_proxy_spend is None:
-                # do nothing if not in cache
-                return
-            elif response_cost is not None and global_proxy_spend is not None:
-                increment: Final = global_proxy_spend + response_cost
-                values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update user spend in cache. "
                 "Budget enforcement may use stale spend values. "
                 "user_id=%s, response_cost=%s - %s\n%s",
                 user_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
+            )
+
+    ### UPDATE GLOBAL PROXY SPEND ###
+    async def _update_global_proxy_spend() -> None:
+        if response_cost is None:
+            return
+        try:
+            # Atomic increment avoids the read-modify-write race with
+            # ResetBudgetJob and starts from 0 when the key is missing.
+            await user_api_key_cache.async_increment_cache(
+                key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+                value=response_cost,
+                ttl=get_management_object_ttl(user_api_key_cache),
+                refresh_ttl=True,
+            )
+        except Exception as e:  # noqa: BLE001  # spend update must not fail the request
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update global proxy spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "response_cost=%s - %s\n%s",
                 response_cost,
                 str(e),
                 traceback.format_exc(),
@@ -3272,6 +3287,8 @@ async def update_cache(
     if user_id is not None:
         await _update_user_cache()
 
+    await _update_global_proxy_spend()
+
     if end_user_id is not None:
         await _update_end_user_cache()
 
@@ -3281,25 +3298,13 @@ async def update_cache(
     if tags is not None:
         await _update_tag_cache()
 
-    global_proxy_spend_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
-    local_object_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
-    shared_scalar_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
-
-    if local_object_updates:
+    if values_to_update_in_cache:
         asyncio.create_task(
             user_api_key_cache.async_set_cache_pipeline(
-                cache_list=list(local_object_updates),
+                cache_list=list(values_to_update_in_cache),
                 ttl=get_management_object_ttl(user_api_key_cache),
                 litellm_parent_otel_span=parent_otel_span,
                 local_only=True,
-            )
-        )
-    if shared_scalar_updates:
-        asyncio.create_task(
-            user_api_key_cache.async_set_cache_pipeline(
-                cache_list=list(shared_scalar_updates),
-                ttl=get_management_object_ttl(user_api_key_cache),
-                litellm_parent_otel_span=parent_otel_span,
             )
         )
 
