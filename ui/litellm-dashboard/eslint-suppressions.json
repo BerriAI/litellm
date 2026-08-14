@@ -1603,9 +1603,6 @@
   "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageTable.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.tsx": {
@@ -1613,24 +1610,11 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/usage/_components/components/EntityUsage/SpendByProvider.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/usage/_components/components/EntityUsage/TopModelView.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
   "src/app/(dashboard)/usage/_components/components/UsageAIChatPanel.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/immutability": {
@@ -1648,21 +1632,13 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/purity": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 3
-    }
-  },
-  "src/app/(dashboard)/usage/_components/components/UsageViewSelect/UsageViewSelect.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity.ts": {
@@ -1927,29 +1903,14 @@
       "count": 1
     }
   },
-  "src/components/EntityUsageExport/EntityUsageExportModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/EntityUsageExport/ExportFormatSelector.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/EntityUsageExport/ExportSummary.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/EntityUsageExport/ExportTypeSelector.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
   "src/components/EntityUsageExport/UsageExportHeader.tsx": {
     "no-restricted-imports": {
-      "count": 3
+      "count": 1
     }
   },
   "src/components/EntityUsageExport/types.ts": {
@@ -2234,9 +2195,6 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/add_model/AdaptiveRoutingConfig.tsx": {
@@ -2721,9 +2679,6 @@
   "src/components/common_components/team_multi_select.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/common_components/user_search_modal.tsx": {
@@ -3088,9 +3043,6 @@
   },
   "src/components/per_user_usage.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -3625,7 +3577,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
