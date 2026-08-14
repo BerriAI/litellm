@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,7 +56,7 @@ const renderForm = (overrides?: {
     </QueryClientProvider>,
   );
 
-  return { fetchSettings, updateSettings };
+  return { fetchSettings, updateSettings, queryClient };
 };
 
 const saveButton = async () => await screen.findByRole("button", { name: "Save Changes" });
@@ -220,6 +220,40 @@ describe("DefaultTeamSettingsForm", () => {
     expect(screen.queryByText("100")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
     expect(NotificationsManager.success).toHaveBeenCalledWith("Default team settings updated successfully");
+  });
+
+  it("never lets a pre-save in-flight refetch restore the old values after saving", async () => {
+    const user = userEvent.setup();
+    const staleRefetch: { resolve: (value: DefaultTeamSettings) => void } = { resolve: () => {} };
+    const { updateSettings, queryClient } = renderForm({
+      fetchSettings: vi
+        .fn()
+        .mockResolvedValueOnce(SETTINGS)
+        .mockImplementationOnce(
+          () =>
+            new Promise<DefaultTeamSettings>((resolve) => {
+              staleRefetch.resolve = resolve;
+            }),
+        )
+        .mockImplementation(() => new Promise(() => {})),
+    });
+
+    await enterEditMode(user);
+    await user.clear(await screen.findByLabelText("Max Budget (USD)"));
+    await user.type(screen.getByLabelText("Max Budget (USD)"), "250");
+    void queryClient.refetchQueries({ queryKey: ["defaultTeamSettings"] });
+    await user.click(await saveButton());
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("250")).toBeInTheDocument();
+
+    await act(async () => {
+      staleRefetch.resolve(SETTINGS);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.getByText("250")).toBeInTheDocument();
+    expect(screen.queryByText("100")).not.toBeInTheDocument();
   });
 
   it("keeps the edit and surfaces the backend error when the save fails", async () => {

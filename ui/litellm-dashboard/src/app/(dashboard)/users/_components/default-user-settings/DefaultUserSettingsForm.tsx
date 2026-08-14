@@ -225,8 +225,9 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
 
   const mutation = useMutation({
     mutationFn: (values: DefaultUserSettingsFormValues) => updateSettings(buildBody(values)),
-    onSuccess: (_result, values) => {
+    onSuccess: async (_result, values) => {
       NotificationsManager.success("Default user settings updated successfully");
+      await queryClient.cancelQueries({ queryKey: SETTINGS_QUERY_KEY });
       queryClient.setQueryData<InternalUserSettings>(SETTINGS_QUERY_KEY, (existing) => ({
         field_schema: existing?.field_schema ?? {},
         values: buildBody(values),

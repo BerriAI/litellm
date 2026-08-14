@@ -148,8 +148,9 @@ const SettingsForm = ({ initialValues, updateSettings, onCancel, onSaved }: Sett
 
   const mutation = useMutation({
     mutationFn: (values: DefaultTeamSettingsFormValues) => updateSettings(buildBody(values)),
-    onSuccess: (_result, values) => {
+    onSuccess: async (_result, values) => {
       NotificationsManager.success("Default team settings updated successfully");
+      await queryClient.cancelQueries({ queryKey: SETTINGS_QUERY_KEY });
       queryClient.setQueryData<DefaultTeamSettings>(SETTINGS_QUERY_KEY, (existing) => ({
         field_schema: existing?.field_schema ?? {},
         values: buildBody(values),
