@@ -1282,3 +1282,29 @@ def test_streaming_surfaces_fireworks_response_fields():
     assert surfaced["fireworks_raw_outputs"] == [raw_output]
     assert surfaced["fireworks_perf_metrics"] == {"prompt-tokens": 5}
     assert surfaced["fireworks_prompt_token_ids"] == [1, 2, 3]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["accounts/fireworks/models/kimi-k3", "kimi-k3"],
+)
+def test_fireworks_kimi_k3_supports_tool_choice(monkeypatch, model):
+    """
+    Kimi K3 on Fireworks had no entry in the model cost map, so
+    supports_tool_choice() came back False and FireworksAIConfig dropped
+    tool_choice from its supported params. Callers passing tool_choice got a
+    local UnsupportedParamsError before the request ever left LiteLLM, even
+    though Fireworks itself accepts it.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model_info = litellm.model_cost.get(f"fireworks_ai/{model}")
+    assert model_info is not None, f"Missing model pricing entry: fireworks_ai/{model}"
+    assert model_info["supports_tool_choice"] is True
+    assert model_info["input_cost_per_token"] == 3e-06
+    assert model_info["output_cost_per_token"] == 1.5e-05
+    assert model_info["cache_read_input_token_cost"] == 3e-07
+    assert model_info["max_input_tokens"] == 1048576
+
+    assert "tool_choice" in FireworksAIConfig().get_supported_openai_params(model=model)
