@@ -450,14 +450,20 @@ def cost_per_token(
     model_with_provider = model
     if caller_supplied_provider:
         _prov_prefix: Final = f"{custom_llm_provider}/"
-        if model_is_str and model.startswith(_prov_prefix):
-            model_with_provider = model
-        else:
-            model_with_provider = f"{custom_llm_provider}/{model}"
-        if region_name is not None:
-            model_with_provider_and_region: Final = f"{custom_llm_provider}/{region_name}/{model}"
-            if model_with_provider_and_region in model_cost_ref:  # use region based pricing, if it's available
-                model_with_provider = model_with_provider_and_region
+        _has_prov_prefix: Final = model_is_str and model.startswith(_prov_prefix)
+        _bare_model: Final = model[len(_prov_prefix) :] if _has_prov_prefix else model
+        _pricing_providers: Final[tuple[str, ...]] = (
+            (custom_llm_provider, "bedrock") if custom_llm_provider == "bedrock_mantle" else (custom_llm_provider,)
+        )
+        _regional_keys: Final[tuple[str, ...]] = (
+            tuple(f"{_p}/{region_name}/{_bare_model}" for _p in _pricing_providers) if region_name is not None else ()
+        )
+        _flat_keys: Final[tuple[str, ...]] = tuple(f"{_p}/{_bare_model}" for _p in _pricing_providers)
+        _default_key: Final = model if _has_prov_prefix else f"{custom_llm_provider}/{model}"
+        model_with_provider = next(
+            (k for k in (*_regional_keys, *_flat_keys) if k in model_cost_ref),
+            _default_key,
+        )
     else:
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
 
