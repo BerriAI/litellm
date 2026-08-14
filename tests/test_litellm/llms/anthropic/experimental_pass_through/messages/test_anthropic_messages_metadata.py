@@ -4,7 +4,6 @@ Tests for Anthropic Messages passthrough metadata support.
 Related issue: https://github.com/BerriAI/litellm/issues/30663
 """
 
-import pytest
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -22,9 +21,9 @@ class TestAnthropicMessagesMetadataSupport:
         supported_params = self.config.get_supported_anthropic_messages_params(
             model="claude-sonnet-4-20250514"
         )
-        assert "metadata" in supported_params, (
-            "'metadata' should be in supported params for Anthropic Messages passthrough"
-        )
+        assert (
+            "metadata" in supported_params
+        ), "'metadata' should be in supported params for Anthropic Messages passthrough"
 
     def test_metadata_appears_exactly_once(self):
         """Verify 'metadata' is not duplicated in the supported params list."""
