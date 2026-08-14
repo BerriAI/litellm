@@ -1038,7 +1038,7 @@ class RedisCache(BaseCache):
         self,
         key: str,
         value: float,
-        ttl: int | float | None = None,
+        ttl: float | None = None,
     ) -> float | None:
         """Atomically increment ``key`` by ``value`` only when the key already
         exists, returning the new value; an absent key is left missing and
