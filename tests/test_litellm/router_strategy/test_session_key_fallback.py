@@ -240,7 +240,7 @@ class TestSessionKeyFallback:
         # user_api_key_hash : model_group : first_system_msg : first_user_msg
         system_text = "You are a mathematics tutor."
         user_text = "Let's think step by step and reason through this problem carefully."
-        expected_payload = f"user_hash_abc:test-router:{system_text}:{user_text}"
+        expected_payload = f"litellm-session-key:user_hash_abc:test-router:{system_text}:{user_text}"
         expected_hash = hashlib.sha256(expected_payload.encode("utf-8")).hexdigest()
 
         derived_id = router._resolve_session_id(

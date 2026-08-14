@@ -1747,8 +1747,8 @@ class ComplexityRouter(CustomLogger):
         user_identifier = self._get_user_identifier_from_request_kwargs(request_kwargs)
         model_group = model or self.model_name or request_kwargs.get("model") or ""
 
-        payload = f"{user_identifier}:{model_group}:{first_system_msg}:{first_user_msg}"
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        payload = f"litellm-session-key:{user_identifier}:{model_group}:{first_system_msg}:{first_user_msg}"
+        return hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
 
     def _resolve_session_id(
         self,
@@ -1776,9 +1776,10 @@ class ComplexityRouter(CustomLogger):
             )
 
         if derived_key is not None:
+            sanitized_key = derived_key.replace("\r", "").replace("\n", "")[:32]
             verbose_router_logger.info(
                 "ComplexityRouter: resolved fallback session key '%s' using strategy '%s'",
-                derived_key,
+                sanitized_key,
                 fallback,
             )
             metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
