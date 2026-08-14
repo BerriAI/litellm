@@ -95,3 +95,71 @@ def test_apply_unified_file_ids_swaps_all_three_ids():
         "unified-out",
         "unified-err",
     )
+
+
+# =========================================================================== #
+# add_internal_model_credentials_for_batch - the snapshot that lets a completed
+# batch's output file be read, and therefore its cost be recorded
+# =========================================================================== #
+
+
+def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
+    """Cost accounting for a completed batch reads its output file, and Bedrock resolves
+    that bucket only from this snapshot. It must be immutable so nothing downstream can
+    redirect the bucket that managed file ids are validated against."""
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        add_internal_model_credentials_for_batch,
+    )
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider = MagicMock(
+        return_value={"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"}
+    )
+    data = {"batch_id": "unified-batch-id"}
+
+    add_internal_model_credentials_for_batch(data=data, llm_router=router, model_id="deployment-1")
+
+    snapshot = data["_litellm_internal_model_credentials"]
+    assert snapshot["s3_bucket_name"] == "configured-bucket"
+    assert isinstance(snapshot, MappingProxyType)
+    with pytest.raises(TypeError):
+        snapshot["s3_bucket_name"] = "attacker-bucket"
+    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="deployment-1")
+
+
+@pytest.mark.parametrize(
+    "model_id, credentials",
+    [(None, {"s3_bucket_name": "b"}), ("deployment-1", None)],
+    ids=["no-model-id", "deployment-has-no-credentials"],
+)
+def test_add_internal_model_credentials_is_a_noop_without_a_resolvable_deployment(model_id, credentials):
+    """An unroutable batch must be left alone rather than given an empty snapshot, which
+    would look like a configured bucket of nothing."""
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        add_internal_model_credentials_for_batch,
+    )
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider = MagicMock(return_value=credentials)
+    data = {"batch_id": "unified-batch-id"}
+
+    add_internal_model_credentials_for_batch(data=data, llm_router=router, model_id=model_id)
+
+    assert "_litellm_internal_model_credentials" not in data
+
+
+def test_add_internal_model_credentials_survives_a_failing_deployment_lookup():
+    """The snapshot only enables cost accounting, so a batch whose deployment no longer
+    resolves, which happens when a model group is removed while batches are in flight,
+    must still be retrievable rather than failing the request on the lookup."""
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        add_internal_model_credentials_for_batch,
+    )
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider = MagicMock(side_effect=KeyError("deployment-gone"))
+    data = {"batch_id": "unified-batch-id"}
+
+    add_internal_model_credentials_for_batch(data=data, llm_router=router, model_id="deployment-gone")
+
+    assert data == {"batch_id": "unified-batch-id"}

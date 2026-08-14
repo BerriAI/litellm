@@ -309,6 +309,7 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "bucket_name",
             "timeout",
             "max_retries",
+            "_litellm_internal_model_credentials",
         ]
         for key in credential_keys:
             if key in litellm_params:
