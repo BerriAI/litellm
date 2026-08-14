@@ -78,11 +78,9 @@ mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
 
 # Fixture to provide the mock prisma client
 @pytest.fixture(autouse=True)
-def mock_db_client():
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
-    ):  # Mock in both places if necessary
-        yield mock_prisma_client
+def mock_db_client(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    yield mock_prisma_client
     mock_prisma_client.reset_mock()
 
 
