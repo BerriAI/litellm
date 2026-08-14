@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
@@ -2120,23 +2120,25 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _aggregate_cache_creation_token_details(
-        cache_creation_objects: Iterable[Mapping[str, Any] | None],
+        iterations: Sequence[Mapping[str, Any]],
     ) -> CacheCreationTokenDetails | None:
-        breakdowns: Final = tuple(c for c in cache_creation_objects if isinstance(c, Mapping))
+        breakdowns: Final = tuple(c for c in (it.get("cache_creation") for it in iterations) if isinstance(c, Mapping))
         if not breakdowns:
             return None
+        detailed_5m: Final = sum(int(c.get("ephemeral_5m_input_tokens") or 0) for c in breakdowns)
+        detailed_1h: Final = sum(int(c.get("ephemeral_1h_input_tokens") or 0) for c in breakdowns)
+        total: Final = sum(int(it.get("cache_creation_input_tokens") or 0) for it in iterations)
+        undetailed: Final = max(total - detailed_5m - detailed_1h, 0)
         return CacheCreationTokenDetails(
-            ephemeral_5m_input_tokens=sum(int(c.get("ephemeral_5m_input_tokens") or 0) for c in breakdowns),
-            ephemeral_1h_input_tokens=sum(int(c.get("ephemeral_1h_input_tokens") or 0) for c in breakdowns),
+            ephemeral_5m_input_tokens=detailed_5m + undetailed,
+            ephemeral_1h_input_tokens=detailed_1h,
         )
 
     @staticmethod
     def _resolve_cache_creation_token_details(usage: Mapping[str, Any]) -> CacheCreationTokenDetails | None:
         iterations: Final = usage.get("iterations")
         if iterations:
-            aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(
-                it.get("cache_creation") for it in iterations
-            )
+            aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(iterations)
             if aggregated is not None:
                 return aggregated
         cache_creation: Final = usage.get("cache_creation")
