@@ -407,11 +407,11 @@ class RedisUpdateBuffer:
             (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY),
         )
 
-        rpush_list: Final[list[RedisPipelineRpushOperation]] = [  # mutable-ok: async_rpush_pipeline requires a list arg
-            RedisPipelineRpushOperation(key=redis_key, values=[safe_dumps(transactions)])
+        rpush_list: Final = tuple(
+            RedisPipelineRpushOperation(key=redis_key, values=(safe_dumps(transactions),))
             for transactions, redis_key in restore_configs
             if transactions
-        ]
+        )
         if len(rpush_list) == 0:
             return
 
