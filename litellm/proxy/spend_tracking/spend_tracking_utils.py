@@ -123,11 +123,7 @@ def _get_spend_logs_metadata(
     )
 
     # Filter the metadata dictionary to include only the specified keys
-    clean_metadata: Final = SpendLogsMetadata(
-        **{  # type: ignore
-            key: metadata.get(key) for key in SpendLogsMetadata.__annotations__.keys()
-        }
-    )
+    clean_metadata: Final = SpendLogsMetadata(**{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__})
     raw_user_api_key: Final = clean_metadata.get("user_api_key")
     if raw_user_api_key is not None and isinstance(raw_user_api_key, str):
         clean_metadata["user_api_key"] = _hash_api_key_for_spend_log(raw_user_api_key)

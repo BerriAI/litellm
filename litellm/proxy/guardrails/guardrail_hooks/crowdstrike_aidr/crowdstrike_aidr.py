@@ -362,6 +362,10 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         tail: Final = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []
         return [_extract_text_from_message(msg) for msg in tail]
 
+    @override
+    def structured_messages_cover_full_request(self) -> bool:
+        return effective_skip_system_message_for_guardrail(self) or effective_skip_tool_message_for_guardrail(self)
+
     def _writeback_messages(
         self,
         structured_messages: list[AllMessageValues],

@@ -139,15 +139,13 @@ class VertexTextToSpeechAPI(VertexLLM):
         ########## End of logging ############
         ####### Send the request ###################
         if _is_async is True:
-            return self.async_audio_speech(  # type: ignore
-                logging_obj=logging_obj, url=url, headers=headers, request=request
-            )
+            return self.async_audio_speech(logging_obj=logging_obj, url=url, headers=headers, request=request)
         sync_handler: Final = _get_httpx_client()
 
         response = sync_handler.post(
             url=url,
             headers=headers,
-            json=request,  # type: ignore
+            json=request,
         )
         if response.status_code != 200:
             raise Exception(f"Request failed with status code {response.status_code}, {response.text}")
@@ -183,7 +181,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         response = await async_handler.post(
             url=url,
             headers=headers,
-            json=request,  # type: ignore
+            json=request,
         )
 
         if response.status_code != 200:

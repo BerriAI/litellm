@@ -1383,6 +1383,121 @@ async def test_check_and_increment_computes_descriptors_when_not_passed():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_enforces_project_otpm_limit_for_batch():
+    """VERIA regression: ``_create_batch_rate_limit_descriptors`` only asked
+    for the generic key/user/team/model descriptors, so a project caller
+    could submit a batch that consumed none of its configured project OTPM
+    quota. The project OTPM descriptor must now be present and charged with
+    the batch's estimated *output* tokens, not its input tokens."""
+    from litellm import DualCache
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    parallel_request_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        parallel_request_limiter=parallel_request_limiter,
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-project-batch-otpm",
+        models=["*"],
+        project_id="proj-mantle-batch",
+        project_metadata={"model_otpm_limit": {"gpt-4o-mini": 50}},
+    )
+
+    # Two rows each declaring max_tokens=40: 80 output tokens total, over the
+    # configured 50-token project OTPM limit but negligible input tokens.
+    mock_content = MagicMock()
+    mock_content.content = (
+        b'{"body": {"model": "gpt-4o-mini", "max_tokens": 40, '
+        b'"messages": [{"role": "user", "content": "hi"}]}}\n'
+        b'{"body": {"model": "gpt-4o-mini", "max_tokens": 40, '
+        b'"messages": [{"role": "user", "content": "hi"}]}}\n'
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={"custom_llm_provider": "openai"},
+        ),
+        patch("litellm.afile_content", new=AsyncMock(return_value=mock_content)),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_project_otpm" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_enforces_project_itpm_limit_for_batch():
+    """Companion to the OTPM regression above: a project's ITPM quota must
+    also apply to batch submissions."""
+    from litellm import DualCache
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    parallel_request_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        parallel_request_limiter=parallel_request_limiter,
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-project-batch-itpm",
+        models=["*"],
+        project_id="proj-mantle-batch",
+        project_metadata={"model_itpm_limit": {"gpt-4o-mini": 1}},
+    )
+
+    mock_content = MagicMock()
+    mock_content.content = (
+        b'{"body": {"model": "gpt-4o-mini", "max_tokens": 1, '
+        b'"messages": [{"role": "user", "content": "well over one token of input"}]}}\n'
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={"custom_llm_provider": "openai"},
+        ),
+        patch("litellm.afile_content", new=AsyncMock(return_value=mock_content)),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_project_itpm" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_count_input_file_usage_raises_on_non_bytes_content():
     from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
 

@@ -158,7 +158,7 @@ class HuggingFaceEmbedding(BaseLLM):
             if call_type == "sync":
                 hf_task: Final = get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=HF_HUB_URL)
             elif call_type == "async":
-                return self._async_transform_input(model=model, task_type=task_type, embed_url=embed_url, input=input)  # type: ignore
+                return self._async_transform_input(model=model, task_type=task_type, embed_url=embed_url, input=input)
 
             data = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
 
@@ -334,7 +334,7 @@ class HuggingFaceEmbedding(BaseLLM):
                 timeout=timeout,
                 logging_obj=logging_obj,
                 headers=headers,
-                api_base=embed_url,  # type: ignore
+                api_base=embed_url,
                 api_key=api_key,
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
                 model=model,

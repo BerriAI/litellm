@@ -1,21 +1,34 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Modal, Select, Switch, Collapse, Input, Divider } from "antd";
-import { Button, TextInput } from "@tremor/react";
-import {
-  CodeOutlined,
-  PlayCircleOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  CaretRightOutlined,
-  SaveOutlined,
-  UsergroupAddOutlined,
-  ExportOutlined,
-} from "@ant-design/icons";
+import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-
-const { Panel } = Collapse;
-const { TextArea } = Input;
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
 // Code templates
 const CODE_TEMPLATES = {
@@ -143,6 +156,17 @@ const MODE_OPTIONS = [
   { value: "post_mcp_call", label: "post_mcp_call (After MCP Tool Call)" },
   { value: "during_mcp_call", label: "during_mcp_call (During MCP Tool Call)" },
 ];
+
+const TEMPLATE_ITEMS = Object.entries(CODE_TEMPLATES).map(([key, template]) => ({
+  value: key,
+  label: template.name,
+}));
+
+type ModeOption = (typeof MODE_OPTIONS)[number];
+
+const MODE_OPTION_BY_VALUE: Record<string, ModeOption> = Object.fromEntries(
+  MODE_OPTIONS.map((option) => [option.value, option]),
+);
 
 // Data for editing an existing guardrail
 export interface EditGuardrailData {
@@ -470,105 +494,104 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   };
 
   const lineCount = code.split("\n").length;
+  const selectedModeOptions = mode.map((value) => MODE_OPTION_BY_VALUE[value]).filter(Boolean);
 
   return (
-    <Modal
-      open={visible}
-      onCancel={onClose}
-      footer={null}
-      width={1400}
-      className="custom-code-modal"
-      closable={true}
-      destroyOnClose
-    >
-      <div className="flex flex-col h-[80vh]">
-        {/* Header */}
-        <div className="pb-4 border-b border-gray-200">
-          <h2 className="text-xl font-semibold text-gray-900">
+    <Dialog open={visible} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1400px]">
+        <DialogHeader>
+          <DialogTitle className="text-xl font-semibold">
             {isEditMode ? "Edit Custom Guardrail" : "Create Custom Guardrail"}
-          </h2>
-          <p className="text-sm text-gray-500 mt-1">Define custom logic using Python-like syntax</p>
-        </div>
+          </DialogTitle>
+          <DialogDescription>Define custom logic using Python-like syntax</DialogDescription>
+        </DialogHeader>
 
         {/* Top Controls */}
-        <div className="flex items-center gap-4 py-4 border-b border-gray-100">
-          <div className="flex-1 max-w-[200px]">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Guardrail Name</label>
-            <TextInput value={guardrailName} onValueChange={setGuardrailName} placeholder="e.g., block-pii-custom" />
-          </div>
-          <div className="w-[280px]">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Mode (can select multiple)</label>
-            <Select
-              mode="multiple"
-              value={mode}
-              onChange={setMode}
-              options={MODE_OPTIONS}
-              className="w-full"
-              size="middle"
-              placeholder="Select modes"
+        <div className="flex items-center gap-4 border-b border-border py-4">
+          <div className="max-w-[200px] flex-1">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Guardrail Name</label>
+            <Input
+              value={guardrailName}
+              onChange={(e) => setGuardrailName(e.target.value)}
+              placeholder="e.g., block-pii-custom"
             />
           </div>
-          <div className="w-[180px]">
-            <label className="block text-xs font-medium text-gray-600 mb-1">Template</label>
-            <Select
-              value={selectedTemplate}
-              onChange={handleTemplateChange}
-              className="w-full"
-              size="middle"
-              dropdownRender={(menu) => (
-                <>
-                  {menu}
-                  <Divider style={{ margin: "8px 0" }} />
-                  <div
-                    style={{
-                      padding: "8px 12px",
-                      cursor: "pointer",
-                      color: "#1890ff",
-                      fontSize: "12px",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "4px",
-                    }}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      window.open("https://models.litellm.ai/guardrails", "_blank");
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = "#f0f0f0";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = "transparent";
-                    }}
-                  >
-                    <UsergroupAddOutlined />
-                    <span>Browse Community templates</span>
-                    <ExportOutlined style={{ fontSize: "10px" }} />
-                  </div>
-                </>
-              )}
+          <div className="w-[280px]">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Mode (can select multiple)</label>
+            <Combobox
+              items={MODE_OPTIONS}
+              value={selectedModeOptions}
+              onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
+              multiple
             >
-              <Select.OptGroup label="STANDARD">
-                {Object.entries(CODE_TEMPLATES).map(([key, template]) => (
-                  <Select.Option key={key} value={key}>
-                    {template.name}
-                  </Select.Option>
+              <ComboboxChips className="w-full">
+                {selectedModeOptions.map((option) => (
+                  <ComboboxChip key={option.value} aria-label={option.label}>
+                    {option.label}
+                  </ComboboxChip>
                 ))}
-              </Select.OptGroup>
+                <ComboboxChipsInput
+                  className="border-0 bg-transparent"
+                  placeholder={mode.length === 0 ? "Select modes" : undefined}
+                />
+              </ComboboxChips>
+              <ComboboxContent>
+                <ComboboxEmpty>No matching modes</ComboboxEmpty>
+                <ComboboxList>
+                  {(option: ModeOption) => (
+                    <ComboboxItem key={option.value} value={option}>
+                      {option.label}
+                    </ComboboxItem>
+                  )}
+                </ComboboxList>
+              </ComboboxContent>
+            </Combobox>
+          </div>
+          <div className="w-[180px]">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Template</label>
+            <Select
+              items={TEMPLATE_ITEMS}
+              value={selectedTemplate}
+              onValueChange={(value: string | null) => value && handleTemplateChange(value)}
+            >
+              <SelectTrigger className="w-full" aria-label="Template">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectLabel>STANDARD</SelectLabel>
+                  {TEMPLATE_ITEMS.map((template) => (
+                    <SelectItem key={template.value} value={template.value}>
+                      {template.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+                <SelectSeparator />
+                <button
+                  type="button"
+                  onClick={() => window.open("https://models.litellm.ai/guardrails", "_blank")}
+                  className="flex w-full items-center gap-1 rounded-sm px-2 py-1.5 text-xs text-primary hover:bg-accent"
+                >
+                  <Users className="size-3.5" />
+                  <span>Browse Community templates</span>
+                  <ExternalLink className="size-2.5" />
+                </button>
+              </SelectContent>
             </Select>
           </div>
           <div className="flex items-center gap-2 pt-5">
-            <span className="text-sm text-gray-600">Default On</span>
-            <Switch checked={defaultOn} onChange={setDefaultOn} />
+            <span className="text-sm text-muted-foreground">Default On</span>
+            <Switch checked={defaultOn} onCheckedChange={setDefaultOn} aria-label="Default On" />
           </div>
         </div>
 
         {/* Main Content */}
-        <div className="flex flex-1 overflow-hidden mt-4 gap-6">
+        <div className="mt-4 flex gap-6">
           {/* Code Editor */}
-          <div className="flex-2 flex flex-col min-w-0 overflow-y-auto">
-            <div className="flex items-center justify-between mb-2 shrink-0">
-              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Python Logic</span>
-              <span className="text-xs text-gray-400">Restricted environment (no imports)</span>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="mb-2 flex shrink-0 items-center justify-between">
+              <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Python Logic</span>
+              <span className="text-xs text-muted-foreground">Restricted environment (no imports)</span>
             </div>
             <div
               className="relative rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e] shrink-0"
@@ -607,27 +630,23 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             </div>
 
             {/* Test Section */}
-            <Collapse
-              activeKey={testExpanded ? ["test"] : []}
-              onChange={(keys) => setTestExpanded(keys.includes("test"))}
-              className="mt-3 bg-white border border-gray-200 rounded-lg shrink-0"
-              expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
+            <Collapsible
+              open={testExpanded}
+              onOpenChange={setTestExpanded}
+              className="mt-3 shrink-0 rounded-lg border border-border"
             >
-              <Panel
-                header={
-                  <span className="flex items-center gap-2 text-sm font-medium">
-                    <PlayCircleOutlined className="text-blue-500" />
-                    Test Your Guardrail
-                  </span>
-                }
-                key="test"
-              >
+              <CollapsibleTrigger className="flex w-full items-center gap-2 p-3 text-sm font-medium">
+                <ChevronRight className={`size-4 transition-transform ${testExpanded ? "rotate-90" : ""}`} />
+                <PlayCircle className="size-4 text-muted-foreground" />
+                Test Your Guardrail
+              </CollapsibleTrigger>
+              <CollapsibleContent className="p-3 pt-0">
                 <div className="space-y-3">
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label className="block text-xs font-medium text-gray-600">Test Input (JSON)</label>
+                      <label className="block text-xs font-medium text-muted-foreground">Test Input (JSON)</label>
                       <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-500">Load example:</span>
+                        <span className="text-xs text-muted-foreground">Load example:</span>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_call.data, null, 2))}
@@ -651,7 +670,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                         </button>
                       </div>
                     </div>
-                    <div className="mb-2 p-2 bg-gray-50 rounded-sm text-xs text-gray-600 border border-gray-200">
+                    <div className="mb-2 rounded-sm border border-border bg-muted/40 p-2 text-xs text-muted-foreground">
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                         <div>
                           <strong>texts</strong>: Message content (always)
@@ -676,16 +695,17 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                         </div>
                       </div>
                     </div>
-                    <TextArea
+                    <Textarea
                       value={testInput}
                       onChange={(e) => setTestInput(e.target.value)}
                       rows={8}
-                      className="font-mono text-xs"
+                      className="font-mono text-xs field-sizing-fixed"
                       placeholder='{"texts": ["test message"], ...}'
                     />
                   </div>
                   <div className="flex items-center gap-3">
-                    <Button size="xs" onClick={handleTest} disabled={isTesting} icon={PlayCircleOutlined}>
+                    <Button size="sm" onClick={handleTest} disabled={isTesting} aria-busy={isTesting}>
+                      {isTesting ? <UiLoadingSpinner className="size-4" /> : <PlayCircle />}
                       {isTesting ? "Running..." : "Run Test"}
                     </Button>
                     {testResult && (
@@ -702,7 +722,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                       >
                         {testResult.error ? (
                           <>
-                            <CloseCircleOutlined />
+                            <XCircle className="size-4" />
                             <span>
                               {testResult.error_type && <span className="font-medium">[{testResult.error_type}] </span>}
                               {testResult.error}
@@ -710,140 +730,117 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                           </>
                         ) : testResult.action === "allow" ? (
                           <>
-                            <CheckCircleOutlined /> Allowed
+                            <CheckCircle2 className="size-4" /> Allowed
                           </>
                         ) : testResult.action === "block" ? (
                           <>
-                            <CloseCircleOutlined /> Blocked: {testResult.reason}
+                            <XCircle className="size-4" /> Blocked: {testResult.reason}
                           </>
                         ) : testResult.action === "modify" ? (
                           <>
-                            <CheckCircleOutlined /> Modified
+                            <CheckCircle2 className="size-4" /> Modified
                             {testResult.texts && testResult.texts.length > 0 && (
-                              <span className="text-xs text-gray-500 ml-1">
-                                → {testResult.texts[0].substring(0, 50)}
+                              <span className="ml-1 text-xs text-muted-foreground">
+                                -&gt; {testResult.texts[0].substring(0, 50)}
                                 {testResult.texts[0].length > 50 ? "..." : ""}
                               </span>
                             )}
                           </>
                         ) : (
                           <>
-                            <CheckCircleOutlined /> {testResult.action || "Unknown"}
+                            <CheckCircle2 className="size-4" /> {testResult.action || "Unknown"}
                           </>
                         )}
                       </div>
                     )}
                   </div>
                 </div>
-              </Panel>
-            </Collapse>
+              </CollapsibleContent>
+            </Collapsible>
             {/* Contribution CTA Banner */}
-            <div className="mt-3 p-4 bg-linear-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg flex items-center justify-between shrink-0">
+            <div className="mt-3 flex shrink-0 items-center justify-between rounded-lg border border-blue-200 bg-linear-to-r from-blue-50 to-indigo-50 p-4">
               <div className="flex items-center gap-3">
-                <div className="bg-blue-100 rounded-full p-2">
-                  <UsergroupAddOutlined className="text-blue-600 text-lg" />
+                <div className="rounded-full bg-blue-100 p-2">
+                  <Users className="size-5 text-blue-600" />
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-gray-900">Built a useful guardrail?</div>
-                  <div className="text-xs text-gray-600">Share it with the community and help others build faster</div>
+                  <div className="text-sm font-medium">Built a useful guardrail?</div>
+                  <div className="text-xs text-muted-foreground">
+                    Share it with the community and help others build faster
+                  </div>
                 </div>
               </div>
-              <Button
-                size="xs"
-                onClick={() => window.open("https://github.com/BerriAI/litellm-guardrails", "_blank")}
-                icon={ExportOutlined}
-                className="bg-blue-600 hover:bg-blue-700 text-white border-0"
-              >
+              <Button size="sm" onClick={() => window.open("https://github.com/BerriAI/litellm-guardrails", "_blank")}>
+                <ExternalLink />
                 Contribute Template
               </Button>
             </div>
           </div>
 
           {/* Primitives Panel */}
-          <div className="w-[300px] shrink-0 overflow-auto border-l border-gray-200 pl-6">
-            <div className="flex items-center gap-2 mb-3">
-              <CodeOutlined className="text-blue-500" />
-              <span className="font-semibold text-gray-700">Available Primitives</span>
+          <div className="w-[300px] shrink-0 overflow-auto border-l border-border pl-6">
+            <div className="mb-3 flex items-center gap-2">
+              <Code className="size-4 text-muted-foreground" />
+              <span className="font-semibold">Available Primitives</span>
             </div>
-            <p className="text-xs text-gray-500 mb-3">Click to copy functions to clipboard</p>
+            <p className="mb-3 text-xs text-muted-foreground">Click to copy functions to clipboard</p>
 
-            <Collapse
-              defaultActiveKey={["Return Values"]}
-              className="primitives-collapse bg-transparent border-0"
-              expandIconPosition="end"
-            >
+            <div className="space-y-2">
               {Object.entries(PRIMITIVES).map(([category, primitives]) => (
-                <Panel
-                  header={<span className="text-sm font-medium text-gray-700">{category}</span>}
+                <Collapsible
                   key={category}
-                  className="bg-white mb-2 rounded-lg border border-gray-200"
+                  defaultOpen={category === "Return Values"}
+                  className="rounded-lg border border-border"
                 >
-                  <div className="space-y-2">
-                    {primitives.map((p) => (
-                      <button
-                        key={p.name}
-                        onClick={() => copyPrimitive(p.name)}
-                        className={`w-full text-left px-2 py-2 rounded transition-colors ${
-                          copiedPrimitive === p.name ? "bg-green-100" : "bg-gray-50 hover:bg-blue-50"
-                        }`}
-                      >
-                        {copiedPrimitive === p.name ? (
-                          <span className="flex items-center gap-1 text-xs font-mono text-green-700">
-                            <CheckCircleOutlined /> Copied!
-                          </span>
-                        ) : (
-                          <>
-                            <div className="text-xs font-mono text-gray-800">{p.name}</div>
-                            <div className="text-[10px] text-gray-500 mt-0.5">{p.desc}</div>
-                          </>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </Panel>
+                  <CollapsibleTrigger className="group flex w-full items-center justify-between px-3 py-2 text-sm font-medium">
+                    {category}
+                    <ChevronRight className="size-4 transition-transform group-data-panel-open:rotate-90" />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="px-3 pb-3">
+                    <div className="space-y-2">
+                      {primitives.map((p) => (
+                        <button
+                          key={p.name}
+                          onClick={() => copyPrimitive(p.name)}
+                          className={`w-full rounded-sm px-2 py-2 text-left transition-colors ${
+                            copiedPrimitive === p.name ? "bg-accent" : "bg-muted/40 hover:bg-accent"
+                          }`}
+                        >
+                          {copiedPrimitive === p.name ? (
+                            <span className="flex items-center gap-1 font-mono text-xs">
+                              <CheckCircle2 className="size-3.5" /> Copied!
+                            </span>
+                          ) : (
+                            <>
+                              <div className="font-mono text-xs">{p.name}</div>
+                              <div className="mt-0.5 text-[10px] text-muted-foreground">{p.desc}</div>
+                            </>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
               ))}
-            </Collapse>
+            </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between pt-4 mt-4 border-t border-gray-200">
-          <span className="text-xs text-gray-400">Changes are auto-saved to local draft</span>
+        <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
+          <span className="text-xs text-muted-foreground">Changes are auto-saved to local draft</span>
           <div className="flex items-center gap-3">
             <Button variant="secondary" onClick={onClose}>
               Cancel
             </Button>
-            <Button
-              onClick={handleSave}
-              loading={isSaving}
-              disabled={isSaving || !guardrailName.trim()}
-              icon={SaveOutlined}
-            >
+            <Button onClick={handleSave} disabled={isSaving || !guardrailName.trim()} aria-busy={isSaving}>
+              {isSaving ? <UiLoadingSpinner className="size-4" /> : <Save />}
               {isEditMode ? "Update Guardrail" : "Save Guardrail"}
             </Button>
           </div>
         </div>
-      </div>
-
-      <style>{`
-        .custom-code-modal .ant-modal-content {
-          padding: 24px;
-        }
-        .custom-code-modal .ant-modal-close {
-          top: 20px;
-          right: 20px;
-        }
-        .primitives-collapse .ant-collapse-item {
-          border: none !important;
-        }
-        .primitives-collapse .ant-collapse-header {
-          padding: 8px 12px !important;
-        }
-        .primitives-collapse .ant-collapse-content-box {
-          padding: 8px 12px !important;
-        }
-      `}</style>
-    </Modal>
+      </DialogContent>
+    </Dialog>
   );
 };
 

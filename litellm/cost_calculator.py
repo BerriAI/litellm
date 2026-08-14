@@ -329,7 +329,7 @@ def cost_per_token(
     response: Any | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
-) -> tuple[float, float]:  # type: ignore
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -878,6 +878,8 @@ def _get_usage_object(
         return None
     if isinstance(usage_obj, Usage):
         return usage_obj
+    elif isinstance(usage_obj, dict) and litellm.AnthropicConfig.is_anthropic_usage_object(usage_obj):
+        return litellm.AnthropicConfig().calculate_usage(usage_object=usage_obj, reasoning_content=None)
     elif (
         usage_obj is not None
         and (isinstance(usage_obj, dict) or isinstance(usage_obj, ResponseAPIUsage))
@@ -1249,7 +1251,13 @@ def completion_cost(
                     else:
                         _usage = usage_obj
 
-                    if ResponseAPILoggingUtils._is_response_api_usage(_usage):
+                    if litellm.AnthropicConfig.is_anthropic_usage_object(_usage):
+                        _usage = (
+                            litellm.AnthropicConfig()
+                            .calculate_usage(usage_object=_usage, reasoning_content=None)
+                            .model_dump()
+                        )
+                    elif ResponseAPILoggingUtils._is_response_api_usage(_usage):
                         _usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                             _usage
                         ).model_dump()
@@ -1514,7 +1522,7 @@ def completion_cost(
                 # see https://replicate.com/pricing
                 elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
                     # for unmapped replicate model, default to replicate's time tracking logic
-                    return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
+                    return get_replicate_completion_pricing(completion_response, total_time)
 
                 if model is None:
                     raise ValueError(

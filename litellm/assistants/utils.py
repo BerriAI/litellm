@@ -8,8 +8,8 @@ from ..types.llms.openai import *
 
 def get_optional_params_add_message(
     role: str | None,
-    content: str | List[MessageContentTextObject | MessageContentImageFileObject | MessageContentImageURLObject] | None,
-    attachments: List[Attachment] | None,
+    content: str | list[MessageContentTextObject | MessageContentImageFileObject | MessageContentImageURLObject] | None,
+    attachments: list[Attachment] | None,
     metadata: dict | None,
     custom_llm_provider: str,
     **kwargs,
@@ -57,7 +57,7 @@ def get_optional_params_add_message(
         optional_params = litellm.AzureOpenAIAssistantsAPIConfig().map_openai_params_create_message_params(
             non_default_params=non_default_params, optional_params=optional_params
         )
-    for k in passed_params.keys():
+    for k in passed_params:
         if k not in default_params:
             optional_params[k] = passed_params[k]
     return optional_params
@@ -128,7 +128,7 @@ def get_optional_params_image_gen(
         if n is not None:
             optional_params["sampleCount"] = int(n)
 
-    for k in passed_params.keys():
+    for k in passed_params:
         if k not in default_params:
             optional_params[k] = passed_params[k]
     return optional_params

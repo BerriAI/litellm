@@ -311,7 +311,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         processed: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
-            response=synthetic_response,  # type: ignore[arg-type]
+            response=synthetic_response,
         )
 
         if not isinstance(processed, dict):
@@ -323,7 +323,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             return body_bytes
 
         try:
-            processed_blocks: Final = processed["output"]["message"]["content"]  # type: ignore[index]
+            processed_blocks: Final = processed["output"]["message"]["content"]
             de_anonymized_texts: Final = [processed_blocks[i]["text"] for i in range(len(active_groups))]
         except (KeyError, IndexError, TypeError):
             return body_bytes

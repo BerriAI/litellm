@@ -27,7 +27,7 @@ def set_global_bitbucket_config(config: dict) -> None:
     """
     import litellm
 
-    litellm.global_bitbucket_config = config  # type: ignore
+    litellm.global_bitbucket_config = config
 
 
 def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":

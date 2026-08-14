@@ -132,7 +132,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 raise
             return TranscriptionResponse(text=raw_response.text)
 
-        if any(key in raw_response_json for key in TranscriptionResponse.model_fields.keys()):
+        if any(key in raw_response_json for key in TranscriptionResponse.model_fields):
             return TranscriptionResponse(**raw_response_json)
         else:
             raise ValueError(

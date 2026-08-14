@@ -292,9 +292,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                 final_messages: list[AllMessageValues] = parsed_messages
             else:
                 # If no messages were parsed, prepend the prompt to existing messages
-                final_messages = [
-                    {"role": "user", "content": rendered_prompt}  # type: ignore
-                ] + messages
+                final_messages = [{"role": "user", "content": rendered_prompt}] + messages
 
             # Update litellm_params with prompt metadata
             if litellm_params is None:
@@ -345,7 +343,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }  # type: ignore
+                        }
                     )
                 current_role = "system"
                 current_content = [line[7:].strip()]  # Remove "System:" prefix
@@ -355,7 +353,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }  # type: ignore
+                        }
                     )
                 current_role = "user"
                 current_content = [line[5:].strip()]  # Remove "User:" prefix
@@ -365,7 +363,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }  # type: ignore
+                        }
                     )
                 current_role = "assistant"
                 current_content = [line[10:].strip()]  # Remove "Assistant:" prefix
@@ -379,9 +377,9 @@ class BitBucketPromptManager(CustomPromptManagement):
 
         # If no role indicators found, treat as a single user message
         if not messages and prompt_content.strip():
-            messages = [{"role": "user", "content": prompt_content.strip()}]  # type: ignore
+            messages = [{"role": "user", "content": prompt_content.strip()}]
 
-        return messages  # type: ignore
+        return messages
 
     def post_call_hook(
         self,

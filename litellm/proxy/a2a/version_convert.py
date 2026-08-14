@@ -26,7 +26,7 @@ The two wire shapes:
 
 from collections.abc import Callable
 from types import ModuleType
-from typing import Final, Literal, Union
+from typing import Final, Literal
 
 from pydantic import BaseModel
 
@@ -34,7 +34,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.a2a.agent_card import normalize_protocol_version
 
 A2AVersion = Literal["0.3", "1.0"]
-RequestId = Union[str, int, None]
+RequestId = str | int | None
 JsonDict = dict[str, object]
 
 _V1_SEND_ENVELOPE_KEYS: Final = frozenset({"message", "task"})

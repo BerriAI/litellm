@@ -18,8 +18,8 @@ AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
 PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
 
 try:
-    from a2a.client import A2ACardResolver as _A2ACardResolver  # type: ignore[no-redef]
-    from a2a.utils.constants import (  # type: ignore[no-redef]
+    from a2a.client import A2ACardResolver as _A2ACardResolver
+    from a2a.utils.constants import (
         AGENT_CARD_WELL_KNOWN_PATH,
         PREV_AGENT_CARD_WELL_KNOWN_PATH,
     )
@@ -102,7 +102,7 @@ def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
     return agent_card
 
 
-class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
+class LiteLLMA2ACardResolver(_A2ACardResolver):
     """
     Custom A2A card resolver that supports multiple well-known paths.
 

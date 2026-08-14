@@ -122,7 +122,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
                     optional_rerank_params["instruction"] = v
                 elif k == "webhook" and v is not None:
                     optional_rerank_params["webhook"] = v
-        return OptionalRerankParams(**optional_rerank_params)  # type: ignore
+        return OptionalRerankParams(**optional_rerank_params)
 
     def transform_rerank_request(
         self,

@@ -1352,7 +1352,7 @@ class PrometheusLogger(CustomLogger):
             # why type ignore below?
             # 1. We just checked if isinstance(standard_logging_payload, dict). Pyright complains.
             # 2. Pyright does not allow us to run isinstance(standard_logging_payload, StandardLoggingPayload) <- this would be ideal
-            standard_logging_payload=standard_logging_payload,  # type: ignore
+            standard_logging_payload=standard_logging_payload,
             end_user_id=end_user_id,
             user_api_key=user_api_key,
             user_api_key_alias=user_api_key_alias,
@@ -1416,14 +1416,14 @@ class PrometheusLogger(CustomLogger):
         # model_group, derive remaining from configured-limit minus current usage so
         # the same metric is populated for any provider.
         await self._async_set_router_remaining_metrics(
-            standard_logging_payload=standard_logging_payload,  # type: ignore
+            standard_logging_payload=standard_logging_payload,
             enum_values=enum_values,
             label_context=label_context,
         )
 
         # cache metrics
         self._increment_cache_metrics(
-            standard_logging_payload=standard_logging_payload,  # type: ignore
+            standard_logging_payload=standard_logging_payload,
             enum_values=enum_values,
             label_context=label_context,
         )
@@ -3050,7 +3050,7 @@ class PrometheusLogger(CustomLogger):
         try:
             from litellm.exceptions import BudgetExceededError
         except ImportError:
-            BudgetExceededError = None  # type: ignore[assignment,misc]
+            BudgetExceededError = None
 
         if BudgetExceededError is not None and isinstance(exception, BudgetExceededError):
             return "BudgetExceededError"

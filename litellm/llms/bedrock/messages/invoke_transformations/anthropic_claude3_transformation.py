@@ -33,9 +33,9 @@ from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
+    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
-    remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -66,6 +66,8 @@ class AmazonAnthropicClaudeMessagesConfig(
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
+
+    WEBSEARCH_INTERCEPTION_DOCS_URL = "https://docs.litellm.ai/docs/integrations/websearch_interception"
 
     @property
     def custom_llm_provider(self) -> str | None:
@@ -370,8 +372,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Check if the model supports tool search on Bedrock.
 
-        On Amazon Bedrock, server-side tool search is supported on Claude Opus 4.5
-        and Claude Sonnet 4.5 with the tool-search-tool-2025-10-19 beta header.
+        The model map's ``supports_tool_search`` flag is authoritative when
+        ``model`` resolves to an entry that sets it; the name patterns below
+        cover ids the map cannot resolve (ARNs, unlisted regional variants).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
@@ -381,9 +384,12 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports tool search on Bedrock
         """
+        catalog: Final = AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock")
+        if catalog is not None:
+            return catalog
+
         model_lower: Final = model.lower()
 
-        # Supported models for tool search on Bedrock
         supported_patterns: Final = [
             # Opus 4.5
             "opus-4.5",
@@ -405,10 +411,16 @@ class AmazonAnthropicClaudeMessagesConfig(
             "sonnet_4.6",
             "sonnet-4-6",
             "sonnet_4_6",
-            # NOTE: Opus 4.7 on Bedrock does not support server-side tool search
-            # as of launch (2026-04-16). Bedrock rejects the tool type with:
-            # "tool type 'tool_search_tool_..._20251119' is not supported for this model".
-            # Re-add the opus-4.7 patterns here once AWS announces support.
+            # Opus 4.7
+            "opus-4.7",
+            "opus_4.7",
+            "opus-4-7",
+            "opus_4_7",
+            # Haiku 4.5
+            "haiku-4.5",
+            "haiku_4.5",
+            "haiku-4-5",
+            "haiku_4_5",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -424,11 +436,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Adjust tool search beta header for Bedrock.
 
-        Bedrock requires a different beta header for tool search on Opus 4 models
-        when tool search is used without programmatic tool calling or input examples.
-
-        Note: On Amazon Bedrock, server-side tool search is only supported on Claude Opus 4
-        with the `tool-search-tool-2025-10-19` beta header.
+        Bedrock requires a different beta header for tool search than the
+        Anthropic API when tool search is used without programmatic tool
+        calling or input examples: `tool-search-tool-2025-10-19`, and only on
+        the models listed in `_supports_tool_search_on_bedrock`.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
@@ -572,6 +583,45 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         return filtered_betas
 
+    @staticmethod
+    def _reject_unsupported_web_search_tools(anthropic_messages_request: dict[str, object], model: str) -> None:
+        """
+        Bedrock's Anthropic endpoints cannot execute Anthropic's server-side
+        ``web_search_*`` tool; forwarding it returns an opaque
+        "The provided request is not valid" 400 from Bedrock. Fail fast with an
+        error that names the problem and the fix instead.
+
+        When web search interception is enabled
+        (``litellm_settings.callbacks: ["websearch_interception"]``), the tool
+        is converted to a regular function tool before this transform runs, so
+        this guard never fires.
+        """
+        from litellm.integrations.websearch_interception.tools import (
+            is_anthropic_native_web_search_tool,
+        )
+
+        tools: Final = anthropic_messages_request.get("tools")
+        if not isinstance(tools, list):
+            return
+        web_search_tool: Final = next(
+            (t for t in tools if isinstance(t, dict) and is_anthropic_native_web_search_tool(t)),
+            None,
+        )
+        if web_search_tool is None:
+            return
+        raise litellm.BadRequestError(
+            message=(
+                f"Bedrock does not support Anthropic's server-side web search tool "
+                f"(tool type '{web_search_tool.get('type')}', model '{model}'). "
+                "To use web search with this model, enable LiteLLM's web search interception "
+                "so the proxy executes the search instead: "
+                f"{AmazonAnthropicClaudeMessagesConfig.WEBSEARCH_INTERCEPTION_DOCS_URL}. "
+                "Alternatively, remove the web_search tool from the request."
+            ),
+            model=model,
+            llm_provider="bedrock",
+        )
+
     def _strip_unsupported_bedrock_invoke_fields(
         self,
         anthropic_messages_request: dict,
@@ -629,6 +679,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
+
+        self._reject_unsupported_web_search_tools(anthropic_messages_request=anthropic_messages_request, model=model)
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
@@ -697,11 +749,9 @@ class AmazonAnthropicClaudeMessagesConfig(
                     model,
                 )
 
-        # 5b. Remove `custom` field from tools (Bedrock doesn't support it)
-        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
-        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # 5b. Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
         # Ref: https://github.com/BerriAI/litellm/issues/22847
-        remove_custom_field_from_tools(anthropic_messages_request)
+        normalize_custom_field_on_tools(anthropic_messages_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
@@ -865,7 +915,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 )
 
                 if delta_usage:
-                    pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
+                    pending_delta["usage"] = delta_usage
 
                 yield pending_delta
                 pending_delta = None
@@ -884,7 +934,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 delta_usage, start_usage_snapshot
             )
             if delta_usage:
-                pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
+                pending_delta["usage"] = delta_usage
             yield pending_delta
 
 

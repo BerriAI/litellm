@@ -275,7 +275,7 @@ class MavvrikFocusLogger(FocusLogger):
 
         logger: Final = loggers[0]
         trigger_kwargs: Final = logger._build_scheduler_trigger()
-        scheduler.add_job(  # type: ignore[attr-defined]
+        scheduler.add_job(
             logger.initialize_mavvrik_focus_export_job,
             id=MAVVRIK_FOCUS_EXPORT_JOB_NAME,
             replace_existing=True,

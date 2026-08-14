@@ -140,7 +140,7 @@ class TwelveLabsMarengoEmbeddingConfig:
                 "mediaSource",
                 "bucketOwner",  # Don't include bucketOwner in the request
             ]:  # Don't override core fields
-                transformed_request[k] = v  # type: ignore
+                transformed_request[k] = v
 
         # If async invoke route, wrap in the async invoke format
         if async_invoke_route and model_id:

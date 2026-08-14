@@ -317,7 +317,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         # Include caller information if present (for programmatic tool calling)
         if "caller" in anthropic_tool_content:
-            tool_call["caller"] = cast(dict[str, Any], anthropic_tool_content["caller"])  # type: ignore[typeddict-item]
+            tool_call["caller"] = cast(dict[str, Any], anthropic_tool_content["caller"])
         return tool_call
 
     @staticmethod
@@ -592,7 +592,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Anthropic requires additionalProperties=false for object schemas
         # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
-        if result.get("type") == "object" and "additionalProperties" not in result:
+        if result.get("type") == "object":
             result["additionalProperties"] = False
 
         return result
@@ -719,10 +719,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             returned_tool = AnthropicHostedTools(
                 type=tool["type"],
                 name=function_name,
-                **additional_tool_params,  # type: ignore
+                **additional_tool_params,
             )
         elif tool["type"] == "url":  # mcp server tool
-            mcp_server = AnthropicMcpServerTool(**tool)  # type: ignore
+            mcp_server = AnthropicMcpServerTool(**tool)
         elif tool["type"] == "mcp":
             mcp_server = self._map_openai_mcp_server_tool(cast(OpenAIMcpServerTool, tool))
         elif tool["type"] == "tool_search_tool_regex_20251119":
@@ -765,7 +765,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _advisor_tool["max_uses"] = _tool_dict["max_uses"]
             if _tool_dict.get("caching") is not None:
                 _advisor_tool["caching"] = _tool_dict["caching"]
-            returned_tool = _advisor_tool  # type: ignore[assignment]
+            returned_tool = _advisor_tool
         if returned_tool is None and mcp_server is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 
@@ -780,11 +780,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 "tool_search_tool_bm25_20251119",
             ):
                 if _cache_control is not None:
-                    returned_tool["cache_control"] = _cache_control  # type: ignore[typeddict-item]
+                    returned_tool["cache_control"] = _cache_control
                 elif _cache_control_function is not None and isinstance(_cache_control_function, dict):
-                    returned_tool["cache_control"] = ChatCompletionCachedContent(  # type: ignore[typeddict-item]
-                        **_cache_control_function  # type: ignore
-                    )
+                    returned_tool["cache_control"] = ChatCompletionCachedContent(**_cache_control_function)
 
         ## check if defer_loading is set in the tool
         _defer_loading: Final = tool.get("defer_loading", None)
@@ -801,11 +799,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if _defer_loading is not None:
                     if not isinstance(_defer_loading, bool):
                         raise ValueError("defer_loading must be a boolean")
-                    returned_tool["defer_loading"] = _defer_loading  # type: ignore[typeddict-item]
+                    returned_tool["defer_loading"] = _defer_loading
                 elif _defer_loading_function is not None:
                     if not isinstance(_defer_loading_function, bool):
                         raise ValueError("defer_loading must be a boolean")
-                    returned_tool["defer_loading"] = _defer_loading_function  # type: ignore[typeddict-item]
+                    returned_tool["defer_loading"] = _defer_loading_function
 
         ## check if allowed_callers is set in the tool
         _allowed_callers: Final = tool.get("allowed_callers", None)
@@ -824,13 +822,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         isinstance(item, str) for item in _allowed_callers
                     ):
                         raise ValueError("allowed_callers must be a list of strings")
-                    returned_tool["allowed_callers"] = _allowed_callers  # type: ignore[typeddict-item]
+                    returned_tool["allowed_callers"] = _allowed_callers
                 elif _allowed_callers_function is not None:
                     if not isinstance(_allowed_callers_function, list) or not all(
                         isinstance(item, str) for item in _allowed_callers_function
                     ):
                         raise ValueError("allowed_callers must be a list of strings")
-                    returned_tool["allowed_callers"] = _allowed_callers_function  # type: ignore[typeddict-item]
+                    returned_tool["allowed_callers"] = _allowed_callers_function
 
         ## check if input_examples is set in the tool
         _input_examples: Final = tool.get("input_examples", None)
@@ -840,9 +838,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_type = returned_tool.get("type", "")
             if tool_type == "custom" or (tool_type == "" and "name" in returned_tool):
                 if _input_examples is not None and isinstance(_input_examples, list):
-                    returned_tool["input_examples"] = _input_examples  # type: ignore[typeddict-item]
+                    returned_tool["input_examples"] = _input_examples
                 elif _input_examples_function is not None and isinstance(_input_examples_function, list):
-                    returned_tool["input_examples"] = _input_examples_function  # type: ignore[typeddict-item]
+                    returned_tool["input_examples"] = _input_examples_function
 
         return returned_tool, mcp_server
 
@@ -1324,7 +1322,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if user_location_approximate is not None:
                 for key, user_location_value in user_location_approximate.items():
                     if key in anthropic_user_location_keys and key != "type":
-                        anthropic_user_location[key] = user_location_value  # type: ignore
+                        anthropic_user_location[key] = user_location_value
                 hosted_web_search_tool["user_location"] = anthropic_user_location
 
         ## MAP SEARCH CONTEXT SIZE
@@ -2103,6 +2101,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_results,
             compaction_blocks,
         )
+
+    @staticmethod
+    def is_anthropic_usage_object(usage_object: dict) -> bool:
+        """Anthropic reports prompt cache tokens as top-level ``cache_read_input_tokens`` /
+        ``cache_creation_input_tokens``; no other API surface uses those keys, and the
+        Responses API mapping would silently drop them.
+
+        Requiring a cache key is deliberate: Responses API usage also carries top-level
+        ``input_tokens``, so the cache keys are the only shape discriminator between the
+        two. A cache-free Anthropic payload falls through to the Responses API mapping,
+        which is safe because both mappings agree whenever no cache tokens are present.
+        """
+        if "prompt_tokens" in usage_object or "input_tokens" not in usage_object:
+            return False
+        return any(key in usage_object for key in ("cache_read_input_tokens", "cache_creation_input_tokens"))
 
     def calculate_usage(
         self,

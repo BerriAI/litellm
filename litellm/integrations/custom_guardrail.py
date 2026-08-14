@@ -34,7 +34,7 @@ from litellm.types.utils import (
 try:
     from fastapi.exceptions import HTTPException
 except ImportError:
-    HTTPException = None  # type: ignore
+    HTTPException = None
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -410,7 +410,7 @@ class CustomGuardrail(CustomLogger):
         if self.should_route_on_sensitive_data():
             try:
                 self.raise_sensitive_data_route_exception(
-                    route_to_model=self.sensitive_data_route_to_model,  # type: ignore
+                    route_to_model=self.sensitive_data_route_to_model,
                     request_data=request_data,
                     detection_info=detection_info,
                 )
@@ -714,6 +714,29 @@ class CustomGuardrail(CustomLogger):
 
         return result
 
+    def supports_scan_only_tool_results(self) -> bool:
+        """Whether this guardrail can scan tool-result content.
+
+        Guardrails whose own role filtering only ever scans human-authored
+        messages override this to return False, so configuring them with
+        ``scan_only_tool_results`` is rejected at initialization instead of
+        silently scanning nothing on every request.
+        """
+        return True
+
+    def structured_messages_cover_full_request(self) -> bool:
+        """Whether returned ``structured_messages`` span the whole request.
+
+        Translation handlers hand guardrails only the in-scope subset of the
+        conversation and merge a returned ``structured_messages`` list back
+        into the full request. A guardrail that already rebuilds the complete
+        conversation itself (like CrowdStrike AIDR with its skip filters
+        active) overrides this to return True so the handler installs the
+        returned list as-is instead of merging it a second time, which would
+        duplicate the out-of-scope messages.
+        """
+        return False
+
     def should_run_guardrail(
         self,
         data,
@@ -892,9 +915,9 @@ class CustomGuardrail(CustomLogger):
         if event_type is not None:
             guardrail_mode = event_type
         elif isinstance(self.event_hook, Mode):
-            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))  # type: ignore[typeddict-item]
+            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))
         else:
-            guardrail_mode = self.event_hook  # type: ignore[assignment]
+            guardrail_mode = self.event_hook
 
         from litellm.litellm_core_utils.core_helpers import (
             filter_exceptions_from_params,
