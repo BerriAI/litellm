@@ -24,6 +24,7 @@ interface SearchSelectProps {
   emptyText?: string;
   disabled?: boolean;
   className?: string;
+  inputId?: string;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -40,6 +41,7 @@ export function SearchSelect({
   emptyText = "No results",
   disabled = false,
   className,
+  inputId,
 }: SearchSelectProps) {
   const selected = options.find((option) => option.value === value) ?? null;
 
@@ -54,6 +56,7 @@ export function SearchSelect({
       disabled={disabled}
     >
       <ComboboxInput
+        id={inputId}
         placeholder={placeholder}
         showClear={value != null && value !== ""}
         className={`h-8 w-full text-sm ${className ?? ""}`}
