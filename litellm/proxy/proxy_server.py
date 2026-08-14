@@ -9540,8 +9540,9 @@ async def model_list(
         create_model_info_response,
         get_available_models_for_user,
     )
+    from litellm.types.proxy.model_listing import ModelInfoResponse
 
-    http_request: Final = cast(Request | None, request)
+    http_request: Final = cast(Request | None, request)  # cast-ok: in-process callers pass no request
     wants_anthropic_format: Final = (
         http_request is not None and http_request.headers.get("anthropic-version") is not None
     )
@@ -9629,7 +9630,8 @@ async def model_list(
             model_data.append(model_info)
 
         if wants_anthropic_format:
-            return create_anthropic_model_list_response(model_data)
+            admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+            return create_anthropic_model_list_response(admin_listing)
 
         return dict(
             data=model_data,
@@ -9672,7 +9674,8 @@ async def model_list(
         model_data.append(model_info)
 
     if wants_anthropic_format:
-        return create_anthropic_model_list_response(model_data)
+        listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+        return create_anthropic_model_list_response(listing)
 
     return dict(
         data=model_data,
