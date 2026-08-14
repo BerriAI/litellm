@@ -888,17 +888,24 @@ async def _common_key_generation_helper(
     if litellm.default_key_generate_params is not None:
         for elem in data:
             key, value = elem
-            if value is None and key in [
-                "max_budget",
-                "user_id",
-                "team_id",
-                "max_parallel_requests",
-                "tpm_limit",
-                "rpm_limit",
-                "budget_duration",
-                "duration",
-            ]:
-                setattr(data, key, litellm.default_key_generate_params.get(key, None))
+            if (
+                value is None
+                and (key != "budget_duration" or key not in data.model_fields_set)
+                and key
+                in [
+                    "max_budget",
+                    "user_id",
+                    "team_id",
+                    "max_parallel_requests",
+                    "tpm_limit",
+                    "rpm_limit",
+                    "budget_duration",
+                    "duration",
+                ]
+            ):
+                default_value = litellm.default_key_generate_params.get(key)
+                if default_value is not None:
+                    setattr(data, key, default_value)
             elif key == "models" and value == []:
                 setattr(data, key, litellm.default_key_generate_params.get(key, []))
             elif key == "metadata" and value == {}:
