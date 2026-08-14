@@ -1,6 +1,6 @@
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
-import { GithubOutlined, SlackOutlined } from "@ant-design/icons";
-import { Tooltip } from "antd";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Github, Slack } from "lucide-react";
 import React from "react";
 
 const iconBtnClass =
@@ -18,28 +18,40 @@ export const CommunityEngagementButtons: React.FC = () => {
       className="flex items-center gap-0.5 rounded-md border border-gray-200/80 bg-gray-50 px-0.5 py-0"
       aria-label="Community links"
     >
-      <Tooltip title="LiteLLM Slack community">
-        <a
-          href="https://www.litellm.ai/support"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={iconBtnClass}
-          aria-label="Join Slack"
-        >
-          <SlackOutlined className="text-lg" />
-        </a>
-      </Tooltip>
-      <Tooltip title="LiteLLM on GitHub">
-        <a
-          href="https://github.com/BerriAI/litellm"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={iconBtnClass}
-          aria-label="LiteLLM on GitHub"
-        >
-          <GithubOutlined className="text-lg" />
-        </a>
-      </Tooltip>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <a
+                href="https://www.litellm.ai/support"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={iconBtnClass}
+                aria-label="Join Slack"
+              />
+            }
+          >
+            <Slack className="size-[18px]" />
+          </TooltipTrigger>
+          <TooltipContent>LiteLLM Slack community</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <a
+                href="https://github.com/BerriAI/litellm"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={iconBtnClass}
+                aria-label="LiteLLM on GitHub"
+              />
+            }
+          >
+            <Github className="size-[18px]" />
+          </TooltipTrigger>
+          <TooltipContent>LiteLLM on GitHub</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 };
