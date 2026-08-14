@@ -1076,6 +1076,27 @@ def test_prompt_tokens_details_survive_later_usage_chunk_without_details():
     assert usage.prompt_tokens_details.cache_write_tokens == 10
 
 
+def test_prompt_tokens_details_base_class_preserved_in_usage_chunk():
+    """Regression for #36882: when the raw streaming usage chunk carries a
+    base-class PromptTokensDetails (not PromptTokensDetailsWrapper), the
+    helper must still extract cached_tokens rather than silently dropping the
+    whole prompt_tokens_details field."""
+    from openai.types.completion_usage import PromptTokensDetails as RawPromptTokensDetails
+
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+    from litellm.types.utils import Usage
+
+    raw_details = RawPromptTokensDetails(cached_tokens=0)
+    usage_chunk = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    usage_chunk.prompt_tokens_details = raw_details  # type: ignore[assignment]
+
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    result = processor._usage_chunk_calculation_helper(usage_chunk)
+
+    assert result["prompt_tokens_details"] is not None
+    assert result["prompt_tokens_details"].cached_tokens == 0
+
+
 def test_get_combined_tool_content_custom_tool_call():
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
     from litellm.types.utils import ChatCompletionMessageCustomToolCall

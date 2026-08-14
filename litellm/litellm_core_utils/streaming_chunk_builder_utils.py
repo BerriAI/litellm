@@ -27,6 +27,7 @@ from litellm.types.utils import (
     ServerToolUse,
     Usage,
 )
+from openai.types.completion_usage import PromptTokensDetails
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
@@ -650,6 +651,8 @@ class ChunkProcessor:
                 prompt_tokens_details = PromptTokensDetailsWrapper(**usage_chunk.prompt_tokens_details)
             elif isinstance(usage_chunk.prompt_tokens_details, PromptTokensDetailsWrapper):
                 prompt_tokens_details = usage_chunk.prompt_tokens_details
+            elif isinstance(usage_chunk.prompt_tokens_details, PromptTokensDetails):
+                prompt_tokens_details = PromptTokensDetailsWrapper(**usage_chunk.prompt_tokens_details.model_dump())
 
         return {
             "prompt_tokens": prompt_tokens,
