@@ -982,6 +982,7 @@ class AdaptiveRouterWeights(BaseModel):
 class AdaptiveRouterConfig(BaseModel):
     available_models: list[str]
     weights: AdaptiveRouterWeights = Field(default_factory=AdaptiveRouterWeights)
+    session_key_fallback: Literal["none", "prompt_cache_key", "prefix_hash"] = "none"
 
 
 class AdaptiveRouterPreferences(BaseModel):
