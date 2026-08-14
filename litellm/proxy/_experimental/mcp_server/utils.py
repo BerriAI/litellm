@@ -945,13 +945,17 @@ def build_synthetic_mcp_request(
     exactly as on the chat completions path. Hop-by-hop headers describe the
     original HTTP framing rather than the logical request, so they are dropped, and
     ``x-forwarded-for`` comes from the resolved ``client_ip`` to avoid spoofing. Upstream
-    MCP credentials are dropped so they cannot reach a callback or a guardrail through the
-    derived metadata.
+    MCP credentials and the deployment's proxy key header, including a custom
+    ``litellm_key_header_name``, are dropped so they cannot reach a callback or a guardrail
+    through the derived metadata even when a caller omits ``general_settings``.
     """
     from fastapi import Request
 
-    excluded: Final = _SYNTHETIC_REQUEST_EXCLUDED_HEADERS | _upstream_credential_headers(
-        raw_headers.keys() if raw_headers else ()
+    custom_key_header: Final = _custom_litellm_key_header_name()
+    excluded: Final = (
+        _SYNTHETIC_REQUEST_EXCLUDED_HEADERS
+        | _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+        | (frozenset({custom_key_header.lower()}) if custom_key_header else frozenset())
     )
     forwarded: Final = tuple(
         (

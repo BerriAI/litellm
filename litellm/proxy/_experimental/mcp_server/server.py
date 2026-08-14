@@ -987,7 +987,7 @@ if MCP_AVAILABLE:
 
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-        from litellm.proxy.proxy_server import general_settings, proxy_config
+        from litellm.proxy.proxy_server import proxy_config
 
         req_ctx: Final = request_ctx.get(None)
         _session_reset_token = None
@@ -1064,7 +1064,6 @@ if MCP_AVAILABLE:
                             user_api_key_auth, tool_name=name
                         ),
                         proxy_config=proxy_config,
-                        general_settings=general_settings,
                     )
                 else:
                     data = body_data

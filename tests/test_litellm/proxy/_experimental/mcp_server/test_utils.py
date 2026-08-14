@@ -131,3 +131,19 @@ class TestBuildSyntheticMcpRequest:
         assert request.headers.get("x-nuid") == "nuid-1"
         assert "x-mcp-auth" not in request.headers
         assert "x-mcp-github-authorization" not in request.headers
+
+    def test_drops_custom_litellm_key_header(self):
+        """Callers such as the sampling flow build metadata off this request, so the
+        deployment's custom proxy key header must never be forwarded on it."""
+        with patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"litellm_key_header_name": "x-company-key"},
+            clear=False,
+        ):
+            request = build_synthetic_mcp_request(
+                path="/mcp/sampling/createMessage",
+                raw_headers={"x-company-key": "sk-proxy-secret", "x-nuid": "nuid-1"},
+            )
+
+        assert request.headers.get("x-nuid") == "nuid-1"
+        assert "x-company-key" not in request.headers
