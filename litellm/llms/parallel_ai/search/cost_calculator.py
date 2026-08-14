@@ -1,5 +1,7 @@
 from collections.abc import Mapping, Sequence
-from typing import Final, cast
+from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.utils import get_model_info
 
@@ -8,6 +10,7 @@ PARALLEL_AI_ADDITIONAL_RESULT_COST: Final = 0.001
 PARALLEL_AI_USAGE_PARAM: Final = "_parallel_ai_usage"
 PARALLEL_AI_STANDARD_SEARCH_MODEL: Final = "parallel_ai/search"
 PARALLEL_AI_TURBO_SEARCH_MODEL: Final = "parallel_ai/search-turbo"
+ADVANCED_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _non_negative_int(value: object) -> int | None:
@@ -38,12 +41,13 @@ def _effective_mode(optional_params: Mapping[str, object]) -> str:
 
 
 def _effective_max_results(optional_params: Mapping[str, object]) -> int:
-    advanced_settings: Final = optional_params.get("advanced_settings")
-    if isinstance(advanced_settings, Mapping):
-        advanced_settings_mapping: Final = cast(Mapping[str, object], advanced_settings)
-        advanced_max_results: Final = _non_negative_int(advanced_settings_mapping.get("max_results"))
+    try:
+        advanced_settings: Final = ADVANCED_SETTINGS_ADAPTER.validate_python(optional_params.get("advanced_settings"))
+        advanced_max_results: Final = _non_negative_int(advanced_settings.get("max_results"))
         if advanced_max_results is not None:
             return advanced_max_results
+    except ValidationError:
+        pass
 
     max_results: Final = _non_negative_int(optional_params.get("max_results"))
     return max_results if max_results is not None else PARALLEL_AI_DEFAULT_RESULTS

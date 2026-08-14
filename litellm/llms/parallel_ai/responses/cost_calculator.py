@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 PARALLEL_AI_DEFAULT_REASONING_EFFORT: Final[str] = "medium"
 PARALLEL_AI_EFFORT_TIER_MODELS: Final[Mapping[str, str]] = MappingProxyType(
@@ -11,6 +13,7 @@ PARALLEL_AI_EFFORT_TIER_MODELS: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 PARALLEL_AI_REASONING_EFFORTS: Final[frozenset[str]] = frozenset(PARALLEL_AI_EFFORT_TIER_MODELS.values())
+REASONING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def is_parallel_ai_response_model(model: str) -> bool:
@@ -19,12 +22,13 @@ def is_parallel_ai_response_model(model: str) -> bool:
 
 
 def _reasoning_effort(optional_params: Mapping[str, object]) -> str:
-    reasoning: Final[object] = optional_params.get("reasoning")
-    if isinstance(reasoning, Mapping):
-        reasoning_mapping: Final = cast(Mapping[str, object], reasoning)
-        effort: Final[object] = reasoning_mapping.get("effort")
-        if isinstance(effort, str) and effort in PARALLEL_AI_REASONING_EFFORTS:
-            return effort
+    try:
+        reasoning: Final = REASONING_ADAPTER.validate_python(optional_params.get("reasoning"))
+    except ValidationError:
+        return PARALLEL_AI_DEFAULT_REASONING_EFFORT
+    effort: Final[object] = reasoning.get("effort")
+    if isinstance(effort, str) and effort in PARALLEL_AI_REASONING_EFFORTS:
+        return effort
     return PARALLEL_AI_DEFAULT_REASONING_EFFORT
 
 

@@ -2,21 +2,30 @@
 Cost calculation for search providers.
 """
 
-from collections.abc import Mapping, Sequence
-from typing import Final, cast
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.utils import get_model_info
+
+PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
+EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _provider_usage(
     optional_params: Mapping[str, object] | None,
     usage_param: str,
 ) -> tuple[Mapping[str, object], ...] | None:
-    raw_usage: Final[object] = (optional_params or {}).get(usage_param)
-    if not isinstance(raw_usage, Sequence) or isinstance(raw_usage, (str, bytes)):
+    params: Final = optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS
+    raw_usage: Final[object] = params.get(usage_param)
+    try:
+        return PROVIDER_USAGE_ADAPTER.validate_python(raw_usage)
+    except ValidationError:
         return None
-    usage_items: Final = cast(Sequence[object], raw_usage)
-    return tuple(cast(Mapping[str, object], item) for item in usage_items if isinstance(item, Mapping))
 
 
 def search_provider_cost_per_query(
@@ -47,7 +56,7 @@ def search_provider_cost_per_query(
         )
 
         input_cost: Final = parallel_ai_search_cost(
-            optional_params=optional_params or {},
+            optional_params=optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS,
             usage=_provider_usage(optional_params, PARALLEL_AI_USAGE_PARAM),
         )
         return (input_cost, 0.0)

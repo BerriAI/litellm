@@ -2,7 +2,9 @@
 ## File for 'response_cost' calculation in Logging
 import logging
 import time
+from collections.abc import Mapping
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
@@ -178,6 +180,7 @@ _SEARCH_CALL_TYPES: Final = frozenset(
 )
 
 _AREALTIME_CALL_TYPE: Final = CallTypes.arealtime.value
+EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _MCP_CALL_TYPE: Final = CallTypes.call_mcp_tool.value
 
 
@@ -874,7 +877,10 @@ def _parallel_ai_response_pricing_model(model: str, optional_params: dict | None
 
     if not is_parallel_ai_response_model(model):
         return None
-    return parallel_ai_response_pricing_model(model=model, optional_params=optional_params or {})
+    return parallel_ai_response_pricing_model(
+        model=model,
+        optional_params=optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS,
+    )
 
 
 def _get_usage_object(

@@ -6,7 +6,7 @@ Parallel AI API Reference: https://docs.parallel.ai/api-reference/search/search
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, TypedDict, cast
+from typing import Final, TypedDict
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -238,35 +238,38 @@ class ParallelAISearchConfig(BaseSearchConfig):
         parsed: Final = _ParallelAIV1SearchResponse.model_validate(raw_response.json())
 
         if parsed.usage is not None:
-            cost_optional_params: Final = cast(dict[str, object], logging_obj.optional_params)
             logging_obj.optional_params = {
-                **cost_optional_params,
+                **logging_obj.optional_params,
                 PARALLEL_AI_USAGE_PARAM: parsed.usage,
             }
 
-        results: Final = [
+        results: Final = tuple(
             SearchResult.model_validate(
-                {
-                    "title": result.title or "",
-                    "url": result.url,
-                    "snippet": " ... ".join(result.excerpts) if result.excerpts else "",
-                    "date": result.publish_date,
-                    "last_updated": None,
-                    "excerpts": result.excerpts,
-                }
+                MappingProxyType(
+                    {
+                        "title": result.title or "",
+                        "url": result.url,
+                        "snippet": " ... ".join(result.excerpts) if result.excerpts else "",
+                        "date": result.publish_date,
+                        "last_updated": None,
+                        "excerpts": result.excerpts,
+                    }
+                )
             )
             for result in parsed.results
-        ]
+        )
 
-        extra_fields: Final = {
-            key: value
-            for key, value in (
-                ("search_id", parsed.search_id),
-                ("session_id", parsed.session_id),
-                ("parallel_usage", parsed.usage),
-                ("warnings", parsed.warnings),
-            )
-            if value is not None
-        }
+        extra_fields: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("search_id", parsed.search_id),
+                    ("session_id", parsed.session_id),
+                    ("parallel_usage", parsed.usage),
+                    ("warnings", parsed.warnings),
+                )
+                if value is not None
+            }
+        )
 
-        return SearchResponse.model_validate({"results": results, "object": "search", **extra_fields})
+        return SearchResponse.model_validate(MappingProxyType({"results": results, "object": "search", **extra_fields}))
