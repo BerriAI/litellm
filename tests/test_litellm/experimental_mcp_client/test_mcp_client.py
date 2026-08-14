@@ -731,9 +731,15 @@ class _ScriptedUpstream:
     error, the shape an upstream application uses to report its own failure.
     """
 
-    def __init__(self, tools_list_error: ErrorData | None = None, tools_call_result: dict | None = None):
+    def __init__(
+        self,
+        tools_list_error: ErrorData | None = None,
+        tools_call_result: dict | None = None,
+        tools_list_result: dict | None = None,
+    ):
         self._tools_list_error = tools_list_error
         self._tools_call_result = tools_call_result
+        self._tools_list_result = tools_list_result
         self._to_client_tx, self._to_client_rx = anyio.create_memory_object_stream(10)
         self._from_client_tx, self._from_client_rx = anyio.create_memory_object_stream(10)
         self._task_group = None
@@ -770,6 +776,8 @@ class _ScriptedUpstream:
                 )
             elif method == "tools/list" and self._tools_list_error is not None:
                 await self._send(JSONRPCError(jsonrpc="2.0", id=request.id, error=self._tools_list_error))
+            elif method == "tools/list" and self._tools_list_result is not None:
+                await self._send(JSONRPCResponse(jsonrpc="2.0", id=request.id, result=self._tools_list_result))
             elif method == "tools/call" and self._tools_call_result is not None:
                 # Sent as a raw dict, not built from CallToolResult, so a non-compliant upstream's
                 # actual wire bytes reach the client exactly as they would over a real connection.
@@ -786,9 +794,14 @@ class _ScriptedClient(MCPClient):
         timeout: float,
         tools_list_error: ErrorData | None = None,
         tools_call_result: dict | None = None,
+        tools_list_result: dict | None = None,
     ):
         super().__init__(server_url="http://upstream.local/mcp", timeout=timeout)
-        self._upstream = _ScriptedUpstream(tools_list_error=tools_list_error, tools_call_result=tools_call_result)
+        self._upstream = _ScriptedUpstream(
+            tools_list_error=tools_list_error,
+            tools_call_result=tools_call_result,
+            tools_list_result=tools_list_result,
+        )
 
     def _create_transport_context(self):
         return self._upstream, None
@@ -813,6 +826,13 @@ _MALFORMED_TOOLS_CALL_RESULT = {
 }
 
 
+# call_tool's private _validate_tool_result fetches the tool list (once per tool name, cached
+# after) to check the result's structuredContent against the tool's output schema. An empty list
+# means the tool isn't found, which _validate_tool_result treats as "nothing to validate against"
+# rather than an error, so it doesn't affect the content-degradation behavior under test here.
+_EMPTY_TOOLS_LIST_RESULT = {"tools": []}
+
+
 class TestCallToolToleratesMalformedContentBlocks:
     """A single content block that fails MCP-SDK validation must not fail the whole ``tools/call``
     result. Driven through ``_ScriptedClient`` over real anyio streams and the real session class
@@ -824,7 +844,11 @@ class TestCallToolToleratesMalformedContentBlocks:
     async def test_relative_uri_resource_degrades_to_text_instead_of_raising(self):
         from mcp.types import CallToolRequestParams
 
-        client = _ScriptedClient(timeout=5, tools_call_result=_MALFORMED_TOOLS_CALL_RESULT)
+        client = _ScriptedClient(
+            timeout=5,
+            tools_call_result=_MALFORMED_TOOLS_CALL_RESULT,
+            tools_list_result=_EMPTY_TOOLS_LIST_RESULT,
+        )
         params = CallToolRequestParams(name="repo_file", arguments={"action": "get_content"})
 
         result = await asyncio.wait_for(client.call_tool(params, raise_on_error=True), timeout=10)
@@ -839,7 +863,11 @@ class TestCallToolToleratesMalformedContentBlocks:
         from mcp.types import CallToolRequestParams
 
         well_formed = {"content": [{"type": "text", "text": "ok"}], "isError": False}
-        client = _ScriptedClient(timeout=5, tools_call_result=well_formed)
+        client = _ScriptedClient(
+            timeout=5,
+            tools_call_result=well_formed,
+            tools_list_result=_EMPTY_TOOLS_LIST_RESULT,
+        )
         params = CallToolRequestParams(name="some_tool", arguments={})
 
         result = await asyncio.wait_for(client.call_tool(params, raise_on_error=True), timeout=10)

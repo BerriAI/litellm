@@ -13,8 +13,9 @@ survives.
 
 import base64
 import json
+from collections.abc import Mapping, Sequence
 from datetime import timedelta
-from typing import Any, Final, Literal, Mapping, Sequence, TypedDict
+from typing import Any, Final, Literal, TypedDict
 
 from mcp import ClientSession, types
 from mcp.shared.session import ProgressFnT
@@ -38,7 +39,7 @@ class _ResourcePayload(BaseModel):
 
     text: str | None = None
     blob: str | None = None
-    mimeType: str | None = None  # noqa: N815  # mirrors the MCP wire field name
+    mimeType: str | None = None
 
 
 class _TextContentBlock(TypedDict):
