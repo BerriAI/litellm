@@ -1,0 +1,126 @@
+# Loi sur l'IA (UE) Article 5.1(c) — Systèmes de notation sociale
+# Interdit les systèmes d'IA qui évaluent ou classent les personnes en fonction
+# de leur comportement social ou de leurs caractéristiques personnelles.
+# Référence : https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_social_scoring_fr"
+description: "Art. 5.1(c) — Bloque les systèmes de notation sociale, de notation des citoyens et de classification de fiabilité"
+default_action: "BLOCK"
+
+identifier_words:
+  # Actions de développement
+  - "construire"
+  - "créer"
+  - "développer"
+  - "concevoir"
+  - "implémenter"
+  - "mettre en place"
+  - "établir"
+  - "bâtir"
+  - "élaborer"
+
+  # Actions de notation/évaluation
+  - "noter"
+  - "classer"
+  - "évaluer"
+  - "estimer"
+  - "classifier"
+  - "profiler"
+  - "coter"
+  - "juger"
+  - "attribuer une note"
+  - "attribuer un score"
+  - "donner une note"
+  - "donner un score"
+  - "catégoriser"
+
+  # Actions de détection
+  - "reconnaître"
+  - "détecter"
+  - "identifier"
+  - "inférer"
+  - "déduire"
+  - "prédire"
+  - "déterminer"
+  - "analyser"
+  - "surveiller"
+  - "monitorer"
+
+additional_block_words:
+  # Notation sociale
+  - "comportement social"
+  - "crédit social"
+  - "score social"
+  - "note sociale"
+  - "notation sociale"
+  - "classement social"
+  - "rang social"
+
+  # Notation des citoyens
+  - "score de citoyen"
+  - "note de citoyen"
+  - "notation des citoyens"
+  - "classement des citoyens"
+  - "fiabilité des citoyens"
+
+  # Fiabilité et réputation
+  - "fiabilité"
+  - "score de fiabilité"
+  - "score de réputation"
+  - "note de réputation"
+  - "score comportemental"
+  - "note comportementale"
+  - "classification comportementale"
+  - "score de loyauté"
+  - "score d'obéissance"
+  - "réputation sociale"
+
+  # Réseaux sociaux
+  - "comportement sur les réseaux sociaux"
+  - "comportement médias sociaux"
+  - "score des réseaux sociaux"
+  - "solvabilité à partir des réseaux sociaux"
+  - "solvabilité à partir du social"
+
+always_block_keywords:
+  - keyword: "système de crédit social"
+    severity: "high"
+  - keyword: "système de notation sociale"
+    severity: "high"
+  - keyword: "système de score social"
+    severity: "high"
+  - keyword: "notation des citoyens"
+    severity: "high"
+  - keyword: "système de notation des citoyens"
+    severity: "high"
+  - keyword: "système pour noter le comportement social"
+    severity: "high"
+  - keyword: "système pour évaluer le comportement social"
+    severity: "high"
+  - keyword: "système pour classer le comportement social"
+    severity: "high"
+  - keyword: "système de score de réputation"
+    severity: "high"
+
+exceptions:
+  - "recherche sur"
+  - "étude sur"
+  - "académique"
+  - "thèse sur"
+  - "mémoire sur"
+  - "expliquer"
+  - "qu'est-ce que"
+  - "c'est quoi"
+  - "article 5"
+  - "interdit par"
+  - "prohibé par"
+  - "audit de biais"
+  - "audit des biais"
+  - "détecter la discrimination"
+  - "détection de discrimination"
+  - "surveillance de conformité"
+  - "contrôle de conformité"
+  - "examen éthique"
+  - "test d'équité"
+  - "avis sur le produit"
+  - "avis produit"
+  - "retour client"

@@ -1,0 +1,33 @@
+{{- if and .Values.backend.enabled .Values.backend.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "litellm.backend.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "litellm.backend.fullname" . }}
+  minReplicas: {{ .Values.backend.hpa.minReplicas }}
+  maxReplicas: {{ .Values.backend.hpa.maxReplicas }}
+  metrics:
+    {{- if .Values.backend.hpa.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.backend.hpa.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.backend.hpa.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.backend.hpa.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}

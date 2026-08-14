@@ -1,0 +1,844 @@
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, cast
+
+from litellm._logging import verbose_logger
+from litellm._uuid import uuid
+from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    ErrorEvent,
+    ErrorEventError,
+    MCPCallArgumentsDeltaEvent,
+    MCPCallArgumentsDoneEvent,
+    MCPCallCompletedEvent,
+    MCPCallFailedEvent,
+    MCPCallInProgressEvent,
+    MCPListToolsCompletedEvent,
+    MCPListToolsFailedEvent,
+    MCPListToolsInProgressEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+    ResponsesAPIStreamingResponse,
+)
+
+if TYPE_CHECKING:
+    from mcp.types import Tool as MCPTool
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
+else:
+    MCPTool = Any
+
+MAX_MCP_TOOL_CALL_ROUNDS: Final = 5
+
+
+async def create_mcp_list_tools_events(
+    mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]],
+    user_api_key_auth: "UserAPIKeyAuth | None",
+    base_item_id: str,
+    pre_processed_mcp_tools: list[MCPTool],
+) -> list[ResponsesAPIStreamingResponse]:
+    """Create MCP discovery events using pre-processed tools from the parent"""
+
+    events: Final[list[ResponsesAPIStreamingResponse]] = []
+
+    try:
+        # Extract MCP server names
+        _mcp_servers: Final = [
+            server_url.split("/")[-1]
+            for tool in mcp_tools_with_litellm_proxy
+            if isinstance(tool, dict)
+            and "server_url" in tool
+            and isinstance(server_url := tool.get("server_url"), str)
+            and server_url.startswith("litellm_proxy/mcp/")
+        ]
+
+        # Emit list tools in progress event
+        in_progress_event: Final = MCPListToolsInProgressEvent(
+            type=ResponsesAPIStreamEvents.MCP_LIST_TOOLS_IN_PROGRESS,
+            sequence_number=1,
+            output_index=0,
+            item_id=base_item_id,
+        )
+        events.append(in_progress_event)
+
+        # Use the pre-processed MCP tools that were already fetched, filtered, and deduplicated by the parent
+        filtered_mcp_tools: Final = pre_processed_mcp_tools
+
+        # Convert tools to dict format for the event
+        _mcp_tools_dict: Final = [
+            tool.model_dump()
+            if hasattr(tool, "model_dump") and callable(getattr(tool, "model_dump", None))
+            else tool.__dict__
+            if hasattr(tool, "__dict__")
+            else {"name": getattr(tool, "name", str(tool))}
+            for tool in filtered_mcp_tools
+        ]
+
+        # Emit list tools completed event
+        completed_event: Final = MCPListToolsCompletedEvent(
+            type=ResponsesAPIStreamEvents.MCP_LIST_TOOLS_COMPLETED,
+            sequence_number=2,
+            output_index=0,
+            item_id=base_item_id,
+        )
+        events.append(completed_event)
+
+        # Add output_item.done event with the actual tools list (matching OpenAI format)
+        from litellm.types.llms.openai import OutputItemDoneEvent
+
+        # Extract server label from the first MCP tool config
+        server_label = ""
+        if mcp_tools_with_litellm_proxy:
+            first_tool: Final = mcp_tools_with_litellm_proxy[0]
+            if isinstance(first_tool, dict):
+                server_label_value: Final = first_tool.get("server_label", "")
+                server_label = str(server_label_value) if server_label_value is not None else ""
+
+        # Format tools for OpenAI output_item.done format
+        formatted_tools: Final = [
+            {
+                "name": getattr(tool, "name", "unknown"),
+                "description": getattr(tool, "description", ""),
+                "annotations": {"read_only": False},
+                **dict.fromkeys(
+                    ("input_schema",) if hasattr(tool, "inputSchema") or hasattr(tool, "input_schema") else (),
+                    getattr(tool, "inputSchema", getattr(tool, "input_schema", None)),
+                ),
+            }
+            for tool in filtered_mcp_tools
+        ]
+
+        # Create the output_item.done event with MCP tools list
+        output_item_done_event = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(
+                **{
+                    "id": base_item_id,
+                    "type": "mcp_list_tools",
+                    "server_label": server_label,
+                    "tools": formatted_tools,
+                }
+            ),
+        )
+        events.append(output_item_done_event)
+
+        verbose_logger.debug("Created %s MCP discovery events", len(events))
+
+    except Exception as e:
+        verbose_logger.error("Error creating MCP list tools events: %s", e)
+        import traceback
+
+        traceback.print_exc()
+
+        # Emit failed event on error
+        failed_event: Final = MCPListToolsFailedEvent(
+            type=ResponsesAPIStreamEvents.MCP_LIST_TOOLS_FAILED,
+            sequence_number=2,
+            output_index=0,
+            item_id=base_item_id,
+        )
+        events.append(failed_event)
+
+        # Still emit output_item.done event even on failure (with empty tools list)
+        from litellm.types.llms.openai import OutputItemDoneEvent
+
+        output_item_done_event = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(
+                **{
+                    "id": base_item_id,
+                    "type": "mcp_list_tools",
+                    "server_label": "",
+                    "tools": [],
+                }
+            ),
+        )
+        events.append(output_item_done_event)
+
+    return events
+
+
+def create_mcp_call_events(
+    tool_name: str,
+    tool_call_id: str | None,
+    arguments: str,
+    result: str | None = None,
+    base_item_id: str | None = None,
+    sequence_start: int = 1,
+) -> list[ResponsesAPIStreamingResponse]:
+    """Create MCP call events following OpenAI's specification"""
+    events: Final[list[ResponsesAPIStreamingResponse]] = []
+    item_id: Final = base_item_id or f"mcp_{uuid.uuid4().hex[:8]}"
+
+    # MCP call in progress event
+    in_progress_event: Final = MCPCallInProgressEvent(
+        type=ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS,
+        sequence_number=sequence_start,
+        output_index=0,
+        item_id=item_id,
+    )
+    events.append(in_progress_event)
+
+    # MCP call arguments delta event (streaming the arguments)
+    arguments_delta_event: Final = MCPCallArgumentsDeltaEvent(
+        type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
+        output_index=0,
+        item_id=item_id,
+        delta=arguments,  # JSON string with arguments
+        sequence_number=sequence_start + 1,
+    )
+    events.append(arguments_delta_event)
+
+    # MCP call arguments done event
+    arguments_done_event: Final = MCPCallArgumentsDoneEvent(
+        type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE,
+        output_index=0,
+        item_id=item_id,
+        arguments=arguments,  # Complete JSON string with finalized arguments
+        sequence_number=sequence_start + 2,
+    )
+    events.append(arguments_done_event)
+
+    # MCP call completed event (or failed if result indicates failure)
+    if result is not None:
+        completed_event: Final = MCPCallCompletedEvent(
+            type=ResponsesAPIStreamEvents.MCP_CALL_COMPLETED,
+            sequence_number=sequence_start + 3,
+            item_id=item_id,
+            output_index=0,
+        )
+        events.append(completed_event)
+
+        # Add output_item.done event with the tool call result
+        from litellm.types.llms.openai import OutputItemDoneEvent
+
+        output_item_done_event: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(
+                **{
+                    "id": item_id,
+                    "type": "mcp_call",
+                    "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
+                    "arguments": arguments,
+                    "error": None,
+                    "name": tool_name,
+                    "output": result,
+                    "server_label": "litellm",
+                }
+            ),
+        )
+        events.append(output_item_done_event)
+    else:
+        failed_event: Final = MCPCallFailedEvent(
+            type=ResponsesAPIStreamEvents.MCP_CALL_FAILED,
+            sequence_number=sequence_start + 3,
+            item_id=item_id,
+            output_index=0,
+        )
+        events.append(failed_event)
+
+    return events
+
+
+class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
+    """
+    A complete MCP streaming iterator that handles the entire flow:
+    1. Immediately emits MCP discovery events
+    2. Makes the first LLM call and streams its response
+    3. Handles tool execution and follow-up calls for auto-execute tools
+    4. Emits tool execution events in the stream
+    """
+
+    model: str
+    tool_results: "Sequence[MCPToolResult]"
+
+    def __init__(
+        self,
+        base_iterator: "BaseResponsesAPIStreamingIterator | ResponsesAPIResponse | None",  # created internally when None
+        mcp_events: list[ResponsesAPIStreamingResponse],
+        tool_server_map: dict[str, str],
+        mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]] | None = None,
+        user_api_key_auth: "UserAPIKeyAuth | None" = None,
+        original_request_params: dict[str, Any] | None = None,
+    ):
+        # MCP setup
+        self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
+        self.user_api_key_auth = user_api_key_auth
+        self.original_request_params = original_request_params or {}
+        self.should_auto_execute = self._should_auto_execute_tools()
+
+        # Streaming state management
+        self.phase = "initial_response"  # initial_response -> mcp_discovery -> (continue_initial_response <-> tool_execution) -> finished
+        self.finished = False
+
+        # Event queues and generation flags
+        self.mcp_discovery_events: list[ResponsesAPIStreamingResponse] = (
+            mcp_events  # Pre-generated MCP discovery events
+        )
+        self.tool_execution_events: list[ResponsesAPIStreamingResponse] = []
+        self.mcp_discovery_generated = True  # Events are already generated
+        self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
+        self.tool_server_map = tool_server_map
+
+        # Iterator references
+        self.base_iterator: BaseResponsesAPIStreamingIterator | ResponsesAPIResponse | None = (
+            base_iterator  # Will be created when needed
+        )
+
+        # Response collection for tool execution
+        self.collected_response: ResponsesAPIResponse | None = None
+
+        # Counts completed rounds of tool execution, so a model that keeps
+        # calling tools (e.g. retrying after an error) can't loop forever.
+        # Capped in _create_follow_up_iterator, which drops "tools" from the
+        # request once the cap is hit so the model must answer in text.
+        self.tool_call_round = 0
+        # The collected_response that self.tool_results was computed from.
+        # _create_follow_up_iterator only builds a follow-up when this is
+        # still the current collected_response — otherwise a round whose
+        # response had no tool calls (e.g. the model finally answered in
+        # text) would incorrectly reuse tool_results left over from an
+        # earlier round and keep looping instead of finishing.
+        self._tool_results_for_response: ResponsesAPIResponse | None = None
+
+        # Set up model metadata (will be updated when we get the real iterator)
+        self.model = self.original_request_params.get("model", "unknown")
+        self.litellm_metadata = {}
+        self.custom_llm_provider = self.original_request_params.get("custom_llm_provider", None)
+        self.litellm_call_id = self.original_request_params.get("litellm_call_id")
+        self.litellm_trace_id = self.original_request_params.get("litellm_trace_id")
+
+        self._extract_mcp_headers_from_params()
+
+        # Mark as async iterator
+        self.is_async = True
+
+        # Track if we've emitted initial OpenAI lifecycle events
+        self.initial_events_emitted = False
+
+        # Cache the response ID to ensure consistency across all events
+        self._cached_response_id: str | None = None
+
+        self._initial_creation_error: Exception | None = None
+        self._stream_error: Exception | None = None
+        self._error_event_emitted = False
+        self._last_sequence_number = 0
+
+    def _extract_mcp_headers_from_params(self) -> None:
+        """Extract MCP headers from original request params to pass to tool calls"""
+
+        from starlette.datastructures import Headers
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        # Extract headers from secret_fields in original_request_params
+        raw_headers_from_request: dict[str, str] | None = None
+        secret_fields: Final = self.original_request_params.get("secret_fields")
+        if secret_fields and isinstance(secret_fields, dict):
+            raw_headers_from_request = secret_fields.get("raw_headers")
+
+        # Extract MCP-specific headers
+        self.mcp_auth_header: str | None = None
+        self.mcp_server_auth_headers: dict[str, dict[str, str]] | None = None
+        self.oauth2_headers: dict[str, str] | None = None
+        self.raw_headers: dict[str, str] | None = raw_headers_from_request
+
+        if raw_headers_from_request:
+            headers_obj: Final = Headers(raw_headers_from_request)
+            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
+            self.mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+
+        # Also check if headers are provided in tools array (from request body)
+        tools: Final[Sequence[object] | None] = self.original_request_params.get("tools")
+        if tools:
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("type") == "mcp":
+                    tool_headers = tool.get("headers", {})
+                    if tool_headers and isinstance(tool_headers, dict):
+                        # Merge tool headers into mcp_server_auth_headers
+                        headers_obj_from_tool = Headers(tool_headers)
+                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                            headers_obj_from_tool
+                        )
+
+                        if tool_mcp_server_auth_headers:
+                            if self.mcp_server_auth_headers is None:
+                                self.mcp_server_auth_headers = {}
+                            # Merge the headers from tool into existing headers
+                            for (
+                                server_alias,
+                                headers_dict,
+                            ) in tool_mcp_server_auth_headers.items():
+                                if server_alias not in self.mcp_server_auth_headers:
+                                    self.mcp_server_auth_headers[server_alias] = {}
+                                self.mcp_server_auth_headers[server_alias].update(headers_dict)
+
+                        # Also merge raw headers
+                        if self.raw_headers is None:
+                            self.raw_headers = {}
+                        self.raw_headers.update(tool_headers)
+
+    def _should_auto_execute_tools(self) -> bool:
+        """Check if tools should be auto-executed"""
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+
+        return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
+
+    def _make_stream_error_event(self) -> ResponsesAPIStreamingResponse:
+        err: Final = self._stream_error
+        status_code: Final[object] = getattr(err, "status_code", None)
+        return ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=self._last_sequence_number + 1,
+            error=ErrorEventError(
+                type="mcp_gateway_error",
+                code=str(status_code) if status_code is not None else "internal_error",
+                message=str(err) if err is not None else "MCP gateway stream failed",
+                param=None,
+            ),
+        )
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
+        chunk: Final = await self._anext_impl()
+        sequence_number: Final = getattr(chunk, "sequence_number", None)
+        if isinstance(sequence_number, int) and sequence_number > self._last_sequence_number:
+            self._last_sequence_number = sequence_number
+        return chunk
+
+    async def _anext_impl(self) -> ResponsesAPIStreamingResponse:
+        """
+        Phase-based streaming:
+        1. initial_response - Stream the first LLM response (includes response.created, response.in_progress, response.output_item.added)
+        2. mcp_discovery - Emit MCP discovery events (after response.output_item.added)
+        3. continue_initial_response - Stream the current round's response (initial or follow-up).
+           On completion, if auto-execute is on and the response contains tool calls, loops back
+           through tool_execution/follow-up instead of ending, up to MAX_MCP_TOOL_CALL_ROUNDS.
+        4. tool_execution - Emit tool execution events
+        5. finished - End iteration
+        """
+
+        # Phase 1: Initial Response Stream (emit standard OpenAI events first)
+        if self.phase == "initial_response":
+            result: Final = await self._handle_initial_response_phase()
+            if result is not None:
+                return result
+
+        # Phase 2: MCP Discovery Events (after response.output_item.added)
+        if self.phase == "mcp_discovery":
+            # Emit MCP discovery events
+            if self.mcp_discovery_events:
+                return self.mcp_discovery_events.pop(0)
+            self.phase = "continue_initial_response"
+            # Fall through to continue processing the initial response
+
+        # Phase 3: Continue Initial Response (after MCP discovery events)
+        if self.phase == "continue_initial_response":
+            try:
+                return await self._process_base_iterator_chunk()
+            except StopAsyncIteration:
+                # Initial response ended, move to next phase
+                if self.should_auto_execute and self.collected_response:
+                    self.phase = "tool_execution"
+                    await self._generate_tool_execution_events()
+                else:
+                    self.phase = "finished"
+                    raise
+
+        # Phase 4: Tool Execution Events
+        if self.phase == "tool_execution":
+            # Emit any queued tool execution events
+            if self.tool_execution_events:
+                return self.tool_execution_events.pop(0)
+
+            # Route the follow-up call back through continue_initial_response so
+            # its completion is checked for further tool calls the same way the
+            # initial response is — otherwise a model that needs a second round
+            # of tool calls (e.g. retrying after an error) would have that round
+            # silently dropped and the stream would end with no final text.
+            await self._create_follow_up_iterator()
+            if self.base_iterator is not None:
+                self.phase = "continue_initial_response"
+                return await self.__anext__()
+            self.phase = "finished"
+            if self._stream_error is not None and not self._error_event_emitted:
+                self._error_event_emitted = True
+                return self._make_stream_error_event()
+            raise StopAsyncIteration
+
+        # Phase 6: Finished
+        if self.phase == "finished":
+            if self._stream_error is not None and not self._error_event_emitted:
+                self._error_event_emitted = True
+                return self._make_stream_error_event()
+            raise StopAsyncIteration
+
+        # Should not reach here
+        raise StopAsyncIteration
+
+    async def _handle_initial_response_phase(
+        self,
+    ) -> ResponsesAPIStreamingResponse | None:
+        """
+        Handle Phase 1: Initial Response Stream.
+
+        Returns a chunk to emit, or None to fall through to the next phase.
+        Raises StopAsyncIteration when the stream is exhausted with no auto-execution.
+        """
+        if self.base_iterator is None:
+            await self._create_initial_response_iterator()
+
+        if self.base_iterator is None:
+            # LLM call failed — still emit MCP discovery events before finishing
+            if self.mcp_discovery_events:
+                self.phase = "mcp_discovery"
+            else:
+                self.phase = "finished"
+                raise StopAsyncIteration
+            return None
+
+        if self.base_iterator:
+            if hasattr(self.base_iterator, "__anext__"):
+                try:
+                    chunk: Final = await cast(Any, self.base_iterator).__anext__()
+
+                    # Capture the response ID from the first event to ensure consistency
+                    if self._cached_response_id is None and hasattr(chunk, "response"):
+                        response_obj: ResponsesAPIResponse | None = getattr(chunk, "response", None)
+                        if response_obj and hasattr(response_obj, "id"):
+                            self._cached_response_id = response_obj.id
+                            verbose_logger.debug("Cached response ID: %s", self._cached_response_id)
+
+                    # After emitting response.output_item.added, transition to MCP discovery
+                    if not self.initial_events_emitted and hasattr(chunk, "type"):
+                        chunk_type: Final = getattr(chunk, "type", None)
+                        if chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+                            self.initial_events_emitted = True
+                            self.phase = "mcp_discovery"
+                            return chunk
+
+                    # If auto-execution is enabled, check for completed responses
+                    if self.should_auto_execute and self._is_response_completed(chunk):
+                        response_obj = getattr(chunk, "response", None)
+                        if isinstance(response_obj, ResponsesAPIResponse):
+                            self.collected_response = response_obj
+                        self.phase = "tool_execution"
+                        await self._generate_tool_execution_events()
+
+                    return chunk
+                except StopAsyncIteration:
+                    if self.should_auto_execute and self.collected_response:
+                        self.phase = "tool_execution"
+                        await self._generate_tool_execution_events()
+                    else:
+                        self.phase = "finished"
+                        raise
+            else:
+                # base_iterator is not async iterable (likely a ResponsesAPIResponse)
+                if self.should_auto_execute and isinstance(self.base_iterator, ResponsesAPIResponse):
+                    self.collected_response = self.base_iterator
+                    self.phase = "tool_execution"
+                    await self._generate_tool_execution_events()
+                else:
+                    self.phase = "finished"
+                    raise StopAsyncIteration
+        return None
+
+    def _is_response_completed(self, chunk: ResponsesAPIStreamingResponse) -> bool:
+        """Check if this chunk indicates the response is completed"""
+        from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+        chunk_type: Final[object] = getattr(chunk, "type", None)
+        return chunk_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+
+    async def _process_base_iterator_chunk(self) -> ResponsesAPIStreamingResponse:
+        """
+        Process a chunk from the base iterator with response ID consistency enforcement.
+        """
+        if not self.base_iterator or not hasattr(self.base_iterator, "__anext__"):
+            raise StopAsyncIteration
+
+        chunk: Final = await cast(Any, self.base_iterator).__anext__()
+
+        if self._cached_response_id is None and hasattr(chunk, "response"):
+            new_response: Final[ResponsesAPIResponse | None] = getattr(chunk, "response", None)
+            new_response_id: Final = getattr(new_response, "id", None) if new_response is not None else None
+            if new_response_id:
+                self._cached_response_id = new_response_id
+
+        # Ensure response ID consistency - update chunk if needed
+        if self._cached_response_id and hasattr(chunk, "response"):
+            response_obj: ResponsesAPIResponse | None = getattr(chunk, "response", None)
+            if response_obj and hasattr(response_obj, "id"):
+                if response_obj.id != self._cached_response_id:
+                    verbose_logger.debug(
+                        "Updating response ID from %s to %s", response_obj.id, self._cached_response_id
+                    )
+                    response_obj.id = self._cached_response_id
+
+        # If auto-execution is enabled, check for completed responses
+        if self.should_auto_execute and self._is_response_completed(chunk):
+            # Collect the response for tool execution
+            response_obj = getattr(chunk, "response", None)
+            if isinstance(response_obj, ResponsesAPIResponse):
+                self.collected_response = response_obj
+            # Move to tool execution phase after emitting this chunk
+            self.phase = "tool_execution"
+            await self._generate_tool_execution_events()
+
+        return chunk
+
+    async def _create_initial_response_iterator(self) -> None:
+        """Create the initial response iterator by making the first LLM call"""
+        try:
+            # Import the core aresponses function that doesn't have MCP logic
+            from litellm.responses.main import aresponses
+
+            # Make the initial response API call - but avoid the MCP wrapper
+            params: Final[dict[str, object]] = self.original_request_params.copy()
+            params["stream"] = True  # Ensure streaming
+
+            # Use the pre-fetched all_tools from original_request_params (no re-processing needed)
+            params_for_llm: Final = {}
+            for key, value in params.items():
+                params_for_llm[key] = value  # Copy all params as-is since tools are already processed
+
+            tools_count: Final = len(params_for_llm.get("tools", [])) if params_for_llm.get("tools") else 0
+            verbose_logger.debug("Making LLM call with %s tools", tools_count)
+            response: Final = await aresponses(**params_for_llm)
+
+            # Set the base iterator
+            if hasattr(response, "__aiter__") or hasattr(response, "__iter__"):
+                self.base_iterator = response
+                # Copy metadata from the real iterator
+                self.model = getattr(response, "model", self.model)
+                self.litellm_metadata = getattr(response, "litellm_metadata", {})
+                self.custom_llm_provider = getattr(response, "custom_llm_provider", self.custom_llm_provider)
+                verbose_logger.debug("Created base iterator: %s", type(self.base_iterator))
+            else:
+                # Non-streaming response - this shouldn't happen but handle it
+                verbose_logger.warning("Got non-streaming response: %s", type(response))
+                self.base_iterator = None
+                self.phase = "finished"
+
+        except Exception as e:
+            verbose_logger.error("Error creating initial response iterator: %s", e)
+            import traceback
+
+            traceback.print_exc()
+            self.base_iterator = None
+            self._initial_creation_error = e
+            self._stream_error = e
+            # Don't set phase to "finished" here — let __anext__ emit any
+            # pre-generated MCP discovery events before ending the iteration.
+
+    async def _generate_tool_execution_events(self) -> None:
+        """Generate tool execution events and execute tools"""
+        if not self.collected_response:
+            return
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+
+        try:
+            # Extract tool calls from the response
+            if self.collected_response is not None:
+                tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(self.collected_response)
+            else:
+                tool_calls = []
+            if not tool_calls:
+                return
+            self.tool_call_round += 1
+
+            for tool_call in tool_calls:
+                (
+                    tool_name,
+                    tool_arguments,
+                    tool_call_id,
+                ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
+                if tool_name and tool_call_id:
+                    # Create MCP call events for this tool execution
+                    call_events = create_mcp_call_events(
+                        tool_name=tool_name,
+                        tool_call_id=tool_call_id,
+                        arguments=tool_arguments or "{}",  # JSON string with arguments
+                        result=None,  # Will be set after execution
+                        base_item_id=f"mcp_{uuid.uuid4().hex[:8]}",
+                        sequence_start=len(self.tool_execution_events) + 1,
+                    )
+                    # Add the in_progress and arguments events (not the completed event yet)
+                    self.tool_execution_events.extend(call_events[:-1])
+
+            # Execute the tools
+            tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+                tool_server_map=self.tool_server_map,
+                tool_calls=tool_calls,
+                user_api_key_auth=self.user_api_key_auth,
+                mcp_auth_header=self.mcp_auth_header,
+                mcp_server_auth_headers=self.mcp_server_auth_headers,
+                oauth2_headers=self.oauth2_headers,
+                raw_headers=self.raw_headers,
+                litellm_call_id=self.litellm_call_id,
+                litellm_trace_id=self.litellm_trace_id,
+                request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(self.original_request_params),
+            )
+
+            # Create completion events and output_item.done events for tool execution
+            for tool_result in tool_results:
+                tool_call_id = tool_result.get("tool_call_id", "unknown")
+                result_text = tool_result.get("result", "")
+
+                # Find matching tool name and arguments
+                tool_name = "unknown"
+                tool_arguments = "{}"
+                for tool_call in tool_calls:
+                    (
+                        name,
+                        args,
+                        call_id,
+                    ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
+                    if call_id == tool_call_id:
+                        tool_name = name or "unknown"
+                        tool_arguments = args or "{}"
+                        break
+
+                item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+
+                # Create the completion event
+                completed_event = MCPCallCompletedEvent(
+                    type=ResponsesAPIStreamEvents.MCP_CALL_COMPLETED,
+                    sequence_number=len(self.tool_execution_events) + 1,
+                    item_id=item_id,
+                    output_index=0,
+                )
+                self.tool_execution_events.append(completed_event)
+
+                # Create output_item.done event with the tool call result
+                from litellm.types.llms.openai import OutputItemDoneEvent
+
+                output_item_done_event = OutputItemDoneEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    output_index=0,
+                    item=BaseLiteLLMOpenAIResponseObject(
+                        **{
+                            "id": item_id,
+                            "type": "mcp_call",
+                            "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
+                            "arguments": tool_arguments,
+                            "error": None,
+                            "name": tool_name,
+                            "output": result_text,
+                            "server_label": "litellm",  # or extract from tool config
+                        }
+                    ),
+                )
+                self.tool_execution_events.append(output_item_done_event)
+
+            # Store tool results for follow-up call
+            self.tool_results = tool_results
+            self._tool_results_for_response = self.collected_response
+
+        except Exception as e:
+            verbose_logger.error("Error in tool execution: %s", e)
+            import traceback
+
+            traceback.print_exc()
+            self.tool_results = []
+            self._tool_results_for_response = self.collected_response
+
+    async def _create_follow_up_iterator(self) -> None:
+        """Create the follow-up response iterator with tool results"""
+        if self.collected_response is None or self.collected_response is not self._tool_results_for_response:
+            # Either no response to follow up on, or the current round's
+            # response had no tool calls (self.tool_results is stale from an
+            # earlier round) — there is nothing to follow up with, so end
+            # the stream instead of reusing stale tool results.
+            self.base_iterator = None
+            return
+
+        from litellm.responses.main import aresponses
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+
+        try:
+            # Create follow-up input
+            if self.collected_response is not None:
+                follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+                    response=self.collected_response,
+                    tool_results=self.tool_results,
+                    original_input=self.original_request_params.get("input"),
+                )
+
+                # Make follow-up call with streaming
+                follow_up_params: Final = self.original_request_params.copy()
+                follow_up_params.update(
+                    {
+                        "input": follow_up_input,
+                        "stream": True,
+                    }
+                )
+            else:
+                return
+            # Remove tool_choice to avoid forcing more tool calls
+            follow_up_params.pop("tool_choice", None)
+
+            if self.tool_call_round >= MAX_MCP_TOOL_CALL_ROUNDS:
+                # Hit the round cap: drop tools entirely so the model must
+                # answer in text instead of emitting another (unexecuted)
+                # tool call that would otherwise end the stream in silence.
+                follow_up_params.pop("tools", None)
+                verbose_logger.warning(
+                    "MCP auto-execute hit MAX_MCP_TOOL_CALL_ROUNDS=%s; forcing a text-only follow-up.",
+                    MAX_MCP_TOOL_CALL_ROUNDS,
+                )
+
+            follow_up_response: Final = await aresponses(**follow_up_params)
+
+            # Route the follow-up through the same base_iterator machinery as
+            # the initial call so its completion is checked for further tool
+            # calls (see phase 4 in __anext__).
+            if hasattr(follow_up_response, "__aiter__"):
+                self.base_iterator = follow_up_response
+                self.collected_response = None
+                self._cached_response_id = None
+
+        except Exception as e:
+            verbose_logger.error("Error creating follow-up iterator: %s", e)
+            import traceback
+
+            traceback.print_exc()
+            self.base_iterator = None
+            self._stream_error = e
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> ResponsesAPIStreamingResponse:
+        # First, emit any queued MCP events
+        if self.mcp_events:
+            return self.mcp_events.pop(0)
+
+        # Then delegate to the base iterator
+        if not self.is_async:
+            try:
+                if self.base_iterator and hasattr(self.base_iterator, "__next__"):
+                    return next(cast(Any, self.base_iterator))
+                else:
+                    raise StopIteration
+            except StopIteration:
+                self.finished = True
+                raise
+        else:
+            raise RuntimeError("Cannot use sync iteration on async iterator")

@@ -1,0 +1,877 @@
+import asyncio
+import json
+import re
+import time
+import traceback
+from collections.abc import Iterable, Sequence
+from typing import Final, Literal, cast
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,
+)
+from litellm.types.llms.databricks import DatabricksTool
+from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
+    ImageURLListItem,
+    OpenAIModerationResponse,
+)
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    ChatCompletionRedactedThinkingBlock,
+    Choices,
+    CompletionTokensDetailsWrapper,
+    Delta,
+    EmbeddingResponse,
+    Function,
+    HiddenParams,
+    ImageResponse,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    PromptTokensDetailsWrapper,
+    RerankResponse,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+    TranscriptionResponse,
+    TranscriptionUsageDurationObject,
+    TranscriptionUsageTokensObject,
+    Usage,
+    chat_completion_tool_call_from_dict,
+)
+from litellm.types.utils import Logprobs as TextCompletionLogprobs
+
+from .get_headers import get_response_headers
+
+_MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
+_CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
+_MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+
+
+def _normalize_images_for_message(
+    images: list[dict] | None,
+) -> list[ImageURLListItem] | None:
+    """
+    Ensure each image has an 'index' field, as required by ImageURLListItem.
+    Some providers (e.g. OpenRouter) return images without index.
+    """
+    if not images:
+        return cast(list[ImageURLListItem] | None, images)
+    normalized: Final[list[ImageURLListItem]] = []
+    for i, img in enumerate(images):
+        if isinstance(img, dict) and "index" not in img:
+            normalized.append(cast(ImageURLListItem, {**img, "index": i}))
+        else:
+            normalized.append(cast(ImageURLListItem, img))
+    return normalized
+
+
+def _safe_convert_created_field(created_value) -> int:
+    """
+    Safely convert a 'created' field value to an integer.
+
+    Some providers (like SambaNova) return the 'created' field as a float
+    (Unix timestamp with fractional seconds), but LiteLLM expects an integer.
+
+    Args:
+        created_value: The value from response_object["created"]
+
+    Returns:
+        int: Unix timestamp as integer
+    """
+    if created_value is None:
+        return int(time.time())
+    elif isinstance(created_value, int):
+        return created_value
+    elif isinstance(created_value, float):
+        return int(created_value)
+    else:
+        # for strings, etc
+        try:
+            return int(float(created_value))
+        except (ValueError, TypeError):
+            # Fallback to current time if conversion fails
+            return int(time.time())
+
+
+def convert_tool_call_to_json_mode(
+    tool_calls: list[ChatCompletionMessageToolCall],
+    convert_tool_call_to_json_mode: bool,
+) -> tuple[Message | None, str | None]:
+    if _should_convert_tool_call_to_json_mode(
+        tool_calls=tool_calls,
+        convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
+    ):
+        # to support 'json_schema' logic on older models
+        json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
+        if json_mode_content_str is not None:
+            message: Final = litellm.Message(content=json_mode_content_str)
+            finish_reason: Final = "stop"
+            return message, finish_reason
+    return None, None
+
+
+# Whitespace-preserving word splitter used by the cache-hit replay generators.
+# Each match is any leading whitespace plus a non-whitespace run plus any
+# trailing whitespace, so concatenating the matches losslessly reconstructs
+# the original string (including content that starts with whitespace).
+_REPLAY_CONTENT_SLICE_RE: Final = re.compile(r"\s*\S+\s*", re.UNICODE)
+
+
+def _split_assembled_content_for_replay(content: str | None) -> list[str]:
+    """
+    Slice an assembled cached completion's ``content`` into word-shaped pieces
+    for cadence-preserving streaming replay. The split is lossless:
+    ``"".join(_split_assembled_content_for_replay(s)) == s`` for every
+    non-empty ``s``. Returns ``[]`` for ``None`` / empty / all-whitespace
+    content.
+    """
+    if not content or content.isspace():
+        # isspace() guard: on all-whitespace content the regex backtracks
+        # quadratically before returning no matches.
+        return []
+    return _REPLAY_CONTENT_SLICE_RE.findall(content)
+
+
+def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
+    # Rebuild the delta as content-only so every accumulate-able field (role,
+    # tool_calls, reasoning_content, thinking_blocks, audio, images,
+    # annotations, ...) is dropped on later slices instead of an enumerated
+    # subset; repeating any of them makes downstream handlers that accumulate
+    # streamed deltas collect it once per slice, and a field added to Delta
+    # later can't silently re-introduce the duplication.
+    choice.delta = Delta(content=choice.delta.content)
+    choice.logprobs = None
+    if hasattr(choice, "enhancements"):
+        del choice.enhancements
+
+
+async def convert_to_streaming_response_async(
+    response_object: dict | None = None,
+):
+    """
+    Asynchronously converts a response object to a streaming response.
+
+    Args:
+        response_object (Optional[dict]): The response object to be converted. Defaults to None.
+
+    Raises:
+        Exception: If the response object is None.
+
+    Yields:
+        ModelResponse: The converted streaming response object.
+
+    Returns:
+        None
+    """
+    if response_object is None:
+        raise Exception("Error in response object format")
+
+    model_response_object: Final = ModelResponseStream()
+
+    if model_response_object is None:
+        raise Exception("Error in response creating model response object")
+
+    choice_list: Final[list[StreamingChoices]] = []
+
+    if not response_object.get("choices"):
+        from litellm.exceptions import APIError
+
+        raise APIError(
+            status_code=500,
+            message=(
+                f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(response_object.keys())}"
+            ),
+            llm_provider="",
+            model="",
+        )
+
+    for idx, choice in enumerate(response_object["choices"]):
+        if (
+            choice["message"].get("tool_calls", None) is not None
+            and isinstance(choice["message"]["tool_calls"], list)
+            and len(choice["message"]["tool_calls"]) > 0
+            and isinstance(choice["message"]["tool_calls"][0], dict)
+        ):
+            pydantic_tool_calls = []
+            for index, t in enumerate(choice["message"]["tool_calls"]):
+                if "index" not in t:
+                    t["index"] = index
+                pydantic_tool_calls.append(ChatCompletionDeltaToolCall(**t))
+            choice["message"]["tool_calls"] = pydantic_tool_calls
+        delta = Delta(
+            content=choice["message"].get("content", None),
+            role=choice["message"]["role"],
+            function_call=choice["message"].get("function_call", None),
+            tool_calls=choice["message"].get("tool_calls", None),
+        )
+        finish_reason = choice.get("finish_reason", None)
+
+        if finish_reason is None:
+            finish_reason = choice.get("finish_details")
+
+        logprobs = choice.get("logprobs", None)
+
+        choice = StreamingChoices(finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs)
+        choice_list.append(choice)
+
+    model_response_object.choices = choice_list
+
+    if "usage" in response_object and response_object["usage"] is not None:
+        setattr(
+            model_response_object,
+            "usage",
+            Usage(
+                completion_tokens=response_object["usage"].get("completion_tokens", 0),
+                prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
+                total_tokens=response_object["usage"].get("total_tokens", 0),
+            ),
+        )
+
+    if "id" in response_object:
+        model_response_object.id = response_object["id"]
+
+    if "created" in response_object:
+        model_response_object.created = _safe_convert_created_field(response_object["created"])
+
+    if "system_fingerprint" in response_object:
+        model_response_object.system_fingerprint = response_object["system_fingerprint"]
+
+    if "model" in response_object:
+        model_response_object.model = response_object["model"]
+
+    # Replay cached content with per-word cadence so stream=true cache hits
+    # don't arrive as a single SSE frame. Multi-choice (n>1) responses and
+    # unsplittable content (None/empty/whitespace-free) keep the original
+    # single-yield behavior.
+    slices: list[str] = []
+    if len(model_response_object.choices) == 1:
+        slices = _split_assembled_content_for_replay(model_response_object.choices[0].delta.content)
+    if len(slices) <= 1:
+        yield model_response_object
+        await asyncio.sleep(0)
+        return
+
+    # Detach usage from the base object so we can re-attach it only to the
+    # final slice chunk. A non-None usage always lives in __pydantic_extra__
+    # here (set via setattr above), so delattr cannot fail.
+    original_usage: Final = getattr(model_response_object, "usage", None)
+    if original_usage is not None:
+        delattr(model_response_object, "usage")
+    original_finish_reason: Final = model_response_object.choices[0].finish_reason
+    last_idx: Final = len(slices) - 1
+    for i, piece in enumerate(slices):
+        slice_chunk = model_response_object.model_copy(deep=True)
+        slice_chunk.choices[0].delta.content = piece
+        if i > 0:
+            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
+        slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
+        if i == last_idx and original_usage is not None:
+            setattr(slice_chunk, "usage", original_usage)
+        yield slice_chunk
+        await asyncio.sleep(0)
+
+
+def convert_to_streaming_response(
+    response_object: dict | None = None,
+):
+    # used for yielding Cache hits when stream == True
+    if response_object is None:
+        raise Exception("Error in response object format")
+
+    model_response_object: Final = ModelResponseStream()
+    choice_list: Final[list[StreamingChoices]] = []
+
+    if not response_object.get("choices"):
+        from litellm.exceptions import APIError
+
+        raise APIError(
+            status_code=500,
+            message=(
+                f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(response_object.keys())}"
+            ),
+            llm_provider="",
+            model="",
+        )
+
+    for idx, choice in enumerate(response_object["choices"]):
+        delta = Delta(**choice["message"])
+        finish_reason = choice.get("finish_reason", None)
+        if finish_reason is None:
+            # gpt-4 vision can return 'finish_reason' or 'finish_details'
+            finish_reason = choice.get("finish_details")
+        logprobs = choice.get("logprobs", None)
+        enhancements = choice.get("enhancements", None)
+        choice = StreamingChoices(
+            finish_reason=finish_reason,
+            index=idx,
+            delta=delta,
+            logprobs=logprobs,
+            enhancements=enhancements,
+        )
+
+        choice_list.append(choice)
+    model_response_object.choices = choice_list
+
+    if "usage" in response_object and response_object["usage"] is not None:
+        setattr(model_response_object, "usage", Usage())
+        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
+        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
+        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+
+    if "id" in response_object:
+        model_response_object.id = response_object["id"]
+
+    if "created" in response_object:
+        model_response_object.created = _safe_convert_created_field(response_object["created"])
+
+    if "system_fingerprint" in response_object:
+        model_response_object.system_fingerprint = response_object["system_fingerprint"]
+
+    if "model" in response_object:
+        model_response_object.model = response_object["model"]
+
+    # Replay cached content with per-word cadence on sync cache-hit paths
+    # (S3Cache, sync completion()). See convert_to_streaming_response_async
+    # for the full rationale — this mirrors its tail.
+    slices: list[str] = []
+    if len(model_response_object.choices) == 1:
+        slices = _split_assembled_content_for_replay(model_response_object.choices[0].delta.content)
+    if len(slices) <= 1:
+        yield model_response_object
+        return
+
+    original_usage: Final = getattr(model_response_object, "usage", None)
+    if original_usage is not None:
+        delattr(model_response_object, "usage")
+    original_finish_reason: Final = model_response_object.choices[0].finish_reason
+    last_idx: Final = len(slices) - 1
+    for i, piece in enumerate(slices):
+        slice_chunk = model_response_object.model_copy(deep=True)
+        slice_chunk.choices[0].delta.content = piece
+        if i > 0:
+            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
+        slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
+        if i == last_idx and original_usage is not None:
+            setattr(slice_chunk, "usage", original_usage)
+        yield slice_chunk
+
+
+from collections import defaultdict
+
+
+def _handle_invalid_parallel_tool_calls(
+    tool_calls: list[
+        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
+    ],  # mutable-ok: patched in place via slice assignment
+):
+    """
+    Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653
+
+    Code modified from: https://github.com/phdowling/openai_multi_tool_use_parallel_patch/blob/main/openai_multi_tool_use_parallel_patch.py
+    """
+
+    if tool_calls is None:
+        return
+    try:
+        replacements: Final[dict[int, list[ChatCompletionMessageToolCall]]] = defaultdict(list)
+        for i, tool_call in enumerate(tool_calls):
+            if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
+                continue
+            current_function = tool_call.function.name
+            function_args = json.loads(tool_call.function.arguments)
+            if current_function == "multi_tool_use.parallel":
+                verbose_logger.debug("OpenAI did a weird pseudo-multi-tool-use call, fixing call structure..")
+                for _fake_i, _fake_tool_use in enumerate(function_args["tool_uses"]):
+                    _function_args = _fake_tool_use["parameters"]
+                    _current_function = _fake_tool_use["recipient_name"]
+                    _current_function = _current_function.removeprefix("functions.")
+
+                    fixed_tc = ChatCompletionMessageToolCall(
+                        id=f"{tool_call.id}_{_fake_i}",
+                        type="function",
+                        function=Function(name=_current_function, arguments=json.dumps(_function_args)),
+                    )
+                    replacements[i].append(fixed_tc)
+
+        shift = 0
+        for i, replacement in replacements.items():
+            tool_calls[:] = tool_calls[: i + shift] + replacement + tool_calls[i + shift + 1 :]
+            shift += len(replacement)
+
+        return tool_calls
+    except json.JSONDecodeError:
+        # if there is a JSONDecodeError, return the original tool_calls
+        return tool_calls
+
+
+class LiteLLMResponseObjectHandler:
+    @staticmethod
+    def convert_to_image_response(
+        response_object: dict,
+        model_response_object: ImageResponse | None = None,
+        hidden_params: dict | None = None,
+    ) -> ImageResponse:
+        response_object.update({"hidden_params": hidden_params})
+
+        # Handle gpt-image-1 usage field with None values
+        if "usage" in response_object and response_object["usage"] is not None:
+            usage: Final = response_object["usage"]
+            # Check if usage fields are None and provide defaults
+            if usage.get("input_tokens") is None:
+                usage["input_tokens"] = 0
+            if usage.get("output_tokens") is None:
+                usage["output_tokens"] = 0
+            if usage.get("total_tokens") is None:
+                usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+            if usage.get("input_tokens_details") is None:
+                usage["input_tokens_details"] = {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                }
+
+            # Map Responses API naming to Chat Completions API naming for cost calculator
+            if usage.get("prompt_tokens") is None:
+                usage["prompt_tokens"] = usage.get("input_tokens", 0)
+            if usage.get("completion_tokens") is None:
+                usage["completion_tokens"] = usage.get("output_tokens", 0)
+
+            # Convert dicts to wrapper objects so getattr() works in cost calculation
+            if isinstance(usage.get("input_tokens_details"), dict):
+                usage["prompt_tokens_details"] = PromptTokensDetailsWrapper(**usage["input_tokens_details"])
+            if isinstance(usage.get("output_tokens_details"), dict):
+                usage["completion_tokens_details"] = CompletionTokensDetailsWrapper(**usage["output_tokens_details"])
+
+        if model_response_object is None:
+            model_response_object = ImageResponse(**response_object)
+            return model_response_object
+        else:
+            model_response_dict: Final = model_response_object.model_dump()
+
+            model_response_dict.update(response_object)
+            model_response_object = ImageResponse(**model_response_dict)
+            return model_response_object
+
+    @staticmethod
+    def convert_to_moderation_response(
+        response_object: dict,
+    ) -> OpenAIModerationResponse:
+        return OpenAIModerationResponse(**response_object)
+
+    @staticmethod
+    def convert_chat_to_text_completion(
+        response: ModelResponse,
+        text_completion_response: TextCompletionResponse,
+        custom_llm_provider: str | None = None,
+    ) -> TextCompletionResponse:
+        """
+        Converts a chat completion response to a text completion response format.
+
+        Note: This is used for huggingface. For OpenAI / Azure Text the providers files directly return TextCompletionResponse which we then send to user
+
+        Args:
+            response (ModelResponse): The chat completion response to convert
+
+        Returns:
+            TextCompletionResponse: The converted text completion response
+
+        Example:
+            chat_response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi"}])
+            text_response = convert_chat_to_text_completion(chat_response)
+        """
+        transformed_logprobs: Final = (
+            LiteLLMResponseObjectHandler._convert_provider_response_logprobs_to_text_completion_logprobs(
+                response=response,
+                custom_llm_provider=custom_llm_provider,
+            )
+        )
+
+        text_completion_response["id"] = response.get("id", None)
+        text_completion_response["object"] = "text_completion"
+        text_completion_response["created"] = response.get("created", None)
+        text_completion_response["model"] = response.get("model", None)
+        choices_list: Final[list[TextChoices]] = []
+
+        # Convert each choice to TextChoices
+        for choice in response["choices"]:
+            text_choices = TextChoices()
+            text_choices["text"] = choice["message"]["content"]
+            text_choices["index"] = choice["index"]
+            text_choices["logprobs"] = transformed_logprobs
+            text_choices["finish_reason"] = choice["finish_reason"]
+            choices_list.append(text_choices)
+
+        text_completion_response["choices"] = choices_list
+        text_completion_response["usage"] = response.get("usage", None)
+        text_completion_response._hidden_params = HiddenParams(**response._hidden_params)
+        return text_completion_response
+
+    @staticmethod
+    def _convert_provider_response_logprobs_to_text_completion_logprobs(
+        response: ModelResponse,
+        custom_llm_provider: str | None = None,
+    ) -> TextCompletionLogprobs | None:
+        """
+        Convert logprobs from provider to OpenAI.Completion() format
+
+        Only supported for HF TGI models
+        """
+        transformed_logprobs: Final[TextCompletionLogprobs | None] = None
+
+        return transformed_logprobs
+
+
+def _should_convert_tool_call_to_json_mode(
+    tool_calls: (
+        Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | Sequence[DatabricksTool] | None
+    ) = None,
+    convert_tool_call_to_json_mode: bool | None = None,
+) -> bool:
+    """
+    Determine if tool calls should be converted to JSON mode
+    """
+    if convert_tool_call_to_json_mode and tool_calls is not None and len(tool_calls) == 1:
+        function: Final = tool_calls[0].get("function")
+        return function is not None and function["name"] == RESPONSE_FORMAT_TOOL_NAME
+    return False
+
+
+def convert_to_model_response_object(
+    response_object: dict | None = None,
+    model_response_object: ModelResponse
+    | EmbeddingResponse
+    | ImageResponse
+    | TranscriptionResponse
+    | RerankResponse
+    | None = None,
+    response_type: Literal[
+        "completion", "embedding", "image_generation", "audio_transcription", "rerank"
+    ] = "completion",
+    stream=False,
+    start_time=None,
+    end_time=None,
+    hidden_params: dict | None = None,
+    _response_headers: dict | None = None,
+    convert_tool_call_to_json_mode: bool | None = None,  # used for supporting 'json_schema' on older models
+):
+    additional_headers = get_response_headers(_response_headers)
+
+    if hidden_params is None:
+        hidden_params = {}
+
+    # Preserve existing additional_headers if they contain important provider headers
+    # For responses API, additional_headers may already be set with LLM provider headers
+    existing_additional_headers: Final = hidden_params.get("additional_headers", {})
+    if existing_additional_headers and _response_headers is None:
+        # Keep existing headers when _response_headers is None (responses API case)
+        additional_headers = existing_additional_headers
+    else:
+        # Merge new headers with existing ones
+        if existing_additional_headers:
+            additional_headers.update(existing_additional_headers)
+
+    hidden_params["additional_headers"] = additional_headers
+
+    ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
+    # Some OpenAI-compatible providers (e.g., Apertis) return empty error objects
+    # even on success. Only raise if the error contains meaningful data.
+    if response_object is not None and "error" in response_object and response_object["error"] is not None:
+        error_obj: Final = response_object["error"]
+        has_meaningful_error = False
+
+        if isinstance(error_obj, dict):
+            # Check if error dict has non-empty message or non-null code
+            error_message: Final = error_obj.get("message", "")
+            error_code: Final = error_obj.get("code")
+            has_meaningful_error = bool(error_message) or error_code is not None
+        elif isinstance(error_obj, str):
+            # String error is meaningful if non-empty
+            has_meaningful_error = bool(error_obj)
+        else:
+            # Any other truthy value is considered meaningful
+            has_meaningful_error = True
+
+        if has_meaningful_error:
+            error_args: Final = {"status_code": 422, "message": "Error in response object"}
+            if isinstance(error_obj, dict):
+                if "code" in error_obj:
+                    error_args["status_code"] = error_obj["code"]
+                if "message" in error_obj:
+                    if isinstance(error_obj["message"], dict):
+                        message_str = json.dumps(error_obj["message"])
+                    else:
+                        message_str = str(error_obj["message"])
+                    error_args["message"] = message_str
+            raised_exception: Final = Exception()
+            setattr(raised_exception, "status_code", error_args["status_code"])
+            setattr(raised_exception, "message", error_args["message"])
+            raise raised_exception
+
+    try:
+        if response_type == "completion" and (
+            model_response_object is None or isinstance(model_response_object, ModelResponse)
+        ):
+            if response_object is None or model_response_object is None:
+                raise Exception("Error in response object format")
+            if stream is True:
+                # for returning cached responses, we need to yield a generator
+                return convert_to_streaming_response(response_object=response_object)
+            choice_list: Final[list[Choices]] = []
+
+            if not response_object.get("choices") or not isinstance(response_object["choices"], Iterable):
+                from litellm.exceptions import APIError
+
+                raise APIError(
+                    status_code=500,
+                    message=(
+                        "LiteLLM: provider returned a response with no 'choices'. "
+                        f"Raw keys: {list(response_object.keys())}"
+                    ),
+                    llm_provider="",
+                    model="",
+                )
+
+            for idx, choice in enumerate(response_object["choices"]):
+                ## HANDLE JSON MODE - anthropic returns single function call]
+                tool_calls = choice["message"].get("tool_calls", None)
+                if tool_calls is not None:
+                    _openai_tool_calls = []
+                    for _tc in tool_calls:
+                        _openai_tc = chat_completion_tool_call_from_dict(_tc)
+                        _openai_tool_calls.append(_openai_tc)
+                    fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
+
+                    if fixed_tool_calls is not None:
+                        tool_calls = fixed_tool_calls
+
+                message: Message | None = None
+                finish_reason: str | None = None
+                if tool_calls is not None and _should_convert_tool_call_to_json_mode(
+                    tool_calls=tool_calls,
+                    convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
+                ):
+                    # to support 'json_schema' logic on older models
+                    json_mode_content_str: str | None = tool_calls[0]["function"].get("arguments")
+                    if json_mode_content_str is not None:
+                        message = litellm.Message(content=json_mode_content_str)
+                        finish_reason = "stop"
+                if message is None:
+                    # Preserve provider_specific_fields if already present
+                    # in the response (e.g. from proxy passthrough)
+                    provider_specific_fields = dict(choice["message"].get("provider_specific_fields", None) or {})
+                    for f in choice["message"].keys() - _MESSAGE_FIELDS:
+                        provider_specific_fields[f] = choice["message"][f]
+
+                    # Handle reasoning models that display `reasoning_content` within `content`
+                    reasoning_content, content = _extract_reasoning_content(choice["message"])
+
+                    # Handle thinking models that display `thinking_blocks` within `content`
+                    thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = (
+                        None
+                    )
+                    if "thinking_blocks" in choice["message"]:
+                        thinking_blocks = choice["message"]["thinking_blocks"]
+                        provider_specific_fields["thinking_blocks"] = thinking_blocks
+
+                    message = Message(
+                        content=content,
+                        role=choice["message"]["role"] or "assistant",
+                        function_call=choice["message"].get("function_call", None),
+                        tool_calls=tool_calls,
+                        audio=choice["message"].get("audio", None),
+                        provider_specific_fields=provider_specific_fields,
+                        reasoning_content=reasoning_content,
+                        thinking_blocks=thinking_blocks,
+                        annotations=choice["message"].get("annotations", None),
+                        images=_normalize_images_for_message(choice["message"].get("images", None)),
+                    )
+                    finish_reason = choice.get("finish_reason", None)
+                if finish_reason is None:
+                    # gpt-4 vision can return 'finish_reason' or 'finish_details'
+                    finish_reason = choice.get("finish_details") or "stop"
+                if finish_reason == "stop" and message.tool_calls and len(message.tool_calls) > 0:
+                    finish_reason = "tool_calls"
+
+                ## PROVIDER SPECIFIC FIELDS ##
+                provider_specific_fields = {f: choice[f] for f in choice.keys() - _CHOICES_FIELDS}
+
+                logprobs = choice.get("logprobs", None)
+                enhancements = choice.get("enhancements", None)
+                choice = Choices(
+                    finish_reason=finish_reason,
+                    index=idx,
+                    message=message,
+                    logprobs=logprobs,
+                    enhancements=enhancements,
+                    provider_specific_fields=provider_specific_fields,
+                )
+                choice_list.append(choice)
+            model_response_object.choices = choice_list
+
+            if "usage" in response_object and response_object["usage"] is not None:
+                usage_object: Final = litellm.Usage(**response_object["usage"])
+                setattr(model_response_object, "usage", usage_object)
+            if "created" in response_object:
+                model_response_object.created = _safe_convert_created_field(response_object["created"])
+
+            if "id" in response_object:
+                # Preserve the auto-generated id from ModelResponse.__init__
+                # when the provider returns a falsy id (None, "")
+                model_response_object.id = response_object["id"] or model_response_object.id
+
+            if "system_fingerprint" in response_object:
+                model_response_object.system_fingerprint = response_object["system_fingerprint"]
+
+            if "model" in response_object:
+                if model_response_object.model is None:
+                    model_response_object.model = response_object["model"]
+                elif "/" in model_response_object.model and response_object["model"] is not None:
+                    openai_compatible_provider: Final = model_response_object.model.split("/")[0]
+                    model_response_object.model = openai_compatible_provider + "/" + response_object["model"]
+
+            if start_time is not None and end_time is not None:
+                if isinstance(start_time, type(end_time)):
+                    model_response_object._response_ms = (end_time - start_time).total_seconds() * 1000
+
+            if hidden_params is not None:
+                if model_response_object._hidden_params is None:
+                    model_response_object._hidden_params = {}
+                model_response_object._hidden_params.update(hidden_params)
+
+            if _response_headers is not None:
+                model_response_object._response_headers = _response_headers
+
+            for k, v in response_object.items():
+                if k not in _MODEL_RESPONSE_FIELDS:
+                    setattr(model_response_object, k, v)
+
+            return model_response_object
+        elif response_type == "embedding" and (
+            model_response_object is None or isinstance(model_response_object, EmbeddingResponse)
+        ):
+            if response_object is None:
+                raise Exception("Error in response object format")
+
+            if model_response_object is None:
+                model_response_object = EmbeddingResponse()
+
+            if "model" in response_object:
+                model_response_object.model = response_object["model"]
+
+            if "object" in response_object:
+                model_response_object.object = response_object["object"]
+
+            model_response_object.data = response_object["data"]
+
+            if "usage" in response_object and response_object["usage"] is not None:
+                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
+                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
+                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+
+            if start_time is not None and end_time is not None:
+                model_response_object._response_ms = (
+                    end_time - start_time
+                ).total_seconds() * 1000  # return response latency in ms like openai
+
+            if hidden_params is not None:
+                model_response_object._hidden_params = hidden_params
+
+            if _response_headers is not None:
+                model_response_object._response_headers = _response_headers
+
+            return model_response_object
+        elif response_type == "image_generation" and (
+            model_response_object is None or isinstance(model_response_object, ImageResponse)
+        ):
+            if response_object is None:
+                raise Exception("Error in response object format")
+
+            return LiteLLMResponseObjectHandler.convert_to_image_response(
+                response_object=response_object,
+                model_response_object=model_response_object,
+                hidden_params=hidden_params,
+            )
+
+        elif response_type == "audio_transcription" and (
+            model_response_object is None or isinstance(model_response_object, TranscriptionResponse)
+        ):
+            if response_object is None:
+                raise Exception("Error in response object format")
+
+            if model_response_object is None:
+                model_response_object = TranscriptionResponse()
+
+            if "text" in response_object:
+                model_response_object.text = response_object["text"]
+
+            optional_keys: Final = ["language", "task", "duration", "words", "segments"]
+            for key in optional_keys:  # not guaranteed to be in response
+                if key in response_object:
+                    setattr(model_response_object, key, response_object[key])
+
+            if "usage" in response_object and response_object["usage"] is not None:
+                tr_usage_object: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
+
+                if response_object["usage"].get("type", None) == "duration":
+                    tr_usage_object = TranscriptionUsageDurationObject(**response_object["usage"])
+                elif response_object["usage"].get("type", None) == "tokens":
+                    tr_usage_object = TranscriptionUsageTokensObject(**response_object["usage"])
+                if tr_usage_object is not None:
+                    setattr(model_response_object, "usage", tr_usage_object)
+
+            if hidden_params is not None:
+                model_response_object._hidden_params = hidden_params
+
+            # Store internally-calculated duration in _hidden_params for cost
+            # tracking without exposing it in the response body. Must be set
+            # after hidden_params assignment to avoid being overwritten.
+            if "_audio_transcription_duration" in response_object:
+                model_response_object._hidden_params["audio_transcription_duration"] = response_object[
+                    "_audio_transcription_duration"
+                ]
+
+            if _response_headers is not None:
+                model_response_object._response_headers = _response_headers
+
+            return model_response_object
+        elif response_type == "rerank" and (
+            model_response_object is None or isinstance(model_response_object, RerankResponse)
+        ):
+            if response_object is None:
+                raise Exception("Error in response object format")
+
+            if model_response_object is None:
+                model_response_object = RerankResponse(**response_object)
+                return model_response_object
+
+            if "id" in response_object:
+                model_response_object.id = response_object["id"]
+
+            if "meta" in response_object:
+                model_response_object.meta = response_object["meta"]
+
+            if "results" in response_object:
+                model_response_object.results = response_object["results"]
+
+            return model_response_object
+    except Exception as e:
+        from litellm.exceptions import APIError
+
+        if isinstance(e, APIError):
+            raise
+
+        received_args: Final = dict(
+            response_object=response_object,
+            model_response_object=model_response_object,
+            response_type=response_type,
+            stream=stream,
+            start_time=start_time,
+            end_time=end_time,
+            convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
+        )
+        raise Exception(f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}")

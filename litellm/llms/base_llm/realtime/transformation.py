@@ -1,0 +1,97 @@
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any
+
+import httpx
+
+from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
+from litellm.types.realtime import (
+    RealtimeResponseTransformInput,
+    RealtimeResponseTypedDict,
+)
+
+from ..chat.transformation import BaseLLMException
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
+
+
+class BaseRealtimeConfig(ABC):
+    @abstractmethod
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        api_key: str | None = None,
+    ) -> dict:
+        pass
+
+    @abstractmethod
+    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
+        """
+        OPTIONAL
+
+        Get the complete url for the request
+
+        Some providers need `model` in `api_base`
+        """
+        return api_base or ""
+
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+        raise BaseLLMException(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )
+
+    @abstractmethod
+    def transform_realtime_request(
+        self,
+        message: str,
+        model: str,
+        session_configuration_request: str | None = None,
+    ) -> list[str]:
+        pass
+
+    def is_setup_message(self, msg_obj: dict) -> bool:
+        return False
+
+    def is_content_message(self, msg_obj: dict) -> bool:
+        return False
+
+    def requires_session_configuration(
+        self,
+    ) -> bool:  # initial configuration message sent to setup the realtime session
+        return False
+
+    def session_configuration_request(self, model: str) -> str | None:  # message sent to setup the realtime session
+        return None
+
+    def transform_session_created_event(
+        self,
+        model: str,
+        logging_session_id: str,
+        session_configuration_request: str | None = None,
+    ) -> dict | OpenAIRealtimeStreamSessionEvents | None:
+        """
+        Optional hook for providers that defer session setup until client `session.update`.
+
+        Return an OpenAI-compatible `session.created` payload when the proxy should
+        emit a synthetic event immediately after backend websocket connection.
+        """
+        return None
+
+    @abstractmethod
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:  # message sent to setup the realtime session
+        """
+        Keep this state less - leave the state management (e.g. tracking current_output_item_id, current_response_id, current_conversation_id, current_delta_chunks) to the caller.
+        """

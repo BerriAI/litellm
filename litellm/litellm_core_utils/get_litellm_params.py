@@ -1,0 +1,186 @@
+from typing import Final
+
+from litellm.llms.openai.data_residency import infer_openai_data_residency
+
+AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
+    {
+        "aws_region_name",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "aws_bedrock_runtime_endpoint",
+        "aws_bedrock_project_id",
+    }
+)
+
+# Pre-define optional kwargs keys as frozenset for O(1) lookups
+# These are extracted from kwargs only if present, avoiding unnecessary .get() calls
+OPTIONAL_KWARGS_KEYS: Final = (
+    frozenset(
+        {
+            "azure_ad_token",
+            "tenant_id",
+            "client_id",
+            "client_secret",
+            "azure_username",
+            "azure_password",
+            "azure_scope",
+            "timeout",
+            "gcs_bucket_name",
+            "bucket_name",
+            "vertex_credentials",
+            "vertex_project",
+            "vertex_location",
+            "vertex_ai_project",
+            "vertex_ai_location",
+            "vertex_ai_credentials",
+            "tpm",
+            "rpm",
+            "itpm",
+            "otpm",
+            "use_xai_oauth",
+        }
+    )
+    | AWS_CREDENTIAL_KWARGS_KEYS
+)
+
+# Backward-compatible alias for existing imports/tests.
+_OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
+
+
+def _get_base_model_from_litellm_call_metadata(
+    metadata: dict | None,
+) -> str | None:
+    if metadata is None:
+        return None
+    model_info: Final = metadata.get("model_info")
+    if model_info:
+        return model_info.get("base_model")
+    return None
+
+
+def get_litellm_params(
+    api_key: str | None = None,
+    force_timeout=600,
+    azure=False,
+    logger_fn=None,
+    verbose=False,
+    hugging_face=False,
+    replicate=False,
+    together_ai=False,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    litellm_call_id=None,
+    model_alias_map=None,
+    completion_call_id=None,
+    metadata: dict | None = None,
+    model_info=None,
+    proxy_server_request=None,
+    acompletion=None,
+    aembedding=None,
+    allm_passthrough_route=None,
+    preset_cache_key=None,
+    no_log=None,
+    input_cost_per_second=None,
+    input_cost_per_token=None,
+    output_cost_per_token=None,
+    output_cost_per_second=None,
+    cost_per_query=None,
+    cooldown_time=None,
+    text_completion=None,
+    azure_ad_token_provider=None,
+    user_continue_message=None,
+    base_model: str | None = None,
+    litellm_trace_id: str | None = None,
+    litellm_session_id: str | None = None,
+    hf_model_name: str | None = None,
+    custom_prompt_dict: dict | None = None,
+    litellm_metadata: dict | None = None,
+    disable_add_transform_inline_image_block: bool | None = None,
+    drop_params: bool | None = None,
+    prompt_id: str | None = None,
+    prompt_variables: dict | None = None,
+    async_call: bool | None = None,
+    ssl_verify: bool | None = None,
+    merge_reasoning_content_in_choices: bool | None = None,
+    use_litellm_proxy: bool | None = None,
+    api_version: str | None = None,
+    max_retries: int | None = None,
+    litellm_request_debug: bool | None = None,
+    **kwargs,
+) -> dict:
+    _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
+    resolved_metadata: Final = _litellm_metadata_dict.copy() if not metadata and _litellm_metadata_dict else metadata
+
+    # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
+    _meta: Final = resolved_metadata or {}
+    if litellm_session_id is None:
+        litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
+    if litellm_trace_id is None:
+        litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
+
+    data_residency: Final[str | None] = infer_openai_data_residency(custom_llm_provider, api_base)
+
+    # Build base dict with explicit parameters (always included)
+    litellm_params: Final = {
+        "acompletion": acompletion,
+        "allm_passthrough_route": allm_passthrough_route,
+        "api_key": api_key,
+        "force_timeout": force_timeout,
+        "logger_fn": logger_fn,
+        "verbose": verbose,
+        "custom_llm_provider": custom_llm_provider,
+        "api_base": api_base,
+        "data_residency": data_residency,
+        "litellm_call_id": litellm_call_id,
+        "model_alias_map": model_alias_map,
+        "completion_call_id": completion_call_id,
+        "aembedding": aembedding,
+        "metadata": resolved_metadata,
+        "model_info": model_info,
+        "proxy_server_request": proxy_server_request,
+        "preset_cache_key": preset_cache_key,
+        "no-log": no_log or kwargs.get("no-log"),
+        "stream_response": {},  # litellm_call_id: ModelResponse Dict
+        "input_cost_per_token": input_cost_per_token,
+        "input_cost_per_second": input_cost_per_second,
+        "output_cost_per_token": output_cost_per_token,
+        "output_cost_per_second": output_cost_per_second,
+        "cost_per_query": cost_per_query,
+        "cooldown_time": cooldown_time,
+        "text_completion": text_completion,
+        "azure_ad_token_provider": azure_ad_token_provider,
+        "user_continue_message": user_continue_message,
+        "base_model": base_model
+        or (_get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
+        "litellm_trace_id": litellm_trace_id,
+        "litellm_session_id": litellm_session_id,
+        "hf_model_name": hf_model_name,
+        "custom_prompt_dict": custom_prompt_dict,
+        "litellm_metadata": litellm_metadata,
+        "disable_add_transform_inline_image_block": disable_add_transform_inline_image_block,
+        "drop_params": drop_params,
+        "prompt_id": prompt_id,
+        "prompt_variables": prompt_variables,
+        "async_call": async_call,
+        "ssl_verify": ssl_verify,
+        "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
+        "api_version": api_version,
+        "max_retries": max_retries,
+        "use_litellm_proxy": use_litellm_proxy,
+        "litellm_request_debug": litellm_request_debug,
+    }
+
+    # Sparse extraction: only add kwargs keys that are actually present
+    if kwargs:
+        for key in OPTIONAL_KWARGS_KEYS:
+            if key in kwargs:
+                litellm_params[key] = kwargs[key]
+
+    return litellm_params

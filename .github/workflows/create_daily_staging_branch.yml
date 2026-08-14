@@ -1,0 +1,49 @@
+name: Create Daily Staging Branch
+
+on:
+  schedule:
+    - cron: "0 0,12 * * *" # Runs every 12 hours at midnight and noon UTC
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  create-staging-branch:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create daily staging branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME="litellm_oss_staging_$(date +'%m_%d_%Y')"
+          echo "Creating branch: $BRANCH_NAME"
+          if gh api "repos/${{ github.repository }}/git/ref/heads/$BRANCH_NAME" --silent 2>/dev/null; then
+            echo "Branch $BRANCH_NAME already exists. Skipping creation."
+            exit 0
+          fi
+          MAIN_SHA=$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')
+          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/heads/$BRANCH_NAME" -f sha="$MAIN_SHA" --silent
+          echo "Successfully created branch: $BRANCH_NAME at $MAIN_SHA"
+
+  create-internal-dev-branch:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create internal dev branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME="litellm_internal_dev_$(date +'%m_%d_%Y')"
+          echo "Creating branch: $BRANCH_NAME"
+          if gh api "repos/${{ github.repository }}/git/ref/heads/$BRANCH_NAME" --silent 2>/dev/null; then
+            echo "Branch $BRANCH_NAME already exists. Skipping creation."
+            exit 0
+          fi
+          MAIN_SHA=$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')
+          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/heads/$BRANCH_NAME" -f sha="$MAIN_SHA" --silent
+          echo "Successfully created branch: $BRANCH_NAME at $MAIN_SHA"

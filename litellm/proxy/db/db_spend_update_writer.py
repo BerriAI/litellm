@@ -1,0 +1,2017 @@
+"""
+Module responsible for
+
+1. Writing spend increments to either in memory list of transactions or to redis
+2. Reading increments from redis or in memory list of transactions and committing them to db
+"""
+
+import asyncio
+import copy
+import json
+import os
+import random
+import time
+import traceback
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import RedisCache
+from litellm.constants import (
+    DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+    DB_SPEND_UPDATE_JOB_NAME,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+)
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.proxy._types import (
+    DB_RETRY_SAFE_ERROR_TYPES,
+    BaseDailySpendTransaction,
+    DailyAgentSpendTransaction,
+    DailyEndUserSpendTransaction,
+    DailyOrganizationSpendTransaction,
+    DailyTagSpendTransaction,
+    DailyTeamSpendTransaction,
+    DailyUserSpendTransaction,
+    DBSpendUpdateTransactions,
+    Litellm_EntityType,
+    SpendLogsMetadata,
+    SpendLogsPayload,
+    SpendUpdateQueueItem,
+    ToolDiscoveryQueueItem,
+)
+from litellm.proxy.db.daily_spend_bulk_upsert import (
+    DAILY_SPEND_TABLES,
+    build_bulk_upsert,
+    merge_by_conflict_key,
+)
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
+    DailySpendUpdateQueue,
+)
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
+    ToolDiscoveryQueue,
+)
+from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.compression_savings import (
+    extract_compression_saved_tokens,
+)
+from litellm.proxy.spend_tracking.savings import (
+    compute_savings_spend,
+    extract_cache_creation_tokens,
+    extract_cache_read_tokens,
+)
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+else:
+    PrismaClient = Any
+    ProxyLogging = Any
+
+
+def _get_llm_router():
+    """The proxy's router, or None outside a running proxy.
+
+    Injected rather than imported where it is used, so the savings computation stays
+    a pure function of its arguments and the caller owns where the router comes from.
+    """
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        return llm_router
+    except Exception:  # noqa: BLE001  # no proxy in scope; savings degrade to zero
+        return None
+
+
+class DBSpendUpdateWriter:
+    """
+    Module responsible for
+
+    1. Writing spend increments to either in memory list of transactions or to redis
+    2. Reading increments from redis or in memory list of transactions and committing them to db
+    """
+
+    def __init__(
+        self,
+        redis_cache: RedisCache | None = None,
+    ):
+        self.redis_cache = redis_cache
+        self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
+        self.pod_lock_manager = PodLockManager()
+        self.spend_update_queue = SpendUpdateQueue()
+        self.tool_discovery_queue = ToolDiscoveryQueue()
+        self.daily_spend_update_queue = DailySpendUpdateQueue()
+        self.daily_team_spend_update_queue = DailySpendUpdateQueue()
+        self.daily_end_user_spend_update_queue = DailySpendUpdateQueue()
+        self.daily_agent_spend_update_queue = DailySpendUpdateQueue()
+        self.daily_org_spend_update_queue = DailySpendUpdateQueue()
+        self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
+
+    async def update_database(
+        # LiteLLM management object fields
+        self,
+        token: str | None,
+        user_id: str | None,
+        end_user_id: str | None,
+        team_id: str | None,
+        org_id: str | None,
+        # Completion object fields
+        kwargs: dict | None,
+        completion_response: litellm.ModelResponse | Any | Exception | None,
+        start_time: datetime | None,
+        end_time: datetime | None,
+        response_cost: float | None,
+    ):
+        from litellm.proxy.proxy_server import (
+            disable_spend_logs,
+            litellm_proxy_budget_name,
+            prisma_client,
+        )
+        from litellm.proxy.utils import ProxyUpdateSpend, hash_token
+
+        try:
+            verbose_proxy_logger.debug(
+                "Enters prisma db call, response_cost: %s, token: %s; user_id: %s; team_id: %s",
+                response_cost,
+                token,
+                user_id,
+                team_id,
+            )
+            if ProxyUpdateSpend.disable_spend_updates() is True:
+                return
+            if token is not None and isinstance(token, str) and token.startswith("sk-"):
+                hashed_token = hash_token(token=token)
+            else:
+                hashed_token = token
+
+            ## CREATE SPEND LOG PAYLOAD ##
+            from litellm.proxy.spend_tracking.spend_tracking_utils import (
+                get_logging_payload,
+            )
+
+            payload: Final = get_logging_payload(
+                kwargs=kwargs,
+                response_obj=completion_response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            payload["spend"] = response_cost or 0.0
+            if isinstance(payload["startTime"], datetime):
+                payload["startTime"] = payload["startTime"].isoformat()
+            if isinstance(payload["endTime"], datetime):
+                payload["endTime"] = payload["endTime"].isoformat()
+
+            if org_id is not None and org_id != "":
+                payload["organization_id"] = org_id
+
+            if team_id is not None and team_id != "":
+                payload["team_id"] = team_id
+
+            if disable_spend_logs is False:
+                await self._insert_spend_log_to_db(
+                    payload=payload,
+                    prisma_client=prisma_client,
+                )
+                await self._enqueue_tool_usage_transaction(
+                    payload=payload,
+                    completion_response=completion_response,
+                    prisma_client=prisma_client,
+                    kwargs=kwargs,
+                )
+                await self._enqueue_autorouter_turn_transaction(
+                    payload=payload,
+                    prisma_client=prisma_client,
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
+                )
+
+            # Single task replaces 11 create_task() calls
+            asyncio.create_task(
+                self._batch_database_updates(
+                    response_cost=response_cost,
+                    user_id=user_id,
+                    hashed_token=hashed_token,
+                    team_id=team_id,
+                    org_id=org_id,
+                    end_user_id=end_user_id,
+                    prisma_client=prisma_client,
+                    litellm_proxy_budget_name=litellm_proxy_budget_name,
+                    payload=payload,
+                )
+            )
+
+            self._enqueue_tool_registry_upsert(
+                kwargs=kwargs,
+                completion_response=completion_response,
+                hashed_token=hashed_token,
+                team_id=team_id,
+            )
+
+            verbose_proxy_logger.debug("Runs spend update on all tables")
+        except Exception:
+            spend_log_error(
+                "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
+                "may not have completed for this request. "
+                "response_cost=%s, token=%s, user_id=%s, team_id=%s, org_id=%s, end_user_id=%s",
+                response_cost,
+                token,
+                user_id,
+                team_id,
+                org_id,
+                end_user_id,
+            )
+
+    async def _enqueue_tool_usage_transaction(
+        self,
+        payload: SpendLogsPayload,
+        completion_response: "litellm.ModelResponse | Any | Exception | None",
+        prisma_client: "PrismaClient | None",
+        kwargs: "dict | None" = None,
+    ) -> None:
+        try:
+            if prisma_client is None:
+                return
+            from litellm.proxy.db.spend_log_tool_index import (
+                build_tool_usage_transaction,
+            )
+
+            transaction: Final = build_tool_usage_transaction(
+                request_id=payload["request_id"],
+                start_time_iso=str(payload["startTime"]),
+                mcp_namespaced_tool_name=payload.get("mcp_namespaced_tool_name"),
+                spend=payload["spend"],
+                total_tokens=payload["total_tokens"],
+                completion_response=completion_response,
+                realtime_tool_calls=(kwargs or {}).get("realtime_tool_calls"),
+            )
+            if transaction is None:
+                return
+            async with prisma_client._tool_usage_transactions_lock:
+                prisma_client.tool_usage_transactions.append(transaction)
+        except Exception as e:
+            verbose_proxy_logger.debug("_enqueue_tool_usage_transaction error (non-blocking): %s", e)
+
+    async def _enqueue_autorouter_turn_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: "PrismaClient | None",
+    ) -> None:
+        try:
+            if prisma_client is None:
+                return
+            metadata_raw: Final = payload.get("metadata")
+            if not metadata_raw:
+                return
+            metadata: Final = json.loads(metadata_raw)
+            if not isinstance(metadata, dict) or not metadata.get("routing_decision"):
+                return
+            from litellm.proxy.db.autorouter_session_rollup import (
+                build_autorouter_turn_transaction,
+            )
+
+            usage_object_raw: Final = metadata.get("usage_object")
+            savings_spend: Final = compute_savings_spend(
+                model=payload.get("model"),
+                custom_llm_provider=payload.get("custom_llm_provider"),
+                compression_saved_tokens=0,
+                routing_decision=metadata.get("routing_decision"),
+                usage_object=usage_object_raw if isinstance(usage_object_raw, dict) else None,
+                model_id=payload.get("model_id"),
+                llm_router=_get_llm_router,
+                cost_breakdown=metadata.get("cost_breakdown"),
+            )
+            transaction: Final = build_autorouter_turn_transaction(
+                payload=payload,
+                metadata=metadata,
+                saved_spend=savings_spend.autorouter,
+            )
+            if transaction is None:
+                return
+            async with prisma_client._autorouter_turn_transactions_lock:
+                prisma_client.autorouter_turn_transactions.append(transaction)
+        except Exception as e:  # noqa: BLE001  # a metrics enqueue must never fail the spend write
+            verbose_proxy_logger.debug("_enqueue_autorouter_turn_transaction error (non-blocking): %s", e)
+
+    def _enqueue_tool_registry_upsert(
+        self,
+        kwargs: dict | None,
+        completion_response: Any | None,
+        hashed_token: str | None = None,
+        team_id: str | None = None,
+    ) -> None:
+        """
+        Extract tool names from the LLM request and response and enqueue them
+        for upsert into LiteLLM_ToolTable via ToolDiscoveryQueue.
+
+        Handles four sources:
+        - MCP tools: standard_logging_object.mcp_tool_call_metadata.namespaced_tool_name
+        - Response tool_calls (OpenAI / Anthropic pass-through converted to OpenAI format):
+            completion_response.choices[].message.tool_calls[].function.name
+        - Request tools array (OpenAI format): kwargs["tools"][].function.name
+        - Request tools array (Anthropic /messages format): kwargs["passthrough_logging_payload"]
+            ["request_body"]["tools"][].name
+        """
+        try:
+            if kwargs is None:
+                return
+
+            # Extract key_alias from kwargs metadata if available
+            key_alias: str | None = None
+            _litellm_params: Final = kwargs.get("litellm_params") or {}
+            _metadata: Final = _litellm_params.get("metadata") or {}
+            key_alias = _metadata.get("user_api_key_alias") or None
+            user_agent: Final = _metadata.get("user_agent") or None
+
+            def _enqueue(tool_name: str, origin: str = "user_defined") -> None:
+                self.tool_discovery_queue.add_update(
+                    ToolDiscoveryQueueItem(
+                        tool_name=tool_name,
+                        origin=origin,
+                        key_hash=hashed_token,
+                        team_id=team_id,
+                        key_alias=key_alias,
+                        user_agent=user_agent,
+                    )
+                )
+
+            # --- MCP tool calls ---
+            sl_object: Final = kwargs.get("standard_logging_object")
+            if sl_object is not None:
+                mcp_metadata: Final = (sl_object.get("metadata", {}) or {}).get("mcp_tool_call_metadata")
+                if mcp_metadata and isinstance(mcp_metadata, dict):
+                    tool_name = mcp_metadata.get("namespaced_tool_name") or mcp_metadata.get("name")
+                    mcp_server_name: Final = mcp_metadata.get("mcp_server_name")
+                    if tool_name:
+                        _enqueue(tool_name, origin=mcp_server_name or "user_defined")
+
+            # --- Tools from request body (OpenAI format: tools[].function.name) ---
+            request_tools: Final = kwargs.get("tools") or []
+            for tool_def in request_tools:
+                if not isinstance(tool_def, dict):
+                    continue
+                fn = tool_def.get("function") or {}
+                name = fn.get("name") if isinstance(fn, dict) else None
+                if name:
+                    _enqueue(name)
+
+            # --- Tools from Anthropic /messages pass-through request body
+            #     (Anthropic format: tools[].name, no "function" wrapper) ---
+            passthrough_payload: Final = kwargs.get("passthrough_logging_payload") or {}
+            request_body: Final = (
+                passthrough_payload.get("request_body") if isinstance(passthrough_payload, dict) else None
+            ) or {}
+            for tool_def in request_body.get("tools") or []:
+                if not isinstance(tool_def, dict):
+                    continue
+                name = tool_def.get("name")
+                if name:
+                    _enqueue(name)
+
+            # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
+            from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
+
+            for tool_name in response_tool_call_names(completion_response):
+                _enqueue(tool_name)
+        except Exception as e:
+            verbose_proxy_logger.debug("_enqueue_tool_registry_upsert error (non-blocking): %s", e)
+
+    async def _batch_database_updates(
+        self,
+        *,
+        response_cost: float | None,
+        user_id: str | None,
+        hashed_token: str | None,
+        team_id: str | None,
+        org_id: str | None,
+        end_user_id: str | None,
+        prisma_client: PrismaClient | None,
+        litellm_proxy_budget_name: str | None,
+        payload: SpendLogsPayload,
+    ):
+        """
+        Runs all 11 spend-update helpers sequentially inside a single asyncio task.
+
+        Each helper is wrapped in try/except so one failure doesn't prevent the others.
+
+        The deepcopy runs here, off the awaited request path, so the daily spend
+        helpers get a payload isolated from the spend-log queue entry and the caller.
+        """
+        payload_copy: Final = copy.deepcopy(payload)
+        request_tags: Final = payload_copy.get("request_tags")
+        try:
+            await self._update_user_db(
+                response_cost=response_cost,
+                user_id=user_id,
+                prisma_client=prisma_client,
+                litellm_proxy_budget_name=litellm_proxy_budget_name,
+                end_user_id=end_user_id,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_user_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self._update_key_db(
+                response_cost=response_cost,
+                hashed_token=hashed_token,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_key_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self._update_team_db(
+                response_cost=response_cost,
+                team_id=team_id,
+                user_id=user_id,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_team_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self._update_org_db(
+                response_cost=response_cost,
+                org_id=org_id,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_org_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self._update_tag_db(
+                response_cost=response_cost,
+                request_tags=request_tags,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_tag_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        _agent_id_for_spend: Final = payload_copy.get("agent_id")
+        try:
+            await self._update_agent_db(
+                response_cost=response_cost,
+                agent_id=_agent_id_for_spend,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_agent_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_user_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_user_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_end_user_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_end_user_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_agent_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_agent_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_team_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_team_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_org_transaction(
+                payload=payload_copy,
+                org_id=org_id,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_org_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_tag_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_tag_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+    async def _update_key_db(
+        self,
+        response_cost: float | None,
+        hashed_token: str | None,
+        prisma_client: PrismaClient | None,
+    ):
+        try:
+            if hashed_token is None or prisma_client is None:
+                return
+
+            await self.spend_update_queue.add_update(
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.KEY,
+                    entity_id=hashed_token,
+                    response_cost=response_cost,
+                )
+            )
+        except Exception as e:
+            spend_log_error("Update Key DB Call failed to execute - %s", str(e), exc=e)
+            raise e
+
+    async def _update_user_db(
+        self,
+        response_cost: float | None,
+        user_id: str | None,
+        prisma_client: PrismaClient | None,
+        litellm_proxy_budget_name: str | None,
+        end_user_id: str | None = None,
+    ):
+        """
+        - Update that user's row
+        - Update litellm-proxy-budget row (global proxy spend)
+        """
+        try:
+            if prisma_client is not None:  # update
+                user_ids: Final = [user_id]
+                if litellm.max_budget > 0:  # track global proxy budget, if user set max budget
+                    user_ids.append(litellm_proxy_budget_name)
+
+                for _id in user_ids:
+                    if _id is not None:
+                        await self.spend_update_queue.add_update(
+                            update=SpendUpdateQueueItem(
+                                entity_type=Litellm_EntityType.USER,
+                                entity_id=_id,
+                                response_cost=response_cost,
+                            )
+                        )
+
+                if end_user_id is not None:
+                    await self.spend_update_queue.add_update(
+                        update=SpendUpdateQueueItem(
+                            entity_type=Litellm_EntityType.END_USER,
+                            entity_id=end_user_id,
+                            response_cost=response_cost,
+                        )
+                    )
+        except Exception as e:
+            spend_log_error(
+                "Spend tracking - failed to enqueue user spend update. "
+                "user_id=%s, end_user_id=%s, response_cost=%s - %s",
+                user_id,
+                end_user_id,
+                response_cost,
+                str(e),
+                exc=e,
+            )
+
+    async def _update_team_db(
+        self,
+        response_cost: float | None,
+        team_id: str | None,
+        user_id: str | None,
+        prisma_client: PrismaClient | None,
+    ):
+        try:
+            if team_id is None or prisma_client is None:
+                verbose_proxy_logger.debug(
+                    "track_cost_callback: team_id is None or prisma_client is None. Not tracking spend for team"
+                )
+                return
+
+            await self.spend_update_queue.add_update(
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.TEAM,
+                    entity_id=team_id,
+                    response_cost=response_cost,
+                )
+            )
+
+            try:
+                # Track spend of the team member within this team
+                if user_id is not None:
+                    # key is "team_id::<value>::user_id::<value>"
+                    team_member_key: Final = f"team_id::{team_id}::user_id::{user_id}"
+                    await self.spend_update_queue.add_update(
+                        update=SpendUpdateQueueItem(
+                            entity_type=Litellm_EntityType.TEAM_MEMBER,
+                            entity_id=team_member_key,
+                            response_cost=response_cost,
+                        )
+                    )
+            except Exception as e:
+                spend_log_error(
+                    "Spend tracking - failed to enqueue team member spend update. "
+                    "team_id=%s, user_id=%s, response_cost=%s - %s",
+                    team_id,
+                    user_id,
+                    response_cost,
+                    str(e),
+                    exc=e,
+                )
+        except Exception as e:
+            spend_log_error(
+                "Spend tracking - failed to enqueue team spend update. team_id=%s, response_cost=%s - %s",
+                team_id,
+                response_cost,
+                str(e),
+                exc=e,
+            )
+            raise e
+
+    async def _update_org_db(
+        self,
+        response_cost: float | None,
+        org_id: str | None,
+        prisma_client: PrismaClient | None,
+    ):
+        try:
+            if org_id is None or prisma_client is None:
+                verbose_proxy_logger.debug(
+                    "track_cost_callback: org_id is None or prisma_client is None. Not tracking spend for org"
+                )
+                return
+
+            await self.spend_update_queue.add_update(
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.ORGANIZATION,
+                    entity_id=org_id,
+                    response_cost=response_cost,
+                )
+            )
+        except Exception as e:
+            spend_log_error(
+                "Spend tracking - failed to enqueue org spend update. org_id=%s, response_cost=%s - %s",
+                org_id,
+                response_cost,
+                str(e),
+                exc=e,
+            )
+            raise e
+
+    async def _update_agent_db(
+        self,
+        response_cost: float | None,
+        agent_id: str | None,
+        prisma_client: PrismaClient | None,
+    ):
+        try:
+            if agent_id is None or prisma_client is None:
+                return
+
+            await self.spend_update_queue.add_update(
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.AGENT,
+                    entity_id=agent_id,
+                    response_cost=response_cost,
+                )
+            )
+        except Exception as e:
+            spend_log_error(
+                "Spend tracking - failed to enqueue agent spend update. agent_id=%s, response_cost=%s - %s",
+                agent_id,
+                response_cost,
+                str(e),
+                exc=e,
+            )
+            raise e
+
+    async def _update_tag_db(
+        self,
+        response_cost: float | None,
+        request_tags: str | None,
+        prisma_client: PrismaClient | None,
+    ):
+        """
+        Update spend for all tags in the request.
+
+        Args:
+            response_cost: Cost of the request
+            request_tags: JSON string of tags list e.g. '["prod-tag", "test-tag"]'
+            prisma_client: Prisma client instance
+        """
+        try:
+            if request_tags is None or prisma_client is None:
+                return
+
+            # Parse tags from JSON string
+            tags = []
+            if isinstance(request_tags, str):
+                tags = safe_json_loads(request_tags, default=[])
+                if not tags:
+                    verbose_proxy_logger.debug("Failed to parse request_tags JSON: %s", request_tags)
+                    return
+            elif isinstance(request_tags, list):
+                tags = request_tags
+            else:
+                return
+
+            # Update spend for each tag
+            for tag_name in tags:
+                if tag_name and isinstance(tag_name, str):
+                    await self.spend_update_queue.add_update(
+                        update=SpendUpdateQueueItem(
+                            entity_type=Litellm_EntityType.TAG,
+                            entity_id=tag_name,
+                            response_cost=response_cost,
+                        )
+                    )
+        except Exception as e:
+            spend_log_error(
+                "Spend tracking - failed to enqueue tag spend update. request_tags=%s, response_cost=%s - %s",
+                request_tags,
+                response_cost,
+                str(e),
+                exc=e,
+            )
+            raise e
+
+    async def _insert_spend_log_to_db(
+        self,
+        payload: dict | SpendLogsPayload,
+        prisma_client: PrismaClient | None = None,
+        spend_logs_url: str | None = os.getenv("SPEND_LOGS_URL"),
+    ) -> PrismaClient | None:
+        verbose_proxy_logger.debug(
+            "Writing spend log to db - request_id: {}, spend: {}".format(
+                payload.get("request_id"), payload.get("spend")
+            )
+        )
+        if prisma_client is not None and spend_logs_url is not None or prisma_client is not None:
+            async with prisma_client._spend_log_transactions_lock:
+                prisma_client.spend_log_transactions.append(payload)
+        else:
+            verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
+
+        return prisma_client
+
+    async def db_update_spend_transaction_handler(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Handles commiting update spend transactions to db
+
+        `UPDATES` can lead to deadlocks, hence we handle them separately
+
+        Args:
+            prisma_client: PrismaClient object
+            n_retry_times: int, number of retry times
+            proxy_logging_obj: ProxyLogging object
+
+        How this works:
+        - Check `general_settings.use_redis_transaction_buffer`
+            - If enabled, write in-memory transactions to Redis
+            - Check if this Pod should read from the DB
+        else:
+            - Regular flow of this method
+        """
+        if RedisUpdateBuffer._should_commit_spend_updates_to_redis():
+            await self._commit_spend_updates_to_db_with_redis(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        else:
+            await self._commit_spend_updates_to_db_without_redis_buffer(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    async def _commit_spend_updates_to_db_with_redis(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Handler to commit spend updates to Redis and attempt to acquire lock to commit to db
+
+        This is a v2 scalable approach to first commit spend updates to redis, then commit to db
+
+        This minimizes DB Deadlocks since
+            - All pods only need to write their spend updates to redis
+            - Only 1 pod will commit to db at a time (based on if it can acquire the lock over writing to DB)
+        """
+        await self.redis_update_buffer.store_in_memory_spend_updates_in_redis(
+            spend_update_queue=self.spend_update_queue,
+            daily_spend_update_queue=self.daily_spend_update_queue,
+            daily_team_spend_update_queue=self.daily_team_spend_update_queue,
+            daily_org_spend_update_queue=self.daily_org_spend_update_queue,
+            daily_end_user_spend_update_queue=self.daily_end_user_spend_update_queue,
+            daily_agent_spend_update_queue=self.daily_agent_spend_update_queue,
+        )
+
+        # Only commit from redis to db if this pod is the leader
+        if await self.pod_lock_manager.acquire_lock(
+            cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
+        ):
+            verbose_proxy_logger.debug("acquired lock for spend updates")
+
+            try:
+                (
+                    db_spend_update_transactions,
+                    daily_spend_update_transactions,
+                    daily_team_spend_update_transactions,
+                    daily_org_spend_update_transactions,
+                    daily_end_user_spend_update_transactions,
+                    daily_agent_spend_update_transactions,
+                ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+                if db_spend_update_transactions is not None:
+                    verbose_proxy_logger.info(
+                        "Spend tracking - committing spend updates from Redis to DB: "
+                        "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, tags=%d, agents=%d",
+                        len(db_spend_update_transactions.get("key_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("user_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("team_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("org_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("end_user_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("team_member_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("tag_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("agent_list_transactions") or {}),
+                    )
+                    await self._commit_spend_updates_to_db(
+                        prisma_client=prisma_client,
+                        n_retry_times=n_retry_times,
+                        proxy_logging_obj=proxy_logging_obj,
+                        db_spend_update_transactions=db_spend_update_transactions,
+                    )
+
+                if daily_spend_update_transactions is not None:
+                    await DBSpendUpdateWriter.update_daily_user_spend(
+                        n_retry_times=n_retry_times,
+                        prisma_client=prisma_client,
+                        proxy_logging_obj=proxy_logging_obj,
+                        daily_spend_transactions=daily_spend_update_transactions,
+                    )
+                if daily_team_spend_update_transactions is not None:
+                    await DBSpendUpdateWriter.update_daily_team_spend(
+                        n_retry_times=n_retry_times,
+                        prisma_client=prisma_client,
+                        proxy_logging_obj=proxy_logging_obj,
+                        daily_spend_transactions=daily_team_spend_update_transactions,
+                    )
+
+                if daily_org_spend_update_transactions is not None:
+                    await DBSpendUpdateWriter.update_daily_org_spend(
+                        n_retry_times=n_retry_times,
+                        prisma_client=prisma_client,
+                        proxy_logging_obj=proxy_logging_obj,
+                        daily_spend_transactions=daily_org_spend_update_transactions,
+                    )
+
+                if daily_end_user_spend_update_transactions is not None:
+                    await DBSpendUpdateWriter.update_daily_end_user_spend(
+                        n_retry_times=n_retry_times,
+                        prisma_client=prisma_client,
+                        proxy_logging_obj=proxy_logging_obj,
+                        daily_spend_transactions=daily_end_user_spend_update_transactions,
+                    )
+                if daily_agent_spend_update_transactions is not None:
+                    await DBSpendUpdateWriter.update_daily_agent_spend(
+                        n_retry_times=n_retry_times,
+                        prisma_client=prisma_client,
+                        proxy_logging_obj=proxy_logging_obj,
+                        daily_spend_transactions=daily_agent_spend_update_transactions,
+                    )
+            except Exception as e:
+                spend_log_error(
+                    "Spend tracking - failed to commit spend updates from Redis to DB. "
+                    "Data already popped from Redis may be lost. Error: %s",
+                    str(e),
+                    exc=e,
+                )
+            finally:
+                await self.pod_lock_manager.release_lock(
+                    cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
+                )
+
+    async def _commit_spend_updates_to_db_without_redis_buffer(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Commits all the spend `UPDATE` transactions to the Database
+
+        This is the regular flow of committing to db without using a redis buffer
+
+        Note: This flow causes Deadlocks in production (1K RPS+). Use self._commit_spend_updates_to_db_with_redis() instead if you expect 1K+ RPS.
+        """
+
+        # Aggregate all in memory spend updates (key, user, end_user, team, team_member, org) and commit to db
+        ################## Spend Update Transactions ##################
+        db_spend_update_transactions: Final = (
+            await self.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+        )
+        await self._commit_spend_updates_to_db(
+            prisma_client=prisma_client,
+            n_retry_times=n_retry_times,
+            proxy_logging_obj=proxy_logging_obj,
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
+
+        ################## Daily Spend Update Transactions ##################
+        # Aggregate all in memory daily spend transactions and commit to db
+        daily_spend_update_transactions: Final = cast(
+            dict[str, DailyUserSpendTransaction],
+            await self.daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        await DBSpendUpdateWriter.update_daily_user_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_update_transactions,
+        )
+
+        ################## Daily Team Spend Update Transactions ##################
+        # Aggregate all in memory daily team spend transactions and commit to db
+        daily_team_spend_update_transactions: Final = cast(
+            dict[str, DailyTeamSpendTransaction],
+            await self.daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        await DBSpendUpdateWriter.update_daily_team_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_team_spend_update_transactions,
+        )
+
+        ################## Daily Organization Spend Update Transactions ##################
+        # Aggregate all in memory daily org spend transactions and commit to db
+        daily_org_spend_update_transactions: Final = cast(
+            dict[str, DailyOrganizationSpendTransaction],
+            await self.daily_org_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        await DBSpendUpdateWriter.update_daily_org_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_org_spend_update_transactions,
+        )
+
+        # NOTE: Daily tag spend is committed by a separate scheduler job.
+
+        ################## Daily End-User Spend Update Transactions ##################
+        # Aggregate all in memory daily end-user spend transactions and commit to db
+        daily_end_user_spend_update_transactions: Final = cast(
+            dict[str, DailyEndUserSpendTransaction],
+            await self.daily_end_user_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        await DBSpendUpdateWriter.update_daily_end_user_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_end_user_spend_update_transactions,
+        )
+
+        ################## Daily Agent Spend Update Transactions ##################
+        # Aggregate all in memory daily agent spend transactions and commit to db
+        daily_agent_spend_update_transactions: Final = cast(
+            dict[str, DailyAgentSpendTransaction],
+            await self.daily_agent_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        await DBSpendUpdateWriter.update_daily_agent_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_agent_spend_update_transactions,
+        )
+
+        ################## Tool Registry Upserts ##################
+        await self._flush_tool_discovery_queue(prisma_client=prisma_client)
+
+    async def _commit_daily_tag_spend_to_db(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Commit only tag spend updates to database.
+        This is called by a separate scheduler job at a longer interval.
+        """
+        daily_tag_spend_update_transactions: Final = cast(
+            dict[str, DailyTagSpendTransaction],
+            await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        if daily_tag_spend_update_transactions:
+            await DBSpendUpdateWriter.update_daily_tag_spend(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                daily_spend_transactions=daily_tag_spend_update_transactions,
+            )
+
+    async def _commit_daily_tag_spend_to_db_with_redis(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Commit daily tag spend updates using Redis buffering.
+
+        This lets the dedicated daily tag scheduler drain both in-memory and
+        Redis-backed tag transactions.
+        """
+        await self.redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis(
+            daily_tag_spend_update_queue=self.daily_tag_spend_update_queue,
+        )
+
+        if await self.pod_lock_manager.acquire_lock(
+            cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+        ):
+            verbose_proxy_logger.debug("acquired lock for daily tag spend updates")
+            try:
+                daily_tag_spend_update_transactions: Final = (
+                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+                )
+
+                if daily_tag_spend_update_transactions:
+                    await DBSpendUpdateWriter.update_daily_tag_spend(
+                        n_retry_times=n_retry_times,
+                        prisma_client=prisma_client,
+                        proxy_logging_obj=proxy_logging_obj,
+                        daily_spend_transactions=daily_tag_spend_update_transactions,
+                    )
+            except Exception as e:
+                spend_log_error(
+                    "Spend tracking - failed to commit daily tag spend updates from Redis to DB. "
+                    "Data already popped from Redis may be lost. Error: %s",
+                    str(e),
+                    exc=e,
+                )
+            finally:
+                await self.pod_lock_manager.release_lock(
+                    cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+                )
+
+    async def _flush_tool_discovery_queue(
+        self,
+        prisma_client: PrismaClient,
+    ) -> None:
+        """Flush ToolDiscoveryQueue and batch-upsert new tools into LiteLLM_ToolTable."""
+        from litellm.proxy.db.tool_registry_writer import batch_upsert_tools
+
+        try:
+            items: Final = self.tool_discovery_queue.flush()
+            if items:
+                await batch_upsert_tools(prisma_client=prisma_client, items=items)
+        except Exception as e:
+            verbose_proxy_logger.debug("_flush_tool_discovery_queue error (non-blocking): %s", e)
+
+    async def _commit_spend_updates_to_db(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+        db_spend_update_transactions: DBSpendUpdateTransactions,
+    ):
+        """
+        Commits all the spend `UPDATE` transactions to the Database
+
+        """
+        from litellm.proxy.utils import (
+            ProxyUpdateSpend,
+            _raise_failed_update_spend_exception,
+        )
+
+        ### UPDATE USER TABLE ###
+        user_list_transactions: Final = db_spend_update_transactions["user_list_transactions"]
+        verbose_proxy_logger.debug("User Spend transactions: %s", user_list_transactions)
+        if user_list_transactions is not None and len(user_list_transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                        async with transaction.batch_() as batcher:
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks.
+                            # batch_() issues statements sequentially within the tx, so iteration
+                            # order = lock acquisition order.
+                            for user_id, response_cost in sorted(user_list_transactions.items()):
+                                batcher.litellm_usertable.update_many(
+                                    where={"user_id": user_id},
+                                    data={"spend": {"increment": response_cost}},
+                                )
+                    break
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
+                    if i >= n_retry_times:  # If we've reached the maximum number of retries
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    # Optionally, sleep for a bit before retrying
+                    await asyncio.sleep(2**i)  # Exponential backoff
+                except Exception as e:
+                    _raise_failed_update_spend_exception(
+                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
+
+        ### UPDATE END-USER TABLE ###
+        end_user_list_transactions: Final = db_spend_update_transactions["end_user_list_transactions"]
+        verbose_proxy_logger.debug("End-User Spend transactions: %s", end_user_list_transactions)
+        if end_user_list_transactions is not None and len(end_user_list_transactions.keys()) > 0:
+            await ProxyUpdateSpend.update_end_user_spend(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                end_user_list_transactions=end_user_list_transactions,
+            )
+        ### UPDATE KEY TABLE ###
+        key_list_transactions: Final = db_spend_update_transactions["key_list_transactions"]
+        verbose_proxy_logger.debug("KEY Spend transactions: %s", key_list_transactions)
+        if key_list_transactions is not None and len(key_list_transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                        async with transaction.batch_() as batcher:
+                            # Sort by token for consistent lock ordering across pods to prevent deadlocks.
+                            for token, response_cost in sorted(key_list_transactions.items()):
+                                batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                    where={"token": token},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "last_active": datetime.now(timezone.utc),
+                                    },
+                                )
+                    break
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
+                    if i >= n_retry_times:  # If we've reached the maximum number of retries
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    # Optionally, sleep for a bit before retrying
+                    await asyncio.sleep(2**i)  # Exponential backoff
+                except Exception as e:
+                    _raise_failed_update_spend_exception(
+                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
+
+        ### UPDATE TEAM TABLE ###
+        team_list_transactions: Final = db_spend_update_transactions["team_list_transactions"]
+        verbose_proxy_logger.debug("Team Spend transactions: %s", team_list_transactions)
+        if team_list_transactions is not None and len(team_list_transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                        async with transaction.batch_() as batcher:
+                            # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
+                            for team_id, response_cost in sorted(team_list_transactions.items()):
+                                verbose_proxy_logger.debug(
+                                    "Updating spend for team id=%s by %s", team_id, response_cost
+                                )
+                                batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                    where={"team_id": team_id},
+                                    data={"spend": {"increment": response_cost}},
+                                )
+                    break
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
+                    if i >= n_retry_times:  # If we've reached the maximum number of retries
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    # Optionally, sleep for a bit before retrying
+                    await asyncio.sleep(2**i)  # Exponential backoff
+                except Exception as e:
+                    _raise_failed_update_spend_exception(
+                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
+
+        ### UPDATE TEAM Membership TABLE with spend ###
+        team_member_list_transactions: Final = db_spend_update_transactions["team_member_list_transactions"]
+        verbose_proxy_logger.debug("Team Membership Spend transactions: %s", team_member_list_transactions)
+        if team_member_list_transactions is not None and len(team_member_list_transactions.keys()) > 0:
+            # Track which team memberships will be updated for cache invalidation
+            team_memberships_to_invalidate: Final[list[tuple[str, str]]] = []
+            for key in team_member_list_transactions:
+                # key is "team_id::<value>::user_id::<value>"
+                team_id = key.split("::")[1]
+                user_id = key.split("::")[3]
+                team_memberships_to_invalidate.append((user_id, team_id))
+
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                        async with transaction.batch_() as batcher:
+                            # Sort by composite key for consistent lock ordering across pods to prevent deadlocks.
+                            # Key format "team_id::<v>::user_id::<v>" makes the string sort equivalent to sorting by (team_id, user_id).
+                            for key, response_cost in sorted(team_member_list_transactions.items()):
+                                # key is "team_id::<value>::user_id::<value>"
+                                team_id = key.split("::")[1]
+                                user_id = key.split("::")[3]
+
+                                batcher.litellm_teammembership.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                    where={"team_id": team_id, "user_id": user_id},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
+                                    },
+                                )
+                    # Transaction succeeded, break out of retry loop
+                    break
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
+                    if i >= n_retry_times:  # If we've reached the maximum number of retries
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    # Optionally, sleep for a bit before retrying
+                    await asyncio.sleep(2**i)  # Exponential backoff
+                except Exception as e:
+                    _raise_failed_update_spend_exception(
+                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
+
+            # Invalidate cache for updated team memberships
+            # This ensures budget checks read fresh spend data from the database
+            if team_memberships_to_invalidate and proxy_logging_obj is not None:
+                user_api_key_cache: Final = proxy_logging_obj.call_details.get("user_api_key_cache")
+                if user_api_key_cache is not None:
+                    for user_id, team_id in team_memberships_to_invalidate:
+                        cache_key = f"team_membership:{user_id}:{team_id}"
+                        await user_api_key_cache.async_delete_cache(key=cache_key)
+                        verbose_proxy_logger.debug(
+                            "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
+                        )
+
+        ### UPDATE ORG TABLE ###
+        org_list_transactions: Final = db_spend_update_transactions["org_list_transactions"]
+        verbose_proxy_logger.debug("Org Spend transactions: %s", org_list_transactions)
+        if org_list_transactions is not None and len(org_list_transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                        async with transaction.batch_() as batcher:
+                            # Sort by org_id for consistent lock ordering across pods to prevent deadlocks.
+                            for org_id, response_cost in sorted(org_list_transactions.items()):
+                                batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                    where={"organization_id": org_id},
+                                    data={"spend": {"increment": response_cost}},
+                                )
+                    break
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
+                    if i >= n_retry_times:  # If we've reached the maximum number of retries
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    # Optionally, sleep for a bit before retrying
+                    await asyncio.sleep(
+                        # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
+                        # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
+                        # and thus they are more likely to deadlock again.
+                        # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
+                        # repeated deadlocks, and therefore of exceeding the retry limit.
+                        random.uniform(2**i, 2 ** (i + 1))
+                    )
+                except Exception as e:
+                    _raise_failed_update_spend_exception(
+                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
+
+        ### UPDATE TAG TABLE ###
+        tag_list_transactions: Final = db_spend_update_transactions["tag_list_transactions"]
+        await DBSpendUpdateWriter._update_entity_spend_in_db(
+            entity_name="Tag",
+            transactions=tag_list_transactions,
+            table_accessor="litellm_tagtable",
+            where_field="tag_name",
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        ### UPDATE AGENT TABLE ###
+        agent_list_transactions: Final = db_spend_update_transactions["agent_list_transactions"]
+        await DBSpendUpdateWriter._update_entity_spend_in_db(
+            entity_name="Agent",
+            transactions=agent_list_transactions,
+            table_accessor="litellm_agentstable",
+            where_field="agent_id",
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    @staticmethod
+    async def _update_entity_spend_in_db(
+        entity_name: str,
+        transactions: dict[str, float] | None,
+        table_accessor: Any,
+        where_field: str,
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Helper function to update spend for any entity type (team, org, tag, etc).
+
+        Args:
+            entity_name: Name of entity for logging (e.g., "Team", "Org", "Tag")
+            transactions: Dictionary of {entity_id: response_cost}
+            table_accessor: Prisma table accessor (e.g., prisma_client.db.litellm_teamtable)
+            where_field: Field name for where clause (e.g., "team_id", "organization_id", "tag_name")
+            n_retry_times: Number of retries on failure
+            prisma_client: Prisma client instance
+            proxy_logging_obj: Proxy logging object
+        """
+        from litellm.proxy.utils import _raise_failed_update_spend_exception
+
+        verbose_proxy_logger.debug("%s Spend transactions: %s", entity_name, transactions)
+        if transactions is not None and len(transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                        async with transaction.batch_() as batcher:
+                            # Sort by entity_id for consistent lock ordering across pods to prevent deadlocks.
+                            for entity_id, response_cost in sorted(transactions.items()):
+                                verbose_proxy_logger.debug(
+                                    "Updating spend for %s %s=%s by %s",
+                                    entity_name,
+                                    where_field,
+                                    entity_id,
+                                    response_cost,
+                                )
+                                getattr(batcher, table_accessor).update_many(
+                                    where={where_field: entity_id},
+                                    data={"spend": {"increment": response_cost}},
+                                )
+                    break
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
+                    if i >= n_retry_times:
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    await asyncio.sleep(2**i)  # Exponential backoff
+                except Exception as e:
+                    _raise_failed_update_spend_exception(
+                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
+
+    # fmt: off
+
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyUserSpendTransaction],
+        entity_type: Literal["user"],
+        entity_id_field: str,
+    ) -> None: 
+        ...
+
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyTeamSpendTransaction],
+        entity_type: Literal["team"],
+        entity_id_field: str,
+    ) -> None:
+        ...
+
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyOrganizationSpendTransaction],
+        entity_type: Literal["org"],
+        entity_id_field: str,
+    ) -> None:
+        ...
+
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyEndUserSpendTransaction],
+        entity_type: Literal["end_user"],
+        entity_id_field: str,
+    ) -> None:
+        ...
+
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyAgentSpendTransaction],
+        entity_type: Literal["agent"],
+        entity_id_field: str,
+    ) -> None:
+        ...
+
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyTagSpendTransaction],
+        entity_type: Literal["tag"],
+        entity_id_field: str,
+    ) -> None: 
+        ...
+    # fmt: on
+
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyUserSpendTransaction]
+        | dict[str, DailyTeamSpendTransaction]
+        | dict[str, DailyTagSpendTransaction]
+        | dict[str, DailyOrganizationSpendTransaction]
+        | dict[str, DailyEndUserSpendTransaction]
+        | dict[str, DailyAgentSpendTransaction],
+        entity_type: Literal["user", "team", "org", "tag", "end_user", "agent"],
+        entity_id_field: str,
+    ) -> None:
+        """
+        Generic function to update daily spend for any entity type (user, team, org, tag, end_user, agent)
+        """
+        from litellm.proxy.utils import _raise_failed_update_spend_exception
+
+        verbose_proxy_logger.debug(
+            "Daily %s Spend transactions: %s", entity_type.capitalize(), len(daily_spend_transactions)
+        )
+        BATCH_SIZE: Final = 100
+        start_time: Final = time.time()
+
+        try:
+            while daily_spend_transactions:
+                for i in range(n_retry_times + 1):
+                    try:
+                        # Sort the transactions to minimize the probability of deadlocks by reducing the chance of concurrent
+                        # trasactions locking the same rows/ranges in different orders.
+                        transactions_to_process = dict(
+                            sorted(
+                                daily_spend_transactions.items(),
+                                # Normally to avoid deadlocks we would sort by the index, but since we have sprinkled indexes
+                                # on our schema like we're discount Salt Bae, we just sort by all fields that have an index,
+                                # in an ad-hoc (but hopefully sensible) order of indexes. The actual ordering matters less than
+                                # ensuring that all concurrent transactions sort in the same order.
+                                # We could in theory use the dict key, as it contains basically the same fields, but this is more
+                                # robust to future changes in the key format.
+                                # If _update_daily_spend ever gets the ability to write to multiple tables at once, the sorting
+                                # should sort by the table first.
+                                key=lambda x: (
+                                    x[1].get("date") or "",
+                                    x[1].get(entity_id_field) or "",
+                                    x[1].get("api_key") or "",
+                                    x[1].get("model") or "",
+                                    x[1].get("custom_llm_provider") or "",
+                                ),
+                            )[:BATCH_SIZE]
+                        )
+
+                        if len(transactions_to_process) == 0:
+                            verbose_proxy_logger.debug(
+                                "No new transactions to process for daily %s spend update", entity_type
+                            )
+                            return
+
+                        table = DAILY_SPEND_TABLES[entity_type]
+                        try:
+                            # One statement per batch rather than per key: the same rows are
+                            # aggregated, but concurrent writers no longer hold a batch's worth
+                            # of row locks across a hundred round trips.
+                            merged_batch = merge_by_conflict_key(
+                                table=table, transactions=tuple(transactions_to_process.values())
+                            )
+                            sql, params = build_bulk_upsert(table=table, batch=merged_batch)
+                            await prisma_client.db.execute_raw(sql, *params)
+                        except Exception as batch_error:
+                            # Log detailed error information for debugging batch upsert failures
+                            # This helps diagnose issues like unique constraint violations
+                            spend_log_error(
+                                "Daily %s spend batch upsert failed. Table: %s, Rows: %d, Error: %s",
+                                entity_type,
+                                table.name,
+                                len(transactions_to_process),
+                                str(batch_error),
+                                exc=batch_error,
+                            )
+                            raise
+
+                        verbose_proxy_logger.debug(
+                            f"Processed {len(transactions_to_process)} daily {entity_type} transactions in {time.time() - start_time:.2f}s"
+                        )
+
+                        # Remove processed transactions
+                        for key in transactions_to_process:
+                            daily_spend_transactions.pop(key, None)
+
+                        break
+
+                    except DB_RETRY_SAFE_ERROR_TYPES as e:
+                        if i >= n_retry_times:
+                            _raise_failed_update_spend_exception(
+                                e=e,
+                                start_time=start_time,
+                                proxy_logging_obj=proxy_logging_obj,
+                            )
+                        await asyncio.sleep(
+                            # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
+                            # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
+                            # and thus they are more likely to deadlock again.
+                            # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
+                            # repeated deadlocks, and therefore of exceeding the retry limit.
+                            random.uniform(2**i, 2 ** (i + 1))
+                        )
+
+        except Exception as e:
+            if "transactions_to_process" in locals():
+                for key in transactions_to_process:
+                    daily_spend_transactions.pop(key, None)
+            _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
+
+    @staticmethod
+    async def update_daily_user_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyUserSpendTransaction],
+    ):
+        """
+        Batch job to update LiteLLM_DailyUserSpend table using in-memory daily_spend_transactions
+        """
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="user",
+            entity_id_field="user_id",
+        )
+
+    @staticmethod
+    async def update_daily_team_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyTeamSpendTransaction],
+    ):
+        """
+        Batch job to update LiteLLM_DailyTeamSpend table using in-memory daily_spend_transactions
+        """
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="team",
+            entity_id_field="team_id",
+        )
+
+    @staticmethod
+    async def update_daily_org_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyOrganizationSpendTransaction],
+    ):
+        """
+        Batch job to update LiteLLM_DailyOrganizationSpend table using in-memory daily_spend_transactions
+        """
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="org",
+            entity_id_field="organization_id",
+        )
+
+    @staticmethod
+    async def update_daily_end_user_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyEndUserSpendTransaction],
+    ):
+        """
+        Batch job to update LiteLLM_DailyEndUserSpend table using in-memory daily_spend_transactions
+        """
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="end_user",
+            entity_id_field="end_user_id",
+        )
+
+    @staticmethod
+    async def update_daily_agent_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyAgentSpendTransaction],
+    ):
+        """
+        Batch job to update LiteLLM_DailyAgentSpend table using in-memory daily_spend_transactions
+        """
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="agent",
+            entity_id_field="agent_id",
+        )
+
+    @staticmethod
+    async def update_daily_tag_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, DailyTagSpendTransaction],
+    ):
+        """
+        Batch job to update LiteLLM_DailyTagSpend table using in-memory daily_spend_transactions
+        """
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="tag",
+            entity_id_field="tag",
+        )
+
+    async def _common_add_spend_log_transaction_to_daily_transaction(
+        self,
+        payload: dict | SpendLogsPayload,
+        prisma_client: PrismaClient,
+        type: Literal["user", "team", "org", "request_tags", "end_user", "agent"] = "user",
+    ) -> BaseDailySpendTransaction | None:
+        common_expected_keys: Final = ["startTime", "api_key"]
+        if type == "user":
+            expected_keys = ["user", *common_expected_keys]
+        elif type == "team":
+            expected_keys = ["team_id", *common_expected_keys]
+        elif type == "org":
+            expected_keys = ["organization_id", *common_expected_keys]
+        elif type == "request_tags":
+            expected_keys = ["request_tags", *common_expected_keys]
+        elif type == "end_user":
+            expected_keys = ["end_user_id", *common_expected_keys]
+        elif type == "agent":
+            expected_keys = ["agent_id", *common_expected_keys]
+        else:
+            raise ValueError(f"Invalid type: {type}")
+        if not all(key in payload for key in expected_keys):
+            verbose_proxy_logger.debug(
+                "Missing expected keys: %s, in payload, skipping from daily_user_spend_transactions", expected_keys
+            )
+            return None
+
+        any_expected_keys: Final = ["model", "mcp_namespaced_tool_name"]
+        if not any(key in payload for key in any_expected_keys):
+            verbose_proxy_logger.debug(
+                "Missing any expected keys: %s, in payload, skipping from daily_user_spend_transactions",
+                any_expected_keys,
+            )
+            return None
+        elif "mcp_namespaced_tool_name" in payload:
+            pass
+        elif "model" in payload and ("custom_llm_provider" not in payload or "model_group" not in payload):
+            verbose_proxy_logger.debug(
+                "Missing custom_llm_provider or model_group in payload, skipping from daily_user_spend_transactions"
+            )
+            return None
+
+        # TODO: remove the successful_requests/failed_requests counters below once the
+        # admin UI has fully migrated to LiteLLM_DailyGatewayRequests, which is now the
+        # source of truth for SGR. This path derives the counts from spend-log metadata
+        # rather than from what the gateway answered, so the two intentionally disagree
+        # (see litellm/proxy/middleware/billable_request_metrics_middleware.py). The
+        # spend, token and per-entity columns written here stay either way.
+        request_status: Final = prisma_client.get_request_status(payload)
+        verbose_proxy_logger.debug("Logged request status: %s", request_status)
+        _metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])
+        usage_obj: Final = _metadata.get("usage_object", {}) or {}
+        if isinstance(payload["startTime"], datetime):
+            start_time: Final = payload["startTime"].isoformat()
+            date = start_time.split("T")[0]
+        elif isinstance(payload["startTime"], str):
+            date = payload["startTime"].split("T")[0]
+        else:
+            verbose_proxy_logger.debug(
+                "Invalid start time: %s, skipping from daily_user_spend_transactions", payload["startTime"]
+            )
+            return None
+        try:
+            # Map call_type to endpoint using ROUTE_ENDPOINT_MAPPING
+            call_type: Final = payload.get("call_type", None)
+            endpoint = None
+            if call_type:
+                endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
+
+            is_internal_call: Final = bool(_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
+            cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
+            compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
+            savings_spend: Final = compute_savings_spend(
+                model=payload.get("model", None),
+                custom_llm_provider=payload.get("custom_llm_provider", None),
+                compression_saved_tokens=compression_saved_tokens,
+                routing_decision=_metadata.get("routing_decision"),
+                model_id=payload.get("model_id"),
+                llm_router=_get_llm_router,
+                usage_object=usage_obj,
+                cost_breakdown=_metadata.get("cost_breakdown"),
+            )
+
+            daily_transaction: Final = BaseDailySpendTransaction(
+                date=date,
+                api_key=payload["api_key"],
+                model=payload.get("model", None),
+                model_group=payload.get("model_group", None),
+                mcp_namespaced_tool_name=payload.get("mcp_namespaced_tool_name", None),
+                custom_llm_provider=payload.get("custom_llm_provider", None),
+                endpoint=endpoint,
+                prompt_tokens=payload["prompt_tokens"],
+                completion_tokens=payload["completion_tokens"],
+                spend=payload["spend"],
+                # Internal sub-calls (auto-router classifier, shadow eval's shadow and
+                # judge) bill real spend and tokens to the key, but they are not
+                # requests the caller made: counting them inflates request-volume
+                # readers, and an auto-router savings figure computed on a shadow
+                # duplicate credits savings for traffic no user sent.
+                api_requests=0 if is_internal_call else 1,
+                successful_requests=1 if not is_internal_call and request_status == "success" else 0,
+                failed_requests=1 if not is_internal_call and request_status != "success" else 0,
+                cache_read_input_tokens=cache_read_input_tokens,
+                cache_creation_input_tokens=extract_cache_creation_tokens(usage_obj),
+                compression_saved_tokens=compression_saved_tokens,
+                compression_savings_spend=savings_spend.compression,
+                prompt_caching_savings_spend=savings_spend.prompt_caching,
+                autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
+            )
+            return daily_transaction
+        except Exception as e:
+            raise e
+
+    async def add_spend_log_transaction_to_daily_user_transaction(
+        self,
+        payload: dict | SpendLogsPayload,
+        prisma_client: PrismaClient | None = None,
+    ):
+        """
+        Add a spend log transaction to the `daily_spend_update_queue`
+
+        Key = @@unique([user_id, date, api_key, model, custom_llm_provider])    )
+
+        If key exists, update the transaction with the new spend and usage
+        """
+        if prisma_client is None:
+            verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
+            return
+
+        base_daily_transaction: Final = await self._common_add_spend_log_transaction_to_daily_transaction(
+            payload, prisma_client, "user"
+        )
+        if base_daily_transaction is None:
+            return
+
+        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{payload['user']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
+        daily_transaction: Final = DailyUserSpendTransaction(user_id=payload["user"], **base_daily_transaction)
+        await self.daily_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
+
+    async def add_spend_log_transaction_to_daily_team_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: PrismaClient | None = None,
+    ) -> None:
+        if prisma_client is None:
+            verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
+            return
+
+        base_daily_transaction: Final = await self._common_add_spend_log_transaction_to_daily_transaction(
+            payload, prisma_client, "team"
+        )
+        if base_daily_transaction is None:
+            return
+        if payload["team_id"] is None:
+            verbose_proxy_logger.debug("team_id is None for request. Skipping incrementing team spend.")
+            return
+
+        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{payload['team_id']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
+        daily_transaction: Final = DailyTeamSpendTransaction(team_id=payload["team_id"], **base_daily_transaction)
+        await self.daily_team_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
+
+    async def add_spend_log_transaction_to_daily_org_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: PrismaClient | None = None,
+        org_id: str | None = None,
+    ) -> None:
+        if prisma_client is None:
+            verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
+            return
+
+        if org_id is None:
+            verbose_proxy_logger.debug("organization_id is None for request. Skipping incrementing organization spend.")
+            return
+
+        payload_with_org: Final = cast(
+            SpendLogsPayload,
+            {
+                **payload,
+                "organization_id": org_id,
+            },
+        )
+
+        base_daily_transaction: Final = await self._common_add_spend_log_transaction_to_daily_transaction(
+            payload_with_org, prisma_client, "org"
+        )
+        if base_daily_transaction is None:
+            return
+
+        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{org_id}_{base_daily_transaction['date']}_{payload_with_org['api_key']}_{payload_with_org['model']}_{payload_with_org['custom_llm_provider']}_{endpoint_str}"
+        daily_transaction: Final = DailyOrganizationSpendTransaction(organization_id=org_id, **base_daily_transaction)
+        await self.daily_org_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
+
+    async def add_spend_log_transaction_to_daily_end_user_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: PrismaClient | None = None,
+    ) -> None:
+        if prisma_client is None:
+            verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
+            return
+
+        end_user_id: Final = payload.get("end_user")
+        if end_user_id is None or end_user_id == "":
+            verbose_proxy_logger.debug("end_user is None or empty for request. Skipping incrementing end user spend.")
+            return
+
+        payload_with_end_user_id: Final = cast(
+            SpendLogsPayload,
+            {
+                **payload,
+                "end_user_id": end_user_id,
+            },
+        )
+
+        base_daily_transaction: Final = await self._common_add_spend_log_transaction_to_daily_transaction(
+            payload_with_end_user_id, prisma_client, "end_user"
+        )
+        if base_daily_transaction is None:
+            return
+
+        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{end_user_id}_{base_daily_transaction['date']}_{payload_with_end_user_id['api_key']}_{payload_with_end_user_id['model']}_{payload_with_end_user_id['custom_llm_provider']}_{endpoint_str}"
+        daily_transaction: Final = DailyEndUserSpendTransaction(end_user_id=end_user_id, **base_daily_transaction)
+        await self.daily_end_user_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
+
+    async def add_spend_log_transaction_to_daily_agent_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: PrismaClient | None = None,
+    ) -> None:
+        if prisma_client is None:
+            verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
+            return
+        if payload["agent_id"] is None:
+            return
+        payload_with_agent_id: Final = cast(
+            SpendLogsPayload,
+            {
+                **payload,
+                "agent_id": payload["agent_id"],
+            },
+        )
+        base_daily_transaction: Final = await self._common_add_spend_log_transaction_to_daily_transaction(
+            payload_with_agent_id, prisma_client, "agent"
+        )
+        if base_daily_transaction is None:
+            return
+        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
+        daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
+        daily_transaction: Final = DailyAgentSpendTransaction(agent_id=payload["agent_id"], **base_daily_transaction)
+        await self.daily_agent_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
+
+    async def add_spend_log_transaction_to_daily_tag_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: PrismaClient | None = None,
+    ) -> None:
+        if prisma_client is None:
+            verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
+            return
+
+        base_daily_transaction: Final = await self._common_add_spend_log_transaction_to_daily_transaction(
+            payload, prisma_client, "request_tags"
+        )
+        if base_daily_transaction is None:
+            return
+        if payload["request_tags"] is None:
+            verbose_proxy_logger.debug("request_tags is None for request. Skipping incrementing tag spend.")
+            return
+
+        request_tags = []
+        if isinstance(payload["request_tags"], str):
+            request_tags = json.loads(payload["request_tags"])
+        elif isinstance(payload["request_tags"], list):
+            request_tags = payload["request_tags"]
+        else:
+            raise ValueError(f"Invalid request_tags: {payload['request_tags']}")
+        for tag in request_tags:
+            endpoint_str = base_daily_transaction.get("endpoint") or ""
+            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
+            daily_transaction = DailyTagSpendTransaction(
+                tag=tag, **base_daily_transaction, request_id=payload["request_id"]
+            )
+
+            await self.daily_tag_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
