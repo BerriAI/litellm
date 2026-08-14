@@ -9,6 +9,7 @@ Usage:
 """
 
 import asyncio
+from collections.abc import AsyncIterable, Iterable
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -113,7 +114,7 @@ async def _mock_async_handler_delete(
     headers=None,
     timeout=None,
     stream=False,
-    content=None,
+    content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
 ):
     """Monkey-patched AsyncHTTPHandler.delete that intercepts GCS calls."""
     # Only mock GCS API calls

@@ -666,7 +666,7 @@ async def get_internal_user_settings():
 )
 async def get_default_team_settings():
     """
-    Get all SSO settings from the litellm_settings configuration.
+    Get the default team parameters (litellm_settings.default_team_params).
     Returns a structured object with values and descriptions for UI display.
     """
     from litellm.proxy.proxy_server import proxy_config
@@ -894,8 +894,9 @@ async def update_default_team_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Update the default team parameters for SSO users.
-    These settings will be applied to new teams created from SSO.
+    Update the default team parameters (litellm_settings.default_team_params).
+    Applied to every new team for fields not explicitly provided in the create request;
+    `models` only applies to teams automatically created via SSO Groups.
     """
     if settings.organization_id is not None:
         await _validate_default_organization_exists(settings.organization_id)

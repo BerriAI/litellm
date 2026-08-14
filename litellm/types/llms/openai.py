@@ -929,6 +929,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     user: str
     metadata: dict  # litellm specific param
     reasoning_effort: str  # OpenAI o1/o3 reasoning parameter
+    output_config: Mapping[str, object]  # Anthropic adaptive-thinking effort, bridged for Bedrock Claude
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):

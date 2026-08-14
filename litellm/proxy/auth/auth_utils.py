@@ -262,6 +262,14 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_sts_endpoint",
     "aws_web_identity_token",
     "aws_role_name",
+    # Remaining AWS identity selectors. ``get_credentials`` prefers a named
+    # profile over the deployment's static keys, so a caller-supplied
+    # ``aws_profile_name`` signs Bedrock and S3 requests as any profile
+    # present on the proxy host; the two AssumeRole knobs are banned with it
+    # so the whole identity-selection family lives behind the same opt-in.
+    "aws_profile_name",
+    "aws_session_name",
+    "aws_external_id",
     "vertex_credentials",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
