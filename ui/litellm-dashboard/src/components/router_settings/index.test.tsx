@@ -134,6 +134,33 @@ describe("RouterSettings", () => {
     );
   });
 
+  // handleSaveChanges reads each setting's value straight off the DOM via
+  // document.querySelector('input[name="..."]'), so the payload only stays correct
+  // while the rendered input keeps its name attribute and its live value.
+  it("should send the edited input value, not the loaded one, on Save Changes", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+
+    const numRetries = await screen.findByRole("textbox", { name: /num_retries/i });
+    await user.clear(numRetries);
+    await user.type(numRetries, "42");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          router_settings: expect.objectContaining({ num_retries: 42 }),
+        }),
+      ),
+    );
+  });
+
   it("should show a success notification after saving", async () => {
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);
