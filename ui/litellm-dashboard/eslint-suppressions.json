@@ -2848,6 +2848,9 @@
   "src/components/onboarding_link.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 2
     }
   },
   "src/components/organisms/RegenerateKeyModal.tsx": {
