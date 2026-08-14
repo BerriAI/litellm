@@ -21,6 +21,13 @@ describe("SearchSelect", () => {
     expect(screen.getByRole("combobox")).toHaveValue("Growth");
   });
 
+  it("shows a value the options do not carry yet instead of blanking the field", () => {
+    const { rerender } = render(<SearchSelect options={[]} value="team-2" onValueChange={vi.fn()} />);
+    expect(screen.getByRole("combobox")).toHaveValue("team-2");
+    rerender(<SearchSelect options={OPTIONS} value="team-2" onValueChange={vi.fn()} />);
+    expect(screen.getByRole("combobox")).toHaveValue("Growth");
+  });
+
   it("shows a clear control only when a value is selected", () => {
     const { rerender } = render(<SearchSelect options={OPTIONS} onValueChange={vi.fn()} />);
     expect(document.querySelector('[data-slot="combobox-clear"]')).toBeNull();

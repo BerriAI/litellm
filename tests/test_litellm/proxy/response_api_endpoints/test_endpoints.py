@@ -1480,6 +1480,12 @@ def _router_serving_only(base_model: str) -> MagicMock:
     mock_router.model_names = set()
     mock_router.model_group_alias = {}
     mock_router.team_public_model_names = frozenset()
+    mock_router.is_recognized_model.side_effect = lambda model: (
+        model in mock_router.model_names or model in mock_router.model_group_alias
+    )
+    mock_router.router_general_settings.pass_through_all_models = False
+    mock_router.default_deployment = None
+    mock_router.pattern_router.patterns = {base_model: ["anthropic/*"]}
     mock_router.pattern_router.get_pattern.side_effect = (
         lambda model: [{"model_name": "anthropic/*"}] if model == base_model else None
     )
@@ -1723,3 +1729,22 @@ class TestCursorVariantResolvedBeforeAuth:
         )
         assert auth_body["model"] == "claude-opus-5-thinking-high"
         assert "reasoning_effort" not in auth_body
+
+
+class TestCursorGateRecognizesRoutingGroups:
+    def test_group_name_variant_is_not_mangled(self):
+        from litellm import Router
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        router = Router(
+            model_list=[
+                {"model_name": "member-fast", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}
+            ],
+            routing_groups=[
+                {"group_name": "grouped-thinking-high", "models": ["member-fast"], "routing_strategy": "simple-shuffle"}
+            ],
+        )
+        body = {"model": "grouped-thinking-high", "messages": [{"role": "user", "content": "hi"}]}
+        resolved = _resolve_cursor_model_variant(body, router)
+        assert resolved["model"] == "grouped-thinking-high"
+        assert "reasoning_effort" not in resolved
