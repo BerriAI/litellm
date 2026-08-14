@@ -16444,3 +16444,91 @@ async def test_regenerate_key_repoints_live_membership_not_the_key_row_it_read(
     assert await _authorized_models_for_key(
         access_groups, new_token_hash, ["ag-revoked-since", "ag-attached-since"]
     ) == ["attached-model"]
+
+
+@pytest.mark.parametrize("team_id", [None, "a-real-team"])
+def test_reject_reserved_ui_session_team_id_allows_ordinary_team_ids(team_id):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        reject_reserved_ui_session_team_id,
+    )
+
+    reject_reserved_ui_session_team_id(team_id)
+
+
+def test_reject_reserved_ui_session_team_id_refuses_the_sentinel():
+    """A key carrying the reserved id resolves its team from the token rather than the
+    database, which is the exemption Admin UI sessions need and nothing else may borrow:
+    it also skips the owner's user-level model check. ``/team/new`` already reserves this
+    id, so reserving it for keys closes the same door on the other side."""
+    from fastapi import HTTPException
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        reject_reserved_ui_session_team_id,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        reject_reserved_ui_session_team_id(UI_SESSION_TOKEN_TEAM_ID)
+    assert exc.value.status_code == 400
+    assert "reserved" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_key_generation_refuses_the_reserved_ui_team_even_for_a_proxy_admin():
+    """Only a proxy admin can reach this at all, since key_generation_check refuses a
+    non-admin naming a team with no row. Admin authority is not the question: the id is
+    reserved for sessions the UI mints, and the UI mints those through
+    generate_key_helper_fn directly, so it never passes through here."""
+    from fastapi import HTTPException
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(team_id=UI_SESSION_TOKEN_TEAM_ID),
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc.value.status_code == 400
+    assert UI_SESSION_TOKEN_TEAM_ID in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_key_update_refuses_moving_a_key_onto_the_reserved_ui_team():
+    """Reserving the id only at creation would leave the same exemption one /key/update
+    away, so the update path carries the guard too. It runs before the key is even read,
+    so no database access is needed to refuse it."""
+    from fastapi import Request
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy._types import LitellmUserRoles, ProxyException, UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+    request = Request(scope={"type": "http", "headers": [], "method": "POST"})
+
+    # the endpoint's own handler re-raises an HTTPException as a ProxyException
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=request,
+            data=UpdateKeyRequest(key="sk-existing", team_id=UI_SESSION_TOKEN_TEAM_ID),
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+        )
+    assert exc.value.code == "400"
+    assert UI_SESSION_TOKEN_TEAM_ID in str(exc.value.message)

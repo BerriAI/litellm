@@ -2755,6 +2755,16 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "user id."
         ),
     )
+    via_ui_session_blob: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Server-only marker set exclusively where an Admin UI session blob is decrypted with the "
+            "proxy's own ui_hash_key, via post-construction assignment. Stripped from validated input "
+            "for the same reason as via_virtual_key. The blob carries no key row, so via_virtual_key "
+            "cannot speak for it, and a proxy-admin session returns before that marker is ever set."
+        ),
+    )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
@@ -2781,6 +2791,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_admitted_user_subject", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("via_virtual_key", None)
+        values.pop("via_ui_session_blob", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):

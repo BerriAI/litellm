@@ -841,6 +841,21 @@ def _enforce_upperbound_key_params(
                         )
 
 
+def reject_reserved_ui_session_team_id(team_id: str | None) -> None:
+    """``/team/new`` already refuses this id, so the row it names can never exist and a key
+    carrying it resolves its team from the token instead of the database. That exemption
+    belongs to Admin UI sessions alone: an ordinary key carrying the id inherits it, and with
+    it the skip of its owner's user-level model check. The UI login flow mints its session key
+    through ``generate_key_helper_fn`` directly, so reserving the id here does not reach it.
+    """
+    if team_id == UI_SESSION_TOKEN_TEAM_ID:
+        raise HTTPException(
+            status_code=400,
+            detail=f"team_id '{UI_SESSION_TOKEN_TEAM_ID}' is reserved for LiteLLM UI dashboard "
+            "sessions and cannot be assigned to a key. Please use a different team id.",
+        )
+
+
 async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -853,6 +868,8 @@ async def _common_key_generation_helper(
         premium_user,
         prisma_client,
     )
+
+    reject_reserved_ui_session_team_id(data.team_id)
 
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
@@ -2770,6 +2787,8 @@ async def update_key_fn(
     )
 
     try:
+        reject_reserved_ui_session_team_id(data.team_id)
+
         # Validate budget values are not negative and are finite numbers
         if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
             raise HTTPException(
