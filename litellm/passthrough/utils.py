@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 from urllib.parse import parse_qs
 
@@ -27,7 +28,7 @@ _PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple] = ("x-amz-",)
 
 # `accept-encoding` is dropped so httpx negotiates a coding it has a decoder for: one it
 # cannot decode leaves the body compressed while Content-Encoding is stripped downstream.
-_NON_FORWARDED_REQUEST_HEADERS: Final[frozenset[str]] = frozenset(
+_NON_FORWARDED_HEADERS: Final[frozenset[str]] = frozenset(
     {
         "content-length",
         "host",
@@ -76,15 +77,14 @@ class BasePassthroughUtils:
         with the prefix stripped, regardless of forward_headers setting.
         e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
         """
-        if forward_headers is True:
-            custom_header_names: Final = {header_name.lower() for header_name in headers}
-            forwardable_headers: Final = {
-                header_name: header_value
-                for header_name, header_value in request_headers.items()
-                if header_name.lower() not in _NON_FORWARDED_REQUEST_HEADERS
-                and header_name.lower() not in custom_header_names
-            }
-            headers = {**forwardable_headers, **headers}
+        custom_header_names: Final = {header_name.lower() for header_name in headers}
+        client_headers: Final = request_headers.items() if forward_headers is True else ()
+        merged_headers: Final = {
+            header_name: header_value
+            for header_name, header_value in chain(client_headers, headers.items())
+            if header_name.lower() not in _NON_FORWARDED_HEADERS
+            and (header_name in headers or header_name.lower() not in custom_header_names)
+        }
 
         # Process x-pass- prefixed headers (strip prefix and forward)
         # Credential and protocol-level headers are excluded from this mechanism.
@@ -100,9 +100,9 @@ class BasePassthroughUtils:
                         header_name,
                     )
                     continue
-                headers[actual_header_name] = header_value
+                merged_headers[actual_header_name] = header_value
 
-        return headers
+        return merged_headers
 
 
 class CommonUtils:

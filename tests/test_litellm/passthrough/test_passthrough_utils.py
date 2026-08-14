@@ -39,6 +39,17 @@ def test_client_accept_encoding_is_not_forwarded_via_x_pass_prefix():
     assert "accept-encoding" not in headers
 
 
+def test_configured_custom_accept_encoding_is_dropped():
+    headers = BasePassthroughUtils.forward_headers_from_request(
+        request_headers={},
+        headers={"x-api-key": "sk-anthropic", "Accept-Encoding": "br"},
+        forward_headers=False,
+    )
+
+    assert "accept-encoding" not in {name.lower() for name in headers}
+    assert headers["x-api-key"] == "sk-anthropic"
+
+
 def test_upstream_request_only_advertises_decodable_encodings():
     """A content coding httpx cannot decode would reach the client still compressed,
     with Content-Encoding stripped by get_response_headers (LIT-5613)."""
