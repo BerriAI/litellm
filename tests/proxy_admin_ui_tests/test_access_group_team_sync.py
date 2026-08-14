@@ -21,6 +21,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy.management_helpers.access_group_team_sync import (
+    reconcile_team_access_group_membership,
     sync_team_access_group_membership,
 )
 
@@ -110,13 +111,15 @@ async def test_reconcile_attaches_and_detaches_without_touching_other_teams():
             GROUPS[1]: [TEAM],
             GROUPS[2]: sorted([TEAM, OTHER_TEAM]),
         }
-        assert invalidated == {GROUPS[0], GROUPS[2]}
+        assert invalidated == {GROUPS[0], GROUPS[1], GROUPS[2]}
 
 
 @pytest.mark.asyncio
 async def test_reconcile_is_idempotent_so_a_retry_heals_rather_than_duplicates():
-    """Reconciling to the same desired state twice must be a no-op. A delta-based mirror
-    would instead go quiet after the team row commits, leaving a half-applied sync stuck."""
+    """Reconciling to the same desired state twice must leave the rows alone and still name
+    the team's groups for the cache step, so a retry after a failed cache drop reaches them.
+    A delta-based mirror would instead go quiet once the rows match, leaving the caches
+    serving a grant the admin already revoked."""
     async with _clean_db() as db:
         await _seed(db, {GROUPS[0]: [], GROUPS[1]: [TEAM], GROUPS[2]: []})
 
@@ -126,8 +129,8 @@ async def test_reconcile_is_idempotent_so_a_retry_heals_rather_than_duplicates()
 
         assert after_first == {GROUPS[0]: [TEAM], GROUPS[1]: [TEAM], GROUPS[2]: []}
         assert await _read(db) == after_first
-        assert first == {GROUPS[0]}
-        assert second == set()
+        assert first == {GROUPS[0], GROUPS[1]}
+        assert second == first
 
 
 @pytest.mark.asyncio
@@ -157,6 +160,24 @@ async def test_passing_none_detaches_the_team_from_every_group():
 
         assert await _read(db) == {GROUPS[0]: [OTHER_TEAM], GROUPS[1]: [], GROUPS[2]: [OTHER_TEAM]}
         assert invalidated == {GROUPS[0], GROUPS[1]}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_mirror_takes_the_new_team_row_with_it():
+    """`/team/new` inserts the team and mirrors it in one transaction. Mirroring in a
+    transaction of its own instead leaves a committed team whose groups never learned about
+    it, and the retry with that same team id comes back as a duplicate."""
+    async with _clean_db() as db:
+        await _seed(db, {GROUPS[0]: [], GROUPS[1]: [OTHER_TEAM]})
+
+        with pytest.raises(RuntimeError):
+            async with db.tx() as tx:
+                await tx.litellm_teamtable.create(data={"team_id": TEAM, "access_group_ids": [GROUPS[0]]})
+                await reconcile_team_access_group_membership(tx, TEAM)
+                raise RuntimeError("the cache handoff blew up")
+
+        assert await _read(db) == {GROUPS[0]: [], GROUPS[1]: [OTHER_TEAM]}
+        assert await db.litellm_teamtable.find_unique(where={"team_id": TEAM}) is None
 
 
 @pytest.mark.asyncio

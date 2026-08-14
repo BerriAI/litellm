@@ -105,6 +105,9 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
+    AccessGroupSyncTx,
+    invalidate_access_group_caches,
+    reconcile_team_access_group_membership,
     sync_team_access_group_membership,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
@@ -314,6 +317,11 @@ class _TeamUiViewFilters(TypedDict, total=False):
 
 class _TeamIdInFilter(TypedDict, total=False):
     team_id: Mapping[str, Sequence[str]]
+
+
+class _TeamCreateTx(AccessGroupSyncTx, Protocol):
+    @property
+    def litellm_teamtable(self) -> "_PrismaTableActions[LiteLLM_TeamTable]": ...
 
 
 def _team_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_TeamTable]":
@@ -1507,12 +1515,15 @@ async def new_team(
         complete_team_data_dict = prisma_client.jsonify_team_object(db_data=complete_team_data_dict)
         team_creation_data: Final[Mapping[str, object]] = complete_team_data_dict
 
-        team_row: Final[LiteLLM_TeamTable] = await _team_db(prisma_client).create(
-            data=team_creation_data,
-            include={"litellm_model_table": True},
-        )
+        tx: _TeamCreateTx
+        async with prisma_client.db.tx() as tx:
+            team_row: Final[LiteLLM_TeamTable] = await tx.litellm_teamtable.create(
+                data=team_creation_data,
+                include={"litellm_model_table": True},
+            )
+            affected_access_groups: Final = await reconcile_team_access_group_membership(tx, team_row.team_id)
 
-        await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
+        await invalidate_access_group_caches(affected_access_groups)
 
         ## ADD TEAM ID TO USER TABLE ##
         team_member_add_request: Final = TeamMemberAddRequest(
