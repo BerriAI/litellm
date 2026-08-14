@@ -135,8 +135,6 @@ jobs:
             test-path: >-
               tests/proxy_unit_tests/test_proxy_server.py
               tests/proxy_unit_tests/test_proxy_server_keys.py
-              tests/proxy_unit_tests/test_proxy_server_caching.py
-              tests/proxy_unit_tests/test_proxy_server_langfuse.py
               tests/proxy_unit_tests/test_proxy_server_spend.py
               tests/proxy_unit_tests/test_aproxy_startup.py
             workers: 4

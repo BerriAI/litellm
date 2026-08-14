@@ -163,6 +163,7 @@ async def test_team_object_has_object_permission_id():
         token=hashed_key,
         last_refreshed_at=time.time(),
         team_object_permission_id=permission_id,
+        team_models=["gpt-4o"],
     )
     user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
 
@@ -255,6 +256,7 @@ async def test_aaauser_personal_budgets(key_ownership):
             user_id=_user_id,
             team_id="my-special-team",
             team_max_budget=100,
+            team_models=["gpt-4o"],
             spend=20,
         )
 
@@ -526,15 +528,6 @@ def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api
 
 
 def test_get_api_key_from_custom_header_bearer_token():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": f"Bearer {token}"},
-        custom_header_name="x-custom-api-key",
-        expected_api_key=token,
-    )
-
-
-def test_get_api_key_from_custom_header_raw_token():
     token = "sk-" + "1" * 8
     _assert_api_key_from_custom_header(
         headers={"x-custom-api-key": f"Bearer {token}"},

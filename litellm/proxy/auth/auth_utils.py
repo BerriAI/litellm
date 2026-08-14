@@ -262,6 +262,14 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_sts_endpoint",
     "aws_web_identity_token",
     "aws_role_name",
+    # Remaining AWS identity selectors. ``get_credentials`` prefers a named
+    # profile over the deployment's static keys, so a caller-supplied
+    # ``aws_profile_name`` signs Bedrock and S3 requests as any profile
+    # present on the proxy host; the two AssumeRole knobs are banned with it
+    # so the whole identity-selection family lives behind the same opt-in.
+    "aws_profile_name",
+    "aws_session_name",
+    "aws_external_id",
     "vertex_credentials",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
@@ -1303,18 +1311,27 @@ def is_pass_through_provider_route(route: str) -> bool:
     return False
 
 
-def _has_user_setup_sso():
+def _has_user_setup_sso() -> bool:
     """
-    Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID or generic client ID and UI username environment variables.
-    Returns a boolean indicating whether SSO has been set up.
+    Check if the user has set up single sign-on (SSO).
+
+    Covers OAuth providers (Microsoft, Google, generic) and SAML IdP metadata.
+    Used by UI discovery (``sso_configured``) so the login button enables when
+    any supported SSO path is configured — including SAML-only setups.
     """
     microsoft_client_id: Final = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id: Final = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id: Final = os.getenv("GENERIC_CLIENT_ID", None)
+    saml_idp_metadata_url: Final = os.getenv("SAML_IDP_METADATA_URL", None)
+    saml_idp_metadata_xml: Final = os.getenv("SAML_IDP_METADATA_XML", None)
 
-    sso_setup = (microsoft_client_id is not None) or (google_client_id is not None) or (generic_client_id is not None)
-
-    return sso_setup
+    return (
+        microsoft_client_id is not None
+        or google_client_id is not None
+        or generic_client_id is not None
+        or bool(saml_idp_metadata_url)
+        or bool(saml_idp_metadata_xml)
+    )
 
 
 def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:

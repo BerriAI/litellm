@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
@@ -201,6 +202,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "mock_tool_calls",
     "disable_global_guardrails",
     "disable_global_guardrail",
+    "enable_prompt_caching",
     "opted_out_global_guardrails",
     "applied_guardrails",
     "applied_policies",
@@ -260,6 +262,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "policy_sources",
     "routing_decision",
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
@@ -883,6 +886,19 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
+    def _get_keepalive_seconds_from_request(headers: Mapping[str, str]) -> float | None:
+        """
+        Get `keepalive_seconds` from the request headers, for clients (e.g. the
+        Vercel AI SDK) that can set custom headers more easily than extra body
+        fields. Subject to the same deployment-level allow_client_keepalive_override
+        gate as the request body field: see _resolve_keepalive_seconds.
+        """
+        keepalive_seconds_header: Final = headers.get("x-litellm-keepalive-seconds", None)
+        if keepalive_seconds_header is not None:
+            return float(keepalive_seconds_header)
+        return None
+
+    @staticmethod
     def _get_num_retries_from_request(headers: dict) -> int | None:
         """
         Workaround for client request from Vercel's AI SDK.
@@ -1114,6 +1130,10 @@ class LiteLLMProxyRequestSetup:
         if num_retries is not None:
             data["num_retries"] = num_retries
 
+        keepalive_seconds: Final = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(headers)
+        if keepalive_seconds is not None:
+            data["keepalive_seconds"] = keepalive_seconds
+
         return data
 
     @staticmethod
@@ -1315,6 +1335,9 @@ class LiteLLMProxyRequestSetup:
         ## KEY-LEVEL DISABLE FALLBACKS
         if "disable_fallbacks" in key_metadata and isinstance(key_metadata["disable_fallbacks"], bool):
             data["disable_fallbacks"] = key_metadata["disable_fallbacks"]
+
+        if isinstance(key_metadata.get("enable_prompt_caching"), bool):
+            data["enable_prompt_caching"] = key_metadata["enable_prompt_caching"]  # rebind-ok: data is an out-param
 
         ## KEY-LEVEL METADATA
         data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
@@ -1845,6 +1868,24 @@ async def add_litellm_data_to_request(
             tags_to_add=project_metadata["tags"],
         )
 
+    # inherited_tags: every tag key/team/project policy contributed, read
+    # directly from those three sources rather than snapshotted off the shared
+    # "tags" list. A pre-auth pass (apply_client_tag_policy_pre_auth, run from
+    # user_api_key_auth for _tag_max_budget_check) may already have merged the
+    # caller's own header tags into that same list before this function ever
+    # runs, so a snapshot taken here -- at any point in this function -- would
+    # misattribute caller-supplied tags as policy-backed. tag_based_routing.py's
+    # allow_fail_open reads this (rather than subtracting caller_tags from the
+    # final merged set) so a caller can't strip an inherited "!"/"&"
+    # constraint's protection just by resubmitting its exact value alongside a
+    # conflicting one.
+    _key_tags: Final = (key_metadata or MappingProxyType({})).get("tags") or ()
+    _team_tags: Final = team_metadata.get("tags") or ()
+    _project_tags: Final = project_metadata.get("tags") or ()
+    data[_metadata_variable_name]["inherited_tags"] = tuple(  # rebind-ok: matches this file's data[...] mutation idiom
+        dict.fromkeys((*_key_tags, *_team_tags, *_project_tags))
+    )
+
     ## TEAM-LEVEL METADATA
     data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
         data=data,
@@ -1941,15 +1982,28 @@ async def add_litellm_data_to_request(
             tags_to_add=tags,
         )
 
-    if _metadata_variable_name != "metadata":
-        _user_metadata = data.get("metadata")
-        if isinstance(_user_metadata, dict):
-            _user_tags: Final = _user_metadata.get("tags")
-            if isinstance(_user_tags, list) and _user_tags:
-                data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=_user_tags,
-                )
+    _caller_body_metadata: Final = data.get("metadata") if _metadata_variable_name != "metadata" else None
+    _caller_body_tags: Final = (
+        _caller_body_metadata.get("tags")
+        if isinstance(_caller_body_metadata, dict) and isinstance(_caller_body_metadata.get("tags"), list)
+        else None
+    )
+    if _caller_body_tags:
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # rebind-ok: matches file idiom
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=_caller_body_tags,
+        )
+
+    # caller_tags: exactly what this request itself supplied (x-litellm-tags header,
+    # body "tags", or body "metadata.tags" on litellm_metadata routes), never
+    # anything from key/team/project metadata. Read directly from the header and
+    # body values here, the same way inherited_tags above is read directly from
+    # key/team/project metadata -- neither is derived by inspecting the shared
+    # "tags" list, which a pre-auth pass (apply_client_tag_policy_pre_auth) may
+    # have already merged caller header tags into before this function runs.
+    data[_metadata_variable_name]["caller_tags"] = tuple(  # rebind-ok: matches file idiom
+        dict.fromkeys((*(tags or ()), *(_caller_body_tags or ())))
+    )
 
     # Team Callbacks controls
     callback_settings_obj: Final = _get_dynamic_logging_metadata(

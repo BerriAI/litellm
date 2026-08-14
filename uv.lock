@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-06T13:09:00.574651711Z"
+exclude-newer = "2026-08-08T22:14:09.01009Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4194,10 +4194,11 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.97.0"
+version = "1.98.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "boto3" },
     { name = "click" },
     { name = "fastuuid" },
     { name = "httpx" },
@@ -4418,6 +4419,7 @@ requires-dist = [
     { name = "azure-storage-blob", marker = "extra == 'proxy'", specifier = ">=12.28.0,<13.0" },
     { name = "azure-storage-file-datalake", marker = "extra == 'proxy-runtime'", specifier = ">=12.20.0,<13.0" },
     { name = "backoff", marker = "extra == 'proxy'", specifier = ">=2.2.1,<3.0" },
+    { name = "boto3", specifier = ">=1.43.1,<2.0" },
     { name = "boto3", marker = "extra == 'proxy'", specifier = ">=1.43.1,<2.0" },
     { name = "click", specifier = ">=8.0.0,<9.0" },
     { name = "cryptography", marker = "extra == 'proxy'", specifier = ">=49.0.0,<51.0" },
@@ -4583,12 +4585,12 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.54"
+version = "0.1.55"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.84"
+version = "0.4.85"
 source = { editable = "litellm-proxy-extras" }
 
 [[package]]

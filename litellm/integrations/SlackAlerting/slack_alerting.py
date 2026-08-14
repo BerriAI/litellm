@@ -10,6 +10,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from openai import APIError
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -17,7 +18,7 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import HOURS_IN_A_DAY
+from litellm.constants import HOURS_IN_A_DAY, SLACK_DAILY_REPORT_LOCK_ID
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.hanging_request_check import (
@@ -34,10 +35,14 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    InvitationModel,
+    InvitationNew,
     Litellm_EntityType,
+    UserAPIKeyAuth,
     VirtualKeyEvent,
     WebhookEvent,
 )
+from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
@@ -51,6 +56,7 @@ from .batching_handler import send_to_webhook, squash_payloads
 from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.router import Router as _Router
 
     Router = _Router
@@ -1138,6 +1144,44 @@ Model Info:
             if email_logo_url is not None or email_support_contact is not None:
                 raise ValueError(f"Trying to Customize Email Alerting\n {CommonProxyErrors.not_premium_user.value}")
 
+    async def _construct_user_invitation_link(self, recipient_user_id: str | None, base_url: str) -> str:
+        from litellm.proxy.management_helpers.user_invitation import (
+            create_invitation_for_user,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if recipient_user_id is None or prisma_client is None:
+            return base_url
+
+        try:
+            existing_invitations: Final = TypeAdapter(list[InvitationModel]).validate_python(
+                await InvitationLinkRepository(prisma_client).table.find_many(  # pyright: ignore[reportAny]  # untyped prisma boundary (any-ok), result validated by TypeAdapter
+                    where={"user_id": recipient_user_id},  # mutable-ok: prisma find_many requires a dict where filter
+                    order={"created_at": "desc"},  # mutable-ok: prisma find_many requires a dict order arg
+                ),
+                from_attributes=True,
+            )
+            invitation: Final = (
+                existing_invitations[0]
+                if existing_invitations
+                else TypeAdapter(InvitationModel).validate_python(
+                    await create_invitation_for_user(
+                        data=InvitationNew(user_id=recipient_user_id),
+                        user_api_key_dict=UserAPIKeyAuth(user_id=recipient_user_id),
+                    ),
+                    from_attributes=True,
+                )
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort link build; any DB/creation failure falls back to base_url
+            verbose_proxy_logger.error(
+                "Error creating invitation link for user_id %s: %s",
+                recipient_user_id,
+                str(e),
+            )
+            return base_url
+
+        return f"{base_url.rstrip('/')}/ui/onboarding?invitation_id={invitation.id}"
+
     async def send_key_created_or_user_invited_email(self, webhook_event: WebhookEvent) -> bool:
         try:
             from litellm.proxy.utils import send_email
@@ -1196,11 +1240,14 @@ Model Info:
                     team_row: Final = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
                     if team_row is not None:
                         team_name = team_row.team_alias or "-"
+                invitation_link: Final = await self._construct_user_invitation_link(
+                    recipient_user_id=recipient_user_id, base_url=base_url
+                )
                 email_html_content = USER_INVITED_EMAIL_TEMPLATE.format(
                     email_logo_url=email_logo_url,
                     recipient_email=recipient_email,
                     team_name=team_name,
-                    base_url=base_url,
+                    base_url=invitation_link,
                     email_support_contact=email_support_contact,
                 )
             else:
@@ -1587,7 +1634,11 @@ Model Info:
         except Exception:
             pass
 
-    async def _run_scheduler_helper(self, llm_router) -> bool:
+    async def _run_scheduler_helper(
+        self,
+        llm_router,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> bool:
         """
         Returns:
         - True -> report sent
@@ -1612,6 +1663,16 @@ Model Info:
             interval_seconds: Final = self.alerting_args.daily_report_frequency
 
             if current_time - report_sent >= interval_seconds:
+                if (
+                    pod_lock_manager is not None
+                    and (
+                        await pod_lock_manager.acquire_lock(
+                            cronjob_id=SLACK_DAILY_REPORT_LOCK_ID, ttl=interval_seconds, allow_reentrant=False
+                        )
+                    )
+                    is False
+                ):
+                    return False
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
@@ -1623,7 +1684,11 @@ Model Info:
 
         return report_sent_bool
 
-    async def _run_scheduled_daily_report(self, llm_router: Any | None = None):
+    async def _run_scheduled_daily_report(
+        self,
+        llm_router: Any | None = None,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ):
         """
         If 'daily_reports' enabled
 
@@ -1636,7 +1701,7 @@ Model Info:
 
         if "daily_reports" in self.alert_types:
             while True:
-                await self._run_scheduler_helper(llm_router=llm_router)
+                await self._run_scheduler_helper(llm_router=llm_router, pod_lock_manager=pod_lock_manager)
                 interval = random.randint(
                     self.alerting_args.report_check_interval - 3,
                     self.alerting_args.report_check_interval + 3,

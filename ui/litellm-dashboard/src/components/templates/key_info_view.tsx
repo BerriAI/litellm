@@ -13,6 +13,8 @@ import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } 
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
+import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
@@ -22,6 +24,9 @@ import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend"
 import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlockedState";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useQueryClient } from "@tanstack/react-query";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
+import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
@@ -72,6 +77,8 @@ export default function KeyInfoView({
   const { teams: teamsData } = useTeams();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const { data: allMcpServers } = useMCPServers();
+  const { data: allMcpToolsets } = useMCPToolsets();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -199,33 +206,28 @@ export default function KeyInfoView({
         delete formValues.vector_stores;
       }
 
-      if (formValues.mcp_servers_and_groups !== undefined) {
-        const { servers, accessGroups, toolsets } = formValues.mcp_servers_and_groups || {
-          servers: [],
-          accessGroups: [],
-          toolsets: [],
-        };
-        formValues.object_permission = {
-          ...currentKeyData.object_permission,
-          mcp_servers: servers || [],
-          mcp_access_groups: accessGroups || [],
-          mcp_toolsets: toolsets || [],
-        };
-        // Remove mcp_servers_and_groups from the top level as it should be in object_permission
-        delete formValues.mcp_servers_and_groups;
-      }
-
-      // Handle MCP tool permissions
-      if (formValues.mcp_tool_permissions !== undefined) {
-        const mcpToolPermissions = formValues.mcp_tool_permissions || {};
-        if (Object.keys(mcpToolPermissions).length > 0) {
-          formValues.object_permission = {
-            ...formValues.object_permission,
-            mcp_tool_permissions: mcpToolPermissions,
-          };
+      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers ?? [], allMcpToolsets ?? []);
+      if (mcpEntitlement) {
+        // Without a catalog the grants an allowlist key still has are unresolvable, so nothing is
+        // pruned and a revocation would save as a no-op while reporting success. Refuse instead.
+        const unresolvableSelection =
+          allMcpServers === undefined ||
+          mcpEntitlement.mcp_toolsets.some(
+            (toolsetId) => !(allMcpToolsets ?? []).some((toolset) => toolset.toolset_id === toolsetId),
+          );
+        if (unresolvableSelection && Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0) {
+          NotificationManager.error(
+            "MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.",
+          );
+          return;
         }
-        delete formValues.mcp_tool_permissions;
+        formValues.object_permission = {
+          ...(formValues.object_permission ?? currentKeyData.object_permission),
+          ...mcpEntitlement,
+        };
       }
+      delete formValues.mcp_servers_and_groups;
+      delete formValues.mcp_tool_permissions;
 
       // Handle agent permissions
       if (formValues.agents_and_groups !== undefined) {
@@ -444,6 +446,8 @@ export default function KeyInfoView({
     );
   };
 
+  const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
+
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
 
   const budgetDisplay =
@@ -468,7 +472,7 @@ export default function KeyInfoView({
             currentKeyData.created_by ||
             "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
-          lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
+          lastUpdated: lastConfiguredAt ? formatTimestamp(lastConfiguredAt) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
           expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
@@ -780,6 +784,13 @@ export default function KeyInfoView({
                     <Text>{currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never"}</Text>
                   </div>
 
+                  {Boolean(currentKeyData.metadata?.enable_prompt_caching) && (
+                    <div>
+                      <Text className="font-medium">Prompt Caching</Text>
+                      <Text>Enabled (auto-injects cache_control markers on Anthropic and Bedrock Claude requests)</Text>
+                    </div>
+                  )}
+
                   <AutoRotationView
                     autoRotate={currentKeyData.auto_rotate}
                     rotationInterval={currentKeyData.rotation_interval}
@@ -824,6 +835,15 @@ export default function KeyInfoView({
                             {fallbacks.join(", ")}
                           </div>
                         ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {hasRouterSettings(currentKeyData.router_settings) && (
+                    <div>
+                      <Text className="font-medium">Router Settings</Text>
+                      <div className="mt-1">
+                        <RouterSettingsSummary routerSettings={currentKeyData.router_settings} />
                       </div>
                     </div>
                   )}
