@@ -5,7 +5,9 @@ import os
 import sys
 import time
 import unittest
-from typing import Final, List, Optional, Tuple
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final, List, Literal, Optional, Tuple
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -15,7 +17,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import CallInfo, Litellm_EntityType
-from litellm.types.integrations.slack_alerting import SlackAlertingCacheKeys
+from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingCacheKeys
 
 
 class TestSlackAlerting(unittest.TestCase):
@@ -369,3 +371,68 @@ async def test_scheduled_daily_report_threads_the_pod_lock_manager_through():
 
     _, kwargs = slack_alerting._run_scheduler_helper.await_args
     assert kwargs["pod_lock_manager"] is pod_lock_manager
+
+
+_SPEND_PER_TEAM: Final = (MappingProxyType({"team_alias": "eng", "total_spend": 12.3456789}),)
+_SPEND_PER_TAG: Final = (MappingProxyType({"individual_request_tag": "prod", "total_spend": 4.2}),)
+_SPEND_REPORT_WEBHOOK: Final = "https://hooks.slack.example/spend-report"
+_SPEND_REPORT_BATCH_SIZE: Final = 2  # pins the flush threshold above 1 so DEFAULT_BATCH_SIZE can't trigger a real POST
+
+
+async def _delivered_spend_report(
+    monkeypatch: pytest.MonkeyPatch,
+    alerting_args: Mapping[str, bool],
+    report_type: Literal["weekly", "monthly"],
+) -> tuple[str, AsyncMock]:
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)  # send_alert appends it to the payload
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        alert_types=[AlertType.spend_reports],
+        internal_usage_cache=DualCache(),
+        alerting_args=alerting_args,
+        default_webhook_url=_SPEND_REPORT_WEBHOOK,
+        batch_size=_SPEND_REPORT_BATCH_SIZE,
+    )
+    slack_alerting.periodic_started = True  # keeps send_alert from spawning an unawaited flush task
+    get_report: Final = AsyncMock(return_value=(_SPEND_PER_TEAM, _SPEND_PER_TAG))
+    with patch(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._get_spend_report_for_time_range",
+        new=get_report,
+    ):
+        if report_type == "weekly":
+            await slack_alerting.send_weekly_spend_report()
+        else:
+            await slack_alerting.send_monthly_spend_report()
+
+    assert len(slack_alerting.log_queue) == 1
+    assert slack_alerting.log_queue[0]["url"] == _SPEND_REPORT_WEBHOOK
+    return slack_alerting.log_queue[0]["payload"]["text"], get_report
+
+
+@pytest.mark.parametrize("report_type", ("weekly", "monthly"))
+@pytest.mark.parametrize("alerting_args", (MappingProxyType({}), MappingProxyType({"spend_report_include_tags": True})))
+@pytest.mark.asyncio
+async def test_spend_report_includes_tag_breakdown_by_default(
+    monkeypatch: pytest.MonkeyPatch, report_type: Literal["weekly", "monthly"], alerting_args: Mapping[str, bool]
+) -> None:
+    message, _ = await _delivered_spend_report(monkeypatch, alerting_args, report_type)
+
+    assert "*Team Spend Report:*" in message
+    assert "Team: `eng` | Spend: `$12.3457`" in message
+    assert "*Tag Spend Report:*" in message
+    assert "Tag: `prod` | Spend: `$4.2`" in message
+
+
+@pytest.mark.parametrize("report_type", ("weekly", "monthly"))
+@pytest.mark.asyncio
+async def test_spend_report_omits_tag_breakdown_when_disabled(
+    monkeypatch: pytest.MonkeyPatch, report_type: Literal["weekly", "monthly"]
+) -> None:
+    message, get_report = await _delivered_spend_report(
+        monkeypatch, MappingProxyType({"spend_report_include_tags": False}), report_type
+    )
+
+    assert "*Team Spend Report:*" in message
+    assert "Team: `eng` | Spend: `$12.3457`" in message
+    assert "Tag" not in message
+    get_report.assert_awaited_once()

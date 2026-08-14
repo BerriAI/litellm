@@ -91,6 +91,10 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=False,
         description="If true, the alerting payload will be printed to the console.",
     )
+    spend_report_include_tags: bool = Field(
+        default=True,
+        description="If false, spend reports drop the per-tag breakdown and keep the per-team one. Tags stay tracked.",
+    )
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):

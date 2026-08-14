@@ -14167,6 +14167,22 @@ async def model_settings():
 #### ALERTING MANAGEMENT ENDPOINTS ####
 
 
+_ALERTING_SETTINGS_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "slack_alerting": "Boolean",
+        "daily_report_frequency": "Integer",
+        "report_check_interval": "Integer",
+        "budget_alert_ttl": "Integer",
+        "outage_alert_ttl": "Integer",
+        "region_outage_alert_ttl": "Integer",
+        "minor_outage_alert_threshold": "Integer",
+        "major_outage_alert_threshold": "Integer",
+        "max_outage_alert_list_size": "Integer",
+        "spend_report_include_tags": "Boolean",
+    }
+)
+
+
 @router.get(
     "/alerting/settings",
     description="Return the configurable alerting param, description, and current value",
@@ -14182,7 +14198,7 @@ async def alerting_settings(
     Used by UI to generate 'alerting settings' page
     {
         field_name=field_name,
-        field_type=allowed_args[field_name]["type"], # string/int
+        field_type=allowed_args[field_name], # string/int
         field_description=field_info.description or "", # human-friendly description
         field_value=general_settings.get(field_name, None), # example value
     }
@@ -14212,17 +14228,7 @@ async def alerting_settings(
         alerting_args_dict = {}
         alerting_values = None
 
-    allowed_args: Final = {
-        "slack_alerting": {"type": "Boolean"},
-        "daily_report_frequency": {"type": "Integer"},
-        "report_check_interval": {"type": "Integer"},
-        "budget_alert_ttl": {"type": "Integer"},
-        "outage_alert_ttl": {"type": "Integer"},
-        "region_outage_alert_ttl": {"type": "Integer"},
-        "minor_outage_alert_threshold": {"type": "Integer"},
-        "major_outage_alert_threshold": {"type": "Integer"},
-        "max_outage_alert_list_size": {"type": "Integer"},
-    }
+    allowed_args: Final = _ALERTING_SETTINGS_FIELD_TYPES
 
     _slack_alerting: Final[SlackAlerting] = proxy_logging_obj.slack_alerting_instance
     _slack_alerting_args_dict: Final = _slack_alerting.alerting_args.model_dump()
@@ -14237,7 +14243,7 @@ async def alerting_settings(
 
     _response_obj = ConfigList(
         field_name="slack_alerting",
-        field_type=allowed_args["slack_alerting"]["type"],
+        field_type=allowed_args["slack_alerting"],
         field_description="Enable slack alerting for monitoring proxy in production: llm outages, budgets, spend tracking failures.",
         field_value=is_slack_enabled,
         stored_in_db=True if alerting_values is not None else False,
@@ -14256,7 +14262,7 @@ async def alerting_settings(
 
             _response_obj = ConfigList(
                 field_name=field_name,
-                field_type=allowed_args[field_name]["type"],
+                field_type=allowed_args[field_name],
                 field_description=field_info.description or "",
                 field_value=_slack_alerting_args_dict.get(field_name, None),
                 stored_in_db=_stored_in_db,

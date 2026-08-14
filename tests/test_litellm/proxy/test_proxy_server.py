@@ -9348,6 +9348,51 @@ def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_alerting_settings_exposes_spend_report_include_tags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Admin UI form rebuilds alerting_args from exactly the fields /alerting/settings returns,
+    and /config/field/update replaces the whole blob, so a field missing from allowed_args is
+    silently reset to its default the next time anyone saves that form."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(
+        return_value=types.SimpleNamespace(param_value={"alerting_args": {"spend_report_include_tags": False}})
+    )
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        ps,
+        "proxy_logging_obj",
+        types.SimpleNamespace(
+            slack_alerting_instance=SlackAlerting(alerting_args={"spend_report_include_tags": False})
+        ),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/alerting/settings")
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "spend_report_include_tags" in fields
+        assert fields["spend_report_include_tags"]["field_type"] == "Boolean"
+        assert fields["spend_report_include_tags"]["field_value"] is False
+        assert fields["spend_report_include_tags"]["field_default_value"] is True
+        assert fields["spend_report_include_tags"]["stored_in_db"] is True
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
     """The throttle fraction is a litellm_settings scalar surfaced on the General
     Settings table as a Float field so it sits with the other global limits; it

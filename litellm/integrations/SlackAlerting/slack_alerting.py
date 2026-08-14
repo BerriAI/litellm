@@ -1701,7 +1701,7 @@ Model Info:
                     _team_spend = round(float(spend["total_spend"]), 4)
                     _spend_message += f"Team: `{spend['team_alias']}` | Spend: `${_team_spend}`\n"
 
-            if spend_per_tag is not None:
+            if spend_per_tag is not None and self.alerting_args.spend_report_include_tags:
                 _spend_message += "\n*Tag Spend Report:*\n"
                 for spend in spend_per_tag:
                     _tag_spend = round(float(spend["total_spend"]), 4)
@@ -1764,7 +1764,7 @@ Model Info:
                     _team_spend = round(_team_spend, 4)
                     _spend_message += f"Team: `{spend['team_alias']}` | Spend: `${_team_spend}`\n"
 
-            if monthly_spend_per_tag is not None:
+            if monthly_spend_per_tag is not None and self.alerting_args.spend_report_include_tags:
                 _spend_message += "\n*Tag Spend Report:*\n"
                 for spend in monthly_spend_per_tag:
                     _tag_spend = spend["total_spend"]
