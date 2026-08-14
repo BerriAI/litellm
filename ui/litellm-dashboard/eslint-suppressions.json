@@ -228,7 +228,7 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/how_it_works.tsx": {
@@ -238,9 +238,6 @@
   },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/index.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -252,9 +249,6 @@
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_cost_results.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_export_dropdown.tsx": {
@@ -275,16 +269,10 @@
   "src/app/(dashboard)/cost-tracking/_components/provider_discount_table.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/provider_margin_table.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
