@@ -43,11 +43,16 @@ export function SearchSelect({
   className,
   inputId,
 }: SearchSelectProps) {
-  const selected = options.find((option) => option.value === value) ?? null;
+  const selected =
+    value === undefined || value === ""
+      ? null
+      : options.find((option) => option.value === value) ?? { label: value, value };
+  const items =
+    selected !== null && !options.some((option) => option.value === selected.value) ? [selected, ...options] : options;
 
   return (
     <Combobox
-      items={options}
+      items={items}
       value={selected}
       onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
