@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic import BaseModel, ValidationError
+
 from proxy_client import ProxyClient
 from e2e_http import StreamingResponse
 from models import (
@@ -17,6 +19,24 @@ from models import (
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
+
+
+class ApiErrorDetail(BaseModel):
+    message: str | None = None
+    type: str | None = None
+    code: str | int | None = None
+
+
+class ApiErrorEnvelope(BaseModel):
+    error: ApiErrorDetail
+
+
+def error_envelope(body: str) -> ApiErrorEnvelope | None:
+    """The OpenAI-shaped `{"error": {...}}` a client parses, or None if absent."""
+    try:
+        return ApiErrorEnvelope.model_validate_json(body)
+    except ValidationError:
+        return None
 
 
 @dataclass(frozen=True, slots=True)

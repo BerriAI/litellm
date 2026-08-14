@@ -177,12 +177,19 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("Loading request & response data...")).toBeInTheDocument();
   });
 
-  it("should display Request & Response section with Pretty and JSON view modes", () => {
+  it("should switch the Request & Response body between the Pretty and JSON view modes", async () => {
+    const user = userEvent.setup();
     render(<LogDetailContent logEntry={createLogEntry()} />);
 
     expect(screen.getByText("Request & Response")).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Pretty" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "JSON" })).toBeInTheDocument();
+    expect(screen.getByText("Pretty")).toBeInTheDocument();
+    expect(screen.getByText("JSON")).toBeInTheDocument();
+
+    await user.click(screen.getByText("JSON"));
+    expect(screen.getByRole("tab", { name: "Request" })).toBeInTheDocument();
+
+    await user.click(screen.getByText("Pretty"));
+    expect(screen.queryByRole("tab", { name: "Request" })).not.toBeInTheDocument();
   });
 
   it("should display Request and Response tabs when JSON view is selected", async () => {
@@ -259,7 +266,7 @@ describe("LogDetailContent", () => {
     render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True" })} />);
 
     expect(screen.getByText("Response Cache")).toBeInTheDocument();
-    expect(screen.getByText("Hit").closest(".ant-tag")).toHaveClass("ant-tag-green");
+    expect(screen.getByText("Hit").className).toMatch(/green/);
   });
 
   it("should show prompt cache tokens without an alarming red tag when only provider prompt caching occurred", () => {
@@ -282,7 +289,7 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("34,462")).toBeInTheDocument();
     expect(screen.getByText("Prompt Cache Creation Tokens")).toBeInTheDocument();
     expect(screen.getByText("83")).toBeInTheDocument();
-    expect(screen.getByText("Miss").closest(".ant-tag")).not.toHaveClass("ant-tag-red");
+    expect(screen.getByText("Miss").className).not.toMatch(/red|destructive/);
     expect(screen.queryByText("Cache Hit")).not.toBeInTheDocument();
   });
 
@@ -310,8 +317,10 @@ describe("LogDetailContent", () => {
     const user = userEvent.setup();
     render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True" })} />);
 
-    const label = screen.getByText("Response Cache").closest(".ant-space") as HTMLElement;
-    await user.hover(within(label).getByRole("img", { name: "info-circle" }));
+    expect(screen.getByText("Response Cache")).toBeInTheDocument();
+    const infoIcons = screen.getAllByRole("img", { name: /info/i });
+    expect(infoIcons).toHaveLength(1);
+    await user.hover(infoIcons[0]);
 
     expect(await screen.findByRole("link", { name: "Docs" })).toHaveAttribute(
       "href",
@@ -333,8 +342,10 @@ describe("LogDetailContent", () => {
       />,
     );
 
-    const label = screen.getByText("Prompt Cache Read Tokens").closest(".ant-space") as HTMLElement;
-    await user.hover(within(label).getByRole("img", { name: "info-circle" }));
+    expect(screen.getByText("Prompt Cache Read Tokens")).toBeInTheDocument();
+    const infoIcons = screen.getAllByRole("img", { name: /info/i });
+    expect(infoIcons).toHaveLength(1);
+    await user.hover(infoIcons[0]);
 
     expect(await screen.findByRole("link", { name: "Docs" })).toHaveAttribute(
       "href",
@@ -370,7 +381,7 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText("LiteLLM Overhead")).not.toBeInTheDocument();
   });
 
-  const retriesItem = () => screen.getByText("Retries").closest(".ant-descriptions-item") as HTMLElement;
+  const retriesItem = () => screen.getByText("Retries").parentElement as HTMLElement;
 
   it("should display attempted_retries / max_retries for Retries when attempted_retries > 0", () => {
     render(
@@ -386,7 +397,7 @@ describe("LogDetailContent", () => {
     render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success", attempted_retries: 0 } })} />);
 
     const noneTag = within(retriesItem()).getByText("None");
-    expect(noneTag.closest(".ant-tag")).toHaveClass("ant-tag-green");
+    expect(noneTag.className).toMatch(/green/);
   });
 
   it("should display '-' for Retries when attempted_retries is absent from metadata", () => {
@@ -444,8 +455,8 @@ describe("LogDetailContent", () => {
       />,
     );
 
-    const descriptions = screen.getByText("Provider").closest(".ant-descriptions-item");
+    const descriptions = screen.getByText("Provider").parentElement as HTMLElement;
     expect(descriptions).toBeInTheDocument();
-    expect(within(descriptions as HTMLElement).getByText("-")).toBeInTheDocument();
+    expect(within(descriptions).getByText("-")).toBeInTheDocument();
   });
 });
