@@ -226,8 +226,6 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                         } ${allowed ? "" : "opacity-60"}`}
                         onClick={() => toggleTool(tool.name)}
                       >
-                        {/* The row's onClick is the single toggle path. Giving this checkbox its
-                            own change handler as well would toggle twice per click on the box. */}
                         <Checkbox
                           aria-label={tool.name}
                           checked={allowed}
