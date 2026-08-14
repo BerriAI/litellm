@@ -326,3 +326,72 @@ async def test_update_batch_in_database_is_a_noop_for_unmanaged_batches(monkeypa
     )
 
     update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_caller_s_accounting_decision_wins_over_a_later_poller_transition(monkeypatch):
+    """The ownership decision is made before the provider retrieval and acted on there, so
+    re-deciding afterwards can observe a poller that only just became usable. That split
+    left the retrieve accounting inline while the row stayed unmarked, so the poller
+    accounted for the same batch again and billed it twice. Passing the decision through
+    makes both halves agree even when the poller transitions mid-flight."""
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    # The predicate now reports an active poller, i.e. it flipped during the retrieval.
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: True)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+    db_batch_object = MagicMock()
+    db_batch_object.status = "in_progress"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+        poller_owns_accounting=False,
+    )
+
+    data = update_mock.await_args.kwargs["data"]
+    assert data["batch_processed"] is True
+    assert data["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_a_caller_that_handed_off_accounting_still_leaves_the_marker_alone(monkeypatch):
+    """The mirror case: a caller that suppressed its own accounting must leave the marker
+    for the poller even if the predicate has since stopped reporting one, otherwise the
+    batch is retired without anyone having accounted for it."""
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: False)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+    db_batch_object = MagicMock()
+    db_batch_object.status = "in_progress"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+        poller_owns_accounting=True,
+    )
+
+    data = update_mock.await_args.kwargs["data"]
+    assert "batch_processed" not in data
+    assert data["status"] == "complete"

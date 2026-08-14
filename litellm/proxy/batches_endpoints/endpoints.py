@@ -497,7 +497,8 @@ async def retrieve_batch(
                 "Batch %s is in non-terminal state %s, syncing with provider", batch_id, response.status
             )
 
-        if unified_batch_id and batch_cost_poller_is_active():
+        poller_owns_accounting: Final = bool(unified_batch_id) and batch_cost_poller_is_active()
+        if poller_owns_accounting:
             litellm_metadata = data.get("litellm_metadata")
             if not isinstance(litellm_metadata, dict):
                 litellm_metadata = {}  # mutable-ok: the suppression flag must live inside litellm_metadata for the success handler to read it, and this request carried no mapping to extend
@@ -581,6 +582,7 @@ async def retrieve_batch(
             verbose_proxy_logger=verbose_proxy_logger,
             db_batch_object=db_batch_object,
             operation="retrieve",
+            poller_owns_accounting=poller_owns_accounting,
         )
 
         ### CALL HOOKS ### - modify outgoing data
