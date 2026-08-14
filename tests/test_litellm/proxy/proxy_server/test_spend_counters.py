@@ -1332,3 +1332,71 @@ async def test_update_cache_global_proxy_spend_concurrent_increments_after_reset
 
     final_value = await cache.async_get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY)
     assert final_value == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_update_cache_global_proxy_spend_leaves_missing_key_absent(monkeypatch):
+    """An absent global spend key must not be recreated from zero by an
+    increment; the auth-time loader restores the authoritative DB spend."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.caching import DualCache
+
+    redis_cache = MagicMock()
+    redis_cache.async_increment_if_exists = AsyncMock(return_value=None)
+    cache = DualCache(redis_cache=redis_cache, default_in_memory_ttl=300)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await cache.async_set_cache(
+        key="user-missing",
+        value={"user_id": "user-missing", "spend": 0.0},
+    )
+    await ps.update_cache(
+        token=None,
+        user_id="user-missing",
+        end_user_id=None,
+        team_id=None,
+        response_cost=1.0,
+        parent_otel_span=None,
+    )
+
+    redis_cache.async_increment_if_exists.assert_awaited_once_with(
+        key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY,
+        value=1.0,
+        ttl=ps.get_management_object_ttl(cache),
+    )
+    assert await cache.async_get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY) is None
+
+
+@pytest.mark.asyncio
+async def test_update_cache_global_proxy_spend_mirrors_authoritative_value(monkeypatch):
+    """In-memory mirrors the authoritative Redis result instead of accruing a
+    stale pre-reset value, so budget checks do not reject off stale memory."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.caching import DualCache
+
+    redis_cache = MagicMock()
+    redis_cache.async_increment_if_exists = AsyncMock(return_value=3.5)
+    cache = DualCache(redis_cache=redis_cache, default_in_memory_ttl=300)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await cache.async_set_cache(
+        key="user-mirror",
+        value={"user_id": "user-mirror", "spend": 0.0},
+    )
+    await ps.update_cache(
+        token=None,
+        user_id="user-mirror",
+        end_user_id=None,
+        team_id=None,
+        response_cost=1.5,
+        parent_otel_span=None,
+    )
+
+    redis_cache.async_increment_if_exists.assert_awaited_once_with(
+        key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY,
+        value=1.5,
+        ttl=ps.get_management_object_ttl(cache),
+    )
+    assert await cache.async_get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY) == 3.5

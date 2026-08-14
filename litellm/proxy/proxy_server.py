@@ -3126,14 +3126,33 @@ async def update_cache(
         if response_cost is None:
             return
         try:
-            # Atomic increment avoids the read-modify-write race with
-            # ResetBudgetJob and starts from 0 when the key is missing.
-            await user_api_key_cache.async_increment_cache(
-                key=GLOBAL_PROXY_SPEND_CACHE_KEY,
-                value=response_cost,
-                ttl=get_management_object_ttl(user_api_key_cache),
-                refresh_ttl=True,
-            )
+            # Atomically accumulate the shared global-proxy scalar without the
+            # read-modify-write race with ResetBudgetJob. A plain INCRBYFLOAT
+            # would recreate a missing key from zero, so increment-if-present
+            # leaves an absent key missing and lets the auth-time loader
+            # restore the authoritative DB spend instead.
+            if user_api_key_cache.redis_cache is not None:
+                current = await user_api_key_cache.redis_cache.async_increment_if_exists(
+                    key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+                    value=response_cost,
+                    ttl=get_management_object_ttl(user_api_key_cache),
+                )
+                if current is not None:
+                    # Mirror the authoritative Redis value into this worker's
+                    # in-memory tier so a stale pre-reset value is never
+                    # accumulated or read back.
+                    await user_api_key_cache.in_memory_cache.async_set_cache(
+                        key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+                        value=current,
+                    )
+            else:
+                # No Redis: single-process, so an in-memory increment is coherent.
+                await user_api_key_cache.async_increment_cache(
+                    key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+                    value=response_cost,
+                    ttl=get_management_object_ttl(user_api_key_cache),
+                    refresh_ttl=True,
+                )
         except Exception as e:  # noqa: BLE001  # spend update must not fail the request
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update global proxy spend in cache. "
