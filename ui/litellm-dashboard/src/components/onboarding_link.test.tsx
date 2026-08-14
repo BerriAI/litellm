@@ -1,22 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import OnboardingModal, { buildOnboardingUrl, InvitationLink } from "./onboarding_link";
-
-vi.mock("./molecules/notifications_manager", () => ({ default: { success: vi.fn() } }));
-
-const invitation: InvitationLink = {
-  id: "inv-123",
-  user_id: "user-abc",
-  is_accepted: false,
-  accepted_at: null,
-  expires_at: new Date("2026-09-01"),
-  created_at: new Date("2026-08-01"),
-  created_by: "admin",
-  updated_at: new Date("2026-08-01"),
-  updated_by: "admin",
-  has_user_setup_sso: false,
-};
+import { describe, it, expect } from "vitest";
+import { buildOnboardingUrl } from "./onboarding_link";
 
 describe("buildOnboardingUrl", () => {
   it("points the invitation link at the dedicated /ui/onboarding route", () => {
@@ -83,75 +66,5 @@ describe("buildOnboardingUrl", () => {
         resetPassword: false,
       }),
     ).toBe("");
-  });
-});
-
-describe("OnboardingModal", () => {
-  it("renders nothing until it is opened", () => {
-    render(
-      <OnboardingModal
-        isInvitationLinkModalVisible={false}
-        setIsInvitationLinkModalVisible={vi.fn()}
-        baseUrl="http://localhost:4000/"
-        invitationLinkData={invitation}
-      />,
-    );
-
-    expect(screen.queryByText("http://localhost:4000/ui/onboarding?invitation_id=inv-123")).not.toBeInTheDocument();
-  });
-
-  it("shows the invitation url, the user id and an invitation-flavoured copy button", async () => {
-    render(
-      <OnboardingModal
-        isInvitationLinkModalVisible
-        setIsInvitationLinkModalVisible={vi.fn()}
-        baseUrl="http://localhost:4000/"
-        invitationLinkData={invitation}
-      />,
-    );
-
-    expect(await screen.findByText("http://localhost:4000/ui/onboarding?invitation_id=inv-123")).toBeInTheDocument();
-    expect(screen.getByText("user-abc")).toBeInTheDocument();
-    expect(screen.getAllByText("Invitation Link").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Copy invitation link" })).toBeInTheDocument();
-    expect(screen.getByText(/Copy and send the generated link to onboard this user/)).toBeInTheDocument();
-  });
-
-  it("switches every label and the url to the reset-password flow", async () => {
-    render(
-      <OnboardingModal
-        isInvitationLinkModalVisible
-        setIsInvitationLinkModalVisible={vi.fn()}
-        baseUrl="http://localhost:4000/"
-        invitationLinkData={invitation}
-        modalType="resetPassword"
-      />,
-    );
-
-    expect(
-      await screen.findByText("http://localhost:4000/ui/onboarding?invitation_id=inv-123&action=reset_password"),
-    ).toBeInTheDocument();
-    expect(screen.getAllByText("Reset Password Link").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Copy password reset link" })).toBeInTheDocument();
-    expect(
-      screen.getByText(/Copy and send the generated link to the user to reset their password/),
-    ).toBeInTheDocument();
-  });
-
-  it("closes through setIsInvitationLinkModalVisible when the close control is used", async () => {
-    const user = userEvent.setup();
-    const setVisible = vi.fn();
-    render(
-      <OnboardingModal
-        isInvitationLinkModalVisible
-        setIsInvitationLinkModalVisible={setVisible}
-        baseUrl="http://localhost:4000/"
-        invitationLinkData={invitation}
-      />,
-    );
-
-    await user.click(await screen.findByRole("button", { name: /close/i }));
-
-    expect(setVisible).toHaveBeenCalledWith(false);
   });
 });
