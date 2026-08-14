@@ -698,7 +698,7 @@ class CheckBatchCost:
                 # mark the job as complete
                 try:
                     update_data: dict = {
-                        "status": "complete",
+                        "status": response.status if response.status != "completed" else "complete",
                         "file_object": response.model_dump_json(),
                     }
                     if self._has_batch_processed_column:

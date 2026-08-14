@@ -1036,6 +1036,9 @@ class TestCheckBatchCost:
             1
         ]["data"]
         assert update_data["batch_processed"] is True
+        assert (
+            update_data["status"] == "expired"
+        ), "billed expired batch must keep its real terminal status in the DB"
 
     @pytest.mark.asyncio
     async def test_raw_output_file_id_converted_to_managed_id(
