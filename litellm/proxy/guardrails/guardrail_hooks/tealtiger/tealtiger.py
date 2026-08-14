@@ -10,7 +10,7 @@ implementation of the same interface.
 No network calls, no LLM calls, no external API keys required.
 """
 
-from typing import TYPE_CHECKING, Final, List, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -33,7 +33,7 @@ DEFAULT_POLICIES = [
 class TealTigerGuardrail(CustomGuardrail):
     def __init__(
         self,
-        policies: Optional[list] = None,
+        policies: list | None = None,
         policy_mode: str = "ENFORCE",
         **kwargs,
     ):
@@ -68,7 +68,7 @@ class TealTigerGuardrail(CustomGuardrail):
             if over_budget:
                 raise ValueError(f"TealTiger: blocked — DAILY_BUDGET_EXCEEDED (${spent:.2f} / ${limit:.2f})")
 
-        checked_texts: List[str] = []
+        checked_texts: list[str] = []
         for text in inputs.get("texts") or []:
             decision = self.engine.evaluate_text(text)
 

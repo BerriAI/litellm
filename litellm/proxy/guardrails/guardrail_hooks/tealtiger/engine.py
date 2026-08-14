@@ -8,9 +8,8 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from .patterns import default_patterns
 
@@ -31,7 +30,7 @@ class Decision:
     action: str
     reason_code: str
     correlation_id: str
-    redacted_text: Optional[str] = None
+    redacted_text: str | None = None
     details: dict = field(default_factory=dict)
 
     def to_receipt(self) -> dict:
@@ -109,14 +108,14 @@ class TealEngine:
         limit = self._cost_policy.get("daily_limit_usd")
         if limit is None:
             return False, 0.0, 0.0
-        today = date.today().isoformat()
+        today = datetime.now().astimezone().date().isoformat()
         with self._lock:
             spent = self._spend_by_day.get(today, 0.0)
         return spent >= limit, spent, limit
 
     def track_cost(self, tokens: int, cost_per_1k_tokens: float = 0.002) -> float:
         cost = (tokens / 1000.0) * cost_per_1k_tokens
-        today = date.today().isoformat()
+        today = datetime.now().astimezone().date().isoformat()
         with self._lock:
             self._spend_by_day[today] = self._spend_by_day.get(today, 0.0) + cost
         return cost
