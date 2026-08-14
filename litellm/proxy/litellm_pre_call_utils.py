@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
@@ -201,6 +202,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "mock_tool_calls",
     "disable_global_guardrails",
     "disable_global_guardrail",
+    "enable_prompt_caching",
     "opted_out_global_guardrails",
     "applied_guardrails",
     "applied_policies",
@@ -260,6 +262,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "policy_sources",
     "routing_decision",
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
@@ -271,7 +274,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 
-_UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
+UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
     {
         "litellm-disable-message-redaction",
     }
@@ -352,7 +355,7 @@ def _strip_untrusted_request_header_controls(
         return
 
     for header_name in list(headers.keys()):
-        if isinstance(header_name, str) and header_name.lower() in _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
+        if isinstance(header_name, str) and header_name.lower() in UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
             if allow_client_message_redaction_opt_out:
                 continue
             headers.pop(header_name, None)
@@ -1333,6 +1336,9 @@ class LiteLLMProxyRequestSetup:
         if "disable_fallbacks" in key_metadata and isinstance(key_metadata["disable_fallbacks"], bool):
             data["disable_fallbacks"] = key_metadata["disable_fallbacks"]
 
+        if isinstance(key_metadata.get("enable_prompt_caching"), bool):
+            data["enable_prompt_caching"] = key_metadata["enable_prompt_caching"]  # rebind-ok: data is an out-param
+
         ## KEY-LEVEL METADATA
         data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
             data=data,
@@ -1862,6 +1868,24 @@ async def add_litellm_data_to_request(
             tags_to_add=project_metadata["tags"],
         )
 
+    # inherited_tags: every tag key/team/project policy contributed, read
+    # directly from those three sources rather than snapshotted off the shared
+    # "tags" list. A pre-auth pass (apply_client_tag_policy_pre_auth, run from
+    # user_api_key_auth for _tag_max_budget_check) may already have merged the
+    # caller's own header tags into that same list before this function ever
+    # runs, so a snapshot taken here -- at any point in this function -- would
+    # misattribute caller-supplied tags as policy-backed. tag_based_routing.py's
+    # allow_fail_open reads this (rather than subtracting caller_tags from the
+    # final merged set) so a caller can't strip an inherited "!"/"&"
+    # constraint's protection just by resubmitting its exact value alongside a
+    # conflicting one.
+    _key_tags: Final = (key_metadata or MappingProxyType({})).get("tags") or ()
+    _team_tags: Final = team_metadata.get("tags") or ()
+    _project_tags: Final = project_metadata.get("tags") or ()
+    data[_metadata_variable_name]["inherited_tags"] = tuple(  # rebind-ok: matches this file's data[...] mutation idiom
+        dict.fromkeys((*_key_tags, *_team_tags, *_project_tags))
+    )
+
     ## TEAM-LEVEL METADATA
     data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
         data=data,
@@ -1958,15 +1982,28 @@ async def add_litellm_data_to_request(
             tags_to_add=tags,
         )
 
-    if _metadata_variable_name != "metadata":
-        _user_metadata = data.get("metadata")
-        if isinstance(_user_metadata, dict):
-            _user_tags: Final = _user_metadata.get("tags")
-            if isinstance(_user_tags, list) and _user_tags:
-                data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=_user_tags,
-                )
+    _caller_body_metadata: Final = data.get("metadata") if _metadata_variable_name != "metadata" else None
+    _caller_body_tags: Final = (
+        _caller_body_metadata.get("tags")
+        if isinstance(_caller_body_metadata, dict) and isinstance(_caller_body_metadata.get("tags"), list)
+        else None
+    )
+    if _caller_body_tags:
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # rebind-ok: matches file idiom
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=_caller_body_tags,
+        )
+
+    # caller_tags: exactly what this request itself supplied (x-litellm-tags header,
+    # body "tags", or body "metadata.tags" on litellm_metadata routes), never
+    # anything from key/team/project metadata. Read directly from the header and
+    # body values here, the same way inherited_tags above is read directly from
+    # key/team/project metadata -- neither is derived by inspecting the shared
+    # "tags" list, which a pre-auth pass (apply_client_tag_policy_pre_auth) may
+    # have already merged caller header tags into before this function runs.
+    data[_metadata_variable_name]["caller_tags"] = tuple(  # rebind-ok: matches file idiom
+        dict.fromkeys((*(tags or ()), *(_caller_body_tags or ())))
+    )
 
     # Team Callbacks controls
     callback_settings_obj: Final = _get_dynamic_logging_metadata(

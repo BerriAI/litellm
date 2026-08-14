@@ -3,7 +3,7 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 import httpx
 from pydantic import (
@@ -18,7 +18,7 @@ from pydantic import (
 from typing_extensions import NotRequired, Required, TypedDict
 
 from litellm._uuid import uuid
-from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
@@ -71,6 +71,27 @@ if TYPE_CHECKING:
     Span = _Span | Any
 else:
     Span = Any
+
+
+class ReconcileOutcome(NamedTuple):
+    """What a model reconcile observed, captured while it still held the reconcile
+    lock.
+
+    Both fields have to be read under that lock to be worth anything. ``live_after``
+    in particular is the router's serving state the instant this reconcile finished,
+    which is NOT the same as what a later snapshot would see: any other model write
+    admitted in between briefly un-serves every db model (see ``clear_cache``), so a
+    caller that re-snapshots at verdict time can observe that hole and blame its own
+    reload for it.
+
+    - ``still_desired``: the db + config ids the reconcile reconciled against, or None
+      when no reconcile ran and the desired set is therefore unknown.
+    - ``live_after``: the ids the router served immediately after the reconcile, or
+      None when no reconcile ran.
+    """
+
+    still_desired: frozenset[str] | None
+    live_after: frozenset[str] | None
 
 
 class SupportedDBObjectType(str, enum.Enum):
@@ -1108,6 +1129,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: str | None = None
     tags: list[str] | None = None
     disable_global_guardrails: bool | None = None
+    enable_prompt_caching: bool | None = None
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
     allowed_routes: list | None = []
@@ -1261,6 +1283,9 @@ class MCPApprovalStatus(str, enum.Enum):
     pending_review = "pending_review"
     active = "active"
     rejected = "rejected"
+    # Short-lived row backing the admin OAuth "Authorize & Fetch Token" flow. Never served: the
+    # registry loader and every listing exclude it, so it is reachable only by its own server_id.
+    draft = "draft"
 
 
 from litellm.models.mcp_server import (  # noqa: E402
@@ -2250,6 +2275,39 @@ class CoordinationRedisParams(LiteLLMPydanticObjectBase):
         return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
 
 
+class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
+    """
+    Spreads the proxy's scheduled background jobs across a window instead of firing them
+    all on one instant, on every replica, forever.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", protected_namespaces=())
+
+    enabled: bool = Field(default=True, description="apply deterministic phase offsets to scheduled background jobs")
+    window_seconds: int = Field(
+        default=DEFAULT_STAGGER_WINDOW_SECONDS,
+        ge=0,
+        description=(
+            "width of the window jobs are spread over. An interval job is never offset by "
+            "more than one of its own periods, so it is not delayed past the wait it already has"
+        ),
+    )
+    identity: str | None = Field(
+        default=None,
+        description=(
+            "replaces the POD_NAME/HOSTNAME-derived component of the offset hash. Set this "
+            "when replicas share a hostname and would otherwise land on the same offset"
+        ),
+    )
+    offsets: Mapping[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "explicit offset in seconds per scheduler job id, overriding the derived value. "
+            "0 pins a job to its unshifted schedule"
+        ),
+    )
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2436,6 +2494,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
     )
+    scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
+        None,
+        description=(
+            "Spreads the proxy's scheduled background jobs (spend flushes, budget resets, "
+            "config reloads, exports) across a window instead of firing them together on "
+            "every replica. On by default; set to tune the window, pin a job, or turn it off."
+        ),
+    )
     maximum_spend_logs_retention_period: str | None = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
@@ -2447,6 +2513,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_spend_logs_partitioning: bool | None = Field(
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
+    )
+    maximum_spend_logs_cleanup_batch_size: int | None = Field(
+        None,
+        description="Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.",
+    )
+    maximum_spend_logs_cleanup_max_batches: int | None = Field(
+        None,
+        description="Maximum DELETE statements the spend log cleanup job issues per table per run. Defaults to 500.",
+    )
+    maximum_spend_logs_cleanup_run_budget: str | None = Field(
+        None,
+        description="Wall-clock budget for one spend log cleanup run (e.g. '5m'), shared across every table it prunes. A run that hits the budget stops and the next run resumes from where it left off. Defaults to '5m'.",
+    )
+    maximum_spend_logs_cleanup_batch_timeout: str | None = Field(
+        None,
+        description="Postgres statement_timeout and lock_timeout applied to each spend log cleanup delete batch (e.g. '30s'), so cleanup cannot hold row locks or a connection indefinitely. Defaults to '30s'.",
     )
     mcp_internal_ip_ranges: list[str] | None = Field(
         None,
@@ -4124,6 +4206,7 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "enforced_batch_output_expires_after",
     "enforced_file_expires_after",
     "throttle_on_budget_exceeded",
+    "enable_prompt_caching",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [

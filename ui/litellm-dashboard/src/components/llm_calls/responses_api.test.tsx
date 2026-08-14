@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeOpenAIResponsesRequest } from "./responses_api";
 import { MessageType } from "../chat_ui/types";
+import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
@@ -171,6 +172,57 @@ describe("responses_api", () => {
     expect(onTotalLatency).toHaveBeenLastCalledWith(expect.any(Number));
   });
 
+  it("should forward the cost the proxy reports on the streamed usage object", async () => {
+    async function* streamWithCost() {
+      yield { type: "response.output_text.delta", delta: "Hi" };
+      yield {
+        type: "response.completed",
+        response: {
+          id: "resp_cost",
+          usage: { output_tokens: 12, input_tokens: 12, total_tokens: 24, cost: 0.000063 },
+        },
+      };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(streamWithCost());
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(
+      { completionTokens: 12, promptTokens: 12, totalTokens: 24, cost: 0.000063 },
+      "",
+    );
+  });
+
+  it("should omit cost when the proxy reports none", async () => {
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ cost: expect.anything() }), "");
+  });
+
   it("should replay MCP output items as events for a non-streaming response", async () => {
     mockResponsesCreate.mockResolvedValueOnce({
       id: "resp_789",
@@ -292,5 +344,60 @@ describe("responses_api", () => {
         allowed_tools: ["toolB", "toolC"],
       },
     ]);
+  });
+});
+
+describe("responses_api prompt cache usage", () => {
+  const captureUsage = async (usage: Record<string, unknown>): Promise<TokenUsage> => {
+    async function* mockStream() {
+      yield {
+        type: "response.completed",
+        response: {
+          id: "resp_cache",
+          usage: { output_tokens: 2, input_tokens: 5000, total_tokens: 5002, ...usage },
+        },
+      };
+    }
+    mockResponsesCreate.mockResolvedValue(mockStream());
+
+    const onUsageData = vi.fn();
+    await makeOpenAIResponsesRequest(
+      [{ role: "user", content: "Hello" }],
+      vi.fn(),
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledTimes(1);
+    return onUsageData.mock.calls[0][0] as TokenUsage;
+  };
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("surfaces read tokens from Responses-shape input_tokens_details", async () => {
+    await expect(
+      captureUsage({ input_tokens_details: { cached_tokens: 4695, cache_write_tokens: 0 } }),
+    ).resolves.toMatchObject({ cacheReadTokens: 4695, promptTokens: 5000 });
+  });
+
+  it("surfaces creation tokens from Responses-shape cache writes", async () => {
+    await expect(
+      captureUsage({ input_tokens_details: { cached_tokens: 0, cache_write_tokens: 4695 } }),
+    ).resolves.toMatchObject({ cacheCreationTokens: 4695 });
+  });
+
+  it("omits cache fields entirely for a provider that reports none", async () => {
+    const usageData = await captureUsage({});
+
+    expect(usageData).not.toHaveProperty("cacheReadTokens");
+    expect(usageData).not.toHaveProperty("cacheCreationTokens");
+    expect(usageData.promptTokens).toBe(5000);
   });
 });

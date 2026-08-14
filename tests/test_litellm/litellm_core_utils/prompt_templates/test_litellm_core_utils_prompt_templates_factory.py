@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
+    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
@@ -2076,7 +2077,7 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     assert "$defs" not in tool_schema, "$defs should be removed after expansion"
 
 
-def test_anthropic_messages_pt_file_block_preserves_cache_control():
+def test_anthropic_messages_pt_file_block_cache_control_with_explicit_provider():
     """
     Test that cache_control on file-type content blocks is preserved
     when translating to Anthropic message format.
@@ -3269,3 +3270,140 @@ def test_group_tool_exchanges_is_linear_in_message_count():
 
     assert len(groups) == 100_000
     assert elapsed < 3.0, f"grouping 100k messages took {elapsed:.2f}s; suspect superlinear accumulation"
+
+
+_PDF_DATA_URI = "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4 regression fixture").decode()
+_PNG_DATA_URI = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def _text_blocks(message):
+    return [block["text"] for block in message["content"] if "text" in block]
+
+
+def test_bedrock_converse_pdf_only_user_message_gets_text_block():
+    """
+    Regression for LIT-4523: Claude Code sends a PDF as a user turn whose only
+    content is the document (an image_url part with a pdf data URI after the
+    /v1/messages -> completion bridge). Bedrock Converse rejects any user
+    message carrying a document without a sibling text block, so the builder
+    must inject a placeholder text block.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _PDF_DATA_URI}}],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert len(result) == 1
+    assert any("document" in block for block in result[0]["content"])
+    assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+def test_bedrock_converse_document_with_text_gets_no_extra_text_block():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": _PDF_DATA_URI}},
+                {"type": "text", "text": "summarize this"},
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert _text_blocks(result[0]) == ["summarize this"]
+
+
+def test_bedrock_converse_image_only_user_message_gets_no_text_block():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert any("image" in block for block in result[0]["content"])
+    assert _text_blocks(result[0]) == []
+
+
+def test_bedrock_converse_tool_round_trip_document_injects_text_before_cache_point():
+    """
+    Claude Code shape: after a Read tool round trip, the document-only user
+    turn (with cache_control) merges into the toolResult message. The injected
+    text block must land before the trailing cachePoint so the cache boundary
+    stays the final block, and earlier turns must stay untouched.
+    """
+    messages = [
+        {"role": "user", "content": "read the pdf"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "tooluse_pdf1",
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tooluse_pdf1", "content": "read ok"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "dGVzdA==",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert _text_blocks(result[0]) == ["read the pdf"]
+    document_message = result[-1]
+    block_keys = [next(iter(block)) for block in document_message["content"]]
+    assert block_keys == ["toolResult", "document", "text", "cachePoint"]
+    assert _text_blocks(document_message) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_pdf_only_user_message_gets_text_block_async():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _PDF_DATA_URI}}],
+        }
+    ]
+
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+    assert len(result) == 1
+    assert any("document" in block for block in result[0]["content"])
+    assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]

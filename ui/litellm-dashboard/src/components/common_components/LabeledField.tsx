@@ -1,8 +1,7 @@
 import React from "react";
-import { Typography, Space } from "antd";
+import CopyButton from "@/components/shared/CopyButton";
+import { cx } from "@/lib/cva.config";
 import DefaultProxyAdminTag from "./DefaultProxyAdminTag";
-
-const { Text } = Typography;
 
 interface LabeledFieldProps {
   label: string;
@@ -29,24 +28,20 @@ export default function LabeledField({
   const valueEl = isDefaultUser ? (
     <DefaultProxyAdminTag userId={value} />
   ) : (
-    <Text
-      strong
-      copyable={isCopyable ? { tooltips: [`Copy ${label}`, "Copied!"] } : false}
-      ellipsis={truncate}
-      style={truncate ? { maxWidth: 160, display: "block" } : undefined}
-    >
-      {displayValue}
-    </Text>
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <strong className={cx("font-semibold", truncate ? "block max-w-40 truncate" : "break-words")}>
+        {displayValue}
+      </strong>
+      {isCopyable && <CopyButton value={value} label={`Copy ${label}`} />}
+    </span>
   );
   return (
-    <div>
-      <Space size={4}>
-        <Text type="secondary">{icon}</Text>
-        <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-          {label}
-        </Text>
-      </Space>
-      <div>{valueEl}</div>
+    <div className="min-w-0">
+      <div className="flex items-center gap-1 text-muted-foreground">
+        {icon}
+        <span className="text-xs tracking-wider uppercase">{label}</span>
+      </div>
+      <div className="min-w-0">{valueEl}</div>
     </div>
   );
 }

@@ -14,6 +14,7 @@ import copy
 import json
 import re
 import sys
+import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
@@ -30,6 +31,7 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
 )
@@ -39,6 +41,15 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import _serialize_http_exception_detail
+from litellm.proxy.common_utils.sse_keepalive import keepalive_ping_has_fired
+from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_from_response,
+    anthropic_sse_error_frames,
+    assemble_anthropic_sse_stream,
+    is_raw_sse_stream,
+    model_response_text,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import BedrockChecksConfigModel, GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
@@ -826,7 +837,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrail call and is logged exactly once here.
         """
         start_time: Final = datetime.now(timezone.utc)
-        credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: Final[dict] = dict(
             self.convert_to_bedrock_format(source=source, messages=messages, response=response)
         )
@@ -850,6 +860,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         content: Final[tuple[BedrockContentItem, ...]] = tuple(bedrock_request_data.get("content") or ())
+        if not content:
+            # ApplyGuardrail rejects an empty content list with a 400, so a turn this extractor
+            # found no text in is skipped rather than turned into a failed request
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail %s: no %s content to scan, skipping ApplyGuardrail",
+                self.guardrail_name,
+                source,
+            )
+            return BedrockGuardrailResponse()
+        credentials, aws_region_name = self._load_credentials()
         allow_chunking: Final = not self._content_uses_contextual_grounding(content)
 
         try:
@@ -2569,14 +2589,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         from litellm.types.utils import TextCompletionResponse
 
         # Collect all chunks to process them together
+        started_at: Final = time.monotonic()
         all_chunks: Final[list[ModelResponseStream]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
-        assembled_model_response: ModelResponse | TextCompletionResponse | None = stream_chunk_builder(
-            chunks=all_chunks,
+        # /v1/messages arrives as SSE frames, which stream_chunk_builder cannot assemble
+        raw_sse: Final = is_raw_sse_stream(all_chunks)
+        assembled_model_response: ModelResponse | TextCompletionResponse | None = (
+            assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+            if raw_sse
+            else stream_chunk_builder(chunks=all_chunks)
         )
         if isinstance(assembled_model_response, ModelResponse):
+            pre_guardrail_text: Final = model_response_text(assembled_model_response)
+            _pre_block_response: Final = assembled_model_response
             ####################################################################
             ########## 1. Make Bedrock Apply Guardrail API request ##########
             #
@@ -2600,7 +2627,32 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
+            except HTTPException as block_exc:
+                block_detail: Final = block_exc.detail
+                # A policy block is the only 400 carrying a structured detail; a service failure
+                # either details a plain string or reports a non-400 status. Re-raising a service
+                # failure keeps its real status, but only while the headers are unflushed: past the
+                # first keepalive ping the raise reaches nobody, so it has to travel as a frame too
+                is_block: Final = raw_sse and block_exc.status_code == 400 and isinstance(block_detail, Mapping)
+                headers_flushed: Final = keepalive_ping_has_fired(
+                    time.monotonic() - started_at, litellm.anthropic_sse_ping_interval_seconds
+                )
+                if not raw_sse or (not is_block and not headers_flushed):
+                    raise
+                block_message, _ = _serialize_http_exception_detail(block_detail)
+                for error_frame in anthropic_sse_error_frames(
+                    block_message if is_block else f"{block_exc.status_code}: {block_message}"
+                ):
+                    yield error_frame
+                return
             except ModifyResponseException as e:
+                if raw_sse:
+                    e.model = _pre_block_response.model or e.model  # rebind-ok: exc.model defaults to the guardrail
+                    if e.original_response is None:
+                        e.original_response = _pre_block_response  # rebind-ok: the block builder reads usage off this
+                    for block_chunk in AnthropicMessagesHandler().build_block_sse_chunks(e, stream_started=False):
+                        yield block_chunk
+                    return
                 # Preserve upstream usage from the LLM call we already
                 # consumed. Non-streaming blocks carry it via
                 # ModifyResponseException.original_response +
@@ -2633,11 +2685,29 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             #########################################################################
             ########## 3. Return the (potentially masked) chunks ##########
             #########################################################################
+            if raw_sse:
+                for sse_chunk in (
+                    anthropic_sse_chunks_from_response(assembled_model_response)
+                    if model_response_text(assembled_model_response) != pre_guardrail_text
+                    else all_chunks
+                ):
+                    yield sse_chunk
+                return
+
             mock_response: Final = MockResponseIterator(model_response=assembled_model_response)
 
             # Return the reconstructed stream
             async for chunk in mock_response:
                 yield chunk
+        elif raw_sse:
+            # Forwarding an unscannable stream would silently disable the guardrail, so fail closed.
+            # A raise cannot reach the client once a keepalive ping has flushed the headers, so the
+            # refusal travels as a frame, matching how a block is delivered above
+            for error_frame in anthropic_sse_error_frames(
+                f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
+            ):
+                yield error_frame
+            return
         else:
             for chunk in all_chunks:
                 yield chunk

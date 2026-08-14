@@ -3,9 +3,10 @@ Types for auto-router management endpoints
 """
 
 from collections.abc import Mapping
-from typing import Final
+from datetime import datetime, timezone
+from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.utils import StandardLoggingRoutingDecision
@@ -126,8 +127,8 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
         description="Turns per tier, keyed by the tier name the routing decision recorded at "
         "request time (never re-derived at read time, since the tier-to-model mapping is "
         "mutable config). Tier names are scoped to this group's router_type and are not "
-        "comparable across types: a complexity router reports 'simple'/'medium'/'complex'/"
-        "'reasoning', a quality router reports its numeric quality tier, and an adaptive router "
+        "comparable across types: a complexity router reports 'SIMPLE'/'MEDIUM'/'COMPLEX'/"
+        "'REASONING', a quality router reports its numeric quality tier, and an adaptive router "
         "records no tier at all. Turns no tier served (the classifier fell back to default_model) "
         "are absent rather than pooled under a sentinel key, so the values may sum to less than turns",
     )
@@ -141,3 +142,112 @@ class AutoRouterBenchmarksResponse(BaseModel):
     routers_in_scope: int
     totals: AutoRouterBenchmarkTotals
     groups: tuple[AutoRouterBenchmarkGroup, ...]
+
+
+ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]
+
+DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
+
+
+class StartShadowEvalRequest(BaseModel):
+    """Start shadowing a key's traffic through an auto-router for blind comparison."""
+
+    api_key_id: str = Field(
+        description=(
+            "The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this "
+            "key's traffic; requests made with any other key are not sampled."
+        )
+    )
+    router_name: str = Field(description="The auto-router config to shadow requests through")
+    shadow_percentage: float = Field(
+        ge=0.1,
+        le=100.0,
+        description="Percentage of the key's requests to duplicate through the router",
+    )
+    judge_model: str = Field(
+        default=DEFAULT_SHADOW_EVAL_JUDGE_MODEL,
+        description=(
+            "Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a "
+            "mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce "
+            "unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes."
+        ),
+    )
+    duration_days: int = Field(
+        default=7,
+        ge=1,
+        le=30,
+        description="How many days the job samples traffic before completing on its own",
+    )
+    max_turns: int = Field(
+        default=200,
+        ge=1,
+        le=2000,
+        description=(
+            "Sample budget: the job judges at most this many turns, then completes. This is also the spend "
+            "bound; expected judge cost is roughly max_turns times one judge call"
+        ),
+    )
+
+    @field_validator("shadow_percentage")
+    @classmethod
+    def _round_percentage(cls, value: float) -> float:
+        return round(value, 2)
+
+
+class ShadowEvalSlice(BaseModel):
+    """Judge outcomes for one slice of a job's verdicts (a router tier, or one of the
+    models the shadowed key currently uses)."""
+
+    group: str
+    turn_count: int
+    real_win_rate_pct: float = Field(description="Share of judged turns where the real (control) model won")
+    shadow_win_rate_pct: float = Field(description="Share of judged turns where the shadowed router's pick won")
+    tie_rate_pct: float
+    avg_judge_confidence: float
+
+
+class ShadowEvalResult(BaseModel):
+    """Stratified results of a shadow-eval job's verdicts so far."""
+
+    by_tier: tuple[ShadowEvalSlice, ...]
+    by_current_model: tuple[ShadowEvalSlice, ...]
+    overall_shadow_win_rate_pct: float
+    overall_tie_rate_pct: float
+
+
+class ShadowEvalJobResponse(BaseModel):
+    """A shadow-eval job. Validates directly from the prisma record (job_id reads the
+    row's id); status is derived from stopped_at and ends_at, never stored, so no writer
+    anywhere can produce an inconsistent one. Aggregate fields are populated by the
+    detail endpoint only and stay None on list responses."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    job_id: str = Field(validation_alias=AliasChoices("id", "job_id"))
+    api_key_id: str = Field(description="The hashed virtual key whose traffic this job evaluates, and only that key's")
+    router_name: str
+    judge_model: str
+    shadow_percentage: float
+    max_turns: int
+    created_at: datetime
+    ends_at: datetime
+    stopped_at: datetime | None = None
+
+    judged_count: int | None = Field(default=None, description="Verdicts recorded; detail endpoint only")
+    error_count: int | None = Field(default=None, description="Sampled attempts that errored; detail endpoint only")
+    judge_spend: float | None = Field(default=None, description="Judge cost so far; detail endpoint only")
+    last_error: str | None = Field(default=None, description="Most recent attempt error; detail endpoint only")
+    results: ShadowEvalResult | None = Field(default=None, description="Stratified verdicts; detail endpoint only")
+
+    @computed_field
+    @property
+    def status(self) -> ShadowEvalStatus:
+        """A job whose window has passed reads completed even if a later sweep stamped
+        stopped_at; stopped means sampling ended before the window did."""
+        if datetime.now(timezone.utc) >= (
+            self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
+        ):
+            return "completed"
+        if self.stopped_at is not None:
+            return "stopped"
+        return "running"

@@ -5,11 +5,11 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -313,8 +313,10 @@ class BaseResponsesAPIStreamingIterator:
                             if encrypted_content and isinstance(encrypted_content, str):
                                 model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                                 if model_id:
-                                    wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
-                                        encrypted_content, model_id
+                                    wrapped_content: Final = (
+                                        ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                                            encrypted_content, model_id
+                                        )
                                     )
                                     setattr(item, "encrypted_content", wrapped_content)
 
@@ -336,7 +338,9 @@ class BaseResponsesAPIStreamingIterator:
                             usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
                             if usage_obj is not None:
                                 try:
-                                    cost: float | None = self.logging_obj._response_cost_calculator(result=response_obj)
+                                    cost: Final[float | None] = self.logging_obj._response_cost_calculator(
+                                        result=response_obj
+                                    )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
                                 except Exception:
@@ -1029,8 +1033,18 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return evt
 
 
-def _dump_response_object(obj: Any) -> dict[str, Any]:
-    if hasattr(obj, "model_dump"):
+@runtime_checkable
+class _HasModelDump(Protocol):
+    def model_dump(self, *, exclude_none: bool = ...) -> dict[str, object]: ...
+
+
+@runtime_checkable
+class _HasModelDumpJson(Protocol):
+    def model_dump_json(self, *, exclude_none: bool = ...) -> str: ...
+
+
+def _dump_response_object(obj: object) -> dict[str, Any]:
+    if isinstance(obj, _HasModelDump):
         return obj.model_dump()
     if _is_json_object(obj):
         return obj
@@ -1120,7 +1134,8 @@ def _add_text_like_part_events(
                     delta=text[i : i + chunk_size],
                 )
             )
-        for annotation_index, annotation in enumerate(part_payload.get("annotations", []) or []):
+        annotations_payload: Final[Sequence[dict[str, object]]] = part_payload.get("annotations", []) or []
+        for annotation_index, annotation in enumerate(annotations_payload):
             events.append(
                 openai_types.OutputTextAnnotationAddedEvent(
                     type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
@@ -1186,7 +1201,8 @@ def _build_synthetic_response_events(
     ]
 
     sequence_number = 0
-    for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
+    output_items: Final[Sequence[object]] = getattr(transformed, "output", []) or []
+    for output_index, output_item in enumerate(output_items):
         output_item_payload = _dump_response_object(output_item)
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
@@ -1200,7 +1216,8 @@ def _build_synthetic_response_events(
         )
 
         if item_type == "message":
-            for content_index, part in enumerate(output_item_payload.get("content", []) or []):
+            content_parts: Sequence[object] = output_item_payload.get("content", []) or []
+            for content_index, part in enumerate(content_parts):
                 part_payload = _dump_response_object(part)
                 events.append(
                     openai_types.ContentPartAddedEvent(
@@ -1247,7 +1264,8 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            for summary_index, summary in enumerate(output_item_payload.get("summary", []) or []):
+            summaries: Sequence[object] = output_item_payload.get("summary", []) or []
+            for summary_index, summary in enumerate(summaries):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
                 for i in range(0, len(summary_text), chunk_size):
@@ -1358,7 +1376,7 @@ class ResponsesWebSocketStreaming:
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
 
-    def _should_store_event(self, event_obj: dict[str, object]) -> bool:
+    def _should_store_event(self, event_obj: Mapping[str, object]) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
 
     def _store_event(self, event: str | bytes | dict[str, object]) -> None:
@@ -1449,7 +1467,8 @@ class ResponsesWebSocketStreaming:
                 # masked response.completed.
                 if self.output_guardrail_callbacks:
                     try:
-                        _evt_type = json.loads(response_str).get("type")
+                        _evt_payload: Mapping[str, object] = json.loads(response_str)
+                        _evt_type = _evt_payload.get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
                     if _evt_type in self._DELTA_EVENT_TYPES or _evt_type in self._OUTPUT_DONE_EVENT_TYPES:
@@ -1513,7 +1532,7 @@ class ResponsesWebSocketStreaming:
         Non-``response.create`` messages are returned unchanged.
         """
         try:
-            msg_obj: Final = json.loads(message)
+            msg_obj: Final[dict[str, object]] = json.loads(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -1530,7 +1549,8 @@ class ResponsesWebSocketStreaming:
             self.request_data["metadata"] = {}
 
         modified = model_modified
-        for cb in self.guardrail_callbacks:
+        guardrail_cbs: Final[tuple[PresidioGuardrailCallback, ...]] = tuple(self.guardrail_callbacks)
+        for cb in guardrail_cbs:
             presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
             # response.create carries client text in two shapes:
             #   flat:   {"type": "response.create", "input": ..., "instructions": ...}
@@ -1636,12 +1656,12 @@ class ResponsesWebSocketStreaming:
 
         metadata: Final = self.request_data.get("metadata")
         raw_pii_tokens: Final = metadata.get("pii_tokens") if _is_json_object(metadata) else None
-        pii_tokens: Final[dict[str, str]] = raw_pii_tokens if _is_str_mapping(raw_pii_tokens) else {}
+        pii_tokens: Final[Mapping[str, str]] = raw_pii_tokens if _is_str_mapping(raw_pii_tokens) else {}
         if not pii_tokens:
             return response_str
 
         try:
-            evt_obj: Final = json.loads(response_str)
+            evt_obj: Final[dict[str, object]] = json.loads(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -1883,11 +1903,11 @@ class ManagedResponsesWebSocketHandler:
     def _serialize_chunk(chunk: Any) -> str | None:
         """Serialize a streaming chunk to a JSON string for WebSocket transmission."""
         try:
-            if hasattr(chunk, "model_dump_json"):
+            if isinstance(chunk, _HasModelDumpJson):
                 return chunk.model_dump_json(exclude_none=True)
-            if hasattr(chunk, "model_dump"):
+            if isinstance(chunk, _HasModelDump):
                 return json.dumps(chunk.model_dump(exclude_none=True), default=str)
-            if isinstance(chunk, dict):
+            if _is_json_object(chunk):
                 return json.dumps(chunk, default=str)
             return json.dumps(str(chunk))
         except Exception as exc:
@@ -1998,7 +2018,7 @@ class ManagedResponsesWebSocketHandler:
     async def _parse_message(self, raw_message: str) -> dict[str, object] | None:
         """Parse raw WS text; return the message dict or None (JSON error / ignored type)."""
         try:
-            msg_obj: Final = json.loads(raw_message)
+            msg_obj: Final[dict[str, object]] = json.loads(raw_message)
         except json.JSONDecodeError:
             await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
             return None
@@ -2279,11 +2299,10 @@ class ManagedResponsesWebSocketHandler:
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        requested_model: Final = call_kwargs.pop("model", None)
-        if requested_model is None or requested_model == self.model_group:
-            model = self.model
-        else:
-            model = requested_model
+        requested_model: Final[str | None] = call_kwargs.pop("model", None)
+        model: Final[str] = (
+            self.model if requested_model is None or requested_model == self.model_group else requested_model
+        )
 
         previous_response_id: Final[str | None] = call_kwargs.pop("previous_response_id", None)
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))

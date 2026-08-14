@@ -2346,6 +2346,59 @@ def test_list_files_resolves_wildcard_deployment_credentials(
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
+def test_list_files_model_routing_does_not_forward_custom_llm_provider_twice(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=[])
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_list(**kwargs):
+        captured_kwargs.update(kwargs)
+        return []
+
+    monkeypatch.setattr(litellm, "afile_list", _mock_afile_list)
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
+        lambda **kwargs: (
+            True,
+            "azure-gpt-4o",
+            None,
+            {
+                "custom_llm_provider": "azure",
+                "api_key": "azure-key",
+            },
+        ),
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs["custom_llm_provider"] == "azure"
+    assert captured_kwargs["api_key"] == "azure-key"
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
 def test_list_files_without_target_model_names_uses_team_openai_deployment(
     mocker: MockerFixture, monkeypatch
 ):

@@ -1,8 +1,7 @@
 "use client";
 
-import { UploadProps } from "antd/es/upload";
 import { Plus } from "lucide-react";
-import { useState } from "react";
+import { type ComponentProps, useState } from "react";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -22,7 +21,7 @@ import CredentialModal from "./CredentialModal";
 import CredentialsTable from "./CredentialsTable";
 
 interface CredentialsPanelProps {
-  uploadProps: UploadProps;
+  uploadProps: ComponentProps<typeof CredentialModal>["uploadProps"];
 }
 
 const restrictedFields = ["credential_name", "custom_llm_provider"];

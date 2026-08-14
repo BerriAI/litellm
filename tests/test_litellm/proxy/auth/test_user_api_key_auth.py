@@ -4369,6 +4369,212 @@ async def test_centralized_common_checks_team_404_does_not_zero_other_contexts()
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_unresolvable_team_without_grant_is_refused():
+    """The store restricts the team to gpt-4o-mini and the read of it fails, so the
+    only surviving team record is the token's own, which carries ``team_models=[]``
+    and reads as every model. The request must be refused with the original lookup
+    error. Pre-fix it was served."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    # The key inherits its models from the team (models=[]), so the team object
+    # is the only gate on model access.
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        team_id="restricted-team",
+        models=[],
+        team_models=[],
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-4.1"}).encode()
+
+    team_read_failure = HTTPException(
+        status_code=404,
+        detail={"error": "Team doesn't exist in db. Team=restricted-team."},
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=team_read_failure,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": "gpt-4.1"},
+                    route="/chat/completions",
+                )
+        assert exc_info.value is team_read_failure
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_team_models", [[], ["gpt-4.1"]])
+async def test_centralized_common_checks_absent_team_refused_despite_db_unavailable_optout(token_team_models):
+    """A team that is provably gone is a definitive answer, not a degraded read.
+    ``allow_requests_on_db_unavailable`` is a static settings read, so without the
+    absent-versus-unreadable distinction it would hand a deleted team's key the
+    old permissive fallback while the database is perfectly healthy. Refused in
+    both token shapes, including the one whose grant would otherwise vouch.
+
+    Imported from the module under test rather than from ``auth_checks``: other
+    tests in this suite ``importlib.reload`` that module, which rebinds the class
+    and would leave this raising a type the guard has never seen."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import TeamNotFoundError
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        team_id="deleted-team",
+        models=[],
+        team_models=token_team_models,
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-4.1"}).encode()
+
+    team_absent = TeamNotFoundError(team_id="deleted-team")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["general_settings"] = {"allow_requests_on_db_unavailable": True}
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=team_absent,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": "gpt-4.1"},
+                    route="/chat/completions",
+                )
+        assert exc_info.value is team_absent
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_unreadable_team_keeps_db_unavailable_optout():
+    """The counterpart: an unreadable team leaves the grant unknown rather than
+    answered, so an operator who has accepted degraded authorization during a
+    database fault still gets the fallback. Without this the fix would trade the
+    widening for a lockout with no way out."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException as _HTTPException
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", team_id="unreadable-team", models=[], team_models=[])
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-4.1"}).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["general_settings"] = {"allow_requests_on_db_unavailable": True}
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=_HTTPException(status_code=404, detail={"error": "team unreadable"}),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4.1"},
+                route="/chat/completions",
+            )
+        mock_checks.assert_awaited_once()
+        assert mock_checks.call_args.kwargs["team_object"].team_id == "unreadable-team"
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, is_granted",
+    [("gpt-4o-mini", True), ("gpt-4.1", False)],
+)
+async def test_centralized_common_checks_unresolvable_team_with_grant_enforces_it(requested_model, is_granted):
+    """Mirror of the refusal above: a token that does carry a team model grant keeps
+    the fallback, and the reconstructed team must still enforce that grant rather
+    than wave the request through."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        team_id="restricted-team",
+        models=[],
+        team_models=["gpt-4o-mini"],
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": requested_model}).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=HTTPException(status_code=404, detail={"error": "team unreadable"}),
+        ):
+            if is_granted:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": requested_model},
+                    route="/chat/completions",
+                )
+            else:
+                with pytest.raises(ProxyException) as exc_info:
+                    await _run_centralized_common_checks(
+                        user_api_key_auth_obj=token,
+                        request=request,
+                        request_data={"model": requested_model},
+                        route="/chat/completions",
+                    )
+                assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_user_http_exception_isolates_to_user_only():
     """Per-fetch isolation, mirror of the team case: an HTTPException
     from get_user_object must zero only ``user_object``. The successfully
@@ -4847,6 +5053,79 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
             setattr(_proxy_server_mod, k, v)
 
 
+async def _run_auth_with_malformed_body(post_call_failure_hook):
+    """Drive ``user_api_key_auth`` for an authenticated caller whose body never parses,
+    with ``proxy_logging_obj.post_call_failure_hook`` swapped for the passed double.
+    Returns the raised ProxyException."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    builder_token = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="team-1")
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = b'{}{"model": "gpt-4o"}'
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["proxy_logging_obj"].post_call_failure_hook = post_call_failure_hook
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                return_value=builder_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(request=request, api_key="Bearer sk-test")
+        return exc_info.value
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_logs_the_failure_for_a_body_that_never_parses():
+    """The endpoint never runs for an unparsable body, so the 400 the caller sees only
+    reaches Request Logs if auth runs the failure hook that writes the spend log row."""
+    hook = AsyncMock(return_value=None)
+
+    raised = await _run_auth_with_malformed_body(hook)
+
+    assert "Invalid JSON payload" in str(raised.message)
+    assert raised.code == str(status.HTTP_400_BAD_REQUEST)
+    hook.assert_awaited_once()
+    hook_kwargs = hook.await_args.kwargs
+    assert hook_kwargs["original_exception"] is raised
+    assert hook_kwargs["error_type"] == ProxyErrorTypes.bad_request_error
+    assert hook_kwargs["route"] == "/chat/completions"
+    assert hook_kwargs["user_api_key_dict"].user_id == "u1"
+    assert hook_kwargs["user_api_key_dict"].team_id == "team-1"
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_returns_the_parse_error_even_if_logging_it_fails():
+    """Logging the rejected request must never change what the caller sees."""
+    raised = await _run_auth_with_malformed_body(AsyncMock(side_effect=Exception("logging is down")))
+
+    assert "Invalid JSON payload" in str(raised.message)
+    assert raised.code == str(status.HTTP_400_BAD_REQUEST)
+
+
 @pytest.mark.asyncio
 async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_the_parse_error():
     """The body is read before the key is authenticated, so a caller who sends both a
@@ -4892,6 +5171,58 @@ async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_
 
         assert "Invalid JSON payload" in str(exc_info.value.message)
         assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_does_not_double_log_a_malformed_body_from_a_rejected_key():
+    """The auth failure this caller also earns is already logged by the handler that
+    rejected the key, so the unparsable-body hook must stay out of that path and leave
+    Request Logs with one row instead of two."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = b'{}{"model": "gpt-4o"}'
+
+    hook = AsyncMock(return_value=None)
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["proxy_logging_obj"].post_call_failure_hook = hook
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                side_effect=ProxyException(
+                    message="Authentication Error, invalid key",
+                    type="auth_error",
+                    param="None",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+        ):
+            with pytest.raises(ProxyException):
+                await user_api_key_auth(request=request, api_key="Bearer sk-bad")
+
+        await asyncio.sleep(0.05)
+        hook.assert_not_awaited()
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)

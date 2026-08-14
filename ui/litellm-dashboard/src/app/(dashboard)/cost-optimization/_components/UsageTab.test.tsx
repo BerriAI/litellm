@@ -13,6 +13,12 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
 }));
 
+// useCan reaches useOrganizations (react-query) through useIsOrgAdmin; stub the
+// org-admin leg so role gating flows through hasCapability without a QueryClient
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
+  default: () => false,
+}));
+
 vi.mock("@/components/networking", () => ({
   getToolSpend: (...args: unknown[]) => mockGetToolSpend(...args),
 }));

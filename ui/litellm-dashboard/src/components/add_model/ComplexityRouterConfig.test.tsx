@@ -102,7 +102,7 @@ describe("ComplexityRouterConfig", () => {
     const expectedValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
-      classifier_llm_config: { model: "", timeout_ms: 3000 },
+      classifier_llm_config: { model: "", timeout_ms: 3000, classification_rubric: "agentic" },
       classifier_context_window_size: 3,
       classifier_context_per_turn_chars: 200,
     };
@@ -535,6 +535,81 @@ describe("ComplexityRouterConfig classifier fallback", () => {
   });
 });
 
+describe("ComplexityRouterConfig classifier rubric", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+  };
+
+  const openClassificationPanel = (value: ComplexityRouterConfigValue, onChange = vi.fn()) => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={value} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    return onChange;
+  };
+
+  it("shows an existing router with no stored preset as legacy, not as the calibrated default", () => {
+    // This router predates the setting. Displaying a calibrated preset it does not have would tell the
+    // operator their traffic is graded by examples the classifier never receives, and saving the form
+    // unchanged would then move its tier decisions.
+    openClassificationPanel(llmValue);
+    expect(screen.getByText("Legacy (uncalibrated)")).toBeInTheDocument();
+    expect(screen.getByText(/tier decisions and spend are unchanged/)).toBeInTheDocument();
+  });
+
+  it("stamps the calibrated preset on a classifier being switched on for the first time", () => {
+    // A heuristic router turning on the LLM classifier has no prior tier behaviour to preserve, so a
+    // newly configured classifier starts on the calibrated rubric rather than the legacy one.
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByText("LLM Classifier"));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ classifier_llm_config: expect.objectContaining({ classification_rubric: "agentic" }) }),
+    );
+  });
+
+  it("shows the calibrated preset when a router stores one", () => {
+    openClassificationPanel({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "agentic" },
+    });
+    expect(screen.getByText("Agentic")).toBeInTheDocument();
+    expect(screen.getByText(/does not route to your most expensive tier/)).toBeInTheDocument();
+  });
+
+  it("records the chat preset the operator picks", async () => {
+    const onChange = openClassificationPanel(llmValue);
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Classification Rubric" }));
+    await userEvent.click(await screen.findByTitle("Chat"));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ classifier_llm_config: expect.objectContaining({ classification_rubric: "chat" }) }),
+    );
+  });
+
+  it("shows the stored preset when editing a router already on chat", () => {
+    openClassificationPanel({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "chat" },
+    });
+    expect(screen.getByText(/only conversational traffic/)).toBeInTheDocument();
+  });
+
+  it("disables the preset once a custom prompt replaces the rubric it would select", () => {
+    // The backend rejects both together, so the picker must not look like it still applies.
+    openClassificationPanel({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, system_prompt: "Grade data sensitivity" },
+    });
+    expect(screen.getByText(/the custom prompt below is the classifier's entire rubric/)).toBeInTheDocument();
+  });
+
+  it("hides the preset for the heuristic classifier, which sends no prompt at all", () => {
+    openClassificationPanel(defaultValue);
+    expect(screen.queryByRole("combobox", { name: "Classification Rubric" })).not.toBeInTheDocument();
+  });
+});
+
 describe("ComplexityRouterConfig tier labels", () => {
   const renamedValue: ComplexityRouterConfigValue = {
     ...defaultValue,
@@ -600,5 +675,34 @@ describe("ComplexityRouterConfig tier labels", () => {
     );
     fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByTitle("Deep")).toBeInTheDocument();
+  });
+});
+
+describe("ComplexityRouterConfig affinity panel", () => {
+  it("holds both affinity switches with their backend defaults", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+  });
+
+  it("writes deployment_affinity through onChange without touching other keys", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    fireEvent.click(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" }));
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, deployment_affinity: false });
+  });
+
+  it("renders a stored deployment_affinity=false as off", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, deployment_affinity: false }} />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).not.toBeChecked();
   });
 });
