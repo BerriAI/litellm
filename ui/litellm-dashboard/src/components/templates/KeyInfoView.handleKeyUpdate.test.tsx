@@ -182,20 +182,6 @@ vi.mock("@heroicons/react/outline", async () => {
   return { ArrowLeftIcon, TrashIcon, RefreshIcon };
 });
 
-vi.mock("lucide-react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("lucide-react")>();
-  const React = await import("react");
-  function CopyIcon() {
-    return React.createElement("span");
-  }
-  (CopyIcon as any).displayName = "CopyIcon";
-  function CheckIcon() {
-    return React.createElement("span");
-  }
-  (CheckIcon as any).displayName = "CheckIcon";
-  return { ...actual, CopyIcon, CheckIcon };
-});
-
 // Heavy children -> async factories & local React
 vi.mock("../organisms/RegenerateKeyModal", () => {
   function RegenerateKeyModal() {
