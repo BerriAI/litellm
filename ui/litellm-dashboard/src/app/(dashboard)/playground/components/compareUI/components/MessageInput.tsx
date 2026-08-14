@@ -1,8 +1,7 @@
 import React from "react";
-import { Input, Button } from "antd";
-import { ArrowUpOutlined } from "@ant-design/icons";
-
-const { TextArea } = Input;
+import { ArrowUp } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 interface MessageInputProps {
   value: string;
@@ -29,25 +28,25 @@ export function MessageInput({ value, onChange, onSend, disabled, hasAttachment,
     <div className="flex items-center gap-2">
       <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
         {uploadComponent && <div className="shrink-0 mr-2">{uploadComponent}</div>}
-        <TextArea
+        <Textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Type your message... (Shift+Enter for new line)"
           disabled={disabled}
-          className="flex-1"
-          autoSize={{ minRows: 1, maxRows: 4 }}
-          style={{
-            resize: "none",
-            border: "none",
-            boxShadow: "none",
-            background: "transparent",
-            padding: "4px 0",
-            fontSize: "14px",
-            lineHeight: "20px",
-          }}
+          rows={1}
+          className="max-h-20 min-h-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-0 py-1 text-sm leading-5 shadow-none focus-visible:ring-0"
         />
-        <Button onClick={onSend} disabled={!canSend} icon={<ArrowUpOutlined />} shape="circle" />
+        <Button
+          onClick={onSend}
+          disabled={!canSend}
+          size="icon-sm"
+          variant="outline"
+          className="rounded-full"
+          aria-label="Send message"
+        >
+          <ArrowUp />
+        </Button>
       </div>
     </div>
   );

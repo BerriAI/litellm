@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import datetime
+import json
 from types import SimpleNamespace
 from typing import AsyncGenerator, Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -5746,3 +5747,132 @@ class TestPerRequestModelGroupAlias:
         )
 
         assert merged_for == ["group-b"]
+
+
+class TestInjectCostIntoUsageDict:
+    @staticmethod
+    def _expected_cost(model, prompt_tokens, completion_tokens):
+        pricing = litellm.model_cost[model]
+        return prompt_tokens * pricing["input_cost_per_token"] + completion_tokens * pricing["output_cost_per_token"]
+
+    def test_openai_chat_completion_chunk_usage_gets_cost(self):
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 4,
+                "total_tokens": 15,
+                "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini")
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
+        assert result["usage"]["cost"] > 0
+        assert result["usage"]["prompt_tokens"] == 11
+        assert result["id"] == "chatcmpl-1"
+        assert "cost" not in event["usage"]
+
+    def test_anthropic_message_delta_usage_still_gets_cost(self):
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 11, "output_tokens": 4},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "claude-haiku-4-5")
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(self._expected_cost("claude-haiku-4-5", 11, 4))
+        assert result["usage"]["cost"] > 0
+        assert result["usage"]["output_tokens"] == 4
+
+    def test_openai_chunk_with_flex_service_tier_uses_flex_pricing(self):
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "service_tier": "flex",
+            "choices": [],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-5-mini")
+
+        assert result is not None
+        pricing = litellm.model_cost["gpt-5-mini"]
+        expected_flex_cost = 1000 * pricing["input_cost_per_token_flex"] + 100 * pricing["output_cost_per_token_flex"]
+        assert result["usage"]["cost"] == pytest.approx(expected_flex_cost)
+        assert result["usage"]["cost"] < self._expected_cost("gpt-5-mini", 1000, 100)
+
+    def test_openai_chunk_with_null_usage_is_not_modified(self):
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": "Hi"}}],
+            "usage": None,
+        }
+
+        assert ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini") is None
+
+    def test_unrecognized_event_shape_with_usage_is_not_modified(self):
+        event = {"kind": "custom", "usage": {"prompt_tokens": 11, "completion_tokens": 4}}
+
+        assert ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini") is None
+
+    def test_sse_frame_with_coalesced_done_line_injects_into_usage_frame(self):
+        frame = (
+            'data: {"object":"chat.completion.chunk","choices":[],'
+            '"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+            "data: [DONE]\n\n"
+        )
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(frame, "gpt-4o-mini")
+
+        assert result is not None
+        assert "data: [DONE]" in result
+        injected = json.loads(result.split("\n")[0].split("data:", 1)[1].strip())
+        assert injected["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
+
+
+class TestProcessChunkWithCostInjection:
+    def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = (
+            b'data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+        )
+
+        result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini")
+
+        assert result != chunk
+        assert result.endswith(b"\n\n")
+        payload = json.loads(result.decode("utf-8").split("data:", 1)[1].strip())
+        assert payload["usage"]["cost"] > 0
+
+    def test_chunk_ending_in_partial_frame_passes_through_byte_identical(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = (
+            b'data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\ndata: [DO'
+        )
+
+        assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk
+
+    def test_chunk_with_invalid_utf8_passes_through_byte_identical(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = (
+            b'\xa8data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+        )
+
+        assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk

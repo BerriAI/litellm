@@ -17,6 +17,7 @@ from fastapi import HTTPException
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
@@ -5554,3 +5555,41 @@ async def test_configured_estimate_blocks_the_overrun_the_static_floor_admits(mo
 
     assert await admitted({}) == 7
     assert await admitted({"default_estimated_output_tokens": 3000}) == 2
+
+
+def test_internal_call_origin_success_ops_are_skipped():
+    """Internal sub-calls (auto-router classifier, shadow eval shadow/judge) bill spend
+    to the caller's key but must not consume its TPM counters: the same kwargs charge
+    ops without the origin stamp and none with it."""
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    response = ModelResponse(
+        id="internal-origin-tpm",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+
+    def _kwargs(metadata: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": hash_token("sk-internal-origin")}
+            },
+            "litellm_params": {"metadata": metadata},
+            "model": "gpt-4o-mini",
+        }
+
+    charged = handler._build_success_event_pipeline_operations(
+        kwargs=_kwargs({}), response_obj=response, rate_limit_type="output"
+    )
+    skipped = handler._build_success_event_pipeline_operations(
+        kwargs=_kwargs({INTERNAL_CALL_ORIGIN_METADATA_KEY: "shadow_eval_judge"}),
+        response_obj=response,
+        rate_limit_type="output",
+    )
+
+    assert charged
+    assert skipped == []

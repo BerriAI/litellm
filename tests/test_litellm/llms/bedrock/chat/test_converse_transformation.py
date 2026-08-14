@@ -370,6 +370,73 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
     assert additional.get("output_config") == {"effort": "high"}
 
 
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "xhigh", "max"),
+    ],
+)
+def test_explicit_output_config_effort_mapped_for_adaptive_thinking_converse(model, effort, expected_effort):
+    """Regression: Claude Code drives adaptive thinking as ``thinking: {"type":
+    "adaptive"}`` plus ``output_config: {"effort": ...}``. ``output_config`` must
+    be a supported openai param and survive ``map_openai_params`` (clamped to the
+    model's Bedrock effort ceiling), otherwise the Converse request carries
+    adaptive thinking without an effort tier and Bedrock streams zero
+    ``reasoningContent`` blocks."""
+    config = AmazonConverseConfig()
+
+    assert "output_config" in config.get_supported_openai_params(model)
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": effort},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "adaptive"}
+    assert optional_params["output_config"] == {"effort": expected_effort}
+
+
+def test_output_config_supported_param_for_arn_models_converse():
+    """ARN model ids hide the underlying Claude model, so ``output_config`` must
+    be in the blanket ARN supported-params list too."""
+    config = AmazonConverseConfig()
+    arn_model = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+    assert "output_config" in config.get_supported_openai_params(arn_model)
+
+
+def test_output_config_effort_forwarded_for_application_inference_profile_arn():
+    """Regression: opaque application inference profile ARNs cannot resolve a
+    base model, so the anthropic-only serialization gate dropped ``output_config``
+    while still sending ``thinking``: adaptive thinking with no effort tier, and
+    Bedrock streams zero ``reasoningContent`` blocks. The effort must be forwarded
+    verbatim (ceilings and capability gates are unknowable behind the alias) for
+    Bedrock to enforce."""
+    config = AmazonConverseConfig()
+    arn_model = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+
+    result = config._transform_request(
+        model=arn_model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "max"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("thinking") == {"type": "adaptive"}
+    assert additional.get("output_config") == {"effort": "max"}
+
+
 def test_output_config_format_translated_to_native_output_config_converse():
     """``output_config.format`` becomes Bedrock ``outputConfig`` and is not forwarded raw."""
     config = AmazonConverseConfig()
