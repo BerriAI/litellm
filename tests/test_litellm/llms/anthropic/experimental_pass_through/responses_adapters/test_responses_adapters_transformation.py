@@ -21,7 +21,10 @@ from litellm.constants import (
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
-from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.anthropic import (
+    AllAnthropicToolsValues,
+    AnthropicMessagesRequest,
+)
 from litellm.types.llms.openai import ResponseAPIUsage
 
 
@@ -618,7 +621,7 @@ class TestTranslateToolsToResponsesAPI:
     def test_tool_with_optional_properties_stays_non_strict(self):
         """Regression: an unset Anthropic `strict` must not become the Responses strict default,
         which would rewrite `required` to include every optional property."""
-        tools = [
+        tools: List[AllAnthropicToolsValues] = [
             {
                 "name": "search",
                 "input_schema": {
@@ -633,14 +636,14 @@ class TestTranslateToolsToResponsesAPI:
             }
         ]
 
-        result = _ADAPTER.translate_tools_to_responses_api(tools)  # type: ignore[arg-type]
+        result = _ADAPTER.translate_tools_to_responses_api(tools)
 
         assert result[0]["strict"] is False
         assert result[0]["parameters"]["required"] == ["query"]
 
     def test_tool_forwards_explicit_strict_true(self):
         """An explicit Anthropic `strict: True` still reaches Responses as True."""
-        tools = [
+        tools: List[AllAnthropicToolsValues] = [
             {
                 "name": "search",
                 "strict": True,
@@ -653,7 +656,7 @@ class TestTranslateToolsToResponsesAPI:
             }
         ]
 
-        result = _ADAPTER.translate_tools_to_responses_api(tools)  # type: ignore[arg-type]
+        result = _ADAPTER.translate_tools_to_responses_api(tools)
 
         assert result == [
             {
