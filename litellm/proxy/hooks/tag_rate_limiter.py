@@ -2,7 +2,7 @@
 
 import asyncio
 import contextvars
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import groupby
@@ -132,6 +132,17 @@ class _ConfiguredLimit:
     # same Redis counter despite the index itself correctly scoping the
     # lookup by (team_id, alias).
     team_scope: str | None = None
+    # The real model_name this limit was found under when `resolve()`'s
+    # direct lookup by the caller-visible model string missed and
+    # `resolve_any()` fell back to resolving via a candidate deployment's
+    # own model_name instead (routing groups, and any other indirection
+    # where Router deliberately keeps the caller-visible name distinct from
+    # every deployment's own model_name). None when resolved directly, in
+    # which case the caller-visible name is already unambiguous and safe to
+    # hash by. Set, this overrides the caller-visible name in the bucket key
+    # so limits from two different underlying model_names sharing one
+    # routing group never collide on one counter.
+    resolved_group: str | None = None
 
 
 def _extract_identity(tags: Sequence[str], tag_id: str) -> str | None:
@@ -313,6 +324,30 @@ class _LimitsIndex:
                 return scoped
         return self.by_model_name.get(model, ())
 
+    def resolve_any(
+        self, model: str, team_id: str | None, candidate_model_names: Iterable[str]
+    ) -> tuple[_ConfiguredLimit, ...]:
+        """
+        Like `resolve`, but falls back to each candidate deployment's own
+        `model_name` when `model` itself matches neither table -- Router
+        deliberately keeps `model` as a callable routing-group name distinct
+        from every member deployment's own `model_name` (see
+        `Router._get_routing_group_deployments`), so a group-addressed call
+        would otherwise never match this index at all despite its member
+        deployments carrying real `tag_rate_limits`. Each fallback result is
+        stamped with the `model_name` it actually came from (`resolved_group`)
+        so hashing stays namespaced per underlying group even when the
+        candidates span more than one `model_name`.
+        """
+        direct: Final = self.resolve(model, team_id)
+        if direct:
+            return direct
+        return tuple(
+            replace(limit, resolved_group=name)
+            for name in frozenset(candidate_model_names)
+            for limit in self.by_model_name.get(name, ())
+        )
+
 
 def _team_alias_key(deployment: Mapping[str, object]) -> tuple[str, str] | None:
     model_info: Final = deployment.get("model_info") or _EMPTY_MAPPING
@@ -464,6 +499,13 @@ def _scope_suffix(deployment_scope: tuple[str, ...] | None) -> str:
 
 
 def _hash_tag(model_group: str, configured: _ConfiguredLimit, tag_value: str, key_hash: str | None) -> str:
+    # resolved_group overrides the caller-visible model_group when this
+    # limit was found via resolve_any()'s per-deployment fallback (routing
+    # groups): the caller-visible name is ambiguous there (shared by every
+    # member model_name), so hashing by it would collide two different
+    # underlying model_names' identically-named limits onto one counter.
+    # See _ConfiguredLimit.resolved_group.
+    effective_model_group: Final = configured.resolved_group if configured.resolved_group is not None else model_group
     scope: Final = _scope_suffix(configured.deployment_scope)
     # team_scope disambiguates two teams that publish the identical
     # team_public_model_name alias with identically-configured limits --
@@ -472,7 +514,7 @@ def _hash_tag(model_group: str, configured: _ConfiguredLimit, tag_value: str, ke
     team_suffix: Final = f":team:{configured.team_scope}" if configured.team_scope is not None else ""
     key_suffix: Final = f":key:{key_hash}" if key_hash is not None else ""
     return (
-        f"tag_rl:{model_group}:{configured.unit}:{configured.entry.name}:{configured.entry.tag_id}:"
+        f"tag_rl:{effective_model_group}:{configured.unit}:{configured.entry.name}:{configured.entry.tag_id}:"
         f"{scope}{team_suffix}:{tag_value}{key_suffix}"
     )
 
@@ -690,7 +732,10 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         resolved_request_kwargs: Final = request_kwargs or _EMPTY_MAPPING
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(resolved_request_kwargs)
         team_id: Final = _extract_team_id(resolved_request_kwargs, metadata_variable_name)
-        configured: Final = self._index.get(self.llm_router).resolve(model, team_id)
+        candidate_model_names: Final = tuple(
+            name for d in healthy_deployments if isinstance(name := d.get("model_name"), str)
+        )
+        configured: Final = self._index.get(self.llm_router).resolve_any(model, team_id, candidate_model_names)
         if not configured:
             return healthy_deployments
 
@@ -882,7 +927,16 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or _EMPTY_MAPPING
         team_id: Final = standard_logging_metadata.get("user_api_key_team_id")
         key_hash: Final = standard_logging_metadata.get("user_api_key_hash")
-        configured: Final = self._index.get(self.llm_router).resolve(model_group, team_id)
+        # model_group is the caller-visible name, which Router deliberately
+        # keeps distinct from the serving deployment's own model_name for a
+        # routing-group call (see resolve_any's docstring); fall back to the
+        # one deployment that actually served this hop.
+        deployment_id: Final = standard_logging_object.get("model_id")
+        serving_deployment: Final = (
+            self.llm_router.get_deployment(deployment_id) if isinstance(deployment_id, str) else None
+        )
+        candidate_model_names: Final = (serving_deployment.model_name,) if serving_deployment is not None else ()
+        configured: Final = self._index.get(self.llm_router).resolve_any(model_group, team_id, candidate_model_names)
         if not configured:
             return
 
@@ -900,7 +954,6 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         if not tags:
             return
 
-        deployment_id: Final = standard_logging_object.get("model_id")
         now: Final = self._time_provider().timestamp()
         increment_by_unit: Final[Mapping[_LimitUnit, float]] = MappingProxyType(
             {

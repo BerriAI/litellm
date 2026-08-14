@@ -258,6 +258,113 @@ async def test_filter_deployments_allows_under_limit_and_rejects_at_limit(time_c
 
 
 @pytest.mark.asyncio
+async def test_filter_deployments_falls_back_to_deployment_model_name_for_routing_group_calls(time_controller):
+    """
+    Router keeps a callable routing-group name distinct from every member
+    deployment's own model_name (see Router._get_routing_group_deployments),
+    so async_filter_deployments can be called with model="my-group" while
+    healthy_deployments carries the group's real member deployments. The
+    limiter must still resolve and enforce each member's own configured
+    limits rather than silently no-opping because "my-group" itself never
+    appears in the index.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "backend-a",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 2, "period_seconds": 60}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    for _ in range(2):
+        result = await limiter.async_filter_deployments(
+            model="my-group",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+        assert result == healthy
+
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="my-group",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_routing_group_does_not_collide_across_different_model_names(time_controller):
+    """
+    A routing group can span deployments from different model_names that
+    happen to declare an identically-named, identically-configured limit.
+    Each must get its own bucket (keyed by its own model_name via
+    resolved_group), not share one just because the caller addressed both
+    through the same group name.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "backend-a",
+                "dep-a",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
+                    }
+                },
+            ),
+            _deployment(
+                "backend-b",
+                "dep-b",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
+                    }
+                },
+            ),
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # Exhaust backend-a's limit (limit=1) via the group-addressed call.
+    await limiter.async_filter_deployments(
+        model="my-group",
+        healthy_deployments=[healthy[0]],
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="my-group",
+            healthy_deployments=[healthy[0]],
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+
+    # backend-b's own bucket must be untouched -- same group, same tag, same
+    # limit name, but a different underlying model_name.
+    result = await limiter.async_filter_deployments(
+        model="my-group",
+        healthy_deployments=[healthy[1]],
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    assert result == [healthy[1]]
+
+
+@pytest.mark.asyncio
 async def test_filter_deployments_per_entry_fail_open_when_tag_absent(time_controller):
     """
     Two entries on the same chain, different tag_ids. Only the tag that's
@@ -517,6 +624,52 @@ async def test_log_success_event_reads_nested_litellm_metadata_when_that_is_auth
 
     now = time_controller.now().timestamp()
     token_key = f"{{tag_rl:grp:tokens:daily:end_user_id:chain:u1}}:{int(now) // 86400}"
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_log_success_event_falls_back_to_serving_deployment_model_name_for_routing_group_calls(
+    time_controller,
+):
+    """
+    standard_logging_object["model_group"] is the caller-visible name from
+    Router._update_kwargs_before_fallbacks -- for a routing-group call this
+    is the group name too, which never appears in the index. Success
+    accounting must fall back to the model_name of the deployment that
+    actually served this hop (standard_logging_object["model_id"]).
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "backend-a",
+                "dep-1",
+                {
+                    "token_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+
+    kwargs = {
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "standard_logging_object": {
+            "model_group": "my-group",
+            "model_id": "dep-1",
+            "total_tokens": 42,
+            "response_cost": 0.01,
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    token_key = f"{{tag_rl:backend-a:tokens:daily:end_user_id:chain:u1}}:{int(now) // 86400}"
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
     )
