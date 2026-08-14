@@ -3508,3 +3508,50 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+def test_translate_anthropic_tools_to_openai_maps_strict_onto_function_not_parameters():
+    """A tool-level `strict` lands on the OpenAI function, leaving the caller's `input_schema` untouched."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    input_schema = {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+    tools = [{"type": "custom", "name": "get_weather", "strict": True, "input_schema": input_schema}]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    function = new_tools[0]["function"]
+    assert function["strict"] is True
+    assert "strict" not in function["parameters"]
+    assert input_schema == {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+
+
+def test_translate_anthropic_tools_to_openai_omits_unset_strict():
+    """Chat Completions already defaults to non-strict, so an unset `strict` stays unset."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tools = [
+        {
+            "type": "custom",
+            "name": "search",
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}, "cursor": {"type": "string"}},
+                "required": ["query"],
+            },
+        }
+    ]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    function = new_tools[0]["function"]
+    assert "strict" not in function
+    assert "strict" not in function["parameters"]
+    assert function["parameters"]["required"] == ["query"]
