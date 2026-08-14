@@ -14,6 +14,7 @@ Routes covered:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from .conftest import VOLATILE_KEYS, normalize
@@ -58,6 +59,120 @@ def test_config_update_happy_admin(client, auth_as, mock_prisma, monkeypatch):
         )
     assert response.status_code == 200
     assert normalize(response.json()) == {"message": "Config updated successfully"}
+
+
+def test_config_update_preserves_existing_router_settings_alias_map(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """
+    Regression pin for #36446: `POST /config/update` must NOT silently
+    wipe `router_settings.model_group_alias` to `{}` when the request
+    omits that field. Pydantic's `UpdateRouterConfig.model_group_alias`
+    defaults to `{}` (not `None`), and `dict(exclude_none=True)` only
+    drops `None` values — the default leaked into the update payload
+    and the shallow merge clobbered the existing alias map on every
+    router-settings edit. The fix is `dict(exclude_none=True,
+    exclude_defaults=True)` so the default no longer leaks.
+    """
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    # Pre-populate the stored config with a non-empty `model_group_alias`.
+    # The `_read_section` helper inside `update_config` returns
+    # `dict(row.param_value)`, so we can return a plain dict for the
+    # param_value — the helper handles the conversion.
+    table.find_first = AsyncMock(
+        return_value=SimpleNamespace(
+            param_value={
+                "routing_groups": [],
+                "model_group_alias": {"security": "luna"},
+                "timeout": 6000,
+            }
+        )
+    )
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        # Caller sends ONLY `routing_groups` — no `model_group_alias`,
+        # no `timeout`. The default `{}` for `model_group_alias` must
+        # NOT clobber the existing {"security": "luna"}.
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"routing_groups": []}},
+        )
+    assert response.status_code == 200, response.text
+
+    # The upserted config is captured in the table.upsert call args.
+    # `update` is the dict literal passed to `ConfigRepository(...).upsert`.
+    upsert_call = table.upsert.call_args
+    assert upsert_call is not None, "config/update must persist via table.upsert"
+    persisted_json = upsert_call.kwargs["data"]["update"]["param_value"]
+    persisted = json.loads(persisted_json)
+    assert persisted["model_group_alias"] == {"security": "luna"}, (
+        f"model_group_alias was wiped to {persisted.get('model_group_alias')!r}; "
+        f"expected the existing {{'security': 'luna'}} to be preserved. "
+        f"Full persisted router_settings: {persisted!r}"
+    )
+    # And the routing_groups in the request still went through.
+    assert persisted["routing_groups"] == []
+    # And the unrelated existing field (timeout) is still there.
+    assert persisted["timeout"] == 6000
+
+
+def test_config_update_preserves_existing_general_settings_default_dict_fields(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """
+    Regression pin for #36446: same `exclude_defaults=True` fix must
+    apply to the `general_settings` update path. The `GeneralSettings`
+    Pydantic model has several fields that default to `{}` or `[]`
+    (e.g. `alerting`, `alerting_threshold`, `spend_logs_deduper_keys`).
+    Sending a request that only touches one field must not wipe the
+    rest with their Pydantic defaults.
+    """
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    # Pre-populate the stored config with a non-default `alerting`
+    # threshold the operator had set previously.
+    table.find_first = AsyncMock(
+        return_value=SimpleNamespace(
+            param_value={
+                "alerting": ["email"],
+                "alerting_threshold": 30.5,
+            }
+        )
+    )
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        # Caller sends ONLY `alerting`. The default `{}` or `[]` for
+        # `alerting_threshold` and other default-dict fields must NOT
+        # clobber the existing values.
+        response = client.post(
+            "/config/update",
+            json={"general_settings": {"alerting": ["slack"]}},
+        )
+    assert response.status_code == 200, response.text
+
+    upsert_call = table.upsert.call_args
+    assert upsert_call is not None
+    persisted_json = upsert_call.kwargs["data"]["update"]["param_value"]
+    persisted = json.loads(persisted_json)
+    # The new `alerting` value is persisted.
+    assert persisted["alerting"] == ["slack"]
+    # The existing `alerting_threshold` is preserved (not wiped to its
+    # Pydantic default).
+    assert persisted.get("alerting_threshold") == 30.5
+
 
 
 def test_config_update_non_admin_forbidden(client, auth_as, mock_prisma, monkeypatch):

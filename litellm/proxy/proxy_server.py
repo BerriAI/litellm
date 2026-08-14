@@ -14529,7 +14529,12 @@ async def update_config(
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
             before_general_settings = copy.deepcopy(existing)
-            updates = config_info.general_settings.dict(exclude_none=True)
+            # `exclude_defaults=True` drops Pydantic defaults (e.g. an
+            # `{}` default for a field the caller never sent) so the shallow
+            # merge below cannot clobber an existing field with the default
+            # value. `exclude_none=True` alone only drops `None` values and
+            # would let a `{}` default leak in — see #36446.
+            updates = config_info.general_settings.dict(exclude_none=True, exclude_defaults=True)
             for k, v in updates.items():
                 if k == "alert_to_webhook_url":
                     if "alerting" not in existing:
@@ -14604,7 +14609,14 @@ async def update_config(
         if config_info.router_settings is not None:
             existing = await _read_section("router_settings")
             before_router_settings = copy.deepcopy(existing)
-            updates = config_info.router_settings.dict(exclude_none=True)
+            # `exclude_defaults=True` drops Pydantic defaults (e.g. an
+            # `{}` default for `model_group_alias` the caller never sent)
+            # so the shallow merge below cannot clobber an existing field
+            # with the default value. `exclude_none=True` alone only drops
+            # `None` values and would let the `{}` default leak in, which
+            # silently wipes `model_group_alias` on every router-settings
+            # edit — see #36446.
+            updates = config_info.router_settings.dict(exclude_none=True, exclude_defaults=True)
             new_router_settings = {**existing, **updates}
             await _upsert_section("router_settings", new_router_settings)
             asyncio.create_task(
