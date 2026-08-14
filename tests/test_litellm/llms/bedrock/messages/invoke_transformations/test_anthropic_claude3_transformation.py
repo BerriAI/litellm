@@ -16,8 +16,8 @@ sys.path.insert(0, os.path.abspath("../../../../../.."))
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
+    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    remove_custom_field_from_tools,
 )
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -353,12 +353,13 @@ def test_remove_ttl_from_cache_control():
     assert request5 == {}
 
 
-def test_remove_custom_field_from_tools():
+def test_normalize_custom_field_on_tools():
     """
-    Ensure the `custom` field is stripped from every tool definition.
+    Ensure the `custom` field is stripped from every tool definition, and that a
+    boolean `custom.defer_loading` is hoisted onto the top-level `defer_loading`
+    flag Bedrock documents instead of being dropped with the wrapper.
 
-    Claude Code v2.1.69+ sends `custom: {defer_loading: true}` on tool
-    objects.  Bedrock does not accept this extra field and returns
+    Bedrock does not accept a `custom` object on a tool and returns
     "Extra inputs are not permitted".
 
     Ref: https://github.com/BerriAI/litellm/issues/22847
@@ -381,28 +382,93 @@ def test_remove_custom_field_from_tools():
         ]
     }
 
-    remove_custom_field_from_tools(request)
+    normalize_custom_field_on_tools(request)
 
     for tool in request["tools"]:
         assert "custom" not in tool, f"Tool {tool['name']} still has 'custom' field"
     # Other fields should be preserved
     assert request["tools"][0]["name"] == "Read"
     assert request["tools"][1]["name"] == "Write"
+    # `custom.defer_loading` is hoisted; the tool that never carried it is untouched
+    assert request["tools"][0]["defer_loading"] is True
+    assert "defer_loading" not in request["tools"][1]
 
     # Case 2: request without tools key (should not raise error)
     request2 = {"messages": [{"role": "user", "content": "hi"}]}
-    remove_custom_field_from_tools(request2)
+    normalize_custom_field_on_tools(request2)
     assert "tools" not in request2
 
     # Case 3: empty tools list (should not raise error)
     request3 = {"tools": []}
-    remove_custom_field_from_tools(request3)
+    normalize_custom_field_on_tools(request3)
     assert request3["tools"] == []
 
     # Case 4: tools with None value (should not raise error)
     request4 = {"tools": None}
-    remove_custom_field_from_tools(request4)
+    normalize_custom_field_on_tools(request4)
     assert request4["tools"] is None
+
+    # Case 5: an explicit top-level flag wins over a conflicting wrapped one
+    request5 = {
+        "tools": [
+            {"name": "Read", "defer_loading": False, "custom": {"defer_loading": True}}
+        ]
+    }
+    normalize_custom_field_on_tools(request5)
+    assert request5["tools"][0] == {"name": "Read", "defer_loading": False}
+
+    # Case 6: a non-boolean `custom.defer_loading` is dropped, never forwarded
+    for junk in ("true", 1, None, {"nested": True}):
+        request6 = {"tools": [{"name": "Read", "custom": {"defer_loading": junk}}]}
+        normalize_custom_field_on_tools(request6)
+        assert request6["tools"][0] == {"name": "Read"}, f"leaked defer_loading={junk!r}"
+
+    # Case 7: a `custom` that is not a dict is dropped without raising
+    request7 = {
+        "tools": [
+            {"name": "Read", "custom": "defer_loading"},
+            {"name": "Write", "custom": None},
+        ]
+    }
+    normalize_custom_field_on_tools(request7)
+    assert request7["tools"] == [{"name": "Read"}, {"name": "Write"}]
+
+
+@pytest.mark.parametrize(
+    "deferred_marker", [{"custom": {"defer_loading": True}}, {"defer_loading": True}]
+)
+def test_bedrock_invoke_messages_transform_emits_top_level_defer_loading(
+    deferred_marker,
+):
+    """A deferred tool must reach Bedrock as top-level ``defer_loading``, whether the
+    client wrapped the flag in ``custom`` or sent it top-level, and the outbound body
+    must still carry the Bedrock tool-search beta."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 128,
+            "stream": False,
+            "betas": ["advanced-tool-use-2025-11-20"],
+            "tools": [
+                {
+                    "name": "Read",
+                    "description": "Read a file",
+                    "input_schema": {"type": "object", "properties": {}},
+                    **deferred_marker,
+                },
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search"},
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"][0]["defer_loading"] is True
+    assert "custom" not in result["tools"][0]
+    assert result["anthropic_beta"] == ["tool-search-tool-2025-10-19"]
 
 
 def test_normalize_tool_input_schema_types_for_bedrock_invoke():
