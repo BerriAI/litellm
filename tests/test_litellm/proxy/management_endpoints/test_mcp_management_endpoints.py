@@ -1,10 +1,8 @@
 import os
 import sys
 import types
-import json
 from contextlib import ExitStack
 from datetime import datetime
-
 from types import SimpleNamespace
 from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
@@ -1692,6 +1690,23 @@ class TestTemporaryMCPSessionEndpoints:
             draft,
             credentials_are_encrypted=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_get_all_mcp_servers_hides_drafts_without_hiding_legacy_null_rows(self):
+        """Drafts are addressable only by their own id and must never appear in a listing, but a
+        bare inequality would also drop pre-approval-workflow rows, since SQL evaluates
+        NULL != 'draft' as NULL."""
+        from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers
+
+        find_rows = AsyncMock(return_value=[])
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_rows",
+            find_rows,
+        ):
+            await get_all_mcp_servers(MagicMock())
+
+        where = find_rows.await_args.args[1]
+        assert where == {"OR": [{"approval_status": None}, {"approval_status": {"not": "draft"}}]}
 
     @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_or_404(self):
@@ -5482,7 +5497,9 @@ def _edit_endpoint_patches(old_record, update_mock):
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(side_effect=old_record) if isinstance(old_record, Exception) else AsyncMock(return_value=old_record),
+            AsyncMock(side_effect=old_record)
+            if isinstance(old_record, Exception)
+            else AsyncMock(return_value=old_record),
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
@@ -5891,7 +5908,13 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
 
     registry_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "..", "..", "..", "..", "litellm", "proxy", "openapi_registry.json",
+        "..",
+        "..",
+        "..",
+        "..",
+        "litellm",
+        "proxy",
+        "openapi_registry.json",
     )
     with open(registry_path) as f:
         registry = json.load(f)

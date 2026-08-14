@@ -554,13 +554,20 @@ async def get_all_mcp_servers(
 ) -> list[LiteLLM_MCPServerTable]:
     """
     Returns mcp servers from the db, optionally filtered by approval_status.
-    Pass approval_status=None to return all servers regardless of approval state.
+    Pass approval_status=None to return every server except drafts, which back the admin OAuth
+    session flow, are addressable only by their own server_id, and must never appear in a listing.
+    NULL approval_status predates the approval workflow, so those rows are kept explicitly rather
+    than dropped by a bare inequality, which SQL evaluates as NULL and would silently hide them.
     """
     try:
-        where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {}
-        if approval_status is not None:
-            where["approval_status"] = approval_status
-        mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client, where if where else {})
+        where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = (
+            {"approval_status": approval_status}
+            if approval_status is not None
+            # mutable-ok: prisma where-inputs must be plain dicts, and both `NOT` and `not` drop
+            # NULL rows (measured), so the OR is the only NULL-preserving way to exclude drafts
+            else {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]}
+        )
+        mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client, where)
 
         tables: Final = [LiteLLM_MCPServerTable.model_validate(mcp_server.model_dump()) for mcp_server in mcp_servers]
         for table in tables:
