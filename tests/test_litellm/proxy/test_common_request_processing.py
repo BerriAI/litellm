@@ -834,6 +834,174 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-margin-amount" not in headers
         assert "x-litellm-response-cost-margin-percent" not in headers
 
+    def test_get_custom_headers_per_component_cost_breakdown(self):
+        """Test that per-component cost headers are included when component breakdown is available."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-components",
+            function_id="test-function",
+        )
+
+        input_cost: Final = 0.00002
+        output_cost: Final = 0.00004
+        cache_read_cost: Final = 0.000005
+        cache_creation_cost: Final = 0.00001
+        reasoning_cost: Final = 0.000015
+        tool_usage_cost: Final = 0.00003
+        total_cost: Final = (
+            input_cost + cache_read_cost + cache_creation_cost + output_cost + tool_usage_cost
+        )
+
+        logging_obj.set_cost_breakdown(
+            input_cost=input_cost,
+            output_cost=output_cost,
+            total_cost=total_cost,
+            cost_for_built_in_tools_cost_usd_dollar=tool_usage_cost,
+            cache_read_cost=cache_read_cost,
+            cache_creation_cost=cache_creation_cost,
+            reasoning_cost=reasoning_cost,
+        )
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-components",
+            response_cost=total_cost,
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert "x-litellm-response-cost" in headers
+        assert float(headers["x-litellm-response-cost"]) == pytest.approx(total_cost)
+
+        assert "x-litellm-response-cost-input" in headers
+        assert float(headers["x-litellm-response-cost-input"]) == pytest.approx(input_cost)
+
+        assert "x-litellm-response-cost-output" in headers
+        assert float(headers["x-litellm-response-cost-output"]) == pytest.approx(output_cost)
+
+        assert "x-litellm-response-cost-cache-read" in headers
+        assert float(headers["x-litellm-response-cost-cache-read"]) == pytest.approx(cache_read_cost)
+
+        assert "x-litellm-response-cost-cache-creation" in headers
+        assert float(headers["x-litellm-response-cost-cache-creation"]) == pytest.approx(cache_creation_cost)
+
+        assert "x-litellm-response-cost-reasoning" in headers
+        assert float(headers["x-litellm-response-cost-reasoning"]) == pytest.approx(reasoning_cost)
+
+        assert "x-litellm-response-cost-tool-usage" in headers
+        assert float(headers["x-litellm-response-cost-tool-usage"]) == pytest.approx(tool_usage_cost)
+
+        component_sum: Final = (
+            float(headers["x-litellm-response-cost-input"])
+            + float(headers["x-litellm-response-cost-cache-read"])
+            + float(headers["x-litellm-response-cost-cache-creation"])
+            + float(headers["x-litellm-response-cost-output"])
+            + float(headers["x-litellm-response-cost-tool-usage"])
+        )
+        assert component_sum == pytest.approx(float(headers["x-litellm-response-cost"]))
+        assert float(headers["x-litellm-response-cost-reasoning"]) <= float(headers["x-litellm-response-cost-output"])
+
+    def test_get_custom_headers_without_cost_breakdown_omits_component_headers(self):
+        """Test that when litellm_logging_obj has no cost_breakdown, component headers are omitted."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-no-breakdown",
+            function_id="test-function",
+        )
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.0001,
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert "x-litellm-response-cost" in headers
+        assert "x-litellm-response-cost-input" not in headers
+        assert "x-litellm-response-cost-output" not in headers
+        assert "x-litellm-response-cost-cache-read" not in headers
+        assert "x-litellm-response-cost-cache-creation" not in headers
+        assert "x-litellm-response-cost-reasoning" not in headers
+        assert "x-litellm-response-cost-tool-usage" not in headers
+
+    def test_get_custom_headers_per_component_with_discount_and_margin(self):
+        """Test that component headers co-exist accurately with discount and margin headers."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-combined",
+            function_id="test-function",
+        )
+
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00006,
+            output_cost=0.00004,
+            total_cost=0.000105,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0001,
+            discount_percent=0.05,
+            discount_amount=0.000005,
+            margin_percent=0.10,
+            margin_total_amount=0.00001,
+        )
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.000105,
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert float(headers["x-litellm-response-cost"]) == pytest.approx(0.000105)
+        assert float(headers["x-litellm-response-cost-original"]) == pytest.approx(0.0001)
+        assert float(headers["x-litellm-response-cost-discount-amount"]) == pytest.approx(0.000005)
+        assert float(headers["x-litellm-response-cost-margin-amount"]) == pytest.approx(0.00001)
+        assert float(headers["x-litellm-response-cost-margin-percent"]) == pytest.approx(0.10)
+        assert float(headers["x-litellm-response-cost-input"]) == pytest.approx(0.00006)
+        assert float(headers["x-litellm-response-cost-output"]) == pytest.approx(0.00004)
+        assert "x-litellm-response-cost-cache-read" not in headers
+        assert "x-litellm-response-cost-cache-creation" not in headers
+        assert "x-litellm-response-cost-reasoning" not in headers
+        assert float(headers["x-litellm-response-cost-tool-usage"]) == pytest.approx(0.0)
+
     @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
     def test_get_custom_headers_classifier_cost_from_routing_decision(self, metadata_key):
         """The auto-router's LLM classifier cost must surface as its own header.
