@@ -4,21 +4,26 @@ Custom A2A Card Resolver for LiteLLM.
 Extends the A2A SDK's card resolver to support multiple well-known paths.
 """
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import LOCALHOST_URL_PATTERNS
 
 if TYPE_CHECKING:
+    from a2a.client import A2ACardResolver as _A2ACardResolver
     from a2a.types import AgentCard
+else:
+    try:
+        from a2a.client import A2ACardResolver as _A2ACardResolver
+    except ImportError:
+        _A2ACardResolver = object
 
 # Runtime imports with availability check
-_A2ACardResolver: Any = object
 AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
 PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
 
 try:
-    from a2a.client import A2ACardResolver as _A2ACardResolver
     from a2a.utils.constants import (
         AGENT_CARD_WELL_KNOWN_PATH,
         PREV_AGENT_CARD_WELL_KNOWN_PATH,
@@ -115,6 +120,7 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
         self,
         relative_card_path: str | None = None,
         http_kwargs: dict[str, Any] | None = None,
+        signature_verifier: Callable[["AgentCard"], None] | None = None,
     ) -> "AgentCard":
         """
         Fetch the agent card, trying multiple well-known paths.
@@ -125,6 +131,8 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
             relative_card_path: Optional path to the agent card endpoint.
                 If None, tries both well-known paths.
             http_kwargs: Optional dictionary of keyword arguments to pass to httpx.get
+            signature_verifier: Optional callable forwarded to the SDK to verify
+                the resolved card's signature.
 
         Returns:
             AgentCard from the A2A agent
@@ -137,6 +145,7 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
             return await super().get_agent_card(
                 relative_card_path=relative_card_path,
                 http_kwargs=http_kwargs,
+                signature_verifier=signature_verifier,
             )
 
         # Try both well-known paths
@@ -152,6 +161,7 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
                 return await super().get_agent_card(
                     relative_card_path=path,
                     http_kwargs=http_kwargs,
+                    signature_verifier=signature_verifier,
                 )
             except Exception as e:
                 verbose_logger.debug("Failed to fetch agent card from %s%s: %s", self.base_url, path, e)

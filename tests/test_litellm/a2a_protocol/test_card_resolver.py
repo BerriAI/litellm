@@ -76,7 +76,7 @@ async def test_card_resolver_fallback_from_new_to_old_path():
 
     # Create a mock for the parent's get_agent_card method
     async def mock_parent_get_agent_card(
-        self, relative_card_path=None, http_kwargs=None
+        self, relative_card_path=None, http_kwargs=None, signature_verifier=None
     ):
         paths_called.append(relative_card_path)
         if relative_card_path == "/.well-known/agent-card.json":
@@ -109,6 +109,39 @@ async def test_card_resolver_fallback_from_new_to_old_path():
         # Verify the result
         assert result == mock_agent_card
         assert result.name == "Test Agent"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_card_forwards_signature_verifier():
+    """
+    The SDK's get_agent_card accepts a signature_verifier. Dropping it from this override
+    made the call raise TypeError for any caller passing it, so it must be forwarded.
+    """
+    received = {}
+
+    async def mock_parent_get_agent_card(
+        self, relative_card_path=None, http_kwargs=None, signature_verifier=None
+    ):
+        received["signature_verifier"] = signature_verifier
+        return MagicMock()
+
+    def verifier(card):
+        return None
+
+    with patch.object(
+        LiteLLMA2ACardResolver.__bases__[0],
+        "get_agent_card",
+        mock_parent_get_agent_card,
+    ):
+        resolver = LiteLLMA2ACardResolver(
+            httpx_client=MagicMock(), base_url="http://test-agent:8000"
+        )
+        await resolver.get_agent_card(
+            relative_card_path="/.well-known/agent-card.json",
+            signature_verifier=verifier,
+        )
+
+    assert received["signature_verifier"] is verifier
 
 
 def test_is_localhost_or_internal_url():
