@@ -2,7 +2,9 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -67,6 +69,21 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 
 # Setup TestClient
 client = TestClient(app)
+
+
+def _wire_team_create_tx(prisma_client):
+    """`/team/new` inserts the team and mirrors it onto the access groups in one transaction,
+    so a mocked client has to hand its team table back out of `db.tx()`."""
+
+    @asynccontextmanager
+    async def _tx():
+        yield SimpleNamespace(
+            litellm_teamtable=prisma_client.db.litellm_teamtable,
+            query_raw=AsyncMock(return_value=[]),
+        )
+
+    prisma_client.db.tx = lambda *_args, **_kwargs: _tx()
+
 
 # Mock prisma_client
 mock_prisma_client = MagicMock()
@@ -400,6 +417,7 @@ async def test_new_team_rejects_a_duration_that_never_advances(
     mock_team_create = AsyncMock()
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.create = mock_team_create
+    _wire_team_create_tx(mock_db_client)
 
     with pytest.raises(ProxyException) as exc_info:
         await new_team(
@@ -481,6 +499,7 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
     mock_team_count = AsyncMock(return_value=0)
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.create = mock_team_create
+    _wire_team_create_tx(mock_db_client)
     mock_db_client.db.litellm_teamtable.count = mock_team_count
     mock_db_client.db.litellm_teamtable.update = AsyncMock(
         return_value=team_create_result
@@ -570,6 +589,7 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
     mock_db_client.db.litellm_teamtable.create = AsyncMock(
         return_value=team_create_result
     )
+    _wire_team_create_tx(mock_db_client)
     mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_db_client.db.litellm_teamtable.update = AsyncMock(
         return_value=team_create_result
@@ -663,6 +683,7 @@ async def test_new_team_disable_auto_add_proxy_admin_flag(
     mock_db_client.db.litellm_teamtable.create = AsyncMock(
         return_value=team_create_result
     )
+    _wire_team_create_tx(mock_db_client)
     mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_db_client.db.litellm_usertable = MagicMock()
     mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
@@ -4430,6 +4451,7 @@ async def test_new_team_max_budget_within_user_limit():
         mock_prisma.db.litellm_teamtable.create = AsyncMock(
             return_value=mock_created_team
         )
+        _wire_team_create_tx(mock_prisma)
         mock_prisma.db.litellm_teamtable.update = AsyncMock(
             return_value=mock_created_team
         )
@@ -4573,6 +4595,7 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
         mock_prisma.db.litellm_teamtable.create = AsyncMock(
             return_value=mock_created_team
         )
+        _wire_team_create_tx(mock_prisma)
         mock_prisma.db.litellm_teamtable.update = AsyncMock(
             return_value=mock_created_team
         )
@@ -4721,6 +4744,7 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
         mock_prisma.db.litellm_teamtable.create = AsyncMock(
             return_value=mock_created_team
         )
+        _wire_team_create_tx(mock_prisma)
         mock_prisma.db.litellm_teamtable.update = AsyncMock(
             return_value=mock_created_team
         )
@@ -6567,6 +6591,7 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
         mock_created_team.rpm_limit = 1000
         mock_created_team.metadata = None
         mock_created_team.members_with_roles = []
+        mock_created_team.access_group_ids = None
         mock_created_team.model_dump.return_value = {
             "team_id": "new-bypass-team-id",
             "team_alias": "org-bypass-test-team",
@@ -6578,6 +6603,7 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
         mock_prisma.db.litellm_teamtable.create = AsyncMock(
             return_value=mock_created_team
         )
+        _wire_team_create_tx(mock_prisma)
         mock_prisma.db.litellm_teamtable.update = AsyncMock(
             return_value=mock_created_team
         )
@@ -6856,6 +6882,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
         mock_updated_team.team_id = "org-team-update-bypass-123"
         mock_updated_team.tpm_limit = 10000
         mock_updated_team.rpm_limit = 1000
+        mock_updated_team.access_group_ids = None
         mock_updated_team.model_dump.return_value = {
             "team_id": "org-team-update-bypass-123",
             "tpm_limit": 10000,
@@ -7009,6 +7036,7 @@ async def test_update_team_guardrails_with_org_id():
             "guardrails": ["aporia-pre-call", "aporia-post-call"]
         }
         mock_updated_team.litellm_model_table = None
+        mock_updated_team.access_group_ids = None
         mock_updated_team.model_dump.return_value = {
             "team_id": "team-guardrails-123",
             "organization_id": "test-org-guardrails",
@@ -7937,6 +7965,7 @@ async def test_new_team_soft_budget_validation(
         mock_prisma.db.litellm_teamtable.create = AsyncMock(
             return_value=mock_created_team
         )
+        _wire_team_create_tx(mock_prisma)
         mock_prisma.db.litellm_teamtable.update = AsyncMock(
             return_value=mock_created_team
         )
@@ -8236,6 +8265,7 @@ async def test_new_team_with_router_settings(mock_db_client, mock_admin_auth):
     mock_team_count = AsyncMock(return_value=0)
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.create = mock_team_create
+    _wire_team_create_tx(mock_db_client)
     mock_db_client.db.litellm_teamtable.count = mock_team_count
     mock_db_client.db.litellm_teamtable.update = AsyncMock(
         return_value=team_create_result
@@ -9626,6 +9656,7 @@ async def test_new_team_encrypts_callback_vars(
     team_create_result.model_dump.return_value = {"team_id": "team-456"}
     mock_team_create = AsyncMock(return_value=team_create_result)
     mock_db_client.db.litellm_teamtable.create = mock_team_create
+    _wire_team_create_tx(mock_db_client)
     mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_db_client.db.litellm_teamtable.update = AsyncMock(
         return_value=team_create_result
@@ -10786,6 +10817,7 @@ async def test_new_team_validator_runs_without_metadata_and_rejection_blocks_cre
     ):
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_prisma.db.litellm_teamtable.create = AsyncMock()
+        _wire_team_create_tx(mock_prisma)
         mock_license.is_team_count_over_limit.return_value = False
 
         with pytest.raises(ProxyException) as exc_info:
@@ -10820,6 +10852,7 @@ async def test_new_team_validator_accept_proceeds_to_create(mock_db_client, mock
     team_create_result.model_dump.return_value = {"team_id": "team-accept-1"}
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.create = AsyncMock(return_value=team_create_result)
+    _wire_team_create_tx(mock_db_client)
     mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_create_result)
     mock_db_client.db.litellm_usertable = MagicMock()
@@ -10859,6 +10892,7 @@ async def test_new_team_rejection_precedes_model_alias_write():
     ):
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_prisma.db.litellm_teamtable.create = AsyncMock()
+        _wire_team_create_tx(mock_prisma)
         mock_prisma.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model-1"))
         mock_license.is_team_count_over_limit.return_value = False
 
@@ -11626,6 +11660,7 @@ def _wire_new_team_prisma(mock_db_client):
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_db_client.db.litellm_teamtable.create = AsyncMock(return_value=created_team)
+    _wire_team_create_tx(mock_db_client)
     mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=created_team)
     mock_db_client.db.litellm_usertable = MagicMock()
     mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
@@ -11714,3 +11749,342 @@ async def test_new_team_explicit_null_max_budget_still_takes_configured_default(
 
     team_data = mock_team_create.call_args.kwargs["data"]
     assert team_data.get("max_budget") == 100.0
+
+
+class _FakeMirrorDb:
+    """Stands in for prisma inside the access-group mirror.
+
+    Dispatches on the statement so a change to the SQL's shape is visible here, but it
+    cannot validate the SQL itself: it reimplements the array semantics in Python, so it
+    passes whatever the statement says. Correctness of the SQL is pinned against a real
+    Postgres in tests/proxy_admin_ui_tests/test_access_group_team_sync.py.
+    """
+
+    def __init__(self, access_groups, teams, plain_lists=False):
+        self._access_groups = access_groups
+        self._teams = teams
+        self._plain_lists = plain_lists
+        self.transactions = []
+
+    def _team_ids(self, group_id):
+        stored = self._access_groups[group_id]
+        return stored if self._plain_lists else stored["assigned_team_ids"]
+
+    async def _query_raw(self, sql, *args):
+        assert self._open, "mirror statement ran outside a transaction"
+        if "pg_advisory_xact_lock" in sql:
+            self.transactions[-1].append("lock")
+            return [{"locked": False}]
+        if "LiteLLM_TeamTable" in sql:
+            self.transactions[-1].append("read")
+            team_id = args[0]
+            if team_id not in self._teams:
+                return []
+            return [{"access_group_ids": list(self._teams[team_id])}]
+
+        team_id, desired = args
+        if sql.lstrip().startswith("SELECT"):
+            self.transactions[-1].append("affected")
+            affected = [g for g in self._access_groups if g in desired or team_id in self._team_ids(g)]
+            return [{"access_group_id": group_id} for group_id in affected]
+
+        if "array_append" in sql:
+            self.transactions[-1].append("attach")
+            changed = [
+                g for g in desired if g in self._access_groups and team_id not in self._team_ids(g)
+            ]
+            for group_id in changed:
+                self._team_ids(group_id).append(team_id)
+        else:
+            self.transactions[-1].append("detach")
+            changed = [
+                g for g in self._access_groups if team_id in self._team_ids(g) and g not in desired
+            ]
+            for group_id in changed:
+                self._team_ids(group_id).remove(team_id)
+        return [{"access_group_id": group_id} for group_id in changed]
+
+    async def _create_team(self, data, include=None):
+        self.transactions[-1].append("create")
+        team_id = data["team_id"]
+        self._teams[team_id] = list(data.get("access_group_ids") or ())
+        return SimpleNamespace(
+            team_id=team_id,
+            access_group_ids=list(self._teams[team_id]),
+            model_dump=lambda: {"team_id": team_id},
+        )
+
+    def tx(self, *_args, **_kwargs):
+        outer = self
+
+        class _Tx:
+            async def __aenter__(self):
+                outer.transactions.append([])
+                outer._open = True
+                return SimpleNamespace(
+                    query_raw=outer._query_raw,
+                    litellm_teamtable=SimpleNamespace(create=outer._create_team),
+                )
+
+            async def __aexit__(self, *_exc_info):
+                outer._open = False
+                return None
+
+        return _Tx()
+
+    _open = False
+
+
+@pytest.mark.asyncio
+async def test_update_team_syncs_access_group_assigned_team_ids_in_both_directions():
+    """
+    A team-side edit of `access_group_ids` must be mirrored onto every affected access
+    group's `assigned_team_ids`, in one transaction, in both directions.
+
+    `assigned_team_ids` is not display-only. `get_authorized_resources_from_key_access_groups`
+    reads it as an authorization input, so a group the team dropped must stop granting its
+    resources to keys on that team, and a group the team added must start granting them.
+    A single-direction assertion would pass against a fix that only ever removes (or only
+    ever adds), so this covers add, remove, untouched, and the authorization consequence.
+    """
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import (
+        get_authorized_resources_from_key_access_groups,
+    )
+
+    access_groups = {
+        "ag-drop": {"assigned_team_ids": ["team-a"], "access_model_names": ["dropped-model"]},
+        "ag-keep": {"assigned_team_ids": ["team-a"], "access_model_names": ["kept-model"]},
+        "ag-add": {"assigned_team_ids": [], "access_model_names": ["added-model"]},
+        "ag-other-team": {"assigned_team_ids": ["team-b"], "access_model_names": ["other-model"]},
+    }
+    committed_team_groups = ["ag-keep", "ag-add"]
+    fake_db = _FakeMirrorDb(access_groups, {"team-a": committed_team_groups})
+
+    existing_team = MagicMock()
+    existing_team.access_group_ids = ["ag-drop", "ag-keep"]
+    existing_team.metadata = {}
+    existing_team.max_budget = None
+    existing_team.organization_id = None
+    existing_team.team_alias = "team-a"
+    existing_team.model_dump.return_value = {"team_id": "team-a", "team_alias": "team-a"}
+
+    updated_team = MagicMock()
+    updated_team.team_id = "team-a"
+    updated_team.access_group_ids = committed_team_groups
+    updated_team.model_dump.return_value = {"team_id": "team-a"}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as prisma,
+        patch("litellm.proxy.proxy_server.llm_router"),
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.management_endpoints.team_endpoints._refresh_cached_team"),
+        patch(
+            "litellm.proxy.management_helpers.access_group_team_sync.invalidate_access_group_cache",
+            new_callable=AsyncMock,
+        ) as invalidate_cache,
+    ):
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+        prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
+        prisma.db.tx = fake_db.tx
+        prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+        await update_team(
+            data=UpdateTeamRequest(team_id="team-a", access_group_ids=committed_team_groups),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    assert access_groups["ag-drop"]["assigned_team_ids"] == []
+    assert access_groups["ag-add"]["assigned_team_ids"] == ["team-a"]
+    assert access_groups["ag-keep"]["assigned_team_ids"] == ["team-a"]
+    assert access_groups["ag-other-team"]["assigned_team_ids"] == ["team-b"]
+
+    assert fake_db.transactions == [["lock", "read", "affected", "attach", "detach"]]
+    assert {call.args[0] for call in invalidate_cache.call_args_list} == {"ag-drop", "ag-keep", "ag-add"}
+
+    async def _get_access_object(*, access_group_id, **_kwargs):
+        stored = access_groups[access_group_id]
+        return LiteLLM_AccessGroupTable(
+            access_group_id=access_group_id,
+            access_group_name=access_group_id,
+            access_model_names=list(stored["access_model_names"]),
+            assigned_team_ids=list(stored["assigned_team_ids"]),
+            assigned_key_ids=[],
+        )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            side_effect=_get_access_object,
+        ),
+    ):
+        authorized_models = await get_authorized_resources_from_key_access_groups(
+            valid_token=UserAPIKeyAuth(
+                token="sk-hash",
+                models=[],
+                team_id="team-a",
+                access_group_ids=["ag-drop", "ag-keep", "ag-add"],
+            ),
+            team_object=LiteLLM_TeamTable(team_id="team-a", models=[]),
+            resource_field="access_model_names",
+        )
+
+    assert sorted(authorized_models) == ["added-model", "kept-model"]
+
+
+@pytest.mark.asyncio
+async def test_sync_reads_the_committed_team_row_rather_than_the_callers_snapshot():
+    """
+    The mirror takes no desired-state argument on purpose. It locks the team and reads
+    the row as committed, so two concurrent writers for one team converge on the row the
+    last one committed instead of each replaying its own stale snapshot. Reconciling also
+    means a retry heals a half-applied sync, where a before/after delta computes nothing.
+
+    The same holds for the cache step: the groups to drop come from the reconciled set,
+    not from the rows this attempt happened to change, so a retry after an unreachable
+    cache still drops the entries even though its statements are now no-ops.
+
+    A team with no row at all is deletion, and must detach from every group.
+    """
+    from litellm.proxy.management_helpers.access_group_team_sync import (
+        sync_team_access_group_membership,
+    )
+
+    access_groups = {"ag-1": ["team-a", "team-b"], "ag-2": ["team-a"], "ag-3": []}
+    teams = {"team-a": ["ag-2", "ag-3"]}
+    fake_db = _FakeMirrorDb(access_groups, teams, plain_lists=True)
+    prisma_client = SimpleNamespace(db=SimpleNamespace(tx=fake_db.tx))
+
+    with patch(
+        "litellm.proxy.management_helpers.access_group_team_sync.invalidate_access_group_cache",
+        new_callable=AsyncMock,
+        side_effect=[ConnectionError("redis unreachable"), None, None],
+    ) as invalidate_cache:
+        with pytest.raises(ConnectionError):
+            await sync_team_access_group_membership(prisma_client=prisma_client, team_id="team-a")
+        assert access_groups == {"ag-1": ["team-b"], "ag-2": ["team-a"], "ag-3": ["team-a"]}
+        assert {call.args[0] for call in invalidate_cache.call_args_list} == {"ag-1", "ag-2", "ag-3"}
+
+        invalidate_cache.reset_mock()
+        invalidate_cache.side_effect = None
+        await sync_team_access_group_membership(prisma_client=prisma_client, team_id="team-a")
+        assert access_groups == {"ag-1": ["team-b"], "ag-2": ["team-a"], "ag-3": ["team-a"]}
+        assert {call.args[0] for call in invalidate_cache.call_args_list} == {"ag-2", "ag-3"}
+
+        invalidate_cache.reset_mock()
+        del teams["team-a"]
+        await sync_team_access_group_membership(prisma_client=prisma_client, team_id="team-a")
+        assert access_groups == {"ag-1": ["team-b"], "ag-2": [], "ag-3": []}
+        assert {call.args[0] for call in invalidate_cache.call_args_list} == {"ag-2", "ag-3"}
+
+    assert fake_db.transactions == [["lock", "read", "affected", "attach", "detach"]] * 3
+
+
+@pytest.mark.asyncio
+async def test_new_team_and_delete_team_both_drive_the_mirror():
+    """Every writer of `team.access_group_ids` has to reach the mirror, not just update.
+    These pin the wiring on the other two paths; the mirror's own behavior is covered above.
+
+    Creation has to insert the team row and mirror it in one transaction. With the mirror
+    in a transaction of its own, a sync that fails leaves a committed team whose groups
+    never learned about it, and the retry is rejected as a duplicate team id."""
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import DeleteTeamRequest, NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import delete_team, new_team
+
+    access_groups = {"ag-1": [], "ag-2": []}
+    fake_db = _FakeMirrorDb(access_groups, {}, plain_lists=True)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as prisma,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team", new_callable=AsyncMock),
+        patch(
+            "litellm.proxy.management_helpers.access_group_team_sync.invalidate_access_group_cache",
+            new_callable=AsyncMock,
+        ) as invalidate_cache,
+    ):
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+        prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        prisma.db.tx = fake_db.tx
+        prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+        prisma.get_data = AsyncMock(return_value=None)
+
+        await new_team(
+            data=NewTeamRequest(team_id="team-new", team_alias="new", access_group_ids=["ag-1"]),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    assert access_groups == {"ag-1": ["team-new"], "ag-2": []}
+    assert fake_db.transactions == [["create", "lock", "read", "affected", "attach", "detach"]]
+    assert {call.args[0] for call in invalidate_cache.call_args_list} == {"ag-1"}
+
+    team_row = LiteLLM_TeamTable(team_id="team-gone", models=[], access_group_ids=["ag-1"])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as prisma,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.management_endpoints.team_endpoints._persist_deleted_team_records", new_callable=AsyncMock),
+        patch("litellm.proxy.management_endpoints.team_endpoints._verify_team_access", new_callable=AsyncMock),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.sync_team_access_group_membership",
+            new_callable=AsyncMock,
+        ) as sync,
+    ):
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        prisma.delete_data = AsyncMock(return_value=[team_row])
+        prisma.db.execute_raw = AsyncMock(return_value=0)
+        prisma.db.litellm_teammembership.delete_many = AsyncMock(return_value=0)
+
+        await delete_team(
+            data=DeleteTeamRequest(team_ids=["team-gone"]),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    assert sync.await_args_list[0].kwargs["team_id"] == "team-gone"
+
+
+@pytest.mark.asyncio
+async def test_invalidate_access_group_cache_deletes_the_cached_object():
+    """The mirror's cache step is what stops a revoked group granting from cache until TTL,
+    so pin that it actually reaches the delete rather than only being called."""
+    from litellm.proxy.management_helpers.access_group_team_sync import (
+        invalidate_access_group_cache,
+    )
+
+    cache, logging_obj = MagicMock(), MagicMock()
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", logging_obj),
+        patch(
+            "litellm.proxy.management_helpers.access_group_team_sync._delete_cache_access_object",
+            new_callable=AsyncMock,
+        ) as delete_cached,
+    ):
+        await invalidate_access_group_cache("ag-1")
+
+    assert delete_cached.await_args.kwargs == {
+        "access_group_id": "ag-1",
+        "user_api_key_cache": cache,
+        "proxy_logging_obj": logging_obj,
+    }
