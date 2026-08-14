@@ -388,6 +388,70 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
         }, f"array branch must have items synthesized; got {branch}"
 
 
+def test_build_vertex_schema_tuple_form_items_become_anyof():
+    """
+    Regression: tuple-form `items` (`"items": [{...}, {...}]`, valid JSON Schema)
+    used to crash the transform with `'list' object has no attribute 'get'`,
+    surfacing as litellm.APIConnectionError on every vertex_ai request carrying
+    such a tool schema.
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "pair": {
+                "type": "array",
+                "items": [{"type": "integer"}, {"type": "string"}],
+            }
+        },
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    assert result["properties"]["pair"]["items"] == {
+        "anyOf": [{"type": "integer"}, {"type": "string"}]
+    }
+
+
+def test_build_vertex_schema_tuple_form_items_nested_in_anyof_branch():
+    """Tuple-form `items` on an anyOf branch is reachable only if the walk
+    descends into anyOf, which is where the original crash was raised."""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "pair": {
+                "anyOf": [
+                    {"type": "array", "items": [{"type": "integer"}]},
+                    {"type": "null"},
+                ]
+            }
+        },
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    array_branch = result["properties"]["pair"]["anyOf"][0]
+    assert array_branch["items"] == {"anyOf": [{"type": "integer"}]}
+
+
+def test_build_vertex_schema_empty_tuple_form_items():
+    """An empty `items: []` has no branches to fold into anyOf, so it takes the
+    same path as `items: {}` rather than raising on a zero-length anyOf."""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {"pair": {"type": "array", "items": []}},
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    assert result["properties"]["pair"]["items"] == {"type": "object"}
+
+
 def test_vertex_ai_complex_response_schema():
     import json
     from copy import deepcopy

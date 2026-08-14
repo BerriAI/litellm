@@ -597,6 +597,8 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
+    _normalize_tuple_items(parameters)
+
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
@@ -770,6 +772,39 @@ def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str],
             result[key] = value
 
     return result
+
+
+def _normalize_tuple_items(schema: dict[str, Any], depth: int = 0) -> None:
+    """Rewrite tuple-form `items` (a list of sub-schemas) as `anyOf`.
+
+    JSON Schema allows it, Vertex's Schema type does not, and every walker below
+    reads `items` as a single sub-schema, so a list there crashes them.
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+
+    tuple_items: Final = schema.get("items", None)
+    if isinstance(tuple_items, list):
+        if tuple_items:
+            schema["items"] = {"anyOf": tuple_items}  # mutable-ok: every walker here rewrites the schema tree in place
+        else:
+            schema.pop("items")
+
+    properties: Final = schema.get("properties", None)
+    if properties is not None:
+        for value in properties.values():
+            _normalize_tuple_items(value, depth=depth + 1)
+
+    items: Final = schema.get("items", None)
+    if items is not None:
+        _normalize_tuple_items(items, depth=depth + 1)
+
+    for key in ("anyOf", "oneOf", "allOf"):
+        values = schema.get(key, None)
+        if values is not None and isinstance(values, list):
+            for value in values:
+                if isinstance(value, dict):
+                    _normalize_tuple_items(value, depth=depth + 1)
 
 
 def convert_anyof_null_to_nullable(schema, depth=0):
