@@ -313,6 +313,7 @@ def _build_logger(**overrides):
 
 @pytest.fixture
 def _no_authority_host_env(monkeypatch):
+    monkeypatch.delenv("AZURE_SENTINEL_AUTHORITY_HOST", raising=False)
     monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
 
 
@@ -389,3 +390,27 @@ async def test_azure_sentinel_token_request_uses_sovereign_authority_and_audienc
     assert len(token_calls) == 1
     assert token_calls[0].kwargs["url"] == "https://login.microsoftonline.us/test-tenant-id/oauth2/v2.0/token"
     assert token_calls[0].kwargs["data"]["scope"] == "https://monitor.azure.us/.default"
+
+
+def test_azure_sentinel_authority_host_prefers_the_sentinel_scoped_env_var(_no_authority_host_env, monkeypatch):
+    """AZURE_AUTHORITY_HOST is shared with Azure OpenAI and the azure_storage callback, so a deployment
+    whose Sentinel workspace lives in a different cloud than the rest of its Azure resources needs a
+    Sentinel-scoped override. This mirrors how tenant, client id and secret already resolve."""
+    monkeypatch.setenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com")
+    monkeypatch.setenv("AZURE_SENTINEL_AUTHORITY_HOST", "https://login.microsoftonline.us")
+
+    logger = _build_logger()
+
+    assert logger.authority_host == "https://login.microsoftonline.us"
+    assert logger.oauth_scope == "https://monitor.azure.us/.default"
+
+
+def test_azure_sentinel_authority_host_argument_outranks_the_scoped_env_var(_no_authority_host_env, monkeypatch):
+    """An explicit constructor argument is the most specific source and has to win, otherwise a
+    deployment that exports the scoped variable silently overrides an SDK caller."""
+    monkeypatch.setenv("AZURE_SENTINEL_AUTHORITY_HOST", "https://login.microsoftonline.us")
+
+    logger = _build_logger(authority_host="https://login.microsoftonline.com")
+
+    assert logger.authority_host == "https://login.microsoftonline.com"
+    assert logger.oauth_scope == "https://monitor.azure.com/.default"

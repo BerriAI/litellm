@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test": "vitest",
     "test:dot": "vitest --reporter=dot",
+    "test:types": "vitest --run --typecheck.only",
     "test:watch": "vitest -w",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",

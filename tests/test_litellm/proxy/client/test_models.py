@@ -143,7 +143,7 @@ def test_list_invalid_api_keys(base_url, api_key):
     assert "Authorization" not in request.headers
 
 
-def test_client_initialization_strips_trailing_slash():
+def test_models_client_initialization_strips_trailing_slash():
     """Test that the client properly strips trailing slashes from base_url during initialization"""
     client = ModelsManagementClient(base_url="http://localhost:8000/////")
     assert client._base_url == "http://localhost:8000"

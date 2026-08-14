@@ -109,7 +109,7 @@ if MCP_AVAILABLE:
     ############ MCP Server REST API Routes #################
     async def _safe_fire_mcp_tool_call_logging(
         logging_obj: Any | None,
-        result: Any,
+        result: "CallToolResult",
         start_time: datetime,
         end_time: datetime,
         user_api_key_auth: UserAPIKeyAuth | None = None,
