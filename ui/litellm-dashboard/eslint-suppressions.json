@@ -140,9 +140,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/purity": {
       "count": 1
     },
@@ -299,11 +296,6 @@
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailDetail.tsx": {
     "no-nested-ternary": {
       "count": 3
-    }
-  },
-  "src/app/(dashboard)/guardrails-monitor/_components/GuardrailsMonitorView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailsOverview.tsx": {
@@ -1484,9 +1476,6 @@
   "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/usage/_components/components/UsageAIChatPanel.tsx": {
@@ -1505,9 +1494,6 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/purity": {
@@ -1736,32 +1722,9 @@
       "count": 1
     }
   },
-  "src/components/EntityUsageExport/ExportSummary.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/EntityUsageExport/UsageExportHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/EntityUsageExport/types.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/EntityUsageExport/utils.test.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/EntityUsageExport/utils.ts": {
     "max-params": {
       "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/GuardrailSettingsView.tsx": {
@@ -3220,9 +3183,6 @@
   },
   "src/components/user_agent_activity.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
