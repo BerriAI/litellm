@@ -606,3 +606,23 @@ def test_transform_messages_strips_both_reasoning_fields():
 
     assert all("thinking_blocks" not in m and "reasoning_content" not in m for m in result)
     assert result[1]["content"][0]["summary"][0]["signature"] == "sig-abc"
+
+
+def test_existing_reasoning_block_is_not_duplicated():
+    """Databricks rejects a message holding two reasoning blocks, so a message that already
+    carries one keeps it and the redundant thinking_blocks are dropped instead."""
+    already_converted = {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "earlier", "signature": "sig-earlier"}],
+    }
+
+    result = DatabricksConfig()._move_reasoning_into_content_block(
+        {
+            "role": "assistant",
+            "content": [already_converted, {"type": "text", "text": "391"}],
+            "thinking_blocks": [{"type": "thinking", "thinking": "later", "signature": "sig-later"}],
+        }
+    )
+
+    assert "thinking_blocks" not in result
+    assert [b for b in result["content"] if b.get("type") == "reasoning"] == [already_converted]

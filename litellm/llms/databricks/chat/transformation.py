@@ -481,38 +481,44 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         Databricks rejects both message-level keys outright, and constrains the replacement to
         exactly one reasoning block holding exactly one summary entry, whose signature is
-        required. Blocks without a signature cannot be replayed, so the keys are dropped rather
-        than sent in a form the API refuses. reasoning_content is a plain-text mirror of the
-        same thinking, so it carries nothing the signed summary does not.
+        required. Blocks without a signature cannot be replayed, and a message already carrying
+        a reasoning block must not gain a second one, so in both cases the keys are dropped
+        rather than sent in a form the API refuses. reasoning_content is a plain-text mirror of
+        the same thinking, so it carries nothing the signed summary does not.
         """
-        transformed_message: Final = cast(dict[str, Any], message.copy())
-        thinking_blocks: Final = transformed_message.pop("thinking_blocks", None)
-        transformed_message.pop("reasoning_content", None)
-        signed_block: Final = next(
-            (block for block in thinking_blocks or [] if isinstance(block, dict) and block.get("signature")),
-            None,
+        stripped: Final = cast(
+            dict[str, Any],
+            {key: value for key, value in message.items() if key not in ("thinking_blocks", "reasoning_content")},
         )
-        if signed_block is None:
-            return cast(AllMessageValues, transformed_message)
-
-        content: Final = transformed_message.get("content")
+        content: Final = stripped.get("content")
         existing_blocks: Final = (
             [{"type": "text", "text": content}] if isinstance(content, str) and content else list(content or [])
         )
-        transformed_message["content"] = [
-            {
-                "type": "reasoning",
-                "summary": [
-                    {
-                        "type": "summary_text",
-                        "text": signed_block.get("thinking") or "",
-                        "signature": signed_block["signature"],
-                    }
-                ],
-            },
-            *existing_blocks,
-        ]
-        return cast(AllMessageValues, transformed_message)
+        if any(isinstance(block, dict) and block.get("type") == "reasoning" for block in existing_blocks):
+            return cast(AllMessageValues, stripped)
+
+        signed_block: Final = next(
+            (
+                block
+                for block in message.get("thinking_blocks") or []
+                if isinstance(block, dict) and block.get("signature")
+            ),
+            None,
+        )
+        if signed_block is None:
+            return cast(AllMessageValues, stripped)
+
+        reasoning_block: Final = {
+            "type": "reasoning",
+            "summary": [
+                {
+                    "type": "summary_text",
+                    "text": signed_block.get("thinking") or "",
+                    "signature": signed_block["signature"],
+                }
+            ],
+        }
+        return cast(AllMessageValues, {**stripped, "content": [reasoning_block, *existing_blocks]})
 
     @staticmethod
     def extract_content_str(
