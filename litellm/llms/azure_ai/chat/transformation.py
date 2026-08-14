@@ -21,7 +21,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import _add_path_to_api_base, supports_tool_choice
+from litellm.utils import _add_path_to_api_base, supports_reasoning, supports_tool_choice
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -56,6 +56,146 @@ class AzureAIStudioConfig(OpenAIConfig):
             xai_config: Final = XAIChatConfig()
             return xai_config._supports_stop_reason(model)
         return True
+
+    # Kimi on Azure AI Foundry (native + Fireworks FW-* catalog) follows the same
+    # Moonshot chat contract: https://platform.kimi.ai/docs/guide/kimi-k3-quickstart
+    _KIMI_K3_FIXED_SAMPLING_PARAMS: Final = (
+        "temperature",
+        "top_p",
+        "n",
+        "presence_penalty",
+        "frequency_penalty",
+    )
+    _KIMI_K3_REASONING_EFFORT_VALUES: Final = frozenset({"low", "high", "max"})
+
+    def _normalize_azure_ai_model_id(self, model: str) -> str:
+        return model.split("/")[-1].lower()
+
+    def _is_kimi_reasoning_model(self, model: str) -> bool:
+        """
+        True for Kimi reasoning models on Azure AI Foundry / Fireworks catalog.
+
+        Name matching covers FW-Kimi-* and native kimi-k2.5+ / kimi-k3 ids even when
+        the local cost map has not been refreshed yet. Cost-map supports_reasoning is
+        a fallback for future azure_ai Kimi entries.
+        """
+        model_id = self._normalize_azure_ai_model_id(model)
+        if model_id.startswith("fw-kimi") or model_id.startswith("kimi-k2.") or model_id.startswith("kimi-k3"):
+            return True
+        if "kimi-k3" in model_id:
+            return True
+        try:
+            return supports_reasoning(model=model, custom_llm_provider="azure_ai")
+        except Exception:
+            return False
+
+    def _is_kimi_k3_model(self, model: str) -> bool:
+        model_id = self._normalize_azure_ai_model_id(model)
+        return model_id == "fw-kimi-k3" or "kimi-k3" in model_id
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        optional_params = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+        if not self._is_kimi_reasoning_model(model):
+            return optional_params
+
+        # Reasoning Kimi rejects non-default temperature (Moonshot + Foundry Fireworks)
+        optional_params.pop("temperature", None)
+
+        if self._is_kimi_k3_model(model):
+            # K3 fixes sampling server-side; omit or the Foundry gateway returns 400
+            for param in self._KIMI_K3_FIXED_SAMPLING_PARAMS:
+                optional_params.pop(param, None)
+            # Parent OpenAI mapping may omit reasoning_effort; K3 accepts low/high/max
+            if "reasoning_effort" in non_default_params:
+                effort = non_default_params["reasoning_effort"]
+                if effort in self._KIMI_K3_REASONING_EFFORT_VALUES:
+                    optional_params["reasoning_effort"] = effort
+                else:
+                    # Claude Code / Anthropic adapters often emit "medium"
+                    optional_params.pop("reasoning_effort", None)
+
+        return optional_params
+
+    @staticmethod
+    def _thinking_blocks_to_text(thinking_blocks: object) -> str:
+        if not isinstance(thinking_blocks, list):
+            return ""
+        parts: list[str] = []
+        for block in thinking_blocks:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("thinking") or block.get("text") or ""
+            if isinstance(text, str) and text.strip():
+                parts.append(text)
+        return "\n".join(parts)
+
+    def fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
+        """
+        Kimi on Azure Foundry:
+        1) Strip LiteLLM/Anthropic `thinking_blocks` (Foundry: Extra inputs not permitted).
+        2) Require `reasoning_content` on assistant messages with tool_calls.
+        """
+        result: Final[list[AllMessageValues]] = []
+        for msg in messages:
+            has_tb = "thinking_blocks" in msg and msg.get("thinking_blocks") is not None
+            needs_rc = (
+                msg.get("role") == "assistant"
+                and msg.get("tool_calls")
+                and not msg.get("reasoning_content")
+            )
+            if not has_tb and not needs_rc:
+                result.append(msg)
+                continue
+
+            patched = dict(cast(dict, msg))
+            thinking_text = self._thinking_blocks_to_text(patched.pop("thinking_blocks", None))
+            provider_fields = patched.get("provider_specific_fields")
+            if isinstance(provider_fields, dict):
+                provider_fields = dict(provider_fields)
+                provider_fields.pop("thinking_blocks", None)
+                stored = provider_fields.pop("reasoning_content", None)
+                patched["provider_specific_fields"] = provider_fields
+            else:
+                stored = None
+
+            if (
+                patched.get("role") == "assistant"
+                and patched.get("tool_calls")
+                and not patched.get("reasoning_content")
+            ):
+                if stored:
+                    patched["reasoning_content"] = stored
+                elif thinking_text:
+                    patched["reasoning_content"] = thinking_text
+                else:
+                    litellm.verbose_logger.warning(
+                        "Azure AI Kimi reasoning model: assistant tool-call message is missing "
+                        "`reasoning_content`. Injecting a placeholder to satisfy API validation. "
+                        "For best results, preserve `reasoning_content` from the original "
+                        "assistant response when building multi-turn conversation history."
+                    )
+                    patched["reasoning_content"] = " "
+            elif (
+                patched.get("role") == "assistant"
+                and thinking_text
+                and not patched.get("reasoning_content")
+            ):
+                patched["reasoning_content"] = thinking_text
+
+            result.append(cast(AllMessageValues, patched))
+        return result
+
 
     def validate_environment(
         self,
@@ -222,7 +362,20 @@ class AzureAIStudioConfig(OpenAIConfig):
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
-        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+        if self._is_kimi_reasoning_model(model):
+            messages = self.fill_reasoning_content(messages)
+        payload: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        if self._is_kimi_reasoning_model(model):
+            payload_messages = payload.get("messages")
+            if isinstance(payload_messages, list):
+                cleaned: list = []
+                for msg in payload_messages:
+                    if isinstance(msg, dict) and "thinking_blocks" in msg:
+                        msg = dict(msg)
+                        msg.pop("thinking_blocks", None)
+                    cleaned.append(msg)
+                payload["messages"] = cleaned
+        return payload
 
     def transform_response(
         self,
@@ -286,8 +439,22 @@ class AzureAIStudioConfig(OpenAIConfig):
             request_data = self._drop_extra_params_from_request_data(request_data, error_text)
         if "Extra inputs are not permitted" in error_text and self._error_has_tool_level_extra_fields(error_text):
             request_data = self._drop_tool_level_extra_fields(request_data, error_text)
+        if "Extra inputs are not permitted" in error_text:
+            request_data = self._drop_message_level_extra_fields(request_data, error_text)
         data: Final = drop_params_from_unprocessable_entity_error(e=e, data=request_data)
         return data
+
+    def _drop_message_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
+        """Strip fields Azure reports as messages[N].field (e.g. thinking_blocks)."""
+        fields: Final = set(re.findall(r"messages\[\d+\]\.([\w-]+)", error_text))
+        messages = request_data.get("messages")
+        if not fields or not isinstance(messages, list):
+            return request_data
+        for msg in messages:
+            if isinstance(msg, dict):
+                for field in fields:
+                    msg.pop(field, None)
+        return request_data
 
     def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
         fields_to_drop: Final = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))

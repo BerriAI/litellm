@@ -98,6 +98,28 @@ def _build_responses_kwargs(
     if stream:
         responses_kwargs["stream"] = True
 
+    # Foundry Kimi: drop fixed sampling and unsupported reasoning.effort values.
+    _model_id = (model or "").split("/")[-1].lower()
+    _is_kimi = (
+        _model_id.startswith("fw-kimi")
+        or _model_id.startswith("kimi-k2.")
+        or "kimi-k3" in _model_id
+    )
+    if _is_kimi:
+        for _param in (
+            "temperature",
+            "top_p",
+            "n",
+            "presence_penalty",
+            "frequency_penalty",
+        ):
+            responses_kwargs.pop(_param, None)
+        _reasoning = responses_kwargs.get("reasoning")
+        if isinstance(_reasoning, dict):
+            _effort = _reasoning.get("effort")
+            if _effort not in ("low", "high", "max"):
+                responses_kwargs.pop("reasoning", None)
+
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
     excluded: Final = {"anthropic_messages"}
     for key, value in (extra_kwargs or {}).items():
