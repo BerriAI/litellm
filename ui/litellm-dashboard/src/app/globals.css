@@ -242,3 +242,13 @@
 [data-slot="dialog-content"][data-nested-dialog-open] {
   visibility: hidden;
 }
+
+/* Base UI portals a popup into an `isolate z-50` positioner, which an antd Modal at z-index 1000
+   then paints over, so options on a half-migrated page are visible but not clickable. The
+   positioner is not reachable from the call site, hence the parent selector. Delete this once no
+   route renders an antd Modal. */
+body:has(.ant-modal-wrap) div:has(> [data-slot="select-content"]),
+body:has(.ant-modal-wrap) div:has(> [data-slot="combobox-content"]),
+body:has(.ant-modal-wrap) div:has(> [data-slot="tooltip-content"]) {
+  z-index: 1100;
+}

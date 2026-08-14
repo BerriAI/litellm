@@ -5,7 +5,7 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -1035,7 +1035,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
 @runtime_checkable
 class _HasModelDump(Protocol):
-    def model_dump(self, *, exclude_none: bool = ...) -> Mapping[str, object]: ...
+    def model_dump(self, *, exclude_none: bool = ...) -> dict[str, object]: ...
 
 
 @runtime_checkable
@@ -1043,8 +1043,8 @@ class _HasModelDumpJson(Protocol):
     def model_dump_json(self, *, exclude_none: bool = ...) -> str: ...
 
 
-def _dump_response_object(obj: Any) -> dict[str, Any]:
-    if hasattr(obj, "model_dump"):
+def _dump_response_object(obj: object) -> dict[str, Any]:
+    if isinstance(obj, _HasModelDump):
         return obj.model_dump()
     if _is_json_object(obj):
         return obj
@@ -1134,7 +1134,8 @@ def _add_text_like_part_events(
                     delta=text[i : i + chunk_size],
                 )
             )
-        for annotation_index, annotation in enumerate(part_payload.get("annotations", []) or []):
+        annotations_payload: Final[Sequence[dict[str, object]]] = part_payload.get("annotations", []) or []
+        for annotation_index, annotation in enumerate(annotations_payload):
             events.append(
                 openai_types.OutputTextAnnotationAddedEvent(
                     type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
@@ -1200,7 +1201,8 @@ def _build_synthetic_response_events(
     ]
 
     sequence_number = 0
-    for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
+    output_items: Final[Sequence[object]] = getattr(transformed, "output", []) or []
+    for output_index, output_item in enumerate(output_items):
         output_item_payload = _dump_response_object(output_item)
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
@@ -1214,7 +1216,8 @@ def _build_synthetic_response_events(
         )
 
         if item_type == "message":
-            for content_index, part in enumerate(output_item_payload.get("content", []) or []):
+            content_parts: Sequence[object] = output_item_payload.get("content", []) or []
+            for content_index, part in enumerate(content_parts):
                 part_payload = _dump_response_object(part)
                 events.append(
                     openai_types.ContentPartAddedEvent(
@@ -1261,7 +1264,8 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            for summary_index, summary in enumerate(output_item_payload.get("summary", []) or []):
+            summaries: Sequence[object] = output_item_payload.get("summary", []) or []
+            for summary_index, summary in enumerate(summaries):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
                 for i in range(0, len(summary_text), chunk_size):
@@ -1463,7 +1467,8 @@ class ResponsesWebSocketStreaming:
                 # masked response.completed.
                 if self.output_guardrail_callbacks:
                     try:
-                        _evt_type = json.loads(response_str).get("type")
+                        _evt_payload: Mapping[str, object] = json.loads(response_str)
+                        _evt_type = _evt_payload.get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
                     if _evt_type in self._DELTA_EVENT_TYPES or _evt_type in self._OUTPUT_DONE_EVENT_TYPES:
@@ -1527,7 +1532,7 @@ class ResponsesWebSocketStreaming:
         Non-``response.create`` messages are returned unchanged.
         """
         try:
-            msg_obj: Final = json.loads(message)
+            msg_obj: Final[dict[str, object]] = json.loads(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -1544,7 +1549,8 @@ class ResponsesWebSocketStreaming:
             self.request_data["metadata"] = {}
 
         modified = model_modified
-        for cb in self.guardrail_callbacks:
+        guardrail_cbs: Final[tuple[PresidioGuardrailCallback, ...]] = tuple(self.guardrail_callbacks)
+        for cb in guardrail_cbs:
             presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
             # response.create carries client text in two shapes:
             #   flat:   {"type": "response.create", "input": ..., "instructions": ...}
@@ -1655,7 +1661,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         try:
-            evt_obj: Final = json.loads(response_str)
+            evt_obj: Final[dict[str, object]] = json.loads(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -2012,7 +2018,7 @@ class ManagedResponsesWebSocketHandler:
     async def _parse_message(self, raw_message: str) -> dict[str, object] | None:
         """Parse raw WS text; return the message dict or None (JSON error / ignored type)."""
         try:
-            msg_obj: Final = json.loads(raw_message)
+            msg_obj: Final[dict[str, object]] = json.loads(raw_message)
         except json.JSONDecodeError:
             await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
             return None
@@ -2293,11 +2299,10 @@ class ManagedResponsesWebSocketHandler:
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        requested_model: Final = call_kwargs.pop("model", None)
-        if requested_model is None or requested_model == self.model_group:
-            model = self.model
-        else:
-            model = requested_model
+        requested_model: Final[str | None] = call_kwargs.pop("model", None)
+        model: Final[str] = (
+            self.model if requested_model is None or requested_model == self.model_group else requested_model
+        )
 
         previous_response_id: Final[str | None] = call_kwargs.pop("previous_response_id", None)
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))

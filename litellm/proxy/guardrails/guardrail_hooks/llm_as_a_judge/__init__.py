@@ -1,16 +1,20 @@
 """LLM-as-a-Judge guardrail: uses an LLM to score responses against weighted criteria."""
 
-import json
-import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.llm_judge import (
+    default_router_provider,
+    extract_text_from_content,
+    judge_acompletion,
+    parse_json_verdict,
+)
 from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
@@ -32,50 +36,9 @@ Return ONLY valid JSON in this exact format:
 
 _VALID_ON_FAILURE: Final = frozenset({"block", "log"})
 
-
-def _default_router_provider() -> "Router | None":
-    try:
-        from litellm.proxy.proxy_server import llm_router
-    except ImportError:
-        return None
-
-    return llm_router
-
-
-_JSON_FENCE_RE: Final = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
-
-
-def _parse_judge_verdict(raw: str) -> dict[str, Any]:
-    """Parse the judge's JSON verdict, tolerating markdown fences and surrounding prose."""
-    text = raw.strip()
-    fenced: Final = _JSON_FENCE_RE.search(text)
-    if fenced is not None:
-        text = fenced.group(1).strip()
-    parsed: object
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        start: Final = text.find("{")
-        end: Final = text.rfind("}")
-        if start == -1 or end <= start:
-            raise
-        parsed = json.loads(text[start : end + 1])
-    if not isinstance(parsed, dict):
-        raise ValueError("judge response is not a JSON object")
-    return cast(dict[str, Any], parsed)  # cast-ok: narrowed to dict by the isinstance guard above
-
-
-def _extract_text_from_content(content: Any) -> str:
-    """Return plain text from a message content field (str or multimodal list)."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: Final = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                parts.append(part.get("text", ""))
-        return " ".join(parts)
-    return ""
+_default_router_provider: Final = default_router_provider
+_parse_judge_verdict: Final = parse_json_verdict
+_extract_text_from_content: Final = extract_text_from_content
 
 
 def _get_litellm_param(
@@ -168,25 +131,13 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 "content": _build_judge_prompt(self.criteria, messages, response_text),
             },
         ]
-        router: Final = self._router_provider()
-        if router is not None and (
-            self.judge_model in router.model_group_alias or router.get_model_list(model_name=self.judge_model)
-        ):
-            response = await router.acompletion(
-                model=self.judge_model,
-                messages=judge_messages,
-                response_format={"type": "json_object"},
-                temperature=0,
-                num_retries=0,
-                fallbacks=[],
-            )
-        else:
-            response = await litellm.acompletion(
-                model=self.judge_model,
-                messages=judge_messages,
-                response_format={"type": "json_object"},
-                temperature=0,
-            )
+        response: Final = await judge_acompletion(
+            self._router_provider(),
+            self.judge_model,
+            judge_messages,
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
         raw: Final = response.choices[0].message.content or "{}"
         return _parse_judge_verdict(raw)
 

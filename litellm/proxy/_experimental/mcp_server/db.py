@@ -552,13 +552,20 @@ async def get_all_mcp_servers(
 ) -> list[LiteLLM_MCPServerTable]:
     """
     Returns mcp servers from the db, optionally filtered by approval_status.
-    Pass approval_status=None to return all servers regardless of approval state.
+    Pass approval_status=None to return every server except drafts, which back the admin OAuth
+    session flow, are addressable only by their own server_id, and must never appear in a listing.
+    NULL approval_status predates the approval workflow, so those rows are kept explicitly rather
+    than dropped by a bare inequality, which SQL evaluates as NULL and would silently hide them.
     """
     try:
-        where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {}
-        if approval_status is not None:
-            where["approval_status"] = approval_status
-        mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client, where if where else {})
+        where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = (
+            {"approval_status": approval_status}
+            if approval_status is not None
+            # mutable-ok: prisma where-inputs must be plain dicts, and both `NOT` and `not` drop
+            # NULL rows (measured), so the OR is the only NULL-preserving way to exclude drafts
+            else {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]}
+        )
+        mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client, where)
 
         tables: Final = [LiteLLM_MCPServerTable.model_validate(mcp_server.model_dump()) for mcp_server in mcp_servers]
         for table in tables:
@@ -812,6 +819,96 @@ async def create_mcp_server(
 
     _decrypt_env_vars_on_returned_row(new_mcp_server)
     return new_mcp_server
+
+
+async def create_draft_mcp_server(
+    prisma_client: PrismaClient,
+    data: NewMCPServerRequest,
+    touched_by: str,
+    ttl_seconds: int,
+    server_id: str | None = None,
+) -> LiteLLM_MCPServerTable:
+    """
+    Persist a short-lived draft row backing the admin OAuth "Authorize & Fetch Token" flow.
+
+    The draft lives in the database rather than in process memory so that the /register,
+    /authorize and /token legs resolve it whichever worker or replica accepts each request.
+
+    Writing is strictly create-if-absent. Any existing row for the id is returned untouched, which
+    covers both a live draft for this same session and a real server the edit form is
+    re-authorizing against its own id, where writing a draft would collide on the primary key.
+    Each click of Authorize mints a fresh id, so nothing is lost by never overwriting, and it is
+    what makes concurrent callers sharing one id safe rather than mutually destructive.
+    """
+    draft_id: Final = server_id or data.server_id or str(uuid.uuid4())
+    await _prune_expired_draft_mcp_servers(prisma_client, ttl_seconds)
+
+    existing: Final = await _db_find_mcp_server_row(prisma_client, draft_id)
+    if existing is not None:
+        # Already usable by every worker, whether it is a live draft for this same session or a
+        # real server the edit form is re-authorizing. Either way there is nothing to write, and
+        # not writing is what keeps concurrent callers for one server_id from racing each other.
+        return LiteLLM_MCPServerTable.model_validate(existing.model_dump())
+
+    draft_payload: Final = data.model_copy(update={"server_id": draft_id, "approval_status": MCPApprovalStatus.draft})
+    try:
+        return await create_mcp_server(prisma_client, draft_payload, touched_by)
+    except Exception:
+        # Lost the create race: the read above and this create are two statements, not one. The
+        # winner wrote a draft for this same session, so adopt it rather than failing a caller
+        # whose session is in fact ready. Anything else still raises.
+        raced: Final = await _db_find_mcp_server_row(prisma_client, draft_id)
+        if raced is None or raced.approval_status != MCPApprovalStatus.draft:
+            raise
+        return LiteLLM_MCPServerTable.model_validate(raced.model_dump())
+
+
+async def _prune_expired_draft_mcp_servers(prisma_client: PrismaClient, ttl_seconds: int) -> None:
+    """Drop drafts already past ``ttl_seconds``, so abandoned OAuth sessions do not accumulate.
+
+    Runs on each draft write rather than on a schedule, mirroring the in-memory cache this
+    replaces, which pruned on every store. Expired drafts are unreadable by then anyway, so the
+    only thing at stake is row count, and the work is bounded by how often admins authorize.
+    """
+    cutoff: Final = datetime.now(timezone.utc) - timedelta(seconds=max(1, ttl_seconds))
+    # Age is filtered here rather than in the query: the draft set is bounded by how many OAuth
+    # authorizations are in flight, so it is a handful of rows even on a busy proxy.
+    drafts: Final = await _db_find_mcp_server_rows(
+        prisma_client,
+        where={"approval_status": MCPApprovalStatus.draft},
+    )
+    for row in drafts:
+        # A row without a timestamp has no age to judge, so leave it rather than guess it is stale.
+        # Two workers sweeping the same row is harmless: prisma's delete returns None for a row
+        # that is already gone rather than raising, so the loser of that race is a no-op.
+        if row.updated_at is not None and row.updated_at < cutoff:
+            await delete_mcp_server(prisma_client, row.server_id)
+
+
+async def get_draft_mcp_server(
+    prisma_client: PrismaClient, server_id: str, ttl_seconds: int
+) -> LiteLLM_MCPServerTable | None:
+    """
+    Return the draft row for ``server_id`` if it has not yet aged past ``ttl_seconds``, else None.
+
+    Age is enforced in the query rather than by a sweeper so an expired draft is unreadable the
+    moment it lapses, regardless of which process last ran a cleanup.
+    """
+    cutoff: Final = datetime.now(timezone.utc) - timedelta(seconds=max(1, ttl_seconds))
+    draft_rows: Final = await _db_find_mcp_server_rows(
+        prisma_client,
+        where={
+            "server_id": server_id,
+            "approval_status": MCPApprovalStatus.draft,
+            "updated_at": {"gte": cutoff},
+        },
+    )
+    if not draft_rows:
+        return None
+
+    table: Final = LiteLLM_MCPServerTable.model_validate(draft_rows[0].model_dump())
+    decrypt_global_env_var_values(table.env_vars)
+    return table
 
 
 async def update_mcp_server(
