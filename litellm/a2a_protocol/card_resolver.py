@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from a2a.types import AgentCard
 
 # Runtime imports with availability check
-_A2ACardResolver: Any = None
+_A2ACardResolver: Any = object
 AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
 PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
 

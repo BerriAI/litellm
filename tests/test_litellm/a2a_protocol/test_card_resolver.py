@@ -4,6 +4,10 @@ Mock tests for LiteLLMA2ACardResolver.
 Tests that the card resolver tries both old and new well-known paths.
 """
 
+import os
+import subprocess
+import sys
+import textwrap
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +19,45 @@ from litellm.a2a_protocol.card_resolver import (
     is_localhost_or_internal_url,
     set_agent_card_url,
 )
+
+
+def test_a2a_protocol_imports_when_a2a_sdk_is_missing():
+    """
+    a2a-sdk is an optional dependency, so the proxy degrades by reading A2A_SDK_AVAILABLE and
+    returning a JSON-RPC "'a2a' package not installed" error. Reading that flag imports this
+    module, so importing it with the SDK absent must not raise.
+
+    Runs in a subprocess because the check is about import time, and a2a-sdk is installed in CI.
+    """
+    script = textwrap.dedent(
+        """
+        import sys
+
+        class _BlockA2A:
+            def find_spec(self, name, path=None, target=None):
+                if name == "a2a" or name.startswith("a2a."):
+                    raise ModuleNotFoundError(f"No module named '{name}'")
+                return None
+
+        sys.meta_path.insert(0, _BlockA2A())
+
+        from litellm.a2a_protocol import asend_message_streaming
+        from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
+
+        print(f"A2A_SDK_AVAILABLE={A2A_SDK_AVAILABLE}")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+    )
+
+    assert result.returncode == 0, f"importing litellm.a2a_protocol without a2a-sdk failed:\n{result.stderr}"
+    assert "A2A_SDK_AVAILABLE=False" in result.stdout
 
 
 @pytest.mark.asyncio
