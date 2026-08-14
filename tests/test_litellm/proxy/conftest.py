@@ -8,9 +8,7 @@ with database and Redis cache configuration.
 import asyncio
 import os
 import tempfile
-from collections.abc import Mapping
-from types import MappingProxyType
-from typing import Dict, Final, Optional
+from typing import Dict, Optional
 
 import pytest
 import yaml
@@ -21,9 +19,6 @@ _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
     "prisma_client",
 )
-
-_MISSING: Final = object()
-_PROXY_GLOBALS_SNAPSHOT: Final = pytest.StashKey[Mapping[str, object]]()
 
 
 class StubClientNotConnectedError(ClientNotConnectedError):
@@ -48,39 +43,47 @@ def disconnected_prisma() -> DisconnectedPrisma:
     return DisconnectedPrisma()
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_runtest_setup(item: pytest.Item) -> None:
+_MODULE_GLOBAL_MISSING = object()
+_proxy_module_globals_snapshot = pytest.StashKey[Dict[str, object]]()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item):
     """
-    Snapshot module-level globals on litellm.proxy.proxy_server that tests mutate.
+    Snapshot module-level globals on litellm.proxy.proxy_server before any
+    fixture runs, and restore them in pytest_runtest_teardown after every
+    fixture finalizer has run.
 
-    Without this, a leaked value, e.g. master_key set by a sibling test, flips the auth
-    short-circuit in user_api_key_auth and causes unrelated tests in the same xdist worker
-    to return 401 instead of 200.
-    """
-    from litellm.proxy import proxy_server
+    Without this, a leaked value (e.g. master_key set by a sibling test)
+    flips the auth short-circuit in user_api_key_auth and causes unrelated
+    tests in the same xdist worker to return 401 instead of 200.
 
-    item.stash[_PROXY_GLOBALS_SNAPSHOT] = MappingProxyType(
-        {name: getattr(proxy_server, name, _MISSING) for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE}
-    )
-
-
-@pytest.hookimpl(trylast=True)
-def pytest_runtest_teardown(item: pytest.Item) -> None:
-    """
-    Restore the snapshot after every fixture finalizer, `monkeypatch` undo included.
-
-    A fixture cannot do this: `monkeypatch` tears down after the autouse fixtures, so its undo
-    reinstalls whatever the value was when the test called setattr, which for a test that also
-    holds an autouse `patch` of the same global is that patch's mock, leaked for the rest of the
-    worker's session.
+    This must be a hook pair, not an autouse fixture: an autouse fixture in
+    the root conftest requests monkeypatch, so monkeypatch's undo stack
+    unwinds after every other fixture finalizer. A test that monkeypatches a
+    global while a fixture has it patched records the fixture's mock as the
+    "original", and monkeypatch.undo re-plants that mock after all restores
+    have run, poisoning the global for the rest of the xdist worker.
     """
     from litellm.proxy import proxy_server
 
-    snapshot: Final = item.stash.get(_PROXY_GLOBALS_SNAPSHOT, None)
+    item.stash[_proxy_module_globals_snapshot] = {
+        name: getattr(proxy_server, name, _MODULE_GLOBAL_MISSING)
+        for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
+    }
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    yield
+    snapshot = item.stash.get(_proxy_module_globals_snapshot, None)
     if snapshot is None:
         return
+    from litellm.proxy import proxy_server
+
     for name, value in snapshot.items():
-        if value is _MISSING:
+        if value is _MODULE_GLOBAL_MISSING:
             if hasattr(proxy_server, name):
                 delattr(proxy_server, name)
         else:
