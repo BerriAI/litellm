@@ -940,6 +940,51 @@ def test_operation_exception_log_event_always_carries_required_pair():
     assert ExceptionEvent.STACKTRACE not in attributes
 
 
+def test_operation_exception_log_event_is_otlp_encodable():
+    """The event must survive the real OTLP encoder, not just an in-memory exporter.
+
+    ``Event.body`` defaults to ``None`` and OTLP's ``AnyValue`` cannot represent
+    it, so an event emitted without a body raises ``Invalid type <class
+    'NoneType'>`` inside ``encode_logs``. That happens on the exporter's batch
+    thread, where ``BatchLogRecordProcessor._export_batch`` catches it, logs it
+    and drops the WHOLE batch — every record batched alongside is lost silently.
+    Every other test here uses ``InMemoryLogExporter``, which never encodes, so
+    only an explicit encode step can catch this.
+    """
+    encode_logs = pytest.importorskip(
+        "opentelemetry.exporter.otlp.proto.common._internal._log_encoder"
+    ).encode_logs
+
+    engine, _, log_exporter = _engine_with_event_recorder()
+    engine.emit(
+        SpanRole.LLM_CALL,
+        _llm_call_data(SpanError(error_type="RateLimitError", message="rate limited")),
+    )
+    logs = log_exporter.get_finished_logs()
+
+    # Raises "Invalid type <class 'NoneType'> of value None" when body is unset.
+    encode_logs(logs).SerializeToString()
+
+
+def test_operation_exception_log_event_body_is_never_none():
+    """A batch is dropped whole on an unencodable body, so this is asserted for
+    both event shapes: with and without a stacktrace."""
+    engine, _, log_exporter = _engine_with_event_recorder()
+    engine.emit(
+        SpanRole.LLM_CALL,
+        _llm_call_data(SpanError(error_type="APIError", message="boom")),
+    )
+    engine.emit(
+        SpanRole.LLM_CALL,
+        _llm_call_data(
+            SpanError(error_type="APIError", message="boom", stack_trace="Traceback ...")
+        ),
+    )
+
+    bodies = [log.log_record.body for log in log_exporter.get_finished_logs()]
+    assert bodies == ["boom", "boom"]
+
+
 def test_operation_exception_log_event_not_emitted_on_success():
     engine, span_exporter, log_exporter = _engine_with_event_recorder()
     engine.emit(SpanRole.LLM_CALL, _llm_call_data(None))
