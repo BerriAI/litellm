@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -536,6 +537,81 @@ def test_forward_headers_from_request_protected_headers_not_overwritten():
 
     # Header name must be normalized to lowercase in output
     assert "Anthropic-Beta" not in result
+
+
+def test_forward_headers_drops_client_accept_encoding():
+    """
+    A client's Accept-Encoding must not reach the vendor API: the proxy can only
+    decode what httpx supports, and an undecodable body reaches clients compressed
+    with Content-Encoding stripped (LIT-5613).
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers={
+            "accept-encoding": "br",
+            "anthropic-version": "2023-06-01",
+            "host": "localhost:4000",
+            "content-length": "123",
+        },
+        headers={"x-api-key": "sk-anthropic"},
+        forward_headers=True,
+    )
+
+    assert "accept-encoding" not in {name.lower() for name in result}
+    assert result["anthropic-version"] == "2023-06-01"
+    assert "host" not in result
+    assert "content-length" not in result
+
+
+def test_forward_headers_drops_accept_encoding_from_x_pass_prefix_and_custom_headers():
+    """
+    Neither the x-pass- mechanism nor endpoint-configured custom headers may
+    reintroduce an Accept-Encoding the proxy cannot decode.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    via_prefix = BasePassthroughUtils.forward_headers_from_request(
+        request_headers={"x-pass-accept-encoding": "br"},
+        headers={},
+        forward_headers=False,
+    )
+    via_custom_headers = BasePassthroughUtils.forward_headers_from_request(
+        request_headers={},
+        headers={"x-api-key": "sk-anthropic", "Accept-Encoding": "br"},
+        forward_headers=False,
+    )
+
+    assert "accept-encoding" not in via_prefix
+    assert "accept-encoding" not in {name.lower() for name in via_custom_headers}
+    assert via_custom_headers["x-api-key"] == "sk-anthropic"
+
+
+def test_forwarded_headers_only_advertise_encodings_httpx_can_decode():
+    """
+    The outbound request must negotiate a content coding httpx has a decoder for,
+    otherwise the vendor replies with a body the proxy passes through unreadable.
+    """
+    from httpx._decoders import SUPPORTED_DECODERS
+
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    forwarded_headers = BasePassthroughUtils.forward_headers_from_request(
+        request_headers={"accept-encoding": "br, zstd, exotic"},
+        headers={"x-api-key": "sk-anthropic"},
+        forward_headers=True,
+    )
+    with httpx.Client(headers={"user-agent": "litellm/test"}) as client:
+        upstream_request = client.build_request(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers=forwarded_headers,
+        )
+
+    advertised = {value.strip().lower() for value in upstream_request.headers["accept-encoding"].split(",")}
+
+    assert advertised
+    assert advertised <= set(SUPPORTED_DECODERS)
 
 
 def test_forward_headers_custom_wins_case_insensitive_over_request_authorization():
