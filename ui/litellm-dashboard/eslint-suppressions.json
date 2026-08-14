@@ -2291,11 +2291,6 @@
       "count": 2
     }
   },
-  "src/components/common_components/AutoRotationView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/common_components/DeleteResourceModal.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -2306,30 +2301,10 @@
       "count": 1
     }
   },
-  "src/components/common_components/IconActionButton/BaseActionButton.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/common_components/KeyLifecycleSettings.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/common_components/LabeledField.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/MemberTable.tsx": {
     "no-restricted-imports": {
       "count": 2
     }
@@ -2351,11 +2326,6 @@
   },
   "src/components/common_components/ModelSelector.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/NewBadge.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2755,9 +2725,6 @@
   },
   "src/components/organization/organization_view.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
