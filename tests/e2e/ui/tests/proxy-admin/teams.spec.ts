@@ -129,7 +129,7 @@ test.describe("Proxy Admin - Teams", () => {
     await teamRow.locator('[data-testid^="team-actions-"]').click();
     await page.getByTestId("team-action-delete").click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Delete Team?" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.locator("input").fill(E2E_TEAM_DELETE_ALIAS);
     await modal.getByRole("button", { name: /Force Delete|Delete/i }).click();
