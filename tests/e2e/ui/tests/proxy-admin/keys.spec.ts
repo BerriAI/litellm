@@ -40,11 +40,11 @@ test.describe("Proxy Admin - Keys", () => {
     const keyName = `e2e-admin-key-${Date.now()}`;
     await page.getByTestId("base-input").fill(keyName);
 
-    // Select team — the team dropdown has placeholder "Search or select a team"
-    const teamSelect = page.locator(".ant-select", { hasText: "Search or select a team" });
+    // Select team
+    const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await page.locator(".ant-select-dropdown:visible").getByText(E2E_TEAM_CRUD_ALIAS).first().click();
+    await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ALIAS).first().click();
 
     // Select models
     await page.locator(".ant-select-selection-overflow").click();
@@ -157,7 +157,7 @@ test.describe("Proxy Admin - Keys", () => {
     await page.getByRole("button", { name: "More key actions" }).click();
     await page.getByRole("menuitem", { name: "Delete Key" }).click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Delete Key" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.locator("input").fill(E2E_DELETE_KEY_ALIAS);
 
