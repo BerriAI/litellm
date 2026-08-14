@@ -1772,18 +1772,10 @@
   "src/components/GuardrailsMonitor/LogViewer.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/HelpLink.test.tsx": {
     "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/ModelSelect/ModelSelect.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2239,9 +2231,6 @@
     }
   },
   "src/components/claude_code_plugins/MakeSkillPublicForm.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -2760,9 +2749,6 @@
     },
     "max-lines": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/query_param_input.tsx": {
