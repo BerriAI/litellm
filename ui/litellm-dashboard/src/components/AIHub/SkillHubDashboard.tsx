@@ -1,12 +1,14 @@
 import React, { useMemo, useState } from "react";
-import { SearchOutlined } from "@ant-design/icons";
 import { SortingState } from "@tanstack/react-table";
-import { Input, Select } from "antd";
-import { Inbox } from "lucide-react";
+import { Inbox, Search, X } from "lucide-react";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import { DataTable } from "@/components/shared/DataTable";
 import { getSkillHubTableColumns } from "@/components/AIHub/SkillHubTableColumns";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const ALL_DOMAINS = "__all_domains__";
 
 interface SkillHubDashboardProps {
   skills: Plugin[];
@@ -48,7 +50,10 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
 
   // Derived stats
   const totalSkills = skills.length;
-  const domains = useMemo(() => [...new Set(skills.map((s) => s.domain).filter(Boolean))], [skills]);
+  const domains = useMemo(
+    () => [...new Set(skills.map((s) => s.domain).filter((domain): domain is string => Boolean(domain)))],
+    [skills],
+  );
   const namespaces = useMemo(() => [...new Set(skills.map((s) => s.namespace).filter(Boolean))], [skills]);
 
   // Filtered table data
@@ -72,6 +77,11 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   }, [skills, search, domainFilter]);
 
   const columns = useMemo(() => getSkillHubTableColumns({ onSkillClick: setSelectedSkill }), []);
+
+  const domainItems = useMemo(
+    () => [{ value: ALL_DOMAINS, label: "All Domains" }, ...domains.map((d) => ({ value: d, label: d }))],
+    [domains],
+  );
 
   const hasActiveFilter = search.trim().length > 0 || domainFilter != null;
 
@@ -111,21 +121,43 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           <h3 className="text-sm font-semibold text-gray-700">All {publicPage ? "Public " : ""}Skills</h3>
           <div className="flex items-center gap-2">
             <Select
-              placeholder="All Domains"
-              allowClear
-              value={domainFilter}
-              onChange={(val) => setDomainFilter(val)}
-              style={{ width: 160 }}
-              options={domains.map((d) => ({ label: d, value: d }))}
-            />
-            <Input
-              prefix={<SearchOutlined className="text-gray-400" />}
-              placeholder="Search by name, namespace, or tag…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={{ width: 280 }}
-              allowClear
-            />
+              items={domainItems}
+              value={domainFilter ?? ALL_DOMAINS}
+              onValueChange={(val) => setDomainFilter(val === null || val === ALL_DOMAINS ? undefined : val)}
+            >
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {domainItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <InputGroup className="w-[280px]">
+              <InputGroupAddon>
+                <Search className="size-4 text-muted-foreground" />
+              </InputGroupAddon>
+              <InputGroupInput
+                placeholder="Search by name, namespace, or tag…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              {search !== "" && (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="Clear search"
+                    onClick={() => setSearch("")}
+                  >
+                    <X className="size-3.5" />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
           </div>
         </div>
         <DataTable
