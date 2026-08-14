@@ -866,6 +866,17 @@ def _normalize_service_tier(service_tier: object) -> str | None:
     return service_tier
 
 
+def _parallel_ai_response_pricing_model(model: str, optional_params: dict | None) -> str | None:
+    from litellm.llms.parallel_ai.responses.cost_calculator import (
+        is_parallel_ai_response_model,
+        parallel_ai_response_pricing_model,
+    )
+
+    if not is_parallel_ai_response_model(model):
+        return None
+    return parallel_ai_response_pricing_model(model=model, optional_params=optional_params or {})
+
+
 def _get_usage_object(
     completion_response: Any,
 ) -> Usage | None:
@@ -1213,12 +1224,25 @@ def completion_cost(
 
         service_tier = _normalize_service_tier(service_tier)
 
+        provider_for_cost: Final = _get_provider_for_cost_calc(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+        pricing_base_model: Final = (
+            _parallel_ai_response_pricing_model(
+                model=model or "parallel",
+                optional_params=optional_params,
+            )
+            if base_model is None and custom_pricing is not True and provider_for_cost == LlmProviders.PARALLEL_AI.value
+            else base_model
+        )
+
         selected_model: Final = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
             custom_llm_provider=custom_llm_provider,
             custom_pricing=custom_pricing,
-            base_model=base_model,
+            base_model=pricing_base_model,
             router_model_id=router_model_id,
         )
 

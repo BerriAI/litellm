@@ -4,6 +4,7 @@ Tests for Parallel AI Responses API transformation.
 Source: litellm/llms/parallel_ai/responses/transformation.py
 """
 
+import json
 import os
 import sys
 
@@ -11,11 +12,41 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.llms.parallel_ai.responses.cost_calculator import parallel_ai_response_pricing_model
 from litellm.llms.parallel_ai.responses.transformation import ParallelAIResponsesConfig
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+
+
+def _parallel_response_body(response_id: str = "resp_test") -> dict[str, object]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1700000000,
+        "model": "parallel",
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "grounded answer", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
 
 
 class TestParallelAIResponsesConfig:
@@ -152,34 +183,7 @@ class TestParallelAICompletionBridge:
 
         litellm_module.model_cost = litellm_module.get_model_cost_map(url="")
 
-        respx_mock.post("https://api.parallel.ai/v1/responses").respond(
-            json={
-                "id": "resp_test",
-                "object": "response",
-                "created_at": 1700000000,
-                "model": "parallel",
-                "status": "completed",
-                "output": [
-                    {
-                        "type": "message",
-                        "id": "msg_1",
-                        "status": "completed",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "grounded answer", "annotations": []}],
-                    }
-                ],
-                "parallel_tool_calls": True,
-                "tool_choice": "auto",
-                "tools": [],
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 5,
-                    "total_tokens": 15,
-                    "input_tokens_details": {"cached_tokens": 0},
-                    "output_tokens_details": {"reasoning_tokens": 0},
-                },
-            }
-        )
+        respx_mock.post("https://api.parallel.ai/v1/responses").respond(json=_parallel_response_body())
 
         response = litellm_module.completion(
             model="parallel_ai/parallel",
@@ -255,3 +259,148 @@ class TestParallelAIEffortTierAliases:
             model="parallel", raw_response=raw, logging_obj=MagicMock()
         )
         assert response_plain.model == "parallel"
+
+
+class TestParallelAIReasoningEffortPricing:
+    @pytest.mark.parametrize(
+        "model,optional_params,expected_model",
+        [
+            ("parallel", {"reasoning": {"effort": "low"}}, "parallel_ai/parallel-low"),
+            ("parallel", {}, "parallel_ai/parallel-medium"),
+            ("parallel", {"reasoning": {"effort": "high"}}, "parallel_ai/parallel-high"),
+            ("parallel_ai/parallel", {"reasoning": {"effort": "low"}}, "parallel_ai/parallel-low"),
+            ("parallel-high", {"reasoning": {"effort": "low"}}, "parallel_ai/parallel-high"),
+        ],
+    )
+    def test_pricing_model_uses_effective_reasoning_effort(self, model, optional_params, expected_model):
+        assert parallel_ai_response_pricing_model(model=model, optional_params=optional_params) == expected_model
+
+    @pytest.mark.parametrize(
+        "model,optional_params,expected_cost",
+        [
+            ("parallel_ai/parallel", {"reasoning": {"effort": "low"}}, 0.01),
+            ("parallel_ai/parallel", {}, 0.05),
+            ("parallel_ai/parallel", {"reasoning": {"effort": "high"}}, 0.25),
+            ("parallel_ai/parallel-high", {"reasoning": {"effort": "low"}}, 0.25),
+        ],
+    )
+    def test_completion_cost_uses_effective_reasoning_effort(self, model, optional_params, expected_cost, monkeypatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "model_cost", litellm_module.get_model_cost_map(url=""))
+        response = ResponsesAPIResponse(
+            id="resp_cost",
+            created_at=1700000000,
+            model="parallel",
+            output=[],
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+
+        cost = litellm_module.completion_cost(
+            completion_response=response,
+            model=model,
+            optional_params=optional_params,
+            call_type="responses",
+        )
+
+        assert cost == pytest.approx(expected_cost)
+
+    def test_explicit_base_model_remains_authoritative(self, monkeypatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "model_cost", litellm_module.get_model_cost_map(url=""))
+        response = ResponsesAPIResponse(
+            id="resp_custom_base",
+            created_at=1700000000,
+            model="parallel",
+            output=[],
+            usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        )
+
+        cost = litellm_module.completion_cost(
+            completion_response=response,
+            model="parallel_ai/parallel",
+            optional_params={"reasoning": {"effort": "high"}},
+            base_model="parallel_ai/parallel-low",
+            call_type="responses",
+        )
+
+        assert cost == pytest.approx(0.01)
+
+    @pytest.mark.respx()
+    @pytest.mark.parametrize(
+        "reasoning,expected_cost",
+        [
+            ({"effort": "low"}, 0.01),
+            (None, 0.05),
+            ({"effort": "high"}, 0.25),
+        ],
+    )
+    def test_responses_records_effort_aware_cost(self, reasoning, expected_cost, respx_mock, monkeypatch):
+        import litellm as litellm_module
+
+        monkeypatch.setenv("PARALLEL_API_KEY", "pk-test")
+        monkeypatch.setattr(litellm_module, "model_cost", litellm_module.get_model_cost_map(url=""))
+        route = respx_mock.post("https://api.parallel.ai/v1/responses").respond(json=_parallel_response_body())
+
+        response = litellm_module.responses(
+            model="parallel_ai/parallel",
+            input="question",
+            reasoning=reasoning,
+        )
+
+        assert response.model == "parallel"
+        assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+        request_body = json.loads(route.calls.last.request.content)
+        if reasoning is None:
+            assert "reasoning" not in request_body
+        else:
+            assert request_body["reasoning"] == reasoning
+
+    @pytest.mark.respx()
+    def test_streaming_response_records_high_effort_cost(self, respx_mock, monkeypatch):
+        import litellm as litellm_module
+
+        monkeypatch.setenv("PARALLEL_API_KEY", "pk-test")
+        monkeypatch.setattr(litellm_module, "model_cost", litellm_module.get_model_cost_map(url=""))
+        monkeypatch.setattr(litellm_module, "include_cost_in_streaming_usage", True)
+        completed_event = {
+            "type": "response.completed",
+            "response": _parallel_response_body(response_id="resp_stream"),
+        }
+        stream_body = f"data: {json.dumps(completed_event)}\n\ndata: [DONE]\n\n".encode()
+        respx_mock.post("https://api.parallel.ai/v1/responses").respond(
+            content=stream_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+        stream = litellm_module.responses(
+            model="parallel_ai/parallel",
+            input="question",
+            reasoning={"effort": "high"},
+            stream=True,
+        )
+        events = list(stream)
+
+        assert len(events) == 1
+        assert events[0].response.model == "parallel"
+        assert events[0].response.usage.cost == pytest.approx(0.25)
+
+    @pytest.mark.respx()
+    def test_completion_bridge_records_high_effort_cost(self, respx_mock, monkeypatch):
+        import litellm as litellm_module
+
+        monkeypatch.setenv("PARALLEL_API_KEY", "pk-test")
+        monkeypatch.setattr(litellm_module, "model_cost", litellm_module.get_model_cost_map(url=""))
+        route = respx_mock.post("https://api.parallel.ai/v1/responses").respond(json=_parallel_response_body())
+
+        response = litellm_module.completion(
+            model="parallel_ai/parallel",
+            messages=[{"role": "user", "content": "question"}],
+            reasoning={"effort": "high"},
+        )
+
+        assert response.choices[0].message.content == "grounded answer"
+        assert response._hidden_params["response_cost"] == pytest.approx(0.25)
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["reasoning"] == {"effort": "high"}

@@ -10,7 +10,6 @@ Provider quirks:
 Ref: https://docs.parallel.ai/responses-api/responses-quickstart
 """
 
-from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -18,18 +17,13 @@ import httpx
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.parallel_ai.common_utils import resolve_parallel_ai_credentials
+from litellm.llms.parallel_ai.responses.cost_calculator import (
+    PARALLEL_AI_EFFORT_TIER_MODELS as EFFORT_TIER_MODELS,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-
-EFFORT_TIER_MODELS: Final = MappingProxyType(
-    {
-        "parallel-low": "low",
-        "parallel-medium": "medium",
-        "parallel-high": "high",
-    }
-)
 
 
 class ParallelAIResponsesConfig(OpenAIResponsesAPIConfig):
