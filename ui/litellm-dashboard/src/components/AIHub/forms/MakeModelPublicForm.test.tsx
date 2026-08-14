@@ -162,7 +162,6 @@ describe("MakeModelPublicForm", () => {
       fireEvent.click(selectAllCheckbox);
     });
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -173,7 +172,6 @@ describe("MakeModelPublicForm", () => {
       expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
@@ -345,7 +343,6 @@ describe("MakeModelPublicForm", () => {
 
     render(<MakeModelPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -355,7 +352,6 @@ describe("MakeModelPublicForm", () => {
       expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
@@ -380,7 +376,6 @@ describe("MakeModelPublicForm", () => {
 
     render(<MakeModelPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -390,19 +385,20 @@ describe("MakeModelPublicForm", () => {
       expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
     });
 
-    // While the request is in flight the flow must not have completed
+    expectDisabledControl(submitButton);
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
     expect(mockMakeModelGroupPublic).toHaveBeenCalledTimes(1);
     expect(mockProps.onSuccess).not.toHaveBeenCalled();
     expect(mockProps.onClose).not.toHaveBeenCalled();
     expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
 
-    // Resolve the promise
     resolvePromise({});
     await waitFor(() => {
       expect(mockProps.onSuccess).toHaveBeenCalled();
@@ -479,7 +475,6 @@ describe("MakeModelPublicForm", () => {
   it("should show confirmation step with selected models", async () => {
     render(<MakeModelPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);

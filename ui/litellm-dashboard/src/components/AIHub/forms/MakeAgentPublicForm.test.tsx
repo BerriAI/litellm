@@ -115,7 +115,6 @@ describe("MakeAgentPublicForm", () => {
       fireEvent.click(selectAllCheckbox);
     });
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -126,7 +125,6 @@ describe("MakeAgentPublicForm", () => {
       expect(screen.getByText("Confirm Making Agents Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
@@ -312,7 +310,6 @@ describe("MakeAgentPublicForm", () => {
 
     render(<MakeAgentPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -322,7 +319,6 @@ describe("MakeAgentPublicForm", () => {
       expect(screen.getByText("Confirm Making Agents Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
@@ -347,7 +343,6 @@ describe("MakeAgentPublicForm", () => {
 
     render(<MakeAgentPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -357,19 +352,20 @@ describe("MakeAgentPublicForm", () => {
       expect(screen.getByText("Confirm Making Agents Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
     });
 
-    // While the request is in flight the flow must not have completed
+    expectDisabledControl(submitButton);
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
     expect(mockMakeAgentsPublicCall).toHaveBeenCalledTimes(1);
     expect(mockProps.onSuccess).not.toHaveBeenCalled();
     expect(mockProps.onClose).not.toHaveBeenCalled();
     expect(screen.getByText("Confirm Making Agents Public")).toBeInTheDocument();
 
-    // Resolve the promise
     resolvePromise({});
     await waitFor(() => {
       expect(mockProps.onSuccess).toHaveBeenCalled();
