@@ -2572,6 +2572,39 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details.cached_tokens == 100
         assert getattr(response_usage.input_tokens_details, "cache_write_tokens", None) == 800
 
+    def test_transform_usage_preserves_input_modality_tokens(self):
+        """Regression: the bridge dropped image and video input tokens.
+
+        Vertex reports prompt tokens split by modality, so a Live session that sends
+        camera frames arrives with image_tokens set. InputTokensDetails declared only
+        audio/cached/text, so those tokens were folded into text and lost their
+        attribution, and any per-modality rate could never apply to them.
+        """
+        usage = Usage(
+            prompt_tokens=300,
+            completion_tokens=10,
+            total_tokens=310,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=20, audio_tokens=80, image_tokens=150, video_tokens=50, cached_tokens=0
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=10),
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=usage
+        )
+        details = response_usage.input_tokens_details
+        assert details is not None
+        assert getattr(details, "image_tokens", None) == 150
+        assert getattr(details, "video_tokens", None) == 50
+        assert getattr(details, "audio_tokens", None) == 80
+
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        back = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_usage.model_dump())
+        assert back.prompt_tokens_details.image_tokens == 150
+        assert back.prompt_tokens_details.video_tokens == 50
+
     def test_transform_usage_with_reasoning_tokens_gemini(self):
         """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""
         # Setup: Simulate Gemini usage with thoughtsTokenCount

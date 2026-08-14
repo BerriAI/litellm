@@ -1286,7 +1286,9 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
+    image_tokens: int | None = None
     text_tokens: int | None = None
+    video_tokens: int | None = None
 
     model_config = {"extra": "allow"}
 
