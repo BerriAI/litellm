@@ -8,7 +8,9 @@ with database and Redis cache configuration.
 import asyncio
 import os
 import tempfile
-from typing import Dict, Optional
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Dict, Final, Optional
 
 import pytest
 import yaml
@@ -19,6 +21,9 @@ _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
     "prisma_client",
 )
+
+_MISSING: Final = object()
+_PROXY_GLOBALS_SNAPSHOT: Final = pytest.StashKey[Mapping[str, object]]()
 
 
 class StubClientNotConnectedError(ClientNotConnectedError):
@@ -43,32 +48,43 @@ def disconnected_prisma() -> DisconnectedPrisma:
     return DisconnectedPrisma()
 
 
-@pytest.fixture(autouse=True)
-def _isolate_proxy_module_globals():
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
     """
-    Snapshot and restore module-level globals on litellm.proxy.proxy_server
-    that tests sometimes mutate via raw setattr (not monkeypatch).
+    Snapshot module-level globals on litellm.proxy.proxy_server that tests mutate.
 
-    Without this, a leaked value — e.g. master_key set by a sibling test —
-    flips the auth short-circuit in user_api_key_auth and causes unrelated
-    tests in the same xdist worker to return 401 instead of 200.
+    Without this, a leaked value, e.g. master_key set by a sibling test, flips the auth
+    short-circuit in user_api_key_auth and causes unrelated tests in the same xdist worker
+    to return 401 instead of 200.
     """
     from litellm.proxy import proxy_server
 
-    sentinel = object()
-    snapshot = {
-        name: getattr(proxy_server, name, sentinel)
-        for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
-    }
-    try:
-        yield
-    finally:
-        for name, value in snapshot.items():
-            if value is sentinel:
-                if hasattr(proxy_server, name):
-                    delattr(proxy_server, name)
-            else:
-                setattr(proxy_server, name, value)
+    item.stash[_PROXY_GLOBALS_SNAPSHOT] = MappingProxyType(
+        {name: getattr(proxy_server, name, _MISSING) for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE}
+    )
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item: pytest.Item) -> None:
+    """
+    Restore the snapshot after every fixture finalizer, `monkeypatch` undo included.
+
+    A fixture cannot do this: `monkeypatch` tears down after the autouse fixtures, so its undo
+    reinstalls whatever the value was when the test called setattr, which for a test that also
+    holds an autouse `patch` of the same global is that patch's mock, leaked for the rest of the
+    worker's session.
+    """
+    from litellm.proxy import proxy_server
+
+    snapshot: Final = item.stash.get(_PROXY_GLOBALS_SNAPSHOT, None)
+    if snapshot is None:
+        return
+    for name, value in snapshot.items():
+        if value is _MISSING:
+            if hasattr(proxy_server, name):
+                delattr(proxy_server, name)
+        else:
+            setattr(proxy_server, name, value)
 
 
 @pytest.fixture(autouse=True)
