@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import ssl
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from types import ModuleType
@@ -69,6 +69,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
+    ProjectQuotaCallback,
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
@@ -252,7 +253,7 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
     return False
 
 
-def _collect_ws_project_quota_callbacks() -> list:
+def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     """Duck-type discover proxy hooks exposing per-frame project ITPM/OTPM
     enforcement, so the Responses WebSocket loop can charge every
     ``response.create`` frame, not just the connection's first one.
@@ -261,19 +262,16 @@ def _collect_ws_project_quota_callbacks() -> list:
     proxy hook directly) to avoid a layering violation (SDK importing from
     the proxy layer).
     """
-    try:
-        import litellm as _litellm
+    import litellm as _litellm
 
-        return [
-            cb for cb in _litellm.callbacks if callable(getattr(cb, "enforce_project_io_token_quota_for_frame", None))
-        ]
-    except Exception as exc:  # noqa: BLE001 - discovery must not block the connection
-        verbose_logger.warning(
-            "Responses WebSocket: failed to collect project quota callbacks — "
-            "per-frame ITPM/OTPM enforcement will be skipped. Error: %s",
-            exc,
-        )
-        return []
+    callbacks: Final = cast(  # cast-ok: callback registry is inspected before protocol use
+        Sequence[object], _litellm.callbacks
+    )
+    return tuple(
+        cast(ProjectQuotaCallback, callback)  # cast-ok: required callback method is callable
+        for callback in callbacks
+        if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
+    )
 
 
 class BaseLLMHTTPHandler:
