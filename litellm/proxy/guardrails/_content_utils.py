@@ -8,8 +8,10 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
-from collections.abc import Callable, Iterator
-from typing import Any, Final
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from typing import Any, Final, TypeAlias
+
+from pydantic import JsonValue
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -34,6 +36,12 @@ def is_text_content_call_type(call_type: str) -> bool:
 
 
 TEXT_PART_TYPES: Final[frozenset[str]] = frozenset({"text", "input_text", "output_text"})
+
+# A text rewrite applied to one fragment at a time.
+TextTransform: TypeAlias = Callable[[str], str]
+
+# Content part types whose payload is image data (Chat Completions and Responses API).
+IMAGE_PART_TYPES: Final[frozenset[str]] = frozenset({"image_url", "input_image"})
 
 # Responses-API item types whose ``output`` field carries user/tool text
 # that guardrails should inspect.  ``function_call_output`` is the
@@ -104,6 +112,111 @@ def iter_message_text(data: dict[str, Any]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
+def iter_role_text(messages: Sequence[Mapping[str, object]], roles: Collection[str]) -> Iterator[str]:
+    """Yield every text fragment carried by messages whose role is in ``roles``.
+
+    Lets a hook anchor a decision to a specific role (e.g. the system /
+    developer instructions) instead of the whole transcript, which would match
+    on any user-pasted content.
+    """
+    for message in messages:
+        # The annotation is the contract; the values arrive from provider
+        # translation handlers, so a stray non-message entry must not raise.
+        if not isinstance(message, Mapping):  # pyright: ignore[reportUnnecessaryIsInstance]  # untyped upstream data
+            continue
+        if message.get("role") in roles:
+            yield from _iter_text_parts_in_content(message.get("content"))
+
+
+def map_content_text(content: JsonValue, transform: TextTransform) -> JsonValue:
+    """Return ``content`` with every text fragment replaced by ``transform(fragment)``.
+
+    Pure counterpart of ``walk_user_text``: string content, bare strings in a
+    content list, and ``{"type": "text", "text": ...}`` parts are transformed;
+    every other part (images, audio, tool payloads) is passed through by
+    reference so the content structure cannot change shape.
+    """
+    if isinstance(content, str):
+        return transform(content) if content else content
+    if not isinstance(content, list):
+        return content
+    return [_mapped_text_part(part, transform) for part in content]  # mutable-ok: JSON content is a list
+
+
+def _mapped_text_part(part: JsonValue, transform: TextTransform) -> JsonValue:
+    if isinstance(part, str):
+        # A bare string in a content list is itself a text fragment.
+        return transform(part) if part else part
+    if not isinstance(part, dict) or part.get("type") not in TEXT_PART_TYPES:
+        return part
+    text: Final = part.get("text")
+    if not isinstance(text, str) or not text:
+        return part
+    return {**part, "text": transform(text)}  # mutable-ok: JSON parts are dicts
+
+
+def map_content_image_urls(content: JsonValue, transform: TextTransform) -> JsonValue:
+    """Return ``content`` with every image payload replaced by ``transform(url)``.
+
+    Covers both image part shapes: Chat Completions ``{"type": "image_url",
+    "image_url": {"url": ...}}`` (and its bare-string variant) and the
+    Responses-API ``{"type": "input_image", "image_url": ...}``. Everything else
+    is passed through by reference.
+    """
+    if not isinstance(content, list):
+        return content
+    return [_mapped_image_part(part, transform) for part in content]  # mutable-ok: JSON content is a list
+
+
+def _mapped_image_part(part: JsonValue, transform: TextTransform) -> JsonValue:
+    if not isinstance(part, dict) or part.get("type") not in IMAGE_PART_TYPES:
+        return part
+    image_url: Final = part.get("image_url")
+    if isinstance(image_url, str):
+        return {**part, "image_url": transform(image_url)}  # mutable-ok: JSON parts are dicts
+    if not isinstance(image_url, dict):
+        return part
+    url: Final = image_url.get("url")
+    if not isinstance(url, str):
+        return part
+    nested: Final = {**image_url, "url": transform(url)}  # mutable-ok: JSON parts are dicts
+    return {**part, "image_url": nested}  # mutable-ok: JSON parts are dicts
+
+
+def map_messages_image_urls(messages: JsonValue, transform: TextTransform) -> JsonValue:
+    """Return a new message list with every image payload transformed."""
+    return _mapped_messages(messages, map_content_image_urls, transform)
+
+
+def map_messages_text(messages: JsonValue, transform: TextTransform) -> JsonValue:
+    """Return a new message list with every ``content`` text fragment transformed.
+
+    Roles, ids, tool calls, tool schemas and any other key are copied through
+    untouched, so only text can differ from the input.
+    """
+    return _mapped_messages(messages, map_content_text, transform)
+
+
+def _mapped_messages(
+    messages: JsonValue,
+    map_content: Callable[[JsonValue, TextTransform], JsonValue],
+    transform: TextTransform,
+) -> JsonValue:
+    if not isinstance(messages, list):
+        return messages
+    return [_mapped_message(message, map_content, transform) for message in messages]  # mutable-ok: JSON is a list
+
+
+def _mapped_message(
+    message: JsonValue,
+    map_content: Callable[[JsonValue, TextTransform], JsonValue],
+    transform: TextTransform,
+) -> JsonValue:
+    if not isinstance(message, dict) or "content" not in message:
+        return message
+    return {**message, "content": map_content(message["content"], transform)}  # mutable-ok: JSON messages are dicts
+
+
 def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
@@ -113,31 +226,13 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     """
     visited = 0
 
-    def _rewrite_content(content: Any) -> Any:
+    def _counting_visit(text: str) -> str:
         nonlocal visited
-        if isinstance(content, str):
-            if content:
-                visited += 1
-                return visit(content)
-            return content
-        if isinstance(content, list):
-            new_parts: Final[list[Any]] = []
-            for part in content:
-                if isinstance(part, str) and part:
-                    visited += 1
-                    new_parts.append(visit(part))
-                elif (
-                    isinstance(part, dict)
-                    and part.get("type") in TEXT_PART_TYPES
-                    and isinstance(part.get("text"), str)
-                    and part["text"]
-                ):
-                    visited += 1
-                    new_parts.append({**part, "text": visit(part["text"])})
-                else:
-                    new_parts.append(part)
-            return new_parts
-        return content
+        visited += 1
+        return visit(text)
+
+    def _rewrite_content(content: Any) -> Any:
+        return map_content_text(content, _counting_visit)
 
     messages: Final = data.get("messages")
     if isinstance(messages, list):

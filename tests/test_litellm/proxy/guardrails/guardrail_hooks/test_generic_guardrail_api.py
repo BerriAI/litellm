@@ -5,6 +5,7 @@ This test file tests the Generic Guardrail API implementation,
 specifically focusing on metadata extraction and passing.
 """
 
+import json as json_module
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +19,9 @@ from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
+)
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.background_dispatch import (
+    BackgroundDispatcher,
 )
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
@@ -1996,3 +2000,1193 @@ class TestFailOnError:
                     request_data={},
                     input_type="response",
                 )
+
+
+# ---------------------------------------------------------------------------
+# Payload shaping, applicability filters and fire-and-forget dispatch
+# ---------------------------------------------------------------------------
+
+
+class _RecordingHandler:
+    """Stands in for AsyncHTTPHandler, capturing every posted payload.
+
+    Injected through GenericGuardrailAPI(async_handler=...) so the guardrail
+    under test keeps its real code path and nothing has to be patched onto it.
+    """
+
+    def __init__(self, *, action="NONE", texts=None, images=None, tools=None, error=None):
+        self.calls: list[dict] = []
+        self._action = action
+        self._texts = texts
+        self._images = images
+        self._tools = tools
+        self._error = error
+
+    @property
+    def payloads(self) -> list[dict]:
+        return [call["json"] for call in self.calls]
+
+    async def post(self, *, url, json, headers, **kwargs):
+        self.calls.append({"url": url, "json": json, "headers": headers})
+        if self._error is not None:
+            raise self._error
+        body = {"action": self._action}
+        for key, value in (("texts", self._texts), ("images", self._images), ("tools", self._tools)):
+            if value is not None:
+                body[key] = value
+        response = MagicMock()
+        response.json.return_value = body
+        response.raise_for_status = MagicMock()
+        return response
+
+
+class _StubLoggingObj:
+    """Minimal stand-in for the LiteLLM logging object shared by both hooks."""
+
+    def __init__(self, *, call_type=None, call_id="call-123", trace_id="trace-123"):
+        self.call_type = call_type
+        self.litellm_call_id = call_id
+        self.litellm_trace_id = trace_id
+        self.model_call_details: dict = {}
+
+
+def _make_guardrail(handler, *, dispatcher=None, name="test-generic-guardrail", event_hook="pre_call", **options):
+    return GenericGuardrailAPI(
+        api_base="https://api.test.guardrail.com",
+        guardrail_name=name,
+        event_hook=event_hook,
+        default_on=True,
+        async_handler=handler,
+        dispatcher=dispatcher,
+        **options,
+    )
+
+
+class TestCallTypeFilter:
+    """run_only_on_call_types / skip_call_types (call-type applicability)."""
+
+    @pytest.mark.asyncio
+    async def test_allowlist_runs_allowed_call_type(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, run_only_on_call_types=["acompletion"])
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(call_type="acompletion"),
+        )
+
+        assert len(handler.calls) == 1
+        assert result["texts"] == ["hello"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("input_type", ["request", "response"])
+    async def test_allowlist_skips_embeddings_on_both_hooks(self, input_type):
+        """An embedding call is skipped on request and response alike; each hook
+        resolves its own call type, so no correlation is needed."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, run_only_on_call_types=["acompletion"])
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["embed me"]},
+            request_data={},
+            input_type=input_type,
+            logging_obj=_StubLoggingObj(call_type="aembedding"),
+        )
+
+        assert handler.calls == []
+        assert result == {"texts": ["embed me"]}
+
+    @pytest.mark.asyncio
+    async def test_unresolved_call_type_still_runs(self):
+        """A call type we cannot resolve must not silently blind the guardrail."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, run_only_on_call_types=["acompletion"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(call_type=None),
+        )
+
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_denylist_skips_listed_call_type_only(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, skip_call_types=["aembedding", "aspeech"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["embed me"]},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(call_type="aembedding"),
+        )
+        assert handler.calls == []
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["chat"]},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(call_type="acompletion"),
+        )
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_allowlist_takes_precedence_over_denylist(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(
+            handler,
+            run_only_on_call_types=["aembedding"],
+            skip_call_types=["aembedding"],
+        )
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["embed me"]},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(call_type="aembedding"),
+        )
+
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_call_type_from_request_data_when_no_logging_obj(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, run_only_on_call_types=["acompletion"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["embed me"]},
+            request_data={"call_type": "aembedding"},
+            input_type="request",
+        )
+
+        assert handler.calls == []
+
+
+class TestPayloadFieldControl:
+    """send_images / exclude_payload_fields / max_messages / max_text_chars."""
+
+    @pytest.mark.asyncio
+    async def test_send_images_false_omits_images_key(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, send_images=False)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["describe"], "images": ["data:image/png;base64,AAAA"]},
+            request_data={},
+            input_type="request",
+        )
+
+        payload = handler.payloads[0]
+        assert "images" not in payload
+        assert payload["texts"] == ["describe"]
+
+    @pytest.mark.asyncio
+    async def test_send_images_false_also_strips_inline_image_parts(self):
+        """Regression: dropping the images array is not enough, structured_messages
+        carries the same base64 payload inline."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, send_images=False)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,SECRETPIXELS"}},
+                ],
+            }
+        ]
+
+        await guardrail.apply_guardrail(
+            inputs={
+                "texts": ["describe this"],
+                "images": ["data:image/png;base64,SECRETPIXELS"],
+                "structured_messages": messages,
+            },
+            request_data={},
+            input_type="request",
+        )
+
+        payload = handler.payloads[0]
+        assert "SECRETPIXELS" not in json_module.dumps(payload)
+        # The part is kept, so the guardrail still sees that an image was sent.
+        part = payload["structured_messages"][0]["content"][1]
+        assert part["type"] == "image_url"
+        assert part["image_url"]["url"] == "[omitted]"
+        assert payload["structured_messages"][0]["content"][0]["text"] == "describe this"
+
+    @pytest.mark.asyncio
+    async def test_bare_string_image_url_part_is_covered(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, send_images=False)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this"},
+                    {"type": "image_url", "image_url": "data:image/png;base64,SECRETPIXELS"},
+                ],
+            }
+        ]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["describe this"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+        )
+
+        assert "SECRETPIXELS" not in json_module.dumps(handler.payloads[0])
+
+    @pytest.mark.asyncio
+    async def test_images_sent_by_default(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["describe"], "images": ["data:image/png;base64,AAAA"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert handler.payloads[0]["images"] == ["data:image/png;base64,AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_omitted_images_cannot_be_rewritten_by_guardrail(self):
+        """The guardrail never received the image, so its replacement is refused."""
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", images=["data:image/png;base64,EVIL"])
+        guardrail = _make_guardrail(handler, send_images=False)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["describe"], "images": ["data:image/png;base64,AAAA"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["images"] == ["data:image/png;base64,AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_exclude_payload_fields_drops_only_requested_field(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, exclude_payload_fields=["request_headers", "litellm_version"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={"proxy_server_request": {"headers": {"user-agent": "curl/8"}}},
+            input_type="request",
+            logging_obj=_StubLoggingObj(),
+        )
+
+        payload = handler.payloads[0]
+        assert "request_headers" not in payload
+        assert "litellm_version" not in payload
+        assert payload["texts"] == ["hello"]
+        assert payload["input_type"] == "request"
+
+    @pytest.mark.asyncio
+    async def test_protected_fields_cannot_be_excluded(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, exclude_payload_fields=["input_type", "litellm_call_id"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(call_id="call-abc"),
+        )
+
+        payload = handler.payloads[0]
+        assert payload["input_type"] == "request"
+        assert payload["litellm_call_id"] == "call-abc"
+
+    @pytest.mark.asyncio
+    async def test_max_messages_sends_only_the_tail(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, max_messages=2)
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+            {"role": "user", "content": "three"},
+        ]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["three"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+        )
+
+        sent = handler.payloads[0]["structured_messages"]
+        assert [m["content"] for m in sent] == ["two", "three"]
+
+    @pytest.mark.asyncio
+    async def test_max_text_chars_truncates_each_text_block(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, max_text_chars=5)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["0123456789", "ab"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert handler.payloads[0]["texts"] == ["01234", "ab"]
+
+    @pytest.mark.asyncio
+    async def test_truncated_text_is_not_written_back(self):
+        """Regression: a rewrite of truncated text must not replace the full prompt."""
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["MASKED", "ab"])
+        guardrail = _make_guardrail(handler, max_text_chars=5)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["0123456789", "ab"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["texts"] == ["0123456789", "ab"]
+
+    @pytest.mark.asyncio
+    async def test_untouched_text_index_still_accepts_rewrite(self):
+        """Only the shaped index is protected; other indices are still masked."""
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["MASKED-LONG", "MASKED-SHORT"])
+        guardrail = _make_guardrail(handler, max_text_chars=5)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["0123456789", "ab"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["texts"] == ["0123456789", "MASKED-SHORT"]
+
+    @pytest.mark.asyncio
+    async def test_rewrite_refused_when_lengths_do_not_align(self):
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["MASKED"])
+        guardrail = _make_guardrail(handler, max_text_chars=5)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["0123456789", "ab"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["texts"] == ["0123456789", "ab"]
+
+    @pytest.mark.asyncio
+    async def test_unshaped_payload_still_applies_rewrites(self):
+        """Default config keeps today's masking behavior intact."""
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["MASKED"])
+        guardrail = _make_guardrail(handler)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["my ssn is 123"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["texts"] == ["MASKED"]
+
+    @pytest.mark.asyncio
+    async def test_excluded_texts_are_neither_sent_nor_rewritten(self):
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["MASKED"])
+        guardrail = _make_guardrail(handler, exclude_payload_fields=["texts"])
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["my ssn is 123"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert "texts" not in handler.payloads[0]
+        assert result["texts"] == ["my ssn is 123"]
+
+    def test_unknown_exclude_field_does_not_break_init(self):
+        guardrail = _make_guardrail(_RecordingHandler(), exclude_payload_fields=["not_a_field"])
+        assert guardrail._payload_policy.exclude_fields == frozenset()
+
+
+class TestStripPatterns:
+    """strip_patterns: source-side removal of content the provider does not need."""
+
+    ENV_BLOCK = "<env>CWD=/tmp\nDATE=2026-01-01</env>"
+
+    @pytest.mark.asyncio
+    async def test_matched_content_never_leaves_litellm(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, strip_patterns=[r"<env>[\s\S]*?</env>"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [f"{self.ENV_BLOCK}\nreal question"]},
+            request_data={},
+            input_type="request",
+        )
+
+        sent = handler.payloads[0]["texts"][0]
+        assert "CWD=/tmp" not in sent
+        assert "real question" in sent
+
+    @pytest.mark.asyncio
+    async def test_structured_messages_keep_their_structure(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, strip_patterns=[r"SECRET-\d+"])
+        messages = [
+            {"role": "system", "content": "you are SECRET-42 helpful"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "leak SECRET-7 here"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "run", "arguments": '{"cmd": "SECRET-9"}'},
+                    }
+                ],
+            },
+        ]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["leak SECRET-7 here"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+        )
+
+        sent = handler.payloads[0]["structured_messages"]
+        assert [m["role"] for m in sent] == ["system", "user", "assistant"]
+        assert sent[0]["content"] == "you are  helpful"
+        assert sent[1]["content"][0]["text"] == "leak  here"
+        # Non-text parts, tool calls and ids are never rewritten.
+        assert sent[1]["content"][1]["image_url"] == {"url": "data:image/png;base64,AAAA"}
+        assert sent[2]["tool_calls"][0]["function"]["arguments"] == '{"cmd": "SECRET-9"}'
+        assert sent[2]["tool_calls"][0]["id"] == "call_1"
+
+    @pytest.mark.asyncio
+    async def test_tool_schemas_are_never_stripped(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, strip_patterns=[r"SECRET-\d+"])
+
+        await guardrail.apply_guardrail(
+            inputs={
+                "texts": ["hello"],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "SECRET-1", "description": "SECRET-2"},
+                    }
+                ],
+            },
+            request_data={},
+            input_type="request",
+        )
+
+        sent_tool = handler.payloads[0]["tools"][0]
+        assert sent_tool["function"]["name"] == "SECRET-1"
+        assert sent_tool["function"]["description"] == "SECRET-2"
+
+    @pytest.mark.asyncio
+    async def test_stripped_text_is_not_written_back(self):
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["rewritten"])
+        guardrail = _make_guardrail(handler, strip_patterns=[r"SECRET-\d+"])
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["keep SECRET-1 me"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["texts"] == ["keep SECRET-1 me"]
+
+    @pytest.mark.asyncio
+    async def test_non_matching_text_is_untouched(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, strip_patterns=[r"SECRET-\d+"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["nothing to strip"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert handler.payloads[0]["texts"] == ["nothing to strip"]
+
+    def test_invalid_regex_fails_at_init(self):
+        with pytest.raises(ValueError, match="strip_patterns"):
+            _make_guardrail(_RecordingHandler(), strip_patterns=["(unclosed"])
+
+
+class TestRequestApplicabilityFilter:
+    """skip_if_system_prompt_matches / skip_if_first_role_in."""
+
+    MARKER = "internal-agent-7f3c"
+
+    def _guardrail(self, handler, **options):
+        return _make_guardrail(
+            handler,
+            event_hook=["pre_call", "post_call"],
+            skip_if_system_prompt_matches=[self.MARKER],
+            **options,
+        )
+
+    @pytest.mark.asyncio
+    async def test_matching_system_prompt_sends_nothing(self):
+        handler = _RecordingHandler()
+        guardrail = self._guardrail(handler)
+        messages = [
+            {"role": "system", "content": f"you are {self.MARKER}"},
+            {"role": "user", "content": "hello"},
+        ]
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(),
+        )
+
+        assert handler.calls == []
+        assert result["texts"] == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_marker_in_user_message_does_not_skip(self):
+        """Anchoring to the system message keeps pasted content from skipping the guardrail."""
+        handler = _RecordingHandler()
+        guardrail = self._guardrail(handler)
+        messages = [
+            {"role": "system", "content": "you are helpful"},
+            {"role": "user", "content": f"what is {self.MARKER}?"},
+        ]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [f"what is {self.MARKER}?"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(),
+        )
+
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_developer_role_prompt_matches(self):
+        handler = _RecordingHandler()
+        guardrail = self._guardrail(handler)
+        messages = [
+            {"role": "developer", "content": [{"type": "text", "text": f"id={self.MARKER}"}]},
+            {"role": "user", "content": "hello"},
+        ]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(),
+        )
+
+        assert handler.calls == []
+
+    @pytest.mark.asyncio
+    async def test_paired_response_skipped_via_shared_logging_obj(self):
+        handler = _RecordingHandler()
+        guardrail = self._guardrail(handler)
+        logging_obj = _StubLoggingObj()
+        messages = [{"role": "system", "content": f"you are {self.MARKER}"}]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+            logging_obj=logging_obj,
+        )
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["model output"]},
+            request_data={},
+            input_type="response",
+            logging_obj=logging_obj,
+        )
+
+        assert handler.calls == []
+
+    @pytest.mark.asyncio
+    async def test_paired_response_skipped_via_call_id_cache(self):
+        """Covers the paths where no logging object reaches the hooks."""
+        handler = _RecordingHandler()
+        guardrail = self._guardrail(handler)
+        messages = [{"role": "system", "content": f"you are {self.MARKER}"}]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"], "structured_messages": messages},
+            request_data={"litellm_call_id": "call-xyz"},
+            input_type="request",
+        )
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["model output"]},
+            request_data={"litellm_call_id": "call-xyz"},
+            input_type="response",
+        )
+
+        assert handler.calls == []
+
+    @pytest.mark.asyncio
+    async def test_cache_entry_is_evicted_on_use(self):
+        """A one-shot entry cannot suppress a later, unrelated response."""
+        handler = _RecordingHandler()
+        guardrail = self._guardrail(handler)
+        messages = [{"role": "system", "content": f"you are {self.MARKER}"}]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"], "structured_messages": messages},
+            request_data={"litellm_call_id": "call-xyz"},
+            input_type="request",
+        )
+        for _ in range(2):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["model output"]},
+                request_data={"litellm_call_id": "call-xyz"},
+                input_type="response",
+            )
+
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_unmatched_request_leaves_response_scanned(self):
+        handler = _RecordingHandler()
+        guardrail = self._guardrail(handler)
+        logging_obj = _StubLoggingObj()
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"], "structured_messages": [{"role": "system", "content": "plain"}]},
+            request_data={},
+            input_type="request",
+            logging_obj=logging_obj,
+        )
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["model output"]},
+            request_data={},
+            input_type="response",
+            logging_obj=logging_obj,
+        )
+
+        assert [payload["input_type"] for payload in handler.payloads] == ["request", "response"]
+
+    @pytest.mark.asyncio
+    async def test_skip_decision_does_not_cross_guardrail_instances(self):
+        handler = _RecordingHandler()
+        skipping = self._guardrail(handler, name="skipping-guardrail")
+        other = _make_guardrail(
+            handler,
+            name="other-guardrail",
+            event_hook=["pre_call", "post_call"],
+            skip_if_system_prompt_matches=["something-else"],
+        )
+        logging_obj = _StubLoggingObj()
+        messages = [{"role": "system", "content": f"you are {self.MARKER}"}]
+
+        await skipping.apply_guardrail(
+            inputs={"texts": ["hello"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+            logging_obj=logging_obj,
+        )
+        await other.apply_guardrail(
+            inputs={"texts": ["model output"]},
+            request_data={},
+            input_type="response",
+            logging_obj=logging_obj,
+        )
+
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_skip_if_first_role_in(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, skip_if_first_role_in=["developer"])
+
+        await guardrail.apply_guardrail(
+            inputs={
+                "texts": ["hello"],
+                "structured_messages": [
+                    {"role": "developer", "content": "instructions"},
+                    {"role": "user", "content": "hello"},
+                ],
+            },
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(),
+        )
+        assert handler.calls == []
+
+        await guardrail.apply_guardrail(
+            inputs={
+                "texts": ["hello"],
+                "structured_messages": [{"role": "user", "content": "hello"}],
+            },
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(call_id="call-2"),
+        )
+        assert len(handler.calls) == 1
+
+
+class TestFireAndForget:
+    """fire_and_forget: dispatch off the request's critical path."""
+
+    def _guardrail(self, handler, *, max_inflight=10, **options):
+        dispatcher = BackgroundDispatcher(guardrail_name="test-fire-and-forget", max_inflight=max_inflight)
+        guardrail = _make_guardrail(handler, dispatcher=dispatcher, fire_and_forget=True, **options)
+        return guardrail, dispatcher
+
+    @pytest.mark.asyncio
+    async def test_request_returns_before_the_guardrail_is_called(self):
+        handler = _RecordingHandler()
+        guardrail, dispatcher = self._guardrail(handler)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"], "structured_messages": [{"role": "user", "content": "hello"}]},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(),
+        )
+
+        # Control is back with the caller while the call is still only scheduled.
+        assert handler.calls == []
+        assert dispatcher.pending_count == 1
+        assert result == {"texts": ["hello"], "structured_messages": [{"role": "user", "content": "hello"}]}
+
+        await dispatcher.wait_for_pending()
+        assert len(handler.calls) == 1
+        assert handler.payloads[0]["texts"] == ["hello"]
+        assert dispatcher.pending_count == 0
+
+    @pytest.mark.asyncio
+    async def test_blocked_action_is_ignored(self):
+        handler = _RecordingHandler(action="BLOCKED")
+        guardrail, dispatcher = self._guardrail(handler)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={},
+            input_type="request",
+        )
+        await dispatcher.wait_for_pending()
+
+        assert result == {"texts": ["hello"]}
+
+    @pytest.mark.asyncio
+    async def test_returned_text_rewrite_is_ignored(self):
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["MASKED"])
+        guardrail, dispatcher = self._guardrail(handler)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["my ssn is 123"]},
+            request_data={},
+            input_type="request",
+        )
+        await dispatcher.wait_for_pending()
+
+        assert result == {"texts": ["my ssn is 123"]}
+
+    @pytest.mark.asyncio
+    async def test_failing_endpoint_never_surfaces_to_the_caller(self):
+        handler = _RecordingHandler(error=httpx.ConnectError("connection refused"))
+        guardrail, dispatcher = self._guardrail(handler, fail_on_error=True)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={},
+            input_type="request",
+        )
+        await dispatcher.wait_for_pending()
+
+        assert result == {"texts": ["hello"]}
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_inflight_cap_drops_instead_of_queueing(self):
+        handler = _RecordingHandler()
+        guardrail, dispatcher = self._guardrail(handler, max_inflight=1)
+
+        for _ in range(3):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert dispatcher.pending_count == 1
+        assert dispatcher.dropped_count == 2
+
+        await dispatcher.wait_for_pending()
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_payload_shaping_applies_to_the_background_call(self):
+        handler = _RecordingHandler()
+        guardrail, dispatcher = self._guardrail(handler, send_images=False, max_text_chars=4)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["0123456789"], "images": ["data:image/png;base64,AAAA"]},
+            request_data={},
+            input_type="request",
+        )
+        await dispatcher.wait_for_pending()
+
+        payload = handler.payloads[0]
+        assert payload["texts"] == ["0123"]
+        assert "images" not in payload
+
+    def test_streaming_is_forced_to_end_of_stream(self):
+        """Otherwise every sampled chunk would dispatch its own background call."""
+        guardrail, _ = self._guardrail(_RecordingHandler(), streaming_end_of_stream_only=False)
+        assert guardrail.streaming_end_of_stream_only is True
+
+    def test_max_inflight_must_be_positive(self):
+        with pytest.raises(ValueError, match="fire_and_forget_max_inflight"):
+            BackgroundDispatcher(guardrail_name="t", max_inflight=0)
+
+    @pytest.mark.asyncio
+    async def test_call_type_filter_still_applies(self):
+        handler = _RecordingHandler()
+        guardrail, dispatcher = self._guardrail(handler, run_only_on_call_types=["acompletion"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["embed me"]},
+            request_data={},
+            input_type="request",
+            logging_obj=_StubLoggingObj(call_type="aembedding"),
+        )
+        await dispatcher.wait_for_pending()
+
+        assert handler.calls == []
+        assert dispatcher.pending_count == 0
+
+
+def _recorded_entries(request_data: dict) -> list:
+    """The StandardLoggingGuardrailInformation entries the decorator appended."""
+    return (request_data.get("metadata") or {}).get("standard_logging_guardrail_information") or []
+
+
+class TestMaxMessagesBoundsTexts:
+    """max_messages must bound the flat texts list, not only structured_messages.
+
+    Production translation handlers populate `texts` from every message in the
+    conversation (one entry per text fragment) alongside `structured_messages`,
+    so windowing only the structured form would leave payload size proportional
+    to session length.
+    """
+
+    @staticmethod
+    def _conversation(turns: int) -> tuple[list, list]:
+        messages = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i}"} for i in range(turns)]
+        return [m["content"] for m in messages], messages
+
+    @pytest.mark.asyncio
+    async def test_texts_are_windowed_with_structured_messages(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, max_messages=2)
+        texts, messages = self._conversation(6)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": texts, "structured_messages": messages},
+            request_data={},
+            input_type="request",
+        )
+
+        payload = handler.payloads[0]
+        assert payload["texts"] == ["turn 4", "turn 5"]
+        assert [m["content"] for m in payload["structured_messages"]] == ["turn 4", "turn 5"]
+
+    @pytest.mark.asyncio
+    async def test_windowed_texts_are_not_written_back(self):
+        """Windowing shifts positions, so a rewrite cannot be index-mapped."""
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["MASKED-A", "MASKED-B"])
+        guardrail = _make_guardrail(handler, max_messages=2)
+        texts, messages = self._conversation(6)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": texts, "structured_messages": messages},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["texts"] == texts
+
+    @pytest.mark.asyncio
+    async def test_window_larger_than_the_conversation_keeps_write_back(self):
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["MASKED"])
+        guardrail = _make_guardrail(handler, max_messages=10)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["only turn"], "structured_messages": [{"role": "user", "content": "only turn"}]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert handler.payloads[0]["texts"] == ["only turn"]
+        assert result["texts"] == ["MASKED"]
+
+
+class TestIdentityApplicabilityFilter:
+    """skip_if_key_alias_in / skip_if_team_id_in: matched on authenticated metadata."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("input_type", ["request", "response"])
+    async def test_key_alias_skips_both_hooks_without_correlation(self, input_type):
+        """Each hook sees the auth metadata, so the response needs no recorded decision."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, skip_if_key_alias_in=["batch-worker"])
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={"metadata": {"user_api_key_alias": "batch-worker"}},
+            input_type=input_type,
+        )
+
+        assert handler.calls == []
+        assert result == {"texts": ["hello"]}
+
+    @pytest.mark.asyncio
+    async def test_other_key_alias_still_scanned(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, skip_if_key_alias_in=["batch-worker"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={"metadata": {"user_api_key_alias": "prod-app"}},
+            input_type="request",
+        )
+
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_team_id_filter(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, skip_if_team_id_in=["team-internal"])
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={"litellm_metadata": {"user_api_key_team_id": "team-internal"}},
+            input_type="response",
+        )
+        assert handler.calls == []
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={"litellm_metadata": {"user_api_key_team_id": "team-other"}},
+            input_type="response",
+        )
+        assert len(handler.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_body_cannot_forge_an_identity_exemption(self):
+        """A caller putting the alias in its own messages must not be exempted."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, skip_if_key_alias_in=["batch-worker"])
+
+        await guardrail.apply_guardrail(
+            inputs={
+                "texts": ["batch-worker"],
+                "structured_messages": [{"role": "system", "content": "batch-worker"}],
+            },
+            request_data={"metadata": {"user_api_key_alias": "prod-app"}},
+            input_type="request",
+        )
+
+        assert len(handler.calls) == 1
+
+
+class TestGuardrailInformationScope:
+    """guardrail_information_scope: how often a logging entry is recorded."""
+
+    @staticmethod
+    def _request_data(session_id: str | None = None) -> dict:
+        data: dict = {"metadata": {}}
+        if session_id is not None:
+            data["litellm_session_id"] = session_id
+        return data
+
+    @pytest.mark.asyncio
+    async def test_per_call_records_every_invocation(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler)
+        request_data = self._request_data("session-1")
+
+        for _ in range(3):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+            )
+
+        assert len(_recorded_entries(request_data)) == 3
+
+    @pytest.mark.asyncio
+    async def test_per_session_records_only_the_first_call(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, guardrail_information_scope="per_session")
+        request_data = self._request_data("session-1")
+
+        for _ in range(4):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+            )
+
+        assert len(_recorded_entries(request_data)) == 1
+        # The guardrail itself still ran on every call.
+        assert len(handler.calls) == 4
+
+    @pytest.mark.asyncio
+    async def test_per_session_records_once_per_session(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, guardrail_information_scope="per_session")
+        first = self._request_data("session-1")
+        second = self._request_data("session-2")
+
+        await guardrail.apply_guardrail(inputs={"texts": ["a"]}, request_data=first, input_type="request")
+        await guardrail.apply_guardrail(inputs={"texts": ["b"]}, request_data=first, input_type="request")
+        await guardrail.apply_guardrail(inputs={"texts": ["c"]}, request_data=second, input_type="request")
+
+        assert len(_recorded_entries(first)) == 1
+        assert len(_recorded_entries(second)) == 1
+
+    @pytest.mark.asyncio
+    async def test_per_session_falls_back_to_per_call_without_a_session_id(self):
+        """No session id means nothing to dedup against, so entries are not dropped."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, guardrail_information_scope="per_session")
+        request_data = self._request_data()
+
+        for _ in range(3):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+            )
+
+        assert len(_recorded_entries(request_data)) == 3
+
+    @pytest.mark.asyncio
+    async def test_per_session_reads_metadata_session_id(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, guardrail_information_scope="per_session")
+        request_data = {"metadata": {"session_id": "session-meta"}}
+
+        for _ in range(3):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+            )
+
+        assert len(_recorded_entries(request_data)) == 1
+
+    @pytest.mark.asyncio
+    async def test_off_records_nothing_on_success(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, guardrail_information_scope="off")
+        request_data = self._request_data("session-1")
+
+        for _ in range(3):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+            )
+
+        assert _recorded_entries(request_data) == []
+        assert len(handler.calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_off_still_records_a_guardrail_failure(self):
+        """The suppression flag must not swallow the error path."""
+        handler = _RecordingHandler(error=httpx.ConnectError("connection refused"))
+        guardrail = _make_guardrail(handler, guardrail_information_scope="off")
+        request_data = self._request_data("session-1")
+
+        with pytest.raises(Exception, match="Generic Guardrail API failed"):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+            )
+
+        assert len(_recorded_entries(request_data)) == 1
+
+    @pytest.mark.asyncio
+    async def test_per_session_still_records_a_block(self):
+        handler = _RecordingHandler(action="BLOCKED")
+        guardrail = _make_guardrail(handler, guardrail_information_scope="per_session")
+        request_data = self._request_data("session-1")
+
+        for _ in range(2):
+            with pytest.raises(GuardrailRaisedException):
+                await guardrail.apply_guardrail(
+                    inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+                )
+
+        assert len(_recorded_entries(request_data)) == 2
+
+    @pytest.mark.asyncio
+    async def test_scope_is_per_guardrail_instance(self):
+        """One guardrail's suppression must not hide another's entry."""
+        handler = _RecordingHandler()
+        suppressed = _make_guardrail(handler, name="quiet", guardrail_information_scope="off")
+        recording = _make_guardrail(handler, name="loud")
+        request_data = self._request_data("session-1")
+
+        await suppressed.apply_guardrail(inputs={"texts": ["a"]}, request_data=request_data, input_type="request")
+        await recording.apply_guardrail(inputs={"texts": ["a"]}, request_data=request_data, input_type="request")
+
+        entries = _recorded_entries(request_data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == "loud"
+
+
+class TestConfigValidationWarnings:
+    """The init-time warnings the config options promise."""
+
+    def test_unknown_call_type_warns_and_keeps_the_value(self, caplog):
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            guardrail = _make_guardrail(_RecordingHandler(), run_only_on_call_types=["acompletion", "nope"])
+        assert "unrecognized call type" in caplog.text
+        assert guardrail._skip_policy.run_only_on_call_types == frozenset({"acompletion", "nope"})
+
+    def test_allowlist_and_denylist_together_warns(self, caplog):
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            _make_guardrail(
+                _RecordingHandler(),
+                run_only_on_call_types=["acompletion"],
+                skip_call_types=["aembedding"],
+            )
+        assert "allowlist wins" in caplog.text
+
+    def test_response_only_mode_warns_that_nothing_can_be_skipped(self, caplog):
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            _make_guardrail(
+                _RecordingHandler(),
+                event_hook="post_call",
+                skip_if_system_prompt_matches=["marker"],
+            )
+        assert "request-side hook" in caplog.text
+
+    def test_message_based_filters_warn_about_the_trust_boundary(self, caplog):
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            _make_guardrail(_RecordingHandler(), skip_if_system_prompt_matches=["marker"])
+        assert "caller controls" in caplog.text
+
+    def test_identity_filters_do_not_warn(self, caplog):
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            _make_guardrail(_RecordingHandler(), skip_if_key_alias_in=["batch-worker"])
+        assert "caller controls" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_excluded_tools_cannot_be_rewritten(self):
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", tools=[{"type": "function"}])
+        guardrail = _make_guardrail(handler, exclude_payload_fields=["tools"])
+        original_tools = [{"type": "function", "function": {"name": "run"}}]
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"], "tools": original_tools},
+            request_data={},
+            input_type="request",
+        )
+
+        assert "tools" not in handler.payloads[0]
+        assert result["tools"] == original_tools

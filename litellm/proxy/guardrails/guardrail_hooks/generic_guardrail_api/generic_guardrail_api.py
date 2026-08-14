@@ -7,22 +7,27 @@
 
 import fnmatch
 import os
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import httpx
+from pydantic import JsonValue
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    get_session_id_from_request_data,
     log_guardrail_information,
+    suppress_guardrail_information_record,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
@@ -30,6 +35,32 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+from .background_dispatch import (
+    DEFAULT_FIRE_AND_FORGET_MAX_INFLIGHT,
+    BackgroundDispatcher,
+)
+from .payload_policy import (
+    PayloadLoss,
+    PayloadPolicy,
+    compile_patterns,
+    merge_guardrailed_texts,
+    resolve_exclude_fields,
+    shape_payload,
+)
+from .record_scope import (
+    DEFAULT_GUARDRAIL_INFORMATION_SCOPE,
+    GuardrailInformationScope,
+    RecordScope,
+)
+from .request_filters import (
+    SkipDecisionStore,
+    SkipPolicy,
+    call_type_allowed,
+    identity_matches_skip,
+    request_matches_skip,
+    validate_call_types,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -148,6 +179,42 @@ def _extract_inbound_headers(
     return None
 
 
+def _resolve_call_type(
+    request_data: Mapping[str, object],
+    logging_obj: Optional["LiteLLMLoggingObj"],
+) -> str | None:
+    """Resolve the call type of the current request.
+
+    The proxy passes the route type straight through to ``function_setup``, which
+    stamps it on the logging object before the pre-call hook runs and keeps it
+    for the post-call hook, so both sides of a call resolve the same value.
+    """
+    from_logging: Final = getattr(logging_obj, "call_type", None) if logging_obj else None
+    if isinstance(from_logging, str) and from_logging:
+        return from_logging
+    from_request: Final = request_data.get("call_type")
+    return from_request if isinstance(from_request, str) and from_request else None
+
+
+def _passthrough_inputs(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+    """Return the inputs untouched (same value identities), as action=NONE."""
+    return GenericGuardrailAPIInputs(**inputs)
+
+
+def _has_request_side_hook(event_hook: str | Sequence[str] | Mode | None) -> bool:
+    """Whether the configured mode(s) include a hook that sees the request.
+
+    Tag-based ``Mode`` config is resolved per request, so it is treated as having
+    one rather than emitting a warning that may not apply.
+    """
+    request_side: Final = frozenset({GuardrailEventHooks.pre_call.value, GuardrailEventHooks.during_call.value})
+    if event_hook is None or isinstance(event_hook, Mode):
+        return True
+    if isinstance(event_hook, str):
+        return event_hook in request_side
+    return any(hook in request_side for hook in event_hook)
+
+
 class GenericGuardrailAPI(CustomGuardrail):
     """
     Generic Guardrail API integration for LiteLLM.
@@ -182,9 +249,27 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        fire_and_forget: bool | None = None,
+        fire_and_forget_max_inflight: int | None = None,
+        send_images: bool | None = None,
+        exclude_payload_fields: Sequence[str] | None = None,
+        max_messages: int | None = None,
+        max_text_chars: int | None = None,
+        strip_patterns: Sequence[str] | None = None,
+        skip_if_system_prompt_matches: Sequence[str] | None = None,
+        skip_if_first_role_in: Sequence[str] | None = None,
+        skip_if_key_alias_in: Sequence[str] | None = None,
+        skip_if_team_id_in: Sequence[str] | None = None,
+        run_only_on_call_types: Sequence[str] | None = None,
+        skip_call_types: Sequence[str] | None = None,
+        guardrail_information_scope: GuardrailInformationScope | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
+        dispatcher: BackgroundDispatcher | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.headers = headers or {}
         self.extra_headers = extra_headers or []
 
@@ -228,6 +313,93 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             "block_only" if streaming_transform_mode is None else streaming_transform_mode
         )
+
+        configured_name: Final = kwargs.get("guardrail_name")
+
+        self.fire_and_forget: bool = False if fire_and_forget is None else fire_and_forget
+        self._dispatcher: Final = dispatcher or BackgroundDispatcher(
+            guardrail_name=configured_name,
+            max_inflight=(
+                DEFAULT_FIRE_AND_FORGET_MAX_INFLIGHT
+                if fire_and_forget_max_inflight is None
+                else fire_and_forget_max_inflight
+            ),
+        )
+
+        self._payload_policy: Final = PayloadPolicy(
+            send_images=True if send_images is None else send_images,
+            exclude_fields=resolve_exclude_fields(exclude_payload_fields, guardrail_name=configured_name),
+            max_messages=max_messages,
+            max_text_chars=max_text_chars,
+            strip_patterns=compile_patterns(strip_patterns, option_name="strip_patterns"),
+        )
+
+        self._skip_policy: Final = SkipPolicy(
+            system_prompt_patterns=compile_patterns(
+                skip_if_system_prompt_matches, option_name="skip_if_system_prompt_matches"
+            ),
+            first_role_in=frozenset(skip_if_first_role_in or ()),
+            key_aliases=frozenset(skip_if_key_alias_in or ()),
+            team_ids=frozenset(skip_if_team_id_in or ()),
+            run_only_on_call_types=(
+                validate_call_types(
+                    run_only_on_call_types,
+                    option_name="run_only_on_call_types",
+                    guardrail_name=configured_name,
+                )
+                if run_only_on_call_types
+                else None
+            ),
+            skip_call_types=validate_call_types(
+                skip_call_types, option_name="skip_call_types", guardrail_name=configured_name
+            ),
+        )
+        self._skip_store: Final = SkipDecisionStore(guardrail_name=configured_name)
+
+        self._record_scope: Final = RecordScope(
+            DEFAULT_GUARDRAIL_INFORMATION_SCOPE if guardrail_information_scope is None else guardrail_information_scope
+        )
+
+        if self.fire_and_forget:
+            # Nothing awaits the response, so a block cannot be honored and the
+            # stream can only be observed. Say so at boot rather than surprising
+            # the operator with a guardrail that never blocks.
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API (%s): fire_and_forget=True makes this guardrail observe-only. "
+                "action=BLOCKED and action=GUARDRAIL_INTERVENED are ignored, and "
+                "fail_on_error=%s / unreachable_fallback=%s cannot block the request. "
+                "Streaming is forced to end-of-stream observation.",
+                configured_name,
+                self.fail_on_error,
+                self.unreachable_fallback,
+            )
+            self.streaming_end_of_stream_only = True
+
+        if self._skip_policy.filters_requests:
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API (%s): skip_if_system_prompt_matches / skip_if_first_role_in match on the "
+                "request body, which the caller controls, so a caller that knows the configured value can exempt "
+                "itself from this guardrail. Use skip_if_key_alias_in / skip_if_team_id_in when the exemption must "
+                "hold against the caller.",
+                configured_name,
+            )
+
+        if self._skip_policy.filters_requests and not _has_request_side_hook(kwargs.get("event_hook")):
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API (%s): skip_if_system_prompt_matches / skip_if_first_role_in need a "
+                "request-side hook (pre_call or during_call) to decide anything. mode=%s only sees "
+                "responses, so nothing will be skipped.",
+                configured_name,
+                kwargs.get("event_hook"),
+            )
+
+        if self._skip_policy.run_only_on_call_types is not None and self._skip_policy.skip_call_types:
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API (%s): both run_only_on_call_types and skip_call_types are set. "
+                "The allowlist wins; skip_call_types=%s is ignored.",
+                configured_name,
+                sorted(self._skip_policy.skip_call_types),
+            )
 
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -303,9 +475,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             exc_info=error,
         )
         # Keep flow going - treat as action=NONE (no modifications)
-        return_inputs: Final[GenericGuardrailAPIInputs] = {}
-        return_inputs.update(inputs)
-        return return_inputs
+        return _passthrough_inputs(inputs)
 
     def _build_request_headers(self) -> dict:
         """Build HTTP headers for the guardrail API request."""
@@ -321,16 +491,24 @@ class GenericGuardrailAPI(CustomGuardrail):
         images: Any,
         tools: Any,
         guardrail_response: GenericGuardrailAPIResponse,
+        loss: PayloadLoss,
     ) -> GenericGuardrailAPIInputs:
-        # Action is NONE or no modifications needed
+        # Action is NONE or no modifications needed. A component the guardrail
+        # never received in full (payload shaping) keeps the caller's original
+        # value: it cannot rewrite what it could not see.
         return_inputs: Final = GenericGuardrailAPIInputs(texts=texts)
         if guardrail_response.texts:
-            return_inputs["texts"] = guardrail_response.texts
-        if guardrail_response.images:
+            return_inputs["texts"] = merge_guardrailed_texts(
+                original=texts,
+                returned=guardrail_response.texts,
+                loss=loss,
+                guardrail_name=getattr(self, "guardrail_name", None),
+            )
+        if guardrail_response.images and not loss.images_omitted:
             return_inputs["images"] = guardrail_response.images
         elif images:
             return_inputs["images"] = images
-        if guardrail_response.tools:
+        if guardrail_response.tools and not loss.tools_omitted:
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
@@ -359,8 +537,79 @@ class GenericGuardrailAPI(CustomGuardrail):
         verbose_proxy_logger.error("Generic Guardrail API: failed to make request: %s", str(error))
         raise Exception(f"Generic Guardrail API failed: {error}")
 
+    def _should_skip_out_of_scope_request(
+        self,
+        *,
+        input_type: Literal["request", "response"],
+        structured_messages: Sequence[Mapping[str, object]] | None,
+        request_data: Mapping[str, object],
+        logging_obj: Optional["LiteLLMLoggingObj"],
+    ) -> bool:
+        """Whether this call is out of scope per skip_if_* (Feature 4).
+
+        Only the request carries the system prompt, so the response side replays
+        the decision the request side recorded instead of re-deciding.
+        """
+        if not self._skip_policy.filters_requests:
+            return False
+
+        call_id: Final = (getattr(logging_obj, "litellm_call_id", None) if logging_obj else None) or request_data.get(
+            "litellm_call_id"
+        )
+
+        if input_type == "response":
+            return self._skip_store.consume(logging_obj=logging_obj, call_id=call_id)
+
+        if not request_matches_skip(self._skip_policy, structured_messages):
+            return False
+
+        self._skip_store.record(logging_obj=logging_obj, call_id=call_id)
+        return True
+
+    def _dispatch_background_post(
+        self,
+        *,
+        payload: Mapping[str, JsonValue],
+        headers: Mapping[str, str],
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"],
+    ) -> None:
+        context: Final = (
+            f"input_type={input_type} "
+            f"litellm_call_id={getattr(logging_obj, 'litellm_call_id', None) if logging_obj else None}"
+        )
+
+        async def _post() -> None:
+            response: Final = await self.async_handler.post(url=self.api_base, json=payload, headers=headers)
+            response.raise_for_status()
+
+        self._dispatcher.dispatch(_post, context=context)
+
     @log_guardrail_information
     async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        """Run the guardrail, then decide whether this call records a log entry.
+
+        The suppression flag is set only once the call has returned normally, so
+        a block or a guardrail failure still records under every scope: the
+        decorator's exception branch reads the same flag.
+        """
+        result: Final = await self._apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type=input_type,
+            logging_obj=logging_obj,
+        )
+        if self._record_scope.should_suppress(get_session_id_from_request_data(request_data or {})):
+            suppress_guardrail_information_record()
+        return result
+
+    async def _apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
@@ -401,6 +650,40 @@ class GenericGuardrailAPI(CustomGuardrail):
         if request_data is None:
             request_data = {}
 
+        # Extract user API key metadata (also the basis of the identity filters below)
+        user_metadata: Final = self._extract_user_api_key_metadata(request_data)
+
+        call_type: Final = _resolve_call_type(request_data=request_data, logging_obj=logging_obj)
+        if not call_type_allowed(self._skip_policy, call_type):
+            verbose_proxy_logger.debug(
+                "Generic Guardrail API: skipping call_type=%s (input_type=%s) per call-type filter",
+                call_type,
+                input_type,
+            )
+            return _passthrough_inputs(inputs)
+
+        if identity_matches_skip(self._skip_policy, user_metadata):
+            verbose_proxy_logger.debug(
+                "Generic Guardrail API: skipping out-of-scope caller (input_type=%s, key_alias=%s, team_id=%s)",
+                input_type,
+                user_metadata.get("user_api_key_alias"),
+                user_metadata.get("user_api_key_team_id"),
+            )
+            return _passthrough_inputs(inputs)
+
+        if self._should_skip_out_of_scope_request(
+            input_type=input_type,
+            structured_messages=structured_messages,
+            request_data=request_data,
+            logging_obj=logging_obj,
+        ):
+            verbose_proxy_logger.debug(
+                "Generic Guardrail API: skipping out-of-scope request (input_type=%s, litellm_call_id=%s)",
+                input_type,
+                getattr(logging_obj, "litellm_call_id", None) if logging_obj else None,
+            )
+            return _passthrough_inputs(inputs)
+
         request_body: Final = request_data.get("body") or {}
 
         # Merge additional provider specific params from config and dynamic params
@@ -411,8 +694,6 @@ class GenericGuardrailAPI(CustomGuardrail):
         if dynamic_params:
             additional_params.update(dynamic_params)
 
-        # Extract user API key metadata
-        user_metadata: Final = self._extract_user_api_key_metadata(request_data)
         extra_allowlist = {h.lower() for h in self.extra_headers if isinstance(h, str)} if self.extra_headers else None
         inbound_headers: Final = _extract_inbound_headers(
             request_data=request_data,
@@ -440,11 +721,25 @@ class GenericGuardrailAPI(CustomGuardrail):
 
             headers: Final = self._build_request_headers()
 
+            # Shape the payload (send_images / exclude_payload_fields / max_messages /
+            # max_text_chars / strip_patterns) once, so the awaited and the
+            # fire_and_forget paths send exactly the same bytes.
+            # mode="json" ensures all iterables are converted to lists.
+            payload, payload_loss = shape_payload(guardrail_request, self._payload_policy)
+
+            if self.fire_and_forget:
+                self._dispatch_background_post(
+                    payload=payload,
+                    headers=headers,
+                    input_type=input_type,
+                    logging_obj=logging_obj,
+                )
+                return _passthrough_inputs(inputs)
+
             # Make the API request
-            # Use mode="json" to ensure all iterables are converted to lists
             response: Final = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.model_dump(mode="json"),
+                json=payload,
                 headers=headers,
             )
 
@@ -471,6 +766,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 images=images,
                 tools=tools,
                 guardrail_response=guardrail_response,
+                loss=payload_loss,
             )
 
         except GuardrailRaisedException:
