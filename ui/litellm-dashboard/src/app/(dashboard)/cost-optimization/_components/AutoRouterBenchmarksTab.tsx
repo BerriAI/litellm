@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -31,6 +31,7 @@ import {
   type BucketRow,
 } from "./autoRouterBenchmarks";
 import { usd } from "./costOptimizationUtils";
+import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 
@@ -268,7 +269,7 @@ interface AutoRouterBenchmarksTabProps {
   accessToken: string | null;
 }
 
-const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
+const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
   const [range, setRange] = useState<BenchmarkWindow>("30d");
   const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, range);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
@@ -318,6 +319,38 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
         autoRouters={autoRouters ?? []}
       />
     </div>
+  );
+};
+
+const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
+  const [visitedTabs, setVisitedTabs] = useState<readonly string[]>(["usage"]);
+
+  const handleTabChange = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+
+    setVisitedTabs((currentTabs) => (currentTabs.includes(value) ? currentTabs : [...currentTabs, value]));
+  };
+
+  return (
+    <Tabs defaultValue="usage" onValueChange={handleTabChange} className="w-full gap-4">
+      <TabsList>
+        <TabsTrigger value="usage" className="px-3">
+          Usage
+        </TabsTrigger>
+        <TabsTrigger value="shadow-evals" className="px-3">
+          Shadow Evals
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
+        <UsageView accessToken={accessToken} />
+      </TabsContent>
+      <TabsContent value="shadow-evals" keepMounted={visitedTabs.includes("shadow-evals")}>
+        <ShadowEvalSection />
+      </TabsContent>
+    </Tabs>
   );
 };
 

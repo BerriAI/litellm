@@ -1,4 +1,4 @@
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import UsageExportHeader from "./UsageExportHeader";
@@ -73,7 +73,7 @@ describe("UsageExportHeader", () => {
 
   it("should keep a searchable single filter usable when no options match", async () => {
     const user = userEvent.setup();
-    const onSearch = vi.fn();
+    const onSearchChange = vi.fn();
 
     renderWithProviders(
       <UsageExportHeader
@@ -84,7 +84,7 @@ describe("UsageExportHeader", () => {
         filterLabel="User"
         filterPlaceholder="Select user to filter..."
         filterOptions={[]}
-        filterSelectProps={{ showSearch: true, filterOption: false, onSearch }}
+        filterSelectProps={{ onSearchChange, onLoadMore: vi.fn() }}
         onFiltersChange={vi.fn()}
       />,
     );
@@ -93,6 +93,6 @@ describe("UsageExportHeader", () => {
     await user.click(userFilter);
     await user.type(userFilter, "alice");
 
-    expect(onSearch).toHaveBeenLastCalledWith("alice");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("alice"));
   });
 });
