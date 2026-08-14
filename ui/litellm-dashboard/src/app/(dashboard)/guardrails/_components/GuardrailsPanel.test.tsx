@@ -35,10 +35,19 @@ vi.mock("./guardrail_info", () => ({
   default: () => <div>Mock Guardrail Info View</div>,
 }));
 
-vi.mock("./GuardrailTestPlayground", () => ({
-  __esModule: true,
-  default: () => <div>Mock Guardrail Test Playground</div>,
-}));
+vi.mock("./GuardrailTestPlayground", async () => {
+  const { useState } = await import("react");
+  const MockGuardrailTestPlayground = () => {
+    const [draft, setDraft] = useState("");
+    return (
+      <div>
+        <div>Mock Guardrail Test Playground</div>
+        <input aria-label="playground draft" value={draft} onChange={(e) => setDraft(e.target.value)} />
+      </div>
+    );
+  };
+  return { __esModule: true, default: MockGuardrailTestPlayground };
+});
 
 vi.mock("./TeamGuardrailsTab", () => ({
   TeamGuardrailsTab: () => <div>Mock Team Guardrails Tab</div>,
@@ -127,6 +136,28 @@ describe("GuardrailsPanel", () => {
       expect(mockDeleteGuardrailCall).toHaveBeenCalledWith("test-token", "test-guardrail-1");
     });
     expect(mockGetGuardrailsList).toHaveBeenCalledTimes(2);
+  });
+
+  it("should mount every tab panel up front so panel state survives tab switches", async () => {
+    render(<GuardrailsPanel {...defaultProps} />);
+
+    expect(await screen.findByLabelText("playground draft")).toBeInTheDocument();
+    expect(screen.getByText("Mock Team Guardrails Tab")).toBeInTheDocument();
+  });
+
+  it("should keep test playground state when switching tabs away and back", async () => {
+    render(<GuardrailsPanel {...defaultProps} />);
+
+    fireEvent.click(screen.getByText("Test Playground"));
+
+    const draft = await screen.findByLabelText("playground draft");
+    fireEvent.change(draft, { target: { value: "keep me" } });
+    expect(draft).toHaveValue("keep me");
+
+    fireEvent.click(screen.getByText("Guardrails"));
+    fireEvent.click(screen.getByText("Test Playground"));
+
+    expect(await screen.findByLabelText("playground draft")).toHaveValue("keep me");
   });
 
   it("should not delete anything when the modal is cancelled", async () => {

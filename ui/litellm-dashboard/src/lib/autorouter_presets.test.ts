@@ -111,6 +111,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       expect(getMissingModels(config, availability)).toEqual([]);
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([group]);
@@ -153,6 +154,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual(["a-group"]);
     });
@@ -166,6 +168,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-opus-5"]);
     });
@@ -198,6 +201,7 @@ describe("autorouter_presets", () => {
       tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
       classifier_type: "heuristic" as const,
       session_affinity: false,
+      deployment_affinity: true,
     });
 
     it("resolves a preset model to a group expanded from a wildcard deployment", () => {
@@ -440,6 +444,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
         match_threshold: 0,
         escalation_keywords: [],
       };
@@ -454,6 +459,7 @@ describe("autorouter_presets", () => {
           tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
           classifier_type: "heuristic",
           session_affinity: false,
+          deployment_affinity: true,
         },
         groupsOnly(["gpt-5-nano"]),
       );
@@ -469,6 +475,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       const labeled = buildPresetPrefill(
         { ...base, tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" } },
@@ -483,6 +490,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
       expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-sonnet-4.5"]);

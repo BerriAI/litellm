@@ -2063,6 +2063,44 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "NVIDIA_RIVA",
+    "provider_display_name": "Nvidia Riva",
+    "litellm_provider": "nvidia_riva",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "grpc.nvcf.nvidia.com:443",
+        "tooltip": "host:port of the Riva gRPC endpoint. Use grpc.nvcf.nvidia.com:443 for NVCF-hosted Riva, or your own host (e.g. localhost:50051) when self-hosting. Riva has no public default, so this is required.",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "nvapi-...",
+        "tooltip": "Sent as gRPC authorization metadata. Required for NVCF-hosted Riva, optional for self-hosted deployments without auth.",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "nvcf_function_id",
+        "label": "NVCF Function ID",
+        "placeholder": "1598d209-5e27-4d3c-8079-4751568b1081",
+        "tooltip": "NVCF function id of the hosted Riva model. Setting it turns on TLS and the function-id gRPC metadata. Leave empty for self-hosted Riva.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr"
+  },
+  {
     "provider": "Ollama",
     "provider_display_name": "Ollama",
     "litellm_provider": "ollama",

@@ -228,7 +228,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     litellm_params=litellm_params,
                 )
 
-                data = {"model": None, "messages": messages, **optional_params}
+                data: dict[str, object] = {"model": None, "messages": messages, **optional_params}
             elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=litellm_params.get("base_model") or model):
                 data = litellm.AzureOpenAIGPT5Config().transform_request(
                     model=model,
@@ -482,12 +482,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     def streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_base: str,
         api_key: str | None,
         api_version: str,
         dynamic_params: bool,
-        data: dict,
+        data: dict[str, object],
         model: str,
         timeout: Any,
         max_retries: int,

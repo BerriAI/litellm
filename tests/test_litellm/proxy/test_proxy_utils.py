@@ -1096,6 +1096,7 @@ async def test_prisma_health_check_failure_names_itself_at_operator_visible_leve
     function and reads as "the check never ran", and reporting it only at debug
     level hides a database fault behind a flag nobody enables in production."""
     import logging
+    from functools import partial
     from unittest.mock import AsyncMock
 
     from litellm.proxy.utils import PrismaClient
@@ -1103,6 +1104,9 @@ async def test_prisma_health_check_failure_names_itself_at_operator_visible_leve
     client = MagicMock()
     client.db.query_raw = AsyncMock(side_effect=Exception("connection refused"))
     client.proxy_logging_obj.failure_handler = AsyncMock()
+    client._probe_target_wrapper = MagicMock(return_value=client.db)
+    client._run_health_probe = partial(PrismaClient._run_health_probe, client)
+    client._report_health_check_failure = AsyncMock()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         with pytest.raises(Exception, match="connection refused"):
@@ -1142,6 +1146,7 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
     text can carry a full connection string, so the credential has to be gone
     from the emitted record."""
     import logging
+    from functools import partial
     from unittest.mock import AsyncMock
 
     from litellm.proxy.utils import PrismaClient
@@ -1151,6 +1156,9 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
         side_effect=Exception("could not connect to postgresql://admin:hunter2@db.internal:5432/litellm")
     )
     client.proxy_logging_obj.failure_handler = AsyncMock()
+    client._probe_target_wrapper = MagicMock(return_value=client.db)
+    client._run_health_probe = partial(PrismaClient._run_health_probe, client)
+    client._report_health_check_failure = AsyncMock()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         with pytest.raises(Exception):
@@ -1161,3 +1169,25 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
     assert emitted
     assert all("hunter2" not in message for message in emitted)
     assert any("postgresql://REDACTED@db.internal" in message for message in emitted)
+
+
+@pytest.mark.asyncio
+async def test_update_data_key_branch_stamps_settings_updated_at():
+    """`updated_at` carries Prisma's @updatedAt and is rewritten by every spend
+    flush, so key config edits need their own audit column."""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = MagicMock()
+    client.jsonify_object = MagicMock(side_effect=lambda data: dict(data))
+    client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+
+    before = datetime.now(timezone.utc)
+    await PrismaClient.update_data(client, token="sk-test-key", data={"models": ["gpt-4"]})
+    after = datetime.now(timezone.utc)
+
+    sent = client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
+    assert sent["models"] == ["gpt-4"]
+    assert before <= sent["settings_updated_at"] <= after
