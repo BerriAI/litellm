@@ -77,6 +77,8 @@ from litellm.proxy.auth.auth_checks import (
     _cache_team_object,
     allowed_route_check_inside_route,
     can_org_access_model,
+    delete_cache_key_objects,
+    delete_cache_team_object,
     get_org_object,
     get_team_membership,
     get_team_object,
@@ -322,6 +324,11 @@ class _TeamIdInFilter(TypedDict, total=False):
 class _TeamCreateTx(AccessGroupSyncTx, Protocol):
     @property
     def litellm_teamtable(self) -> "_PrismaTableActions[LiteLLM_TeamTable]": ...
+
+
+_STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
+UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
+"""
 
 
 def _team_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_TeamTable]":
@@ -2674,6 +2681,11 @@ async def _add_team_members_to_team(
     serialize on the row lock and each appends onto the other's committed
     result, instead of both rewriting the whole JSON array from a stale
     snapshot (which silently drops one member on the losing write).
+
+    The same lock serializes this against /team/delete: the delete cannot remove
+    the row while the reconcile holds it, and a reconcile that finds the row
+    already gone cleans up after itself rather than leaving the member pointing
+    at a deleted team id.
     """
     # Process and add new members
     updated_users, updated_team_memberships = await _process_team_members(
@@ -2684,10 +2696,41 @@ async def _add_team_members_to_team(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
-    async with prisma_client.tx() as tx:
-        complete_team_data.members_with_roles = await TeamRepository(prisma_client).get_members_with_roles_locked(
-            tx, data.team_id
+    updated_team: Final = await _write_members_with_roles_locked(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        updated_users=updated_users,
+    )
+    if updated_team is None:
+        await _sweep_deleted_team_references(team_ids=(data.team_id,), prisma_client=prisma_client)
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team={data.team_id} was deleted while this member add was running"},
         )
+
+    return updated_team, updated_users, updated_team_memberships
+
+
+async def _write_members_with_roles_locked(
+    data: TeamMemberAddRequest,
+    complete_team_data: LiteLLM_TeamTable,
+    prisma_client: PrismaClient,
+    updated_users: list[LiteLLM_UserTable],
+) -> LiteLLM_TeamTable | None:
+    """Reconcile members_with_roles under the team row lock. None when the team row is gone.
+
+    That read is at least as recent as the user and membership writes the caller
+    already made, so a missing row means /team/delete committed after them. Its
+    post-delete sweep can have run before those writes landed, which is why the
+    caller sweeps this team id again rather than only reporting the 404.
+    """
+    async with prisma_client.tx() as tx:
+        locked_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, data.team_id)
+        if locked_members is None:
+            return None
+
+        complete_team_data.members_with_roles = locked_members
 
         await _update_team_members_list(
             data=data,
@@ -2696,12 +2739,10 @@ async def _add_team_members_to_team(
         )
 
         _db_team_members: Final = [m.model_dump() for m in complete_team_data.members_with_roles]
-        updated_team: Final = await tx.litellm_teamtable.update(
+        return await tx.litellm_teamtable.update(
             where={"team_id": data.team_id},
             data={"members_with_roles": json.dumps(_db_team_members)},
         )
-
-    return updated_team, updated_users, updated_team_memberships
 
 
 def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
@@ -3108,26 +3149,27 @@ async def team_member_add(
     )
 
 
+def _is_member_addressed_by(member: Member, data: TeamMemberDeleteRequest) -> bool:
+    return (data.user_id is not None and member.user_id is not None and data.user_id == member.user_id) or (
+        data.user_email is not None and member.user_email is not None and data.user_email == member.user_email
+    )
+
+
 def _cleanup_members_with_roles(
     existing_team_row: LiteLLM_TeamTable,
     data: TeamMemberDeleteRequest,
-) -> tuple[bool, list[Member]]:
-    """Cleanup members_with_roles list for a team."""
-    is_member_in_team = False
-    new_team_members: Final[list[Member]] = []
-    for m in existing_team_row.members_with_roles:
-        if (
-            data.user_id is not None
-            and m.user_id is not None
-            and data.user_id == m.user_id
-            or data.user_email is not None
-            and m.user_email is not None
-            and data.user_email == m.user_email
-        ):
-            is_member_in_team = True
-            continue
-        new_team_members.append(m)
-    return is_member_in_team, new_team_members
+) -> tuple[tuple[Member, ...], list[Member]]:
+    """Split a team's members_with_roles into the entries the request addresses and the ones that stay.
+
+    The addressed entries are returned rather than a bare found/not-found flag because they carry the
+    user_id the request may not have supplied, and every cleanup that keys off the user rather than
+    off the roster has to run against that id.
+    """
+    removed_team_members: Final = tuple(
+        m for m in existing_team_row.members_with_roles if _is_member_addressed_by(m, data)
+    )
+    new_team_members: Final = [m for m in existing_team_row.members_with_roles if not _is_member_addressed_by(m, data)]
+    return removed_team_members, new_team_members
 
 
 @router.post(
@@ -3199,12 +3241,12 @@ async def team_member_delete(
         )
 
     ## DELETE MEMBER FROM TEAM
-    is_member_in_team, new_team_members = _cleanup_members_with_roles(
+    removed_team_members, new_team_members = _cleanup_members_with_roles(
         existing_team_row=existing_team_row,
         data=data,
     )
 
-    if not is_member_in_team:
+    if not removed_team_members:
         raise HTTPException(status_code=400, detail={"error": "User not found in team"})
 
     existing_team_row.members_with_roles = new_team_members
@@ -3222,38 +3264,28 @@ async def team_member_delete(
 
     ## DELETE TEAM ID from USER ROW, IF EXISTS ##
     # get user row
-    key_val: Final = {}
-    if data.user_id is not None:
-        key_val["user_id"] = data.user_id
-    elif data.user_email is not None:
-        key_val["user_email"] = data.user_email
-    existing_user_rows: Final[Sequence[LiteLLM_UserTable] | None] = await UserRepository(prisma_client).table.find_many(
-        where=key_val
+    removed_user_ids: Final = frozenset(m.user_id for m in removed_team_members if m.user_id is not None)
+    key_val: Final[Mapping[str, object]] = (
+        {"user_id": {"in": sorted(removed_user_ids)}} if removed_user_ids else {"user_email": data.user_email}
     )
+    existing_user_rows: Final[Sequence[LiteLLM_UserTable]] = await _user_db(prisma_client).find_many(where=key_val)
 
-    if existing_user_rows is not None and (isinstance(existing_user_rows, list) and len(existing_user_rows) > 0):
-        for existing_user in existing_user_rows:
-            team_list = []
-            if data.team_id in existing_user.teams:
-                team_list = existing_user.teams
-                team_list.remove(data.team_id)
-                await _user_db(prisma_client).update(
-                    where={
-                        "user_id": existing_user.user_id,
-                    },
-                    data={"teams": {"set": team_list}},
-                )
+    for existing_user in existing_user_rows:
+        if data.team_id in existing_user.teams:
+            await _user_db(prisma_client).update(
+                where={
+                    "user_id": existing_user.user_id,
+                },
+                data={"teams": {"set": [team for team in existing_user.teams if team != data.team_id]}},
+            )
 
     # Also clean up any existing team membership rows for this user and team
-    user_ids_to_delete: Final = set[str]()
-    if data.user_id is not None:
-        user_ids_to_delete.add(data.user_id)
-    if existing_user_rows is not None and isinstance(existing_user_rows, list):
-        for existing_user in existing_user_rows:
-            if getattr(existing_user, "user_id", None):
-                user_ids_to_delete.add(existing_user.user_id)
+    user_ids_to_delete: Final = removed_user_ids.union(
+        (data.user_id,) if data.user_id is not None else (),
+        (user.user_id for user in existing_user_rows if user.user_id),
+    )
 
-    for _uid in user_ids_to_delete:
+    for _uid in sorted(user_ids_to_delete):
         await _team_membership_db(prisma_client).delete_many(where={"team_id": data.team_id, "user_id": _uid})
 
     ## DELETE KEYS CREATED BY USER FOR THIS TEAM
@@ -3265,7 +3297,7 @@ async def team_member_delete(
         # Fetch keys before deletion to persist them
         keys_to_delete: Final[list[LiteLLM_VerificationToken]] = await _tokens_db(prisma_client).find_many(
             where={
-                "user_id": {"in": list(user_ids_to_delete)},
+                "user_id": {"in": sorted(user_ids_to_delete)},
                 "team_id": data.team_id,
             }
         )
@@ -3280,7 +3312,7 @@ async def team_member_delete(
 
         await _tokens_db(prisma_client).delete_many(
             where={
-                "user_id": {"in": list(user_ids_to_delete)},
+                "user_id": {"in": sorted(user_ids_to_delete)},
                 "team_id": data.team_id,
             }
         )
@@ -3679,6 +3711,8 @@ async def delete_team(
         create_audit_log_for_update,
         litellm_proxy_admin_name,
         prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
     if prisma_client is None:
@@ -3772,6 +3806,12 @@ async def delete_team(
 
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
 
+    await _invalidate_deleted_key_cache(
+        keys=keys_to_delete,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     ## DELETE ASSOCIATED BYOK MODELS
     # Runs before the team rows are deleted so a mid-flight failure never leaves
     # the team gone with its models orphaned.
@@ -3805,13 +3845,91 @@ async def delete_team(
             )
         await asyncio.gather(*tasks)
 
+    await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
+
     ## DELETE TEAMS
     deleted_teams: Final = await prisma_client.delete_data(team_id_list=data.team_ids, table_name="team")
+
+    # Evict AFTER the rows are gone. Both writers of these keys (`_cache_team_object` and
+    # `get_team_object_by_alias`) hydrate from the db, so evicting first leaves a window where a
+    # concurrent auth lookup re-caches the still-present team and the delete looks like it never
+    # invalidated anything. Nothing fallible runs between the delete and this, or a failure there
+    # would strand the deleted team in cache.
+    await _invalidate_deleted_team_cache(
+        teams=team_rows,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    # Sweep again now the team is gone. A `/team/member_add` that landed between the first sweep
+    # and the delete would have re-appended the reference; an add still in flight sees the row
+    # missing under its own row lock and sweeps what it wrote. Both passes are idempotent, and
+    # keeping the first one means a failure here still leaves a team the admin can retry deleting.
+    await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
 
     for deleted_team in team_rows:
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return deleted_teams
+
+
+async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client: PrismaClient) -> None:
+    """
+    Strip the deleted team ids from every user row and team-membership row that still references them.
+
+    The per-member `team_member_delete` pass above only reaches users listed in the team's
+    `members_with_roles`, so a user row that outlived its roster entry is invisible to it and keeps
+    surfacing the team on `/user/info` after the team is gone.
+
+    #36839 closed the route that created that drift, by resolving member removal off the roster
+    entry's `user_id` rather than the identifier the caller happened to pass. It does not backfill
+    rows that already drifted, which is the state this was reported against, so the sweep still has
+    to run on delete.
+
+    `array_remove` rather than read-filter-write: rewriting the whole array from a snapshot read
+    outside a transaction drops any team a concurrent `/team/member_add` appended in between.
+    """
+    for team_id in team_ids:
+        _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+
+    _ = await _team_membership_db(prisma_client).delete_many(where=_TeamIdInFilter(team_id={"in": tuple(team_ids)}))
+
+
+async def _invalidate_deleted_key_cache(
+    keys: Sequence[LiteLLM_VerificationToken],
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """
+    Evict the auth cache entry for every key deleted along with the team.
+
+    `/key/delete` evicts as it goes, but the bulk delete above writes straight to the db. Auth
+    resolves a cached key object without re-reading the team, so a key belonging to a deleted team
+    keeps buying access until its TTL expires.
+    """
+    await delete_cache_key_objects(
+        hashed_tokens=tuple(key.token for key in keys),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _invalidate_deleted_team_cache(
+    teams: Sequence[LiteLLM_TeamTable],
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    _ = await asyncio.gather(
+        *(
+            delete_cache_team_object(
+                team_id=team.team_id,
+                team_alias=team.team_alias,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            for team in teams
+        )
+    )
 
 
 def _transform_teams_to_deleted_records(
