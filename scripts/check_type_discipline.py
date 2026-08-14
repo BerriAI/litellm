@@ -30,9 +30,11 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         spelling of the `MyTd(...)` call, which was never construction, and an
         all-ReadOnly payload cannot be grown or rewritten. The exemption is
         conservative: the TypedDict's name must be bound exactly once in the file
-        (a name also bound as a function, another class, an assignment target, or
-        an import alias might resolve to something mutable at the annotation
-        site), every field it declares or inherits in-module must be
+        (a name also bound in any other form, another def, an assignment or loop
+        target, an import alias, a parameter, might resolve to something mutable
+        at the annotation site, and a `from x import *` anywhere in the file
+        disqualifies every name, since what it binds is statically invisible),
+        every field it declares or inherits in-module must be
         `ReadOnly[...]`, only the display itself is exempt (nested mutables still
         count), and a TypedDict imported from another module is out of reach,
         exactly as in LIT012. Suppress with `# mutable-ok: <reason>`.
@@ -536,9 +538,10 @@ def _typeddict_assigned_value_ids(tree: ast.AST) -> frozenset[int]:
     exactly as in LIT012's base-class resolution); its name is bound exactly once
     in the file (resolution here is scope-blind, so a name the file also binds in
     any other form, another def, an assignment or loop target, an import alias, a
-    parameter, could resolve to something mutable at the annotation site); and
-    every field it declares or inherits within the module is `ReadOnly[...]`, so
-    no holder can statically
+    parameter, could resolve to something mutable at the annotation site, and a
+    `from x import *` anywhere disqualifies every name in the file, since what it
+    binds is statically invisible); and every field it declares or inherits
+    within the module is `ReadOnly[...]`, so no holder can statically
     rewrite a key even where LIT012 was suppressed or is riding its budget. Only
     the display itself is exempt; anything mutable nested inside it still trips
     LIT002.
@@ -558,6 +561,8 @@ def _typeddict_assigned_value_ids(tree: ast.AST) -> frozenset[int]:
         )
 
     bindings = tuple(name for node in ast.walk(tree) for name in _binding_names(node))
+    if "*" in bindings:
+        return frozenset()
     frozen_names = frozenset(
         cls.name for cls in classes if bindings.count(cls.name) == 1 and frozen_lineage(cls.name, frozenset())
     )
