@@ -2119,23 +2119,6 @@ async def _delete_cache_key_object(
         await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
 
 
-class TeamNotFoundError(HTTPException):
-    """The team row is provably absent, as opposed to merely unreadable.
-
-    ``get_team_object`` reports every failure as a 404, so a deleted team and a
-    database that would not answer are indistinguishable to its callers. Callers
-    that must not treat a degraded read as a definitive answer, such as the
-    authorization fallback in ``user_api_key_auth``, key on this subclass. It
-    stays a 404 carrying the same detail, so every other caller is unaffected.
-    """
-
-    def __init__(self, team_id: str) -> None:
-        super().__init__(
-            status_code=404,
-            detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
-        )
-
-
 async def delete_cache_key_objects(
     hashed_tokens: Sequence[str],
     user_api_key_cache: UserApiKeyCache,
@@ -2219,10 +2202,6 @@ async def _get_team_object_from_user_api_key_cache(
     )
     if should_check_db:
         response = await _get_team_db_check(team_id=team_id, prisma_client=prisma_client, team_id_upsert=team_id_upsert)
-        # The database answered and the row is not there. Distinct from every
-        # other failure here, which leaves the team's grant unknown.
-        if response is None:
-            raise TeamNotFoundError(team_id=team_id)
     else:
         response = None
 
@@ -2344,8 +2323,6 @@ async def get_team_object(
             key=key,
             team_id_upsert=team_id_upsert,
         )
-    except TeamNotFoundError:
-        raise
     except Exception:
         raise HTTPException(
             status_code=404,
