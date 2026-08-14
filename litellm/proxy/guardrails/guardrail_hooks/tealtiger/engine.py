@@ -2,6 +2,7 @@
 TealEngine: deterministic, dependency-free PII / cost / tool-auth policy
 evaluation. No network calls in the governance path.
 """
+
 from __future__ import annotations
 
 import threading

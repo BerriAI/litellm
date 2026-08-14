@@ -9,6 +9,7 @@ implementation of the same interface.
 
 No network calls, no LLM calls, no external API keys required.
 """
+
 from typing import TYPE_CHECKING, Final, List, Literal, Optional
 
 from litellm.integrations.custom_guardrail import (
@@ -63,13 +64,9 @@ class TealTigerGuardrail(CustomGuardrail):
                 if tool_name and not self.engine.check_tool(tool_name):
                     raise ValueError(f"TealTiger: blocked — TOOL_NOT_ALLOWLISTED ({tool_name})")
 
-            over_budget, spent, limit = self.engine.check_budget(
-                session_id=request_data.get("user") or "default"
-            )
+            over_budget, spent, limit = self.engine.check_budget(session_id=request_data.get("user") or "default")
             if over_budget:
-                raise ValueError(
-                    f"TealTiger: blocked — DAILY_BUDGET_EXCEEDED (${spent:.2f} / ${limit:.2f})"
-                )
+                raise ValueError(f"TealTiger: blocked — DAILY_BUDGET_EXCEEDED (${spent:.2f} / ${limit:.2f})")
 
         checked_texts: List[str] = []
         for text in inputs.get("texts") or []:
