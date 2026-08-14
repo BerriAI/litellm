@@ -1283,6 +1283,9 @@ class MCPApprovalStatus(str, enum.Enum):
     pending_review = "pending_review"
     active = "active"
     rejected = "rejected"
+    # Short-lived row backing the admin OAuth "Authorize & Fetch Token" flow. Never served: the
+    # registry loader and every listing exclude it, so it is reachable only by its own server_id.
+    draft = "draft"
 
 
 from litellm.models.mcp_server import (  # noqa: E402
