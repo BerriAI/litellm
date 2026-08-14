@@ -4,7 +4,6 @@ Tests for Anthropic Messages passthrough metadata support.
 Related issue: https://github.com/BerriAI/litellm/issues/30663
 """
 
-
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
