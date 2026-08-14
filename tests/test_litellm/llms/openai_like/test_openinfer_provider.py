@@ -31,13 +31,13 @@ class TestOpenInferProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="openinfer/llama-3.1-8b-instruct",
+            model="openinfer/@oi/Llama-3.2-1B-Instruct",
             custom_llm_provider=None,
             api_base=None,
             api_key="sk-test",
         )
 
-        assert model == "llama-3.1-8b-instruct"
+        assert model == "@oi/Llama-3.2-1B-Instruct"
         assert provider == "openinfer"
         assert api_key == "sk-test"
         assert api_base == "https://api.openinfer.ai/v1"
@@ -49,7 +49,7 @@ class TestOpenInferProviderConfig:
         monkeypatch.setenv("OPENINFER_API_BASE", "https://proxy.internal/v1")
 
         _, provider, api_key, api_base = get_llm_provider(
-            model="openinfer/llama-3.1-8b-instruct",
+            model="openinfer/@oi/Qwen3.5-9B",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
@@ -65,7 +65,7 @@ class TestOpenInferProviderConfig:
         monkeypatch.setenv("OPENINFER_API_KEY", "sk-env-key")
 
         _, provider, api_key, api_base = get_llm_provider(
-            model="llama-3.1-8b-instruct",
+            model="@oi/Llama-3.2-1B-Instruct",
             custom_llm_provider=None,
             api_base="https://api.openinfer.ai/v1",
             api_key=None,
@@ -76,14 +76,14 @@ class TestOpenInferProviderConfig:
 
     def test_chat_completions_url(self):
         config = litellm.ProviderConfigManager.get_provider_chat_config(
-            model="llama-3.1-8b-instruct", provider=litellm.LlmProviders.OPENINFER
+            model="@oi/Llama-3.2-1B-Instruct", provider=litellm.LlmProviders.OPENINFER
         )
         assert config is not None
         assert (
             config.get_complete_url(
                 api_base=None,
                 api_key="sk-test",
-                model="llama-3.1-8b-instruct",
+                model="@oi/Llama-3.2-1B-Instruct",
                 optional_params={},
                 litellm_params={},
             )
