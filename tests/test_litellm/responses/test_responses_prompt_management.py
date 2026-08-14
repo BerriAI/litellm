@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
@@ -410,6 +411,23 @@ class TestResponsesAPIPromptManagement:
         assert handler_call_kwargs.get("custom_llm_provider") == "anthropic"
 
 
+    def test_invalid_input_type_raises_bad_request_error(self):
+        """Non-string, non-list input should raise BadRequestError."""
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=[],
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3]:
+            with pytest.raises(litellm.BadRequestError, match="input"):
+                litellm.responses(
+                    input=12345,
+                    model="gpt-4o",
+                    prompt_id="test-prompt",
+                    litellm_logging_obj=logging_obj,
+                )
+
 class TestAsyncResponsesAPIPromptManagement:
     """Tests for the async aresponses() prompt management path.
 
@@ -539,3 +557,21 @@ class TestAsyncResponsesAPIPromptManagement:
         assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
         assert sent_input[1] == reasoning_item
         assert sent_input[2]["id"] == "msg_1"
+
+    @pytest.mark.asyncio
+    async def test_async_invalid_input_type_raises_bad_request_error(self):
+        """Non-string, non-list input should raise BadRequestError."""
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=[],
+        )
+        logging_obj.async_failure_handler = AsyncMock()
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3]:
+            with pytest.raises(litellm.BadRequestError, match="input"):
+                await litellm.aresponses(
+                    input=12345,
+                    model="gpt-4o",
+                    prompt_id="test-prompt",
+                    litellm_logging_obj=logging_obj,
+                )

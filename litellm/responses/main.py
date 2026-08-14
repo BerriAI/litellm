@@ -465,6 +465,12 @@ async def aresponses(
         ) and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs):
             if isinstance(input, str):
                 client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
+            elif not isinstance(input, list):
+                raise litellm.BadRequestError(
+                    message=f"'input' must be a string or list of input items, got {type(input).__name__}",
+                    model=model,
+                    llm_provider=custom_llm_provider or "unknown",
+                )
             else:
                 client_input = [item for item in input if isinstance(item, dict) and "role" in item]
             (
@@ -579,6 +585,12 @@ def _apply_prompt_management_to_responses_call(
 
     if isinstance(input, str):
         client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
+    elif not isinstance(input, list):
+        raise litellm.BadRequestError(
+            message=f"'input' must be a string or list of input items, got {type(input).__name__}",
+            model=model,
+            llm_provider=custom_llm_provider or "unknown",
+        )
     else:
         client_input = [item for item in input if isinstance(item, dict) and "role" in item]
 
