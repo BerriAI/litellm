@@ -1,15 +1,15 @@
 {
   "reportAny": {
-    "limit": 26391
+    "limit": 22947
   },
   "reportArgumentType": {
-    "limit": 2614
+    "limit": 2579
   },
   "reportAssignmentType": {
-    "limit": 327
+    "limit": 323
   },
   "reportAttributeAccessIssue": {
-    "limit": 514
+    "limit": 488
   },
   "reportCallIssue": {
     "limit": 114
@@ -18,13 +18,13 @@
     "limit": 40
   },
   "reportDeprecated": {
-    "limit": 215
+    "limit": 213
   },
   "reportDuplicateImport": {
     "limit": 19
   },
   "reportExplicitAny": {
-    "limit": 8319
+    "limit": 7312
   },
   "reportFunctionMemberAccess": {
     "limit": 7
@@ -54,10 +54,10 @@
     "limit": 0
   },
   "reportMissingParameterType": {
-    "limit": 5825
+    "limit": 5707
   },
   "reportMissingTypeArgument": {
-    "limit": 15695
+    "limit": 15642
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -72,7 +72,7 @@
     "limit": 0
   },
   "reportOptionalMemberAccess": {
-    "limit": 1077
+    "limit": 1069
   },
   "reportOptionalOperand": {
     "limit": 0
@@ -99,37 +99,37 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 44996
+    "limit": 44776
   },
   "reportUnknownLambdaType": {
     "limit": 113
   },
   "reportUnknownMemberType": {
-    "limit": 39643
+    "limit": 39237
   },
   "reportUnknownParameterType": {
-    "limit": 20132
+    "limit": 19969
   },
   "reportUnknownVariableType": {
-    "limit": 31153
+    "limit": 30881
   },
   "reportUnnecessaryCast": {
-    "limit": 118
+    "limit": 117
   },
   "reportUnnecessaryComparison": {
-    "limit": 701
+    "limit": 699
   },
   "reportUnnecessaryContains": {
     "limit": 5
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 857
+    "limit": 853
   },
   "reportUntypedBaseClass": {
     "limit": 0
   },
   "reportUntypedFunctionDecorator": {
-    "limit": 33
+    "limit": 27
   },
   "reportUnusedClass": {
     "limit": 23
@@ -138,7 +138,7 @@
     "limit": 139
   },
   "reportUnusedImport": {
-    "limit": 555
+    "limit": 545
   },
   "reportUnusedVariable": {
     "limit": 146

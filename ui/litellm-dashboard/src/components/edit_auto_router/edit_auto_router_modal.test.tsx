@@ -365,7 +365,7 @@ describe("EditAutoRouterModal session affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByText("Advanced: Affinity"));
     expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -378,7 +378,7 @@ describe("EditAutoRouterModal session affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByText("Advanced: Affinity"));
     expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -391,7 +391,7 @@ describe("EditAutoRouterModal session affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByText("Advanced: Affinity"));
     await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -404,13 +404,74 @@ describe("EditAutoRouterModal session affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByText("Advanced: Affinity"));
     await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().session_affinity).toBe(false);
+  });
+});
+
+describe("EditAutoRouterModal deployment affinity", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const renderWithStoredConfig = (complexity_router_config: Record<string, unknown>) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{ ...MODEL_DATA, litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config } }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  it("shows a stored config with no deployment_affinity key as on, matching the backend default", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    expect(
+      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
+    ).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().deployment_affinity).toBe(true);
+  });
+
+  it("shows a stored deployment_affinity=false as off and preserves it through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, deployment_affinity: false });
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    expect(
+      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
+    ).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().deployment_affinity).toBe(false);
+  });
+
+  it("persists turning deployment affinity off", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().deployment_affinity).toBe(false);
   });
 });
 

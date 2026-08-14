@@ -16,8 +16,8 @@ sys.path.insert(0, os.path.abspath("../../../../../.."))
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
+    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    remove_custom_field_from_tools,
 )
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -353,12 +353,13 @@ def test_remove_ttl_from_cache_control():
     assert request5 == {}
 
 
-def test_remove_custom_field_from_tools():
+def test_normalize_custom_field_on_tools():
     """
-    Ensure the `custom` field is stripped from every tool definition.
+    Ensure the `custom` field is stripped from every tool definition, and that a
+    boolean `custom.defer_loading` is hoisted onto the top-level `defer_loading`
+    flag Bedrock documents instead of being dropped with the wrapper.
 
-    Claude Code v2.1.69+ sends `custom: {defer_loading: true}` on tool
-    objects.  Bedrock does not accept this extra field and returns
+    Bedrock does not accept a `custom` object on a tool and returns
     "Extra inputs are not permitted".
 
     Ref: https://github.com/BerriAI/litellm/issues/22847
@@ -381,28 +382,93 @@ def test_remove_custom_field_from_tools():
         ]
     }
 
-    remove_custom_field_from_tools(request)
+    normalize_custom_field_on_tools(request)
 
     for tool in request["tools"]:
         assert "custom" not in tool, f"Tool {tool['name']} still has 'custom' field"
     # Other fields should be preserved
     assert request["tools"][0]["name"] == "Read"
     assert request["tools"][1]["name"] == "Write"
+    # `custom.defer_loading` is hoisted; the tool that never carried it is untouched
+    assert request["tools"][0]["defer_loading"] is True
+    assert "defer_loading" not in request["tools"][1]
 
     # Case 2: request without tools key (should not raise error)
     request2 = {"messages": [{"role": "user", "content": "hi"}]}
-    remove_custom_field_from_tools(request2)
+    normalize_custom_field_on_tools(request2)
     assert "tools" not in request2
 
     # Case 3: empty tools list (should not raise error)
     request3 = {"tools": []}
-    remove_custom_field_from_tools(request3)
+    normalize_custom_field_on_tools(request3)
     assert request3["tools"] == []
 
     # Case 4: tools with None value (should not raise error)
     request4 = {"tools": None}
-    remove_custom_field_from_tools(request4)
+    normalize_custom_field_on_tools(request4)
     assert request4["tools"] is None
+
+    # Case 5: an explicit top-level flag wins over a conflicting wrapped one
+    request5 = {
+        "tools": [
+            {"name": "Read", "defer_loading": False, "custom": {"defer_loading": True}}
+        ]
+    }
+    normalize_custom_field_on_tools(request5)
+    assert request5["tools"][0] == {"name": "Read", "defer_loading": False}
+
+    # Case 6: a non-boolean `custom.defer_loading` is dropped, never forwarded
+    for junk in ("true", 1, None, {"nested": True}):
+        request6 = {"tools": [{"name": "Read", "custom": {"defer_loading": junk}}]}
+        normalize_custom_field_on_tools(request6)
+        assert request6["tools"][0] == {"name": "Read"}, f"leaked defer_loading={junk!r}"
+
+    # Case 7: a `custom` that is not a dict is dropped without raising
+    request7 = {
+        "tools": [
+            {"name": "Read", "custom": "defer_loading"},
+            {"name": "Write", "custom": None},
+        ]
+    }
+    normalize_custom_field_on_tools(request7)
+    assert request7["tools"] == [{"name": "Read"}, {"name": "Write"}]
+
+
+@pytest.mark.parametrize(
+    "deferred_marker", [{"custom": {"defer_loading": True}}, {"defer_loading": True}]
+)
+def test_bedrock_invoke_messages_transform_emits_top_level_defer_loading(
+    deferred_marker,
+):
+    """A deferred tool must reach Bedrock as top-level ``defer_loading``, whether the
+    client wrapped the flag in ``custom`` or sent it top-level, and the outbound body
+    must still carry the Bedrock tool-search beta."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 128,
+            "stream": False,
+            "betas": ["advanced-tool-use-2025-11-20"],
+            "tools": [
+                {
+                    "name": "Read",
+                    "description": "Read a file",
+                    "input_schema": {"type": "object", "properties": {}},
+                    **deferred_marker,
+                },
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search"},
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"][0]["defer_loading"] is True
+    assert "custom" not in result["tools"][0]
+    assert result["anthropic_beta"] == ["tool-search-tool-2025-10-19"]
 
 
 def test_normalize_tool_input_schema_types_for_bedrock_invoke():
@@ -2473,6 +2539,91 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
     )
     assert out_converse == []
 
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config, model):
+    """
+    LIT-4522: Bedrock InvokeModel only admits ``tool_search_tool_*`` tool types
+    when the request body carries the ``tool-search-tool-2025-10-19`` beta;
+    without it Bedrock 400s with "Input tag 'tool_search_tool_regex_20251119'
+    ... does not match any of the expected tags". The allowlist in
+    ``_supports_tool_search_on_bedrock`` previously omitted Haiku 4.5 and
+    Opus 4.7, so the beta was silently dropped for those models and every
+    tool-search request failed. Verified live 2026-08-11: Bedrock returns 200
+    with ``server_tool_use`` for all three models once the beta is sent.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 64,
+        "tools": [
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {
+                "name": "add_numbers",
+                "description": "Add two integers",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                    "required": ["a", "b"],
+                },
+            },
+        ],
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "tool-search-tool-2025-10-19" in (result.get("anthropic_beta") or [])
+
+
+def test_bedrock_messages_tool_search_model_map_flag_is_authoritative(local_model_cost_map, monkeypatch):
+    """``supports_tool_search`` lives in the model map; the name patterns in
+    ``_supports_tool_search_on_bedrock`` are only a fallback for ids the map
+    cannot resolve. Flipping the mapped entry's flag to ``False`` must win even
+    though the model name still matches the ``haiku-4-5`` pattern."""
+    import litellm
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    assert AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock") is True
+    assert cfg._supports_tool_search_on_bedrock(model) is True
+
+    monkeypatch.setitem(litellm.model_cost[model], "supports_tool_search", False)
+    litellm.get_model_info.cache_clear()
+
+    assert cfg._supports_tool_search_on_bedrock(model) is False
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        pytest.param("us.anthropic.claude-opus-4-6-v99:9", True, id="unmapped_id_falls_back_to_patterns"),
+        pytest.param("anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="mapped_entry_without_flag_no_pattern"),
+    ],
+)
+def test_bedrock_messages_tool_search_pattern_fallback(local_model_cost_map, model, expected):
+    """Ids the model map cannot resolve (or resolves without a
+    ``supports_tool_search`` opinion) fall through to the name patterns, so
+    ARNs and unlisted regional variants of supported families keep working."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    assert cfg._supports_tool_search_on_bedrock(model) is expected
 
 
 def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
