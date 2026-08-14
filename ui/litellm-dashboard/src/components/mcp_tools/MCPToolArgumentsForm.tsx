@@ -20,14 +20,14 @@ const BOOLEAN_ITEMS = [
 
 const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
 
-const jsonErrorFor = (prop: InputSchemaProperty, value: unknown): string | null => {
+const jsonErrorFor = (effectiveType: string | undefined, value: unknown): string | null => {
   try {
     const parsed = typeof value === "string" ? JSON.parse(value) : value;
     const isValidObject =
-      prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
-    const isValidArray = prop.type === "array" && Array.isArray(parsed);
+      effectiveType === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+    const isValidArray = effectiveType === "array" && Array.isArray(parsed);
     if (isValidObject || isValidArray) return null;
-    return prop.type === "object" ? "Please enter a JSON object" : "Please enter a JSON array";
+    return effectiveType === "object" ? "Please enter a JSON object" : "Please enter a JSON array";
   } catch {
     return "Invalid JSON";
   }
@@ -46,9 +46,10 @@ const collectErrors = (
     if (actualSchema.required?.includes(key) && blank) {
       return [[key, { type: "required", message: requiredMessages[key] ?? `Please enter ${key}` }]];
     }
-    if (prop.type !== "object" && prop.type !== "array") return [];
+    const effectiveType = resolveSchemaType(prop.type);
+    if (effectiveType !== "object" && effectiveType !== "array") return [];
     if (blank) return [];
-    const message = jsonErrorFor(prop, value);
+    const message = jsonErrorFor(effectiveType, value);
     return message === null ? [] : [[key, { type: "validate", message }]];
   });
   return Object.fromEntries(entries);
@@ -76,6 +77,17 @@ const labelFor = (key: string, prop: InputSchemaProperty, required: boolean): Re
 const isPlainObject = (value: unknown): value is Record<string, any> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+// JSON Schema allows "type" to be an array (e.g. ["string", "null"]) for a nullable field, the
+// shape Pydantic's model_json_schema() emits for Optional[str] / str | None. Every branch below
+// that decides a widget or a value conversion from a property's type needs the single effective
+// (non-null) type, not the raw field verbatim.
+function resolveSchemaType(type: InputSchemaProperty["type"] | undefined): string | undefined {
+  if (Array.isArray(type)) {
+    return type.find((t) => t !== "null") ?? type[0];
+  }
+  return type;
+}
+
 function buildArrayItems(items?: InputSchemaProperty | InputSchemaProperty[]): any[] {
   if (!items) return [];
   if (Array.isArray(items)) {
@@ -88,8 +100,9 @@ function buildArrayItems(items?: InputSchemaProperty | InputSchemaProperty[]): a
 function buildDefaultValue(prop?: InputSchemaProperty, overrideDefault?: any): any {
   if (!prop) return undefined;
   const effectiveDefault = overrideDefault !== undefined ? overrideDefault : prop.default;
+  const effectiveType = resolveSchemaType(prop.type);
 
-  if (prop.type === "object") {
+  if (effectiveType === "object") {
     const base = isPlainObject(effectiveDefault) ? { ...effectiveDefault } : {};
     if (prop.properties) {
       Object.entries(prop.properties).forEach(([childKey, childProp]) => {
@@ -99,7 +112,7 @@ function buildDefaultValue(prop?: InputSchemaProperty, overrideDefault?: any): a
     return base;
   }
 
-  if (prop.type === "array") {
+  if (effectiveType === "array") {
     if (Array.isArray(effectiveDefault)) {
       const itemSchema = prop.items;
       if (!itemSchema) return effectiveDefault;
@@ -120,7 +133,7 @@ function buildDefaultValue(prop?: InputSchemaProperty, overrideDefault?: any): a
   }
 
   if (effectiveDefault !== undefined) return effectiveDefault;
-  switch (prop.type) {
+  switch (effectiveType) {
     case "integer":
     case "number":
       return 0;
@@ -134,8 +147,9 @@ function buildDefaultValue(prop?: InputSchemaProperty, overrideDefault?: any): a
 
 const getInitialValueForField = (prop: InputSchemaProperty): any => {
   const defaultValue = buildDefaultValue(prop);
-  if (prop.type === "object" || prop.type === "array") {
-    const fallback = prop.type === "array" ? [] : {};
+  const effectiveType = resolveSchemaType(prop.type);
+  if (effectiveType === "object" || effectiveType === "array") {
+    const fallback = effectiveType === "array" ? [] : {};
     return JSON.stringify(defaultValue ?? fallback, null, 2);
   }
   return defaultValue;
@@ -152,7 +166,8 @@ function convertFormValues(
   Object.entries(values).forEach(([key, value]) => {
     const prop = schemaToUse.properties?.[key];
     if (prop && value !== null && value !== undefined && value !== "") {
-      switch (prop.type) {
+      const effectiveType = resolveSchemaType(prop.type);
+      switch (effectiveType) {
         case "boolean":
           convertedValues[key] = value === "true" || value === true;
           break;
@@ -161,7 +176,7 @@ function convertFormValues(
           const numericValue = Number(value);
           convertedValues[key] = Number.isNaN(numericValue)
             ? value
-            : prop.type === "integer"
+            : effectiveType === "integer"
               ? Math.trunc(numericValue)
               : numericValue;
           break;
@@ -171,9 +186,9 @@ function convertFormValues(
           try {
             const parsed = typeof value === "string" ? JSON.parse(value) : value;
             const isValidObject =
-              prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
-            const isValidArray = prop.type === "array" && Array.isArray(parsed);
-            if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
+              effectiveType === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+            const isValidArray = effectiveType === "array" && Array.isArray(parsed);
+            if ((effectiveType === "object" && isValidObject) || (effectiveType === "array" && isValidArray)) {
               convertedValues[key] = parsed;
             } else {
               convertedValues[key] = value;
@@ -194,7 +209,7 @@ function convertFormValues(
     }
   });
 
-  const isNestedParams = schema.properties?.params?.type === "object" && schema.properties.params.properties;
+  const isNestedParams = resolveSchemaType(schema.properties?.params?.type) === "object" && schema.properties?.params?.properties;
 
   return isNestedParams ? { params: convertedValues } : convertedValues;
 }
@@ -227,7 +242,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
     }, [tool.inputSchema]);
 
     const actualSchema: InputSchema = useMemo(() => {
-      if (schema.properties?.params?.type === "object" && schema.properties.params.properties) {
+      if (resolveSchemaType(schema.properties?.params?.type) === "object" && schema.properties?.params?.properties) {
         return {
           type: "object",
           properties: schema.properties.params.properties,
@@ -320,6 +335,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
           <FieldGroup>
             {Object.entries(actualSchema.properties).map(([key, prop]) => {
               const required = actualSchema.required?.includes(key) ?? false;
+              const effectiveType = resolveSchemaType(prop.type);
               return (
                 <FormField
                   key={`${tool.name}-${key}`}
@@ -328,7 +344,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                   label={labelFor(key, prop, required)}
                 >
                   {(field) => {
-                    if (prop.type === "string" && prop.enum) {
+                    if (effectiveType === "string" && prop.enum) {
                       return (
                         <Select value={field.value ?? ""} onValueChange={field.onChange}>
                           <SelectTrigger
@@ -350,7 +366,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                         </Select>
                       );
                     }
-                    if (prop.type === "boolean") {
+                    if (effectiveType === "boolean") {
                       return (
                         <Select items={BOOLEAN_ITEMS} value={field.value ?? ""} onValueChange={field.onChange}>
                           <SelectTrigger
@@ -369,28 +385,28 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                         </Select>
                       );
                     }
-                    if (prop.type === "number" || prop.type === "integer") {
+                    if (effectiveType === "number" || effectiveType === "integer") {
                       return (
                         <Input
                           {...field}
                           type="number"
-                          step={prop.type === "integer" ? 1 : undefined}
+                          step={effectiveType === "integer" ? 1 : undefined}
                           value={field.value as number | string}
                           placeholder={prop.description || `Enter ${key}`}
                         />
                       );
                     }
-                    if (prop.type === "object" || prop.type === "array") {
+                    if (effectiveType === "object" || effectiveType === "array") {
                       return (
                         <Textarea
                           {...field}
-                          rows={prop.type === "object" ? 4 : 3}
+                          rows={effectiveType === "object" ? 4 : 3}
                           value={field.value as string}
                           spellCheck={false}
                           className="font-mono"
                           placeholder={
                             prop.description ||
-                            (prop.type === "object" ? `Enter JSON object for ${key}` : `Enter JSON array for ${key}`)
+                            (effectiveType === "object" ? `Enter JSON object for ${key}` : `Enter JSON array for ${key}`)
                           }
                         />
                       );

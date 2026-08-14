@@ -158,6 +158,54 @@ describe("ToolTestPanel defaults", () => {
     expect(callButton.closest("form")).not.toBeNull();
     expect(callButton).toHaveAttribute("type", "button");
   });
+
+  it("renders inputs for nullable (type-array) schema properties instead of leaving them blank", () => {
+    // JSON Schema represents an optional/nullable field as an array type, e.g. ["string", "null"] -
+    // the shape Pydantic's model_json_schema() emits for Optional[str]. A real Azure DevOps MCP tool
+    // schema (testplan_test_suite_write) declares its optional fields exactly this way.
+    const schema: InputSchema = {
+      type: "object",
+      properties: {
+        name: { type: ["string", "null"], description: "Optional name" },
+        parentSuiteId: { type: ["integer", "null"], description: "Optional parent suite id" },
+        active: { type: ["boolean", "null"], description: "Optional flag" },
+      },
+    };
+
+    renderPanel(schema);
+
+    expect(screen.getByLabelText("name")).toHaveValue("");
+    expect(screen.getByLabelText("parentSuiteId")).toHaveValue(0);
+    expect(screen.getByLabelText("active")).toBeInTheDocument();
+  });
+
+  it("coerces a nullable integer field to a number on submit, not a string", async () => {
+    const schema: InputSchema = {
+      type: "object",
+      properties: {
+        parentSuiteId: { type: ["integer", "null"], description: "Optional parent suite id" },
+      },
+    };
+    const onSubmit = vi.fn();
+
+    render(
+      <ToolTestPanel
+        tool={buildTool(schema)}
+        onSubmit={onSubmit}
+        isLoading={false}
+        result={null}
+        error={null}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByLabelText("parentSuiteId");
+    await userEvent.clear(input);
+    await userEvent.type(input, "42");
+    await userEvent.click(screen.getByRole("button", { name: "Call Tool" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ parentSuiteId: 42 }));
+  });
 });
 
 describe("ToolTestPanel argument payload", () => {
