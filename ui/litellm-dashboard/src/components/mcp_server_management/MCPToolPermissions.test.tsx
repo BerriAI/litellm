@@ -64,13 +64,10 @@ describe("MCPToolPermissions", () => {
       expect(screen.getByText("read_wiki_structure")).toBeInTheDocument();
     });
 
-    // Switch to Flat List view, and prove the view actually switched: the flat
-    // list is the only view that renders the description inline after a dash.
     await userEvent.click(screen.getByText("Flat List"));
     expect(screen.getByRole("radio", { name: "Flat List" })).toBeChecked();
     expect(await screen.findByText("- Get documentation topics")).toBeInTheDocument();
 
-    // Deselect read_wiki_structure
     await userEvent.click(screen.getByRole("checkbox", { name: "read_wiki_structure" }));
 
     // Verify onChange was called with read_wiki_structure removed
@@ -220,7 +217,6 @@ describe("MCPToolPermissions", () => {
 
       await userEvent.click(readGroupToggle);
 
-      // Both read-classified tools drop out; the delete-classified one survives.
       expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["delete_document"] });
     });
 
@@ -242,8 +238,6 @@ describe("MCPToolPermissions", () => {
 
       await userEvent.click(await screen.findByRole("checkbox", { name: "delete_document" }));
 
-      // The surrounding row is itself clickable, so a click that bubbles would
-      // toggle twice and the permission would silently stay allowed.
       expect(mockOnChange).toHaveBeenCalledTimes(1);
       expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
     });
@@ -259,8 +253,6 @@ describe("MCPToolPermissions", () => {
     });
 
     it("re-renders each checkbox from the permissions it emitted", async () => {
-      // Drives the panel from real parent state so the assertions cover the full
-      // round trip: click, emitted payload, then the state the panel renders back.
       const Harness = () => {
         const [permissions, setPermissions] = useState<Record<string, string[]>>({
           [mockServerId]: allCrudToolNames,
@@ -293,12 +285,10 @@ describe("MCPToolPermissions", () => {
       expect(deleteTool).not.toBeChecked();
       expect(screen.getByRole("status")).toHaveTextContent("list_documents,get_document");
 
-      // Clearing one tool of the Read group must leave that group's toggle mixed.
       await userEvent.click(screen.getByRole("checkbox", { name: "get_document" }));
       expect(readGroupToggle).toBePartiallyChecked();
       expect(screen.getByRole("status")).toHaveTextContent("list_documents");
 
-      // Re-arming the group restores both read tools and leaves delete blocked.
       await userEvent.click(readGroupToggle);
       expect(readGroupToggle).toBeChecked();
       expect(screen.getByRole("status")).toHaveTextContent("list_documents,get_document");
