@@ -244,11 +244,6 @@ def test_bedrock_mantle_provider_fields():
 
 
 def test_nvidia_riva_provider_fields():
-    """The Add Model provider dropdown is populated from /public/providers/fields, so a
-    missing entry meant Riva could not be added through the UI. Riva is gRPC only with no
-    public default endpoint, hence the required api_base, and NVCF hosted Riva cannot be
-    called without nvcf_function_id.
-    """
     app_instance = FastAPI()
     app_instance.include_router(router)
     test_client = TestClient(app_instance)
