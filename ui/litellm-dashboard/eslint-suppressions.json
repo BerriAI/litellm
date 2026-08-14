@@ -1393,9 +1393,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "prefer-const": {
       "count": 2
     }
@@ -1721,11 +1718,6 @@
       "count": 1
     }
   },
-  "src/components/BetaBadge.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/CloudZeroCostTracking/CloudZeroCreateModal.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1741,11 +1733,6 @@
       "count": 2
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/DeprecationBanner.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1917,11 +1904,6 @@
       "count": 1
     }
   },
-  "src/components/Settings/RouterSettings/Fallbacks/EditFallbacks.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/Settings/RouterSettings/Fallbacks/FallbackGroupConfig.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 1
@@ -1939,9 +1921,6 @@
     }
   },
   "src/components/Settings/RouterSettings/Fallbacks/Fallbacks.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
     "prefer-const": {
       "count": 2
     }
