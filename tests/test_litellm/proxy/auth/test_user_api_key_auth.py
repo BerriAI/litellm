@@ -4472,6 +4472,218 @@ async def test_centralized_common_checks_absent_team_refused_despite_db_unavaila
             setattr(_proxy_server_mod, k, v)
 
 
+@pytest.mark.parametrize("marker", ["via_virtual_key", "via_ui_session_blob"])
+@pytest.mark.asyncio
+async def test_centralized_common_checks_ui_session_team_is_not_treated_as_deleted(marker):
+    """Every Admin UI session token is stamped with the reserved
+    ``litellm-dashboard`` team id, which never has a row, so the absent-team
+    refusal read the ordinary UI case as a deleted team and hard 404'd every
+    dashboard request. The sentinel resolves to the token-derived team without a
+    lookup that can only fail.
+
+    One row per way the proxy mints a UI session: a database-backed key row, and the
+    ``EXPERIMENTAL_UI_LOGIN`` blob, which has no row and so cannot be a virtual key."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.auth.user_api_key_auth import TeamNotFoundError
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed-sk-test",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        models=[],
+        team_models=[],
+    )
+    setattr(token, marker, True)
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-4.1"}).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=TeamNotFoundError(team_id=UI_SESSION_TOKEN_TEAM_ID),
+            ) as mock_get_team,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4.1"},
+                route="/chat/completions",
+            )
+        mock_get_team.assert_not_awaited()
+        mock_checks.assert_awaited_once()
+        assert mock_checks.call_args.kwargs["team_object"].team_id == UI_SESSION_TOKEN_TEAM_ID
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        pytest.param(
+            {"token": "hashed-sk-test", "jwt_claims": {"team_id": "litellm-dashboard"}},
+            id="jwt_mapped_to_a_virtual_key",
+        ),
+        pytest.param(
+            {"token": None, "jwt_claims": {"team_id": "litellm-dashboard"}},
+            id="standard_jwt_identity",
+        ),
+        # The shape Oauth2Handler.check_oauth2_token returns: team_id read straight out of
+        # the introspection response, api_key set so a token hash exists, and no jwt_claims.
+        pytest.param({"api_key": "oauth2-access-token"}, id="oauth2_introspection_identity"),
+        pytest.param({"token": "handler-supplied"}, id="custom_auth_handler_return"),
+        pytest.param({"token": None, "jwt_claims": None}, id="tokenless_identity"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_centralized_common_checks_non_ui_identity_claiming_ui_team_still_refused(identity):
+    """Several auth paths take ``team_id`` from data the proxy did not mint, so any of them
+    could name the reserved UI team and inherit the exemption if the id alone earned it. The
+    synthesized team's empty ``models`` reads as every model, so that is a widening, not just
+    a bypass.
+
+    None of these carry a provenance marker, and none can: both markers are stripped from
+    validated input, which the marker-forging test below pins separately."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.auth.user_api_key_auth import TeamNotFoundError
+
+    token = UserAPIKeyAuth(
+        **{
+            "api_key": None,
+            "team_id": UI_SESSION_TOKEN_TEAM_ID,
+            "models": [],
+            "team_models": [],
+            **identity,
+        }
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-4.1"}).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=TeamNotFoundError(team_id=UI_SESSION_TOKEN_TEAM_ID),
+            ) as mock_get_team,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+            pytest.raises(TeamNotFoundError),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4.1"},
+                route="/chat/completions",
+            )
+        mock_get_team.assert_awaited_once()
+        mock_checks.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_ui_session_blob_is_marked_where_it_is_decrypted(monkeypatch):
+    """The blob carries no key row, so nothing downstream can mark it, and a proxy-admin
+    session returns from the builder before the virtual-key paths run. Losing the marker
+    at the decrypt boundary therefore costs the exemption outright and puts every Admin UI
+    request under ``EXPERIMENTAL_UI_LOGIN`` back on the 404 this PR exists to fix."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.auth.user_api_key_auth import (
+        _is_ui_session_token,
+        _user_api_key_auth_builder,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-ui-session-blob")
+
+    admin = LiteLLM_UserTable(
+        user_id="ui-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        models=[],
+    )
+    blob = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(admin)
+    assert not blob.startswith("sk-"), "a sk- credential would take the key-row path instead"
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        result = await _user_api_key_auth_builder(
+            request=request,
+            api_key=f"Bearer {blob}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+        assert result.team_id == UI_SESSION_TOKEN_TEAM_ID
+        assert result.via_virtual_key is False, "the blob has no key row to be marked by"
+        assert result.via_ui_session_blob is True
+        assert _is_ui_session_token(result) is True
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+@pytest.mark.parametrize("marker", ["via_virtual_key", "via_ui_session_blob"])
+def test_ui_session_provenance_markers_cannot_be_forged_from_validated_input(marker):
+    """The exemption rests entirely on these two markers, so the whole guard collapses if a
+    JWT claim splat, a custom auth handler's return value, or key metadata can set one. They
+    are server-only: settable by assignment, stripped from anything validated."""
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.auth.user_api_key_auth import _is_ui_session_token
+
+    forged = UserAPIKeyAuth.model_validate(
+        {"team_id": UI_SESSION_TOKEN_TEAM_ID, "api_key": "sk-forged", marker: True}
+    )
+    assert getattr(forged, marker) is False
+    assert _is_ui_session_token(forged) is False
+
+    minted = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, api_key="sk-minted")
+    assert _is_ui_session_token(minted) is False
+    setattr(minted, marker, True)
+    assert _is_ui_session_token(minted) is True
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_unreadable_team_keeps_db_unavailable_optout():
     """The counterpart: an unreadable team leaves the grant unknown rather than

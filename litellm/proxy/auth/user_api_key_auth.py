@@ -26,6 +26,7 @@ from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
@@ -1597,6 +1598,11 @@ async def _user_api_key_auth_builder(
                 and get_secret_bool("EXPERIMENTAL_UI_LOGIN") is not False
             ):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(api_key)
+                if valid_token is not None:
+                    # Decryption with ui_hash_key is itself the provenance proof, and it is the
+                    # only one this token gets: a proxy-admin session returns below, before the
+                    # virtual-key paths that would mark it.
+                    valid_token.via_ui_session_blob = True
 
         if (
             valid_token is not None
@@ -2163,6 +2169,26 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     )
 
 
+def _is_ui_session_token(valid_token: UserAPIKeyAuth) -> bool:
+    """An Admin UI session key, whose reserved team is absent by design rather than deleted.
+
+    The id alone cannot earn the exemption. The synthesized team's empty ``models`` reads as
+    every model, so an identity that merely names the reserved team is widened, not just waved
+    through, and several auth paths take ``team_id`` straight from data the proxy did not mint:
+    JWT claims, an OAuth2 introspection response, a custom auth handler's return value.
+
+    So ask where the credential came from rather than trying to name every producer it did not
+    come from. Both markers are set only by post-construction assignment at a boundary the proxy
+    itself validated, and both are stripped from validated input, so no claim, header or handler
+    return can carry one in. A database-minted session key is marked as a virtual key. The
+    ``EXPERIMENTAL_UI_LOGIN`` blob has no key row to be marked by, and a proxy-admin one returns
+    before the virtual-key paths, so it is marked where it is decrypted instead.
+    """
+    return valid_token.team_id == UI_SESSION_TOKEN_TEAM_ID and (
+        valid_token.via_virtual_key or valid_token.via_ui_session_blob
+    )
+
+
 def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseException) -> bool:
     """Whether the token's own team fields may stand in for a team that failed to
     resolve, without widening access.
@@ -2272,7 +2298,9 @@ async def _run_centralized_common_checks(
         )
 
     fetch_coros: Final = []
-    if user_api_key_auth_obj.team_id is not None:
+    if _is_ui_session_token(user_api_key_auth_obj):
+        fetch_coros.append(_safe_fetch("team", _team_from_token(user_api_key_auth_obj)))
+    elif user_api_key_auth_obj.team_id is not None:
         fetch_coros.append(
             _safe_fetch(
                 "team",
@@ -2487,6 +2515,12 @@ async def _run_centralized_common_checks(
         skip_budget_checks=skip_budget_checks,
         general_settings=general_settings,
     )
+
+
+async def _team_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCachedObj:
+    """Coroutine wrapper over ``_team_obj_from_token`` for the gather below, used
+    where the team is known not to be resolvable from the database."""
+    return _team_obj_from_token(valid_token)
 
 
 async def _noop_none() -> None:
