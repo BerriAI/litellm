@@ -172,6 +172,57 @@ describe("responses_api", () => {
     expect(onTotalLatency).toHaveBeenLastCalledWith(expect.any(Number));
   });
 
+  it("should forward the cost the proxy reports on the streamed usage object", async () => {
+    async function* streamWithCost() {
+      yield { type: "response.output_text.delta", delta: "Hi" };
+      yield {
+        type: "response.completed",
+        response: {
+          id: "resp_cost",
+          usage: { output_tokens: 12, input_tokens: 12, total_tokens: 24, cost: 0.000063 },
+        },
+      };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(streamWithCost());
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(
+      { completionTokens: 12, promptTokens: 12, totalTokens: 24, cost: 0.000063 },
+      "",
+    );
+  });
+
+  it("should omit cost when the proxy reports none", async () => {
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ cost: expect.anything() }), "");
+  });
+
   it("should replay MCP output items as events for a non-streaming response", async () => {
     mockResponsesCreate.mockResolvedValueOnce({
       id: "resp_789",
