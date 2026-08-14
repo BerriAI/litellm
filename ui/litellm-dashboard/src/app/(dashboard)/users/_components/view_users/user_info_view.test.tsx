@@ -244,7 +244,7 @@ describe("UserInfoView", () => {
     });
 
     // The DeleteResourceModal's OK button has text "Delete" - find it within the modal
-    const modal = screen.getByText("Remove from Team").closest(".ant-modal") as HTMLElement;
+    const modal = screen.getByRole("dialog", { name: "Remove from Team" });
     const deleteConfirmButton = within(modal).getByRole("button", { name: /delete/i });
     await user.click(deleteConfirmButton);
 
