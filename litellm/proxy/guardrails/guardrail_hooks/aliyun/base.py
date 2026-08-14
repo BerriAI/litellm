@@ -5,7 +5,8 @@ Base class for Aliyun guardrails
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterator, Sequence
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -16,45 +17,69 @@ class AliyunGuardrailBase:
     Base class for Aliyun guardrails.
     """
 
-    def get_user_prompt(self, messages: list[AllMessageValues]) -> str | None:
+    @staticmethod
+    def _iter_user_messages(messages: Sequence[AllMessageValues]) -> Iterator[AllMessageValues]:
         """
-        Get the last consecutive block of messages from the user.
+        Yield every user message of the request, in order.
+        Restricting this to the trailing user block would let a caller hide a
+        prohibited turn behind an attacker-supplied assistant message.
+        """
+        return (message for message in messages if message.get("role") == "user")
+
+    @staticmethod
+    def _extract_image_url(part: object) -> str | None:
+        """
+        Return the URL of an ``image_url`` content part.
+        Args:
+            part: A single content part of a message
+        Returns:
+            The URL string, or None when the part carries no image URL
+        """
+        if not isinstance(part, dict) or part.get("type") != "image_url":
+            return None
+        image_url: Final = part.get("image_url")
+        if isinstance(image_url, dict):
+            url: Final = image_url.get("url")
+            return url if isinstance(url, str) else None
+        return image_url if isinstance(image_url, str) else None
+
+    def get_user_prompt(self, messages: Sequence[AllMessageValues]) -> str | None:
+        """
+        Collect the text of every user message in the request.
+        Scanning only the trailing user block would let a caller hide a
+        prohibited prompt behind an attacker-supplied assistant message, so all
+        user turns of the submitted request are audited.
         Example:
         messages = [
             {"role": "user", "content": "Hello, how are you?"},
             {"role": "assistant", "content": "I'm good, thank you!"},
             {"role": "user", "content": "What is the weather in Tokyo?"},
         ]
-        get_user_prompt(messages) -> "What is the weather in Tokyo?"
+        get_user_prompt(messages) -> "Hello, how are you?\nWhat is the weather in Tokyo?"
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             convert_content_list_to_str,
         )
 
-        if not messages:
-            return None
-        # Iterate from the end to find the last consecutive block of user messages
-        user_messages = []
-        for message in reversed(messages):
-            if message.get("role") == "user":
-                user_messages.append(message)
-            else:
-                # Stop when we hit a non-user message
-                break
-        if not user_messages:
-            return None
-        # Reverse to get the messages in chronological order
-        user_messages.reverse()
-        user_prompt = ""
-        for message in user_messages:
-            text_content = convert_content_list_to_str(message)
-            user_prompt += text_content + "\n"
-        result = user_prompt.strip()
-        return result if result else None
+        user_prompt: Final = "\n".join(
+            convert_content_list_to_str(message) for message in self._iter_user_messages(messages)
+        ).strip()
+        return user_prompt or None
 
-    def get_image_urls(self, messages: list[AllMessageValues]) -> list[str]:
+    def _iter_public_image_urls(self, messages: Sequence[AllMessageValues]) -> Iterator[str]:
+        """Yield the publicly reachable image URLs of every user message, in order."""
+        for content in (message.get("content") for message in self._iter_user_messages(messages)):
+            if not isinstance(content, list):
+                continue
+            for url in (self._extract_image_url(part) for part in content):
+                # Only public http(s) URLs are reachable by the Aliyun API, so
+                # data: URIs and other inline payloads are skipped.
+                if url is not None and url.startswith(("http://", "https://")):
+                    yield url
+
+    def get_image_urls(self, messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
         """
-        Extract image URLs from the last consecutive block of user messages.
+        Extract image URLs from every user message in the request.
         Only publicly accessible http(s) URLs are collected (in order,
         de-duplicated). Uses the same message range as ``get_user_prompt``.
         Example:
@@ -64,40 +89,8 @@ class AliyunGuardrailBase:
                 {"type": "image_url", "image_url": {"url": "https://a.com/x.png"}},
             ]},
         ]
-        get_image_urls(messages) -> ["https://a.com/x.png"]
+        get_image_urls(messages) -> ("https://a.com/x.png",)
         """
-        if not messages:
-            return []
-        # Iterate from the end to find the last consecutive block of user messages
-        user_messages = []
-        for message in reversed(messages):
-            if message.get("role") == "user":
-                user_messages.append(message)
-            else:
-                break
-        if not user_messages:
-            return []
-        user_messages.reverse()
-        image_urls: list[str] = []
-        seen = set()
-        for message in user_messages:
-            content = message.get("content")
-            if not isinstance(content, list):
-                continue
-            for part in content:
-                if not isinstance(part, dict) or part.get("type") != "image_url":
-                    continue
-                image_url = part.get("image_url")
-                url: str | None = None
-                if isinstance(image_url, dict):
-                    url = image_url.get("url")
-                elif isinstance(image_url, str):
-                    url = image_url
-                if not isinstance(url, str):
-                    continue
-                if not (url.startswith("http://") or url.startswith("https://")):
-                    continue
-                if url not in seen:
-                    seen.add(url)
-                    image_urls.append(url)
-        return image_urls
+        # dict.fromkeys is the order-preserving dedup; it is transient and the
+        # result is frozen into a tuple before it leaves this method.
+        return tuple(dict.fromkeys(self._iter_public_image_urls(messages)))  # mutable-ok: transient dedup, frozen here

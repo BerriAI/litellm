@@ -11,7 +11,7 @@ This module provides integration with Aliyun's AI Security Guardrail service for
 Documentation: https://help.aliyun.com/document_detail/2873209.html
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -19,6 +19,19 @@ from .aliyun_ai_guardrail import AliyunAIGuardrail
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
+
+
+def _resolve_os_environ_reference(value: str | None) -> str | None:
+    """Resolve an ``os.environ/`` reference.
+
+    guardrail_registry.py only auto-resolves api_key/api_base, so the Aliyun
+    credential fields have to be resolved here.
+    """
+    from litellm.secret_managers.main import get_secret_str
+
+    if isinstance(value, str) and value.startswith("os.environ/"):
+        return get_secret_str(value)
+    return value
 
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> AliyunAIGuardrail:
@@ -35,33 +48,27 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         AliyunAIGuardrail instance
     """
     import litellm
-    from litellm.secret_managers.main import get_secret_str
 
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("Aliyun AI Guardrail: guardrail_name is required")
 
-    level = getattr(litellm_params, "level", None)
-    max_text_length = getattr(litellm_params, "max_text_length", None)
-    stream_window_size = getattr(litellm_params, "stream_window_size", None)
-    stream_slide_step = getattr(litellm_params, "stream_slide_step", None)
-    stream_first_check_step = getattr(litellm_params, "stream_first_check_step", None)
-    region_id = getattr(litellm_params, "region_id", None)
-    service_input = getattr(litellm_params, "service_input", None)
-    service_output = getattr(litellm_params, "service_output", None)
-    service_mcp = getattr(litellm_params, "service_mcp", None)
+    level: Final = getattr(litellm_params, "level", None)
+    max_text_length: Final = getattr(litellm_params, "max_text_length", None)
+    stream_window_size: Final = getattr(litellm_params, "stream_window_size", None)
+    stream_slide_step: Final = getattr(litellm_params, "stream_slide_step", None)
+    stream_first_check_step: Final = getattr(litellm_params, "stream_first_check_step", None)
+    region_id: Final = getattr(litellm_params, "region_id", None)
+    service_input: Final = getattr(litellm_params, "service_input", None)
+    service_output: Final = getattr(litellm_params, "service_output", None)
+    service_mcp: Final = getattr(litellm_params, "service_mcp", None)
 
-    # Get credentials from config. These custom fields are not auto-resolved by
-    # guardrail_registry.py (only api_key/api_base are), so resolve os.environ/
-    # references manually here.
-    access_key_id = getattr(litellm_params, "access_key_id", None)
-    access_key_secret = getattr(litellm_params, "access_key_secret", None)
-    if isinstance(access_key_id, str) and access_key_id.startswith("os.environ/"):
-        access_key_id = get_secret_str(access_key_id)
-    if isinstance(access_key_secret, str) and access_key_secret.startswith("os.environ/"):
-        access_key_secret = get_secret_str(access_key_secret)
+    # These custom credential fields are not auto-resolved by guardrail_registry.py
+    # (only api_key/api_base are), so os.environ/ references are resolved here.
+    access_key_id: Final = _resolve_os_environ_reference(getattr(litellm_params, "access_key_id", None))
+    access_key_secret: Final = _resolve_os_environ_reference(getattr(litellm_params, "access_key_secret", None))
 
-    aliyun_guardrail = AliyunAIGuardrail(
+    aliyun_guardrail: Final = AliyunAIGuardrail(
         guardrail_name=guardrail_name,
         access_key_id=access_key_id,
         access_key_secret=access_key_secret,
@@ -83,12 +90,14 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return aliyun_guardrail
 
 
-# Registry for guardrail initializers
-guardrail_initializer_registry = {
+# Registry for guardrail initializers.
+# Plain dicts: guardrail_registry.py gates discovery on `isinstance(registry, dict)`,
+# which a MappingProxyType would fail, silently skipping this guardrail's registration.
+guardrail_initializer_registry: Final = {  # mutable-ok: loader requires a real dict
     SupportedGuardrailIntegrations.ALIYUN_AI_GUARDRAIL.value: initialize_guardrail,
 }
 
 # Registry for guardrail classes
-guardrail_class_registry = {
+guardrail_class_registry: Final = {  # mutable-ok: loader requires a real dict
     SupportedGuardrailIntegrations.ALIYUN_AI_GUARDRAIL.value: AliyunAIGuardrail,
 }

@@ -8,10 +8,11 @@ Aliyun AI Guardrail supports the following detection types:
 - maliciousUrl: Malicious URL detection
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from collections.abc import Sequence
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, Field
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from ..base import GuardrailConfigModel
 
@@ -20,77 +21,79 @@ from ..base import GuardrailConfigModel
 class AliyunAIGuardrailResponseDetailResultExt(TypedDict, total=False):
     """Extended information in result"""
 
-    Desensitization: Optional[str]  # Desensitized text when action is mask
+    Desensitization: ReadOnly[str | None]  # Desensitized text when action is mask
 
 
 class AliyunAIGuardrailResponseDetailResult(TypedDict, total=False):
     """Result item in detail"""
 
-    Confidence: Optional[float]
-    Label: Optional[str]
-    Ext: Optional[AliyunAIGuardrailResponseDetailResultExt]
+    Confidence: ReadOnly[float | None]
+    Label: ReadOnly[str | None]
+    Ext: ReadOnly[AliyunAIGuardrailResponseDetailResultExt | None]
     # Per-result risk level. This is the shape documented for MultiModalGuard; the
     # ``_pro`` service codes report the severity on the parent Detail as ``Level``
     # instead, so both have to be honoured when deciding whether to block.
-    RiskLevel: Optional[str]
+    RiskLevel: ReadOnly[str | None]
 
 
 class AliyunAIGuardrailResponseDetail(TypedDict):
     """Detail item in response data"""
 
-    Type: str  # contentModeration, sensitiveData, promptAttack, maliciousUrl
-    Suggestion: str  # pass, block, mask
-    Result: List[AliyunAIGuardrailResponseDetailResult]
+    Type: ReadOnly[str]  # contentModeration, sensitiveData, promptAttack, maliciousUrl
+    Suggestion: ReadOnly[str]  # pass, block, mask
+    Result: ReadOnly[Sequence[AliyunAIGuardrailResponseDetailResult]]
     # Risk level as returned by the ``_pro`` service codes (none/low/medium/high, or
     # S0-S4 for sensitiveData). Absent in the documented response shape, which carries
     # the severity as Result[].RiskLevel.
-    Level: NotRequired[str]
+    Level: ReadOnly[NotRequired[str]]
 
 
 class AliyunAIGuardrailResponseData(TypedDict, total=False):
     """Response data from Aliyun AI Guardrail API"""
 
-    Suggestion: str  # Overall suggestion: pass, block, mask
-    Detail: Optional[List[AliyunAIGuardrailResponseDetail]]
+    Suggestion: ReadOnly[str]  # Overall suggestion: pass, block, mask
+    Detail: ReadOnly[Sequence[AliyunAIGuardrailResponseDetail] | None]
 
 
 class AliyunAIGuardrailResponse(TypedDict):
     """Response from Aliyun AI Guardrail API"""
 
-    RequestId: str
-    Code: int
-    Message: Optional[str]
-    Data: Optional[AliyunAIGuardrailResponseData]
+    RequestId: ReadOnly[str]
+    Code: ReadOnly[int]
+    Message: ReadOnly[str | None]
+    Data: ReadOnly[AliyunAIGuardrailResponseData | None]
 
 
 # Suggestion type
-AliyunAIGuardrailSuggestion = Literal["pass", "block", "watch"]
+AliyunAIGuardrailSuggestion: TypeAlias = Literal["pass", "block", "watch"]
 
 # Detection type
-AliyunAIGuardrailDetectionType = Literal["contentModeration", "sensitiveData", "promptAttack", "maliciousUrl"]
+AliyunAIGuardrailDetectionType: TypeAlias = Literal[
+    "contentModeration", "sensitiveData", "promptAttack", "maliciousUrl"
+]
 
 
 class AliyunAIGuardrailRequestParams(TypedDict, total=False):
     """Request parameters for Aliyun AI Guardrail API"""
 
-    Action: str
-    Version: str
-    AccessKeyId: str
-    Timestamp: str
-    SignatureMethod: str
-    SignatureVersion: str
-    SignatureNonce: str
-    Format: str
-    Service: str
-    ServiceParameters: str
-    Signature: str
+    Action: ReadOnly[str]
+    Version: ReadOnly[str]
+    AccessKeyId: ReadOnly[str]
+    Timestamp: ReadOnly[str]
+    SignatureMethod: ReadOnly[str]
+    SignatureVersion: ReadOnly[str]
+    SignatureNonce: ReadOnly[str]
+    Format: ReadOnly[str]
+    Service: ReadOnly[str]
+    ServiceParameters: ReadOnly[str]
+    Signature: ReadOnly[str]
 
 
 # Risk level literals
-AliyunRiskLevel = Literal["none", "low", "medium", "high"]
+AliyunRiskLevel: TypeAlias = Literal["none", "low", "medium", "high"]
 
 # Protection level literals
-AliyunProtectionLevel = Literal["low", "medium", "high", "max"]
+AliyunProtectionLevel: TypeAlias = Literal["low", "medium", "high", "max"]
 
 
 # Configuration models
@@ -101,39 +104,39 @@ class AliyunAIGuardrailOptionalParams(BaseModel):
     in config.yaml on the AliyunAIGuardrailConfigModel and support os.environ/ references.
     """
 
-    level: Optional[AliyunProtectionLevel] = Field(
+    level: AliyunProtectionLevel | None = Field(
         default="medium",
         description="Protection level for risk filtering. 'low': block all risks (high protection), 'medium': block medium and high risks, 'high': block only high risks (low protection), 'max': observation mode (no blocking). Default: medium",
     )
-    max_text_length: Optional[int] = Field(
+    max_text_length: int | None = Field(
         default=2000,
         description="Maximum text length for a single API call. Text longer than this will be split.",
     )
-    stream_window_size: Optional[int] = Field(
+    stream_window_size: int | None = Field(
         default=500,
         description="Sliding window size (in chars) for streaming output guardrail checks. Each check sends the most recent N chars to the API.",
     )
-    stream_slide_step: Optional[int] = Field(
+    stream_slide_step: int | None = Field(
         default=300,
         description="Sliding step (in chars) for streaming output guardrail checks. A check is triggered every time N new chars accumulate since the last check.",
     )
-    stream_first_check_step: Optional[int] = Field(
+    stream_first_check_step: int | None = Field(
         default=50,
         description="First check threshold (in chars) for streaming output. The first guardrail check triggers earlier (at N chars) to reduce first-token latency, subsequent checks use stream_slide_step.",
     )
-    region_id: Optional[str] = Field(
+    region_id: str | None = Field(
         default="cn-shanghai",
         description="Aliyun region ID. Default: cn-shanghai",
     )
-    service_input: Optional[str] = Field(
+    service_input: str | None = Field(
         default="query_security_check_pro",
         description="Service code for input (pre-call) detection. Default: query_security_check_pro",
     )
-    service_output: Optional[str] = Field(
+    service_output: str | None = Field(
         default="response_security_check_pro",
         description="Service code for output (post-call) detection. Default: response_security_check_pro",
     )
-    service_mcp: Optional[str] = Field(
+    service_mcp: str | None = Field(
         default="query_security_check_pro",
         description="Service code for MCP tool call detection (pre_mcp_call and post_mcp_call). Default: query_security_check_pro",
     )
@@ -147,15 +150,15 @@ class AliyunAIGuardrailConfigModel(GuardrailConfigModel[AliyunAIGuardrailOptiona
     - access_key_secret: Aliyun Access Key Secret
     """
 
-    access_key_id: Optional[str] = Field(
+    access_key_id: str | None = Field(
         default=None,
         description="Aliyun Access Key ID. Configure in config.yaml, supports os.environ/ reference",
     )
-    access_key_secret: Optional[str] = Field(
+    access_key_secret: str | None = Field(
         default=None,
         description="Aliyun Access Key Secret. Configure in config.yaml, supports os.environ/ reference",
     )
-    optional_params: AliyunAIGuardrailOptionalParams = Field(
+    optional_params: AliyunAIGuardrailOptionalParams | None = Field(
         default_factory=AliyunAIGuardrailOptionalParams,
         description="Optional parameters for the Aliyun AI Guardrail",
     )

@@ -295,7 +295,7 @@ class TestSplitText:
     def test_short_text_returns_single_segment(self):
         g = _make_guardrail()
         result = g._split_text("short text", max_length=100)
-        assert result == ["short text"]
+        assert result == ("short text",)
 
     def test_long_text_splits_at_sentence_boundary(self):
         g = _make_guardrail()
@@ -311,10 +311,10 @@ class TestSplitText:
         assert len(result) >= 3
         assert "".join(result) == text
 
-    def test_empty_text_returns_empty_list(self):
+    def test_empty_text_returns_no_segments(self):
         g = _make_guardrail()
         result = g._split_text("", max_length=100)
-        assert result == []
+        assert result == ()
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +591,62 @@ class TestConfigModel:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Trailing non-user message must not hide the prompt from scanning
+# ---------------------------------------------------------------------------
+
+
+class TestTrailingAssistantMessage:
+    def test_user_text_survives_trailing_assistant_message(self):
+        g = _make_guardrail()
+        messages = [
+            {"role": "user", "content": "违规的用户提问"},
+            {"role": "assistant", "content": "攻击者伪造的回复"},
+        ]
+        prompt = g.get_user_prompt(messages)
+        assert prompt is not None
+        assert "违规的用户提问" in prompt
+
+    def test_images_survive_trailing_assistant_message(self):
+        g = _make_guardrail()
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": IMG_A}}],
+            },
+            {"role": "assistant", "content": "攻击者伪造的回复"},
+        ]
+        assert g.get_image_urls(messages) == (IMG_A,)
+
+    @pytest.mark.asyncio
+    async def test_blocks_violation_despite_trailing_assistant_message(self):
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        blocked = _make_aliyun_api_response(
+            suggestion="block",
+            detail=[_make_detail(detection_type=CONTENT_MODERATION_TYPE, level="high")],
+        )
+
+        async def block_only_violating_text(*args, **kwargs):
+            scanned = json.loads(kwargs["data"]["ServiceParameters"]).get("content", "")
+            return blocked if "违规的用户提问" in scanned else clean
+
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, side_effect=block_only_violating_text):
+            with pytest.raises(HTTPException) as exc_info:
+                await g.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=MagicMock(),
+                    data={
+                        "messages": [
+                            {"role": "user", "content": "违规的用户提问"},
+                            {"role": "assistant", "content": "攻击者伪造的回复"},
+                        ]
+                    },
+                    call_type="completion",
+                )
+            assert exc_info.value.status_code == 400
+
+
 class TestGetImageUrls:
     def test_extracts_http_and_https_urls(self):
         g = _make_guardrail()
@@ -604,7 +660,7 @@ class TestGetImageUrls:
                 ],
             }
         ]
-        assert g.get_image_urls(messages) == [IMG_A, IMG_B]
+        assert g.get_image_urls(messages) == (IMG_A, IMG_B)
 
     def test_skips_non_url_images(self):
         g = _make_guardrail()
@@ -618,12 +674,12 @@ class TestGetImageUrls:
                 ],
             }
         ]
-        assert g.get_image_urls(messages) == [IMG_A]
+        assert g.get_image_urls(messages) == (IMG_A,)
 
     def test_plain_text_returns_empty(self):
         g = _make_guardrail()
         messages = [{"role": "user", "content": "just text"}]
-        assert g.get_image_urls(messages) == []
+        assert g.get_image_urls(messages) == ()
 
     def test_deduplicates_across_messages(self):
         g = _make_guardrail()
@@ -631,20 +687,20 @@ class TestGetImageUrls:
             {"role": "user", "content": [{"type": "image_url", "image_url": {"url": IMG_A}}]},
             {"role": "user", "content": [{"type": "image_url", "image_url": {"url": IMG_A}}]},
         ]
-        assert g.get_image_urls(messages) == [IMG_A]
+        assert g.get_image_urls(messages) == (IMG_A,)
 
-    def test_only_last_consecutive_user_block(self):
+    def test_collects_images_from_every_user_message(self):
         g = _make_guardrail()
         messages = [
             {"role": "user", "content": [{"type": "image_url", "image_url": {"url": IMG_B}}]},
             {"role": "assistant", "content": "ok"},
             {"role": "user", "content": [{"type": "image_url", "image_url": {"url": IMG_A}}]},
         ]
-        assert g.get_image_urls(messages) == [IMG_A]
+        assert g.get_image_urls(messages) == (IMG_B, IMG_A)
 
     def test_empty_messages_returns_empty(self):
         g = _make_guardrail()
-        assert g.get_image_urls([]) == []
+        assert g.get_image_urls([]) == ()
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +749,67 @@ class TestServiceParametersConstruction:
 
 
 class TestPreCallHook:
+    @pytest.mark.asyncio
+    async def test_scans_responses_api_string_input(self):
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean) as mock_post:
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                cache=MagicMock(),
+                data={"input": "违规的 responses 输入"},
+                call_type="responses",
+            )
+
+        scanned = "".join(
+            json.loads(call.kwargs["data"]["ServiceParameters"]).get("content", "") for call in mock_post.call_args_list
+        )
+        assert "违规的 responses 输入" in scanned
+
+    @pytest.mark.asyncio
+    async def test_blocks_violating_responses_api_input(self):
+        g = _make_guardrail(level="medium")
+        blocked = _make_aliyun_api_response(
+            suggestion="block",
+            detail=[_make_detail(detection_type=CONTENT_MODERATION_TYPE, level="high")],
+        )
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=blocked):
+            with pytest.raises(HTTPException) as exc_info:
+                await g.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=MagicMock(),
+                    data={"input": "违规的 responses 输入"},
+                    call_type="responses",
+                )
+            assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_scans_responses_api_structured_input_with_image(self):
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "结构化输入文本"},
+                        {"type": "image_url", "image_url": {"url": IMG_A}},
+                    ],
+                }
+            ]
+        }
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean) as mock_post:
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                cache=MagicMock(),
+                data=data,
+                call_type="responses",
+            )
+
+        sent = [json.loads(call.kwargs["data"]["ServiceParameters"]) for call in mock_post.call_args_list]
+        assert any("结构化输入文本" in (sp.get("content") or "") for sp in sent)
+        assert any(IMG_A in (sp.get("imageUrls") or []) for sp in sent)
+
     @pytest.mark.asyncio
     async def test_blocks_violation(self):
         g = _make_guardrail(level="medium")
@@ -982,6 +1099,161 @@ class TestPostCallHook:
         assert result is response
 
 
+def _make_tool_call_response(arguments: str, name: str = "send_email"):
+    """Build a non-streaming response whose only output is a tool call."""
+    import litellm
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+    return litellm.ModelResponse(
+        id="test-id",
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_1",
+                            type="function",
+                            function=Function(name=name, arguments=arguments),
+                        )
+                    ],
+                ),
+            )
+        ],
+    )
+
+
+def _make_responses_api_response(text: str):
+    """Build a non-streaming /v1/responses body carrying assistant text."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model="gpt-4o",
+        object="response",
+        output=[
+            GenericResponseOutputItem(
+                type="message",
+                id="m1",
+                status="completed",
+                role="assistant",
+                content=[OutputText(type="output_text", text=text, annotations=[])],
+            )
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+        temperature=1.0,
+        top_p=1.0,
+    )
+
+
+class TestPostCallStructuredFields:
+    """The streaming path already audits tool calls, reasoning text and
+    /v1/responses output. Auditing only ``message.content`` here would let the
+    very same content reach the client unchecked whenever stream=False."""
+
+    @pytest.mark.asyncio
+    async def test_scans_tool_call_arguments(self):
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        response = _make_tool_call_response('{"body": "违规的工具参数"}')
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean) as mock_post:
+            await g.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "hi"}]},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                response=response,
+            )
+        scanned = "".join(
+            json.loads(call.kwargs["data"]["ServiceParameters"])["content"] for call in mock_post.call_args_list
+        )
+        assert "违规的工具参数" in scanned
+
+    @pytest.mark.asyncio
+    async def test_blocks_violation_in_tool_call_arguments(self):
+        g = _make_guardrail(level="medium")
+        blocked = _make_aliyun_api_response(
+            suggestion="block",
+            detail=[_make_detail(detection_type=CONTENT_MODERATION_TYPE, level="high")],
+        )
+        response = _make_tool_call_response('{"body": "违规的工具参数"}')
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=blocked):
+            with pytest.raises(HTTPException) as exc_info:
+                await g.async_post_call_success_hook(
+                    data={"messages": [{"role": "user", "content": "hi"}]},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    response=response,
+                )
+            assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_scans_reasoning_content(self):
+        import litellm
+
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        response = litellm.ModelResponse(
+            id="test-id",
+            choices=[
+                litellm.Choices(
+                    index=0,
+                    message=litellm.Message(
+                        role="assistant",
+                        content="正常的回复内容",
+                        reasoning_content="推理过程里的违规内容",
+                    ),
+                )
+            ],
+        )
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean) as mock_post:
+            await g.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "hi"}]},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                response=response,
+            )
+        scanned = "".join(
+            json.loads(call.kwargs["data"]["ServiceParameters"])["content"] for call in mock_post.call_args_list
+        )
+        assert "推理过程里的违规内容" in scanned
+
+    @pytest.mark.asyncio
+    async def test_scans_responses_api_output(self):
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        response = _make_responses_api_response("响应体里的违规内容")
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean) as mock_post:
+            await g.async_post_call_success_hook(
+                data={"input": "hi"},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                response=response,
+            )
+        scanned = "".join(
+            json.loads(call.kwargs["data"]["ServiceParameters"])["content"] for call in mock_post.call_args_list
+        )
+        assert "响应体里的违规内容" in scanned
+
+    @pytest.mark.asyncio
+    async def test_blocks_violation_in_responses_api_output(self):
+        g = _make_guardrail(level="medium")
+        blocked = _make_aliyun_api_response(
+            suggestion="block",
+            detail=[_make_detail(detection_type=CONTENT_MODERATION_TYPE, level="high")],
+        )
+        response = _make_responses_api_response("响应体里的违规内容")
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=blocked):
+            with pytest.raises(HTTPException) as exc_info:
+                await g.async_post_call_success_hook(
+                    data={"input": "hi"},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    response=response,
+                )
+            assert exc_info.value.status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # Post-MCP hook tests
 # ---------------------------------------------------------------------------
@@ -991,6 +1263,93 @@ def _make_call_tool_result(text: str = "tool output"):
     from mcp.types import CallToolResult, TextContent
 
     return CallToolResult(content=[TextContent(type="text", text=text)], isError=False)
+
+
+class TestExtractMcpToolText:
+    """A tool result carries text outside of ``content[].text``. Auditing only that
+    field would release structured payloads and embedded resources unchecked."""
+
+    def test_collects_structured_content(self):
+        from mcp.types import CallToolResult
+
+        g = _make_guardrail()
+        result = CallToolResult(content=[], structuredContent={"note": "结构化字段里的违规内容"}, isError=False)
+        assert "结构化字段里的违规内容" in g._extract_mcp_tool_text(result)
+
+    def test_collects_structured_content_alongside_text(self):
+        from mcp.types import CallToolResult, TextContent
+
+        g = _make_guardrail()
+        result = CallToolResult(
+            content=[TextContent(type="text", text="正常的工具输出")],
+            structuredContent={"note": "结构化字段里的违规内容"},
+            isError=False,
+        )
+        extracted = g._extract_mcp_tool_text(result)
+        assert "正常的工具输出" in extracted
+        assert "结构化字段里的违规内容" in extracted
+
+    def test_collects_embedded_resource_text(self):
+        from mcp.types import CallToolResult, EmbeddedResource, TextResourceContents
+
+        g = _make_guardrail()
+        result = CallToolResult(
+            content=[
+                EmbeddedResource(
+                    type="resource",
+                    resource=TextResourceContents(
+                        uri="file:///tmp/note.txt",
+                        mimeType="text/plain",
+                        text="内嵌资源里的违规内容",
+                    ),
+                )
+            ],
+            isError=False,
+        )
+        assert "内嵌资源里的违规内容" in g._extract_mcp_tool_text(result)
+
+    def test_collects_structured_content_from_dict_payload(self):
+        g = _make_guardrail()
+        payload = {"content": [], "structuredContent": {"note": "结构化字段里的违规内容"}}
+        assert "结构化字段里的违规内容" in g._extract_mcp_tool_text(payload)
+
+    def test_collects_structured_content_from_coerced_tuple_list(self):
+        """MCPPostCallResponseObject coerces a CallToolResult into (field, value) pairs."""
+        g = _make_guardrail()
+        payload = [("content", []), ("structuredContent", {"note": "结构化字段里的违规内容"}), ("isError", False)]
+        assert "结构化字段里的违规内容" in g._extract_mcp_tool_text(payload)
+
+    @pytest.mark.asyncio
+    async def test_blocks_violation_in_structured_content(self):
+        from mcp.types import CallToolResult, TextContent
+
+        g = _make_guardrail(level="medium")
+        tool_result = CallToolResult(
+            content=[TextContent(type="text", text="正常的工具输出")],
+            structuredContent={"note": "结构化字段里的违规内容"},
+            isError=False,
+        )
+        kwargs, response_obj = _make_post_mcp_hook_args(tool_result)
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        blocked = _make_aliyun_api_response(
+            suggestion="block",
+            detail=[_make_detail(detection_type=CONTENT_MODERATION_TYPE, level="high")],
+        )
+
+        async def block_only_structured_content(*args, **kwargs):
+            scanned = json.loads(kwargs["data"]["ServiceParameters"]).get("content", "")
+            return blocked if "结构化字段里的违规内容" in scanned else clean
+
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, side_effect=block_only_structured_content):
+            await g.async_post_mcp_tool_call_hook(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+        remaining = " ".join(getattr(item, "text", "") for item in tool_result.content)
+        assert CONTENT_MODERATION_TYPE in remaining
+        assert tool_result.isError is True
 
 
 # ---------------------------------------------------------------------------
@@ -1162,35 +1521,35 @@ class TestShouldRunPostMcpCall:
 class TestIterMcpContentItems:
     def test_plain_string_is_wrapped(self):
         g = _make_guardrail()
-        assert g._iter_mcp_content_items("hello") == ["hello"]
+        assert g._iter_mcp_content_items("hello") == ("hello",)
 
     def test_object_with_content_list(self):
         g = _make_guardrail()
         payload = MagicMock()
         payload.content = ["a", "b"]
-        assert g._iter_mcp_content_items(payload) == ["a", "b"]
+        assert g._iter_mcp_content_items(payload) == ("a", "b")
 
     def test_dict_with_content_list(self):
         g = _make_guardrail()
-        assert g._iter_mcp_content_items({"content": ["a"]}) == ["a"]
+        assert g._iter_mcp_content_items({"content": ["a"]}) == ("a",)
 
     def test_dict_without_content_returns_itself(self):
         g = _make_guardrail()
         payload = {"text": "no content key"}
-        assert g._iter_mcp_content_items(payload) == [payload]
+        assert g._iter_mcp_content_items(payload) == (payload,)
 
     def test_coerced_tuple_pairs_recover_real_content(self):
         g = _make_guardrail()
         payload = [("meta", None), ("content", ["real"]), ("isError", False)]
-        assert g._iter_mcp_content_items(payload) == ["real"]
+        assert g._iter_mcp_content_items(payload) == ("real",)
 
     def test_plain_list_passes_through(self):
         g = _make_guardrail()
-        assert g._iter_mcp_content_items(["a", "b"]) == ["a", "b"]
+        assert g._iter_mcp_content_items(["a", "b"]) == ("a", "b")
 
     def test_unsupported_payload_returns_empty(self):
         g = _make_guardrail()
-        assert g._iter_mcp_content_items(123) == []
+        assert g._iter_mcp_content_items(123) == ()
 
 
 class TestReplaceToolOutputInPlace:

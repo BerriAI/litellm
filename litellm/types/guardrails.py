@@ -1177,4 +1177,3 @@ class PatchGuardrailRequest(BaseModel):
     guardrail_name: str | None = None
     litellm_params: BaseLitellmParams | None = None
     guardrail_info: dict[str, Any] | None = None
-
