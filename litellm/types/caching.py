@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
@@ -59,7 +60,7 @@ class RedisPipelineRpushOperation(TypedDict):
     """
 
     key: str
-    values: list[Any]
+    values: Sequence[Any]
 
 
 class RedisPipelineLpopOperation(TypedDict):
