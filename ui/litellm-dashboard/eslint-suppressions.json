@@ -921,14 +921,8 @@
     }
   },
   "src/app/(dashboard)/playground/components/chat_ui/ChatUI.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
     "max-lines": {
       "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 6
     },
     "react-hooks/set-state-in-effect": {
       "count": 4

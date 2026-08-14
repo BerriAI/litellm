@@ -1,4 +1,4 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { createApiClient } from "@/lib/http/client";
 
@@ -46,7 +46,7 @@ export async function makeOpenAIOcrRequest({
   const client = createApiClient({
     getBaseUrl: () => customBaseUrl || getProxyBaseUrl(),
     getAuthHeaderName: getGlobalLitellmHeaderName,
-    onError: (message) => NotificationManager.fromBackend(`OCR failed: ${message}`),
+    onError: (message) => toast.fromError(`OCR failed: ${message}`),
   });
   const formData = new FormData();
   formData.append("model", selectedModel);
@@ -62,5 +62,5 @@ export async function makeOpenAIOcrRequest({
   });
 
   updateUI(formatOcrResponse(responseJson), selectedModel);
-  NotificationManager.success("OCR completed successfully");
+  toast.success("OCR completed successfully");
 }
