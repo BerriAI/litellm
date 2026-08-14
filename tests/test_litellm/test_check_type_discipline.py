@@ -199,6 +199,55 @@ def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
     assert "LIT002" not in codes
 
 
+def test_typeddict_annotated_dict_literal_is_exempt(tmp_path):
+    assert "LIT002" not in _codes(
+        tmp_path, "from typing import Final\nfrom foo import MyTD\nx: Final[MyTD] = {'a': 1}\n"
+    )
+    assert "LIT002" not in _codes(tmp_path, "from foo import MyTD\nx: MyTD = {'a': 1}\n")
+    assert "LIT002" not in _codes(tmp_path, "from typing import Final\nx: Final['MyTD'] = {'a': 1}\n")
+    assert "LIT002" not in _codes(tmp_path, "import foo\nfrom typing import Final\nx: Final[foo.MyTD] = {'a': 1}\n")
+
+
+def test_wrapped_typeddict_annotations_share_the_exemption(tmp_path):
+    assert "LIT002" not in _codes(
+        tmp_path, "from typing import Final, Optional\nx: Final[Optional[MyTD]] = {'a': 1}\n"
+    )
+    assert "LIT002" not in _codes(
+        tmp_path, "from typing import Annotated, Final\nx: Final[Annotated[MyTD, 'meta']] = {'a': 1}\n"
+    )
+    assert "LIT002" not in _codes(
+        tmp_path, "from typing import ClassVar\nclass C:\n    x: ClassVar[MyTD] = {'a': 1}\n"
+    )
+
+
+def test_bare_final_dict_literal_still_counts(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final = {'a': 1}\n")
+    assert "LIT002" in _codes(tmp_path, "from typing import ClassVar\nclass C:\n    x: ClassVar = {'a': 1}\n")
+
+
+def test_non_typeddict_annotations_do_not_exempt(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[dict[str, int]] = {'a': 1}\n")
+    assert "LIT002" in _codes(
+        tmp_path, "from collections.abc import Mapping\nfrom typing import Final\nx: Final[Mapping[str, int]] = {'a': 1}\n"
+    )
+    assert "LIT002" in _codes(tmp_path, "from typing import Any, Final\nx: Final[Any] = {'a': 1}\n")
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[object] = {'a': 1}\n")
+
+
+def test_typeddict_exemption_covers_only_dict_literals(tmp_path):
+    # A TypedDict cannot be built from a comprehension (its keys are fixed literals),
+    # and `dict(...)` is the constructor call the rule targets, so neither is exempt.
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[MyTD] = dict(a=1)\n")
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[MyTD] = {k: 1 for k in ('a',)}\n")
+
+
+def test_nested_dict_literals_share_the_typeddict_exemption(tmp_path):
+    assert "LIT002" not in _codes(
+        tmp_path, "from typing import Final\nx: Final[Outer] = {'inner': {'a': 1}, 'steps': ({'b': 2},)}\n"
+    )
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[Outer] = {'tags': ['a']}\n")
+
+
 # --------------------------------------------------------------------------- #
 # Casts (LIT006)
 # --------------------------------------------------------------------------- #
