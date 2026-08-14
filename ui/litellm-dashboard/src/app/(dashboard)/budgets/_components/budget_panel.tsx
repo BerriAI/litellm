@@ -6,7 +6,7 @@
 import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
 import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -80,7 +80,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
   return (
     <div className="flex h-full flex-col gap-4 p-6 px-12">
-      <PageHeader
+      <LegacyPageHeader
         icon={<Wallet className="size-5" />}
         title="Budgets"
         subtitle="Spend, TPM and RPM limits you can assign to customers."
