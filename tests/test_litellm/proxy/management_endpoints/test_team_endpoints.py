@@ -12052,6 +12052,8 @@ async def test_new_team_and_delete_team_both_drive_the_mirror():
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
         prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
         prisma.delete_data = AsyncMock(return_value=[team_row])
+        prisma.db.execute_raw = AsyncMock(return_value=0)
+        prisma.db.litellm_teammembership.delete_many = AsyncMock(return_value=0)
 
         await delete_team(
             data=DeleteTeamRequest(team_ids=["team-gone"]),

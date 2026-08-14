@@ -140,7 +140,7 @@ async def reconcile_team_access_group_membership(tx: AccessGroupSyncTx, team_id:
     """
     await tx.query_raw(_LOCK_TEAM_SQL, team_id)
     team_rows: Final = _TeamRows.validate_python(await tx.query_raw(_READ_TEAM_SQL, team_id))
-    desired: Final = list(team_rows[0].access_group_ids or ()) if team_rows else []
+    desired: Final = (team_rows[0].access_group_ids or ()) if team_rows else ()
     affected: Final = _AffectedGroups.validate_python(await tx.query_raw(_AFFECTED_SQL, team_id, desired))
     await tx.query_raw(_ATTACH_SQL, team_id, desired)
     await tx.query_raw(_DETACH_SQL, team_id, desired)

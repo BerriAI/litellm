@@ -15,6 +15,7 @@ import math
 import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict, TypeVar, cast
 
 import fastapi
@@ -329,6 +330,8 @@ class _TeamCreateTx(AccessGroupSyncTx, Protocol):
 _STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
 UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
 """
+
+_INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
 
 
 def _team_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_TeamTable]":
@@ -1526,7 +1529,7 @@ async def new_team(
         async with prisma_client.db.tx() as tx:
             team_row: Final[LiteLLM_TeamTable] = await tx.litellm_teamtable.create(
                 data=team_creation_data,
-                include={"litellm_model_table": True},
+                include=_INCLUDE_MODEL_TABLE,
             )
             affected_access_groups: Final = await reconcile_team_access_group_membership(tx, team_row.team_id)
 
