@@ -661,6 +661,7 @@ wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
+lm_studio_models: Set = set()  # mutable-ok: dynamic-discovery-only, like lemonade_models
 docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
@@ -1177,6 +1178,7 @@ def _build_models_by_provider() -> dict:
         "wandb": wandb_models,
         "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
         "lemonade": lemonade_models,
+        "lm_studio": lm_studio_models,
         "clarifai": clarifai_models,
         "amazon_nova": amazon_nova_models,
         "stability": stability_models,

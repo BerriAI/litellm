@@ -2814,6 +2814,58 @@ class TestGetValidModelsWithCLI:
             assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
 
 
+class TestGetValidModelsLMStudio:
+    """Test get_valid_models(check_provider_endpoint=True) for lm_studio.
+
+    get_provider_model_info() previously had no LM_STUDIO branch, so
+    discovery silently returned an empty list regardless of
+    check_provider_endpoint; and lm_studio was missing from
+    models_by_provider, so the proxy's wildcard-model expansion
+    (get_provider_models) bailed out before ever calling get_valid_models.
+    """
+
+    def test_get_valid_models_lm_studio_discovery(self):
+        """Discovery hits LM Studio's own /v1/models, not OpenAI's default api_base, and prefixes results with lm_studio/."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "data": [
+                {"id": "qwen/qwen3-a3b", "object": "model"},
+                {"id": "lm_studio/already-prefixed", "object": "model"},
+            ]
+        }
+
+        with patch.object(
+            litellm.module_level_client, "get", return_value=mock_response
+        ) as mock_get:
+            result = litellm.get_valid_models(
+                check_provider_endpoint=True,
+                custom_llm_provider="lm_studio",
+                api_key="lm-studio-key",
+                api_base="http://my-lm-studio-host:1234",
+            )
+
+            assert isinstance(result, list)
+            assert result == [
+                "lm_studio/qwen/qwen3-a3b",
+                "lm_studio/already-prefixed",
+            ]
+
+            mock_get.assert_called_once()
+            _, call_kwargs = mock_get.call_args
+
+            # Must hit the passed-in LM Studio host, not OpenAIGPTConfig's
+            # default of https://api.openai.com
+            assert call_kwargs["url"] == "http://my-lm-studio-host:1234/v1/models"
+            assert call_kwargs["headers"]["Authorization"] == "Bearer lm-studio-key"
+
+    def test_lm_studio_in_models_by_provider(self):
+        """lm_studio must be a key in models_by_provider or the proxy's
+        wildcard-model expansion (get_provider_models) bails out before
+        ever reaching get_valid_models/check_provider_endpoint."""
+        assert "lm_studio" in litellm.models_by_provider
+
+
 class TestIsCachedMessage:
     """Test is_cached_message function for context caching detection.
 
