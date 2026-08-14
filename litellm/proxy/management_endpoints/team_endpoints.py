@@ -3091,26 +3091,27 @@ async def team_member_add(
     )
 
 
+def _is_member_addressed_by(member: Member, data: TeamMemberDeleteRequest) -> bool:
+    return (data.user_id is not None and member.user_id is not None and data.user_id == member.user_id) or (
+        data.user_email is not None and member.user_email is not None and data.user_email == member.user_email
+    )
+
+
 def _cleanup_members_with_roles(
     existing_team_row: LiteLLM_TeamTable,
     data: TeamMemberDeleteRequest,
-) -> tuple[bool, list[Member]]:
-    """Cleanup members_with_roles list for a team."""
-    is_member_in_team = False
-    new_team_members: Final[list[Member]] = []
-    for m in existing_team_row.members_with_roles:
-        if (
-            data.user_id is not None
-            and m.user_id is not None
-            and data.user_id == m.user_id
-            or data.user_email is not None
-            and m.user_email is not None
-            and data.user_email == m.user_email
-        ):
-            is_member_in_team = True
-            continue
-        new_team_members.append(m)
-    return is_member_in_team, new_team_members
+) -> tuple[tuple[Member, ...], list[Member]]:
+    """Split a team's members_with_roles into the entries the request addresses and the ones that stay.
+
+    The addressed entries are returned rather than a bare found/not-found flag because they carry the
+    user_id the request may not have supplied, and every cleanup that keys off the user rather than
+    off the roster has to run against that id.
+    """
+    removed_team_members: Final = tuple(
+        m for m in existing_team_row.members_with_roles if _is_member_addressed_by(m, data)
+    )
+    new_team_members: Final = [m for m in existing_team_row.members_with_roles if not _is_member_addressed_by(m, data)]
+    return removed_team_members, new_team_members
 
 
 @router.post(
@@ -3182,12 +3183,12 @@ async def team_member_delete(
         )
 
     ## DELETE MEMBER FROM TEAM
-    is_member_in_team, new_team_members = _cleanup_members_with_roles(
+    removed_team_members, new_team_members = _cleanup_members_with_roles(
         existing_team_row=existing_team_row,
         data=data,
     )
 
-    if not is_member_in_team:
+    if not removed_team_members:
         raise HTTPException(status_code=400, detail={"error": "User not found in team"})
 
     existing_team_row.members_with_roles = new_team_members
@@ -3205,38 +3206,28 @@ async def team_member_delete(
 
     ## DELETE TEAM ID from USER ROW, IF EXISTS ##
     # get user row
-    key_val: Final = {}
-    if data.user_id is not None:
-        key_val["user_id"] = data.user_id
-    elif data.user_email is not None:
-        key_val["user_email"] = data.user_email
-    existing_user_rows: Final[Sequence[LiteLLM_UserTable] | None] = await UserRepository(prisma_client).table.find_many(
-        where=key_val
+    removed_user_ids: Final = frozenset(m.user_id for m in removed_team_members if m.user_id is not None)
+    key_val: Final[Mapping[str, object]] = (
+        {"user_id": {"in": sorted(removed_user_ids)}} if removed_user_ids else {"user_email": data.user_email}
     )
+    existing_user_rows: Final[Sequence[LiteLLM_UserTable]] = await _user_db(prisma_client).find_many(where=key_val)
 
-    if existing_user_rows is not None and (isinstance(existing_user_rows, list) and len(existing_user_rows) > 0):
-        for existing_user in existing_user_rows:
-            team_list = []
-            if data.team_id in existing_user.teams:
-                team_list = existing_user.teams
-                team_list.remove(data.team_id)
-                await _user_db(prisma_client).update(
-                    where={
-                        "user_id": existing_user.user_id,
-                    },
-                    data={"teams": {"set": team_list}},
-                )
+    for existing_user in existing_user_rows:
+        if data.team_id in existing_user.teams:
+            await _user_db(prisma_client).update(
+                where={
+                    "user_id": existing_user.user_id,
+                },
+                data={"teams": {"set": [team for team in existing_user.teams if team != data.team_id]}},
+            )
 
     # Also clean up any existing team membership rows for this user and team
-    user_ids_to_delete: Final = set[str]()
-    if data.user_id is not None:
-        user_ids_to_delete.add(data.user_id)
-    if existing_user_rows is not None and isinstance(existing_user_rows, list):
-        for existing_user in existing_user_rows:
-            if getattr(existing_user, "user_id", None):
-                user_ids_to_delete.add(existing_user.user_id)
+    user_ids_to_delete: Final = removed_user_ids.union(
+        (data.user_id,) if data.user_id is not None else (),
+        (user.user_id for user in existing_user_rows if user.user_id),
+    )
 
-    for _uid in user_ids_to_delete:
+    for _uid in sorted(user_ids_to_delete):
         await _team_membership_db(prisma_client).delete_many(where={"team_id": data.team_id, "user_id": _uid})
 
     ## DELETE KEYS CREATED BY USER FOR THIS TEAM
@@ -3248,7 +3239,7 @@ async def team_member_delete(
         # Fetch keys before deletion to persist them
         keys_to_delete: Final[list[LiteLLM_VerificationToken]] = await _tokens_db(prisma_client).find_many(
             where={
-                "user_id": {"in": list(user_ids_to_delete)},
+                "user_id": {"in": sorted(user_ids_to_delete)},
                 "team_id": data.team_id,
             }
         )
@@ -3263,7 +3254,7 @@ async def team_member_delete(
 
         await _tokens_db(prisma_client).delete_many(
             where={
-                "user_id": {"in": list(user_ids_to_delete)},
+                "user_id": {"in": sorted(user_ids_to_delete)},
                 "team_id": data.team_id,
             }
         )

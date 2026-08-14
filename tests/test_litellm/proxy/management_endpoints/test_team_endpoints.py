@@ -4133,6 +4133,106 @@ async def test_team_member_delete_cleans_verification_tokens(
     )
 
 
+@pytest.mark.parametrize(
+    "roster_email",
+    ["Alice@Example.com", "alice-invited-as@example.com"],
+    ids=["case_variant_of_the_row_email", "email_the_row_never_carried"],
+)
+@pytest.mark.parametrize("user_row_exists", [True, False])
+@pytest.mark.asyncio
+async def test_team_member_delete_by_email_the_user_row_does_not_carry(
+    user_row_exists, roster_email, mock_db_client, mock_admin_auth
+):
+    """
+    Removing a member addressed by user_email drove its user-row and membership cleanup off that raw
+    email instead of off the user_id the roster entry already carries, so an email the user row does
+    not literally hold matched nothing and both cleanups silently no-opped behind a 200.
+
+    Both roster emails here are reachable over plain HTTP. /team/member_add resolves an email to a
+    user case-insensitively but stores the caller's casing in members_with_roles, which produces the
+    case variant; it also leaves an unmatched email on the entry when no user row carries it at all,
+    which produces the second. Both converge on the same lookup, so they are parametrized inputs
+    rather than separate paths, and each one has to detect the bug on its own.
+
+    The user table below is case-sensitive like Postgres, so only a lookup driven by the resolved
+    user_id finds the row. The user_row_exists=False leg pins the second half on its own: the
+    membership row has to go even when no user row is left to resolve it from.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-email-case-123"
+    test_user_id = "user-del-email-case-123"
+    user_row_email = "alice@example.com"
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": test_user_id, "user_email": roster_email, "role": "user"}
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    mock_user_row = MagicMock()
+    mock_user_row.user_id = test_user_id
+    mock_user_row.user_email = user_row_email
+    mock_user_row.teams = [test_team_id]
+
+    async def find_user_rows(where):
+        if not user_row_exists:
+            return []
+        user_id_filter = where.get("user_id")
+        if isinstance(user_id_filter, dict) and test_user_id in user_id_filter.get(
+            "in", []
+        ):
+            return [mock_user_row]
+        if where.get("user_email") == user_row_email:
+            return [mock_user_row]
+        return []
+
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        side_effect=find_user_rows
+    )
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    mock_db_client.db.litellm_verificationtoken = MagicMock()
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(team_id=test_team_id, user_email=roster_email),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    if user_row_exists:
+        mock_db_client.db.litellm_usertable.update.assert_awaited_once_with(
+            where={"user_id": test_user_id},
+            data={"teams": {"set": []}},
+        )
+    else:
+        mock_db_client.db.litellm_usertable.update.assert_not_awaited()
+
+    mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"team_id": test_team_id, "user_id": test_user_id}
+    )
+
+
 @pytest.mark.asyncio
 async def test_new_team_max_budget_exceeds_user_max_budget():
     """
