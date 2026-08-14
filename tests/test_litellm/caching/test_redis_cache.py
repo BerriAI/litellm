@@ -435,66 +435,6 @@ def test_increment_cache_namespaces_key(
     mock_client.incr.assert_called_once_with(name=expected, amount=1)
 
 
-@pytest.mark.asyncio
-async def test_async_increment_if_exists_increments_present_key(
-    monkeypatch, redis_no_ping
-):
-    """A present key is atomically incremented and its TTL refreshed."""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache(namespace=None)
-    mock_redis_instance = AsyncMock()
-    mock_redis_instance.eval = AsyncMock(return_value="5.0")
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        result = await redis_cache.async_increment_if_exists(key="k", value=2.0, ttl=60)
-
-    assert result == 5.0
-    lua, num_keys, key, value, ttl = mock_redis_instance.eval.await_args.args
-    assert num_keys == 1
-    assert key == "k"
-    assert value == "2.0"
-    assert ttl == "60"
-    assert "if cur == false then return nil end" in lua
-
-
-@pytest.mark.asyncio
-async def test_async_increment_if_exists_decodes_bytes_result(
-    monkeypatch, redis_no_ping
-):
-    """Redis returns bytes; the method decodes them to a float."""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache(namespace=None)
-    mock_redis_instance = AsyncMock()
-    mock_redis_instance.eval = AsyncMock(return_value=b"7.0")
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        result = await redis_cache.async_increment_if_exists(key="k", value=2.0)
-
-    assert result == 7.0
-
-
-@pytest.mark.asyncio
-async def test_async_increment_if_exists_leaves_missing_key_absent(
-    monkeypatch, redis_no_ping
-):
-    """An absent key stays missing: the method returns None and does not create it."""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache(namespace=None)
-    mock_redis_instance = AsyncMock()
-    mock_redis_instance.eval = AsyncMock(return_value=None)
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        result = await redis_cache.async_increment_if_exists(key="k", value=2.0)
-
-    assert result is None
-
-
 @pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
 def test_delete_cache_namespaces_key(namespace, expected, monkeypatch, redis_no_ping):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")

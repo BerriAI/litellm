@@ -1033,41 +1033,6 @@ class RedisCache(BaseCache):
             result = result.decode()
         return float(result)
 
-    @_redis_circuit_breaker_guard
-    async def async_increment_if_exists(
-        self,
-        key: str,
-        value: float,
-        ttl: float | None = None,
-    ) -> float | None:
-        """Atomically increment ``key`` by ``value`` only when the key already
-        exists, returning the new value; an absent key is left missing and
-        ``None`` is returned so callers can fall back to loading the
-        authoritative total. The GET/increment/SET runs in a single Lua call,
-        so it is race-free across callers and pods, and refreshing the TTL on
-        a present key keeps the accumulator alive while it is being used.
-        """
-        _redis_client: Final = self.init_async_client()
-        _used_ttl: Final = self.get_ttl(ttl=ttl)
-        key = self.check_and_fix_namespace(key=key)
-        lua: Final = (
-            "local cur = redis.call('GET', KEYS[1]) "
-            "if cur == false then return nil end "
-            "local new = tonumber(cur) + tonumber(ARGV[1]) "
-            "redis.call('SET', KEYS[1], new) "
-            "if tonumber(ARGV[2]) > 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
-            "return new"
-        )
-        result = cast(  # cast-ok: redis eval returns an untyped scalar
-            "str | bytes | int | float | None",
-            await _redis_client.eval(lua, 1, key, str(value), str(int(_used_ttl or 0))),
-        )
-        if result is None:
-            return None
-        if isinstance(result, bytes):
-            result = result.decode()
-        return float(result)
-
     async def flush_cache_buffer(self):
         print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")
         await self.async_set_cache_pipeline(self.redis_batch_writing_buffer)

@@ -6134,11 +6134,14 @@ async def test_global_proxy_spend_reads_shared_redis_scalar_when_configured():
     cache = UserApiKeyCache()
     redis_cache = MagicMock()
     redis_cache.async_get_cache = AsyncMock(return_value=8.5)
+    redis_cache.async_set_cache = AsyncMock()
     cache.redis_cache = redis_cache
 
+    proxy_budget_row = MagicMock()
+    proxy_budget_row.spend = 5.0
     prisma_client = MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        side_effect=AssertionError("a Redis hit must not hit the DB")
+        return_value=proxy_budget_row
     )
 
     result = await _fetch_global_spend_with_event_coordination(
@@ -6149,6 +6152,43 @@ async def test_global_proxy_spend_reads_shared_redis_scalar_when_configured():
 
     assert result == 8.5
     redis_cache.async_get_cache.assert_awaited_once_with(key="default_user_id:spend")
+    redis_cache.async_set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_global_proxy_spend_floors_stale_low_redis_to_db():
+    """A Redis counter that is stale-low (e.g., recreated from zero after a
+    reset or Redis restart) must be floored to the authoritative DB spend so
+    requests cannot leak past the global cap."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _fetch_global_spend_with_event_coordination,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value="2.0")
+    redis_cache.async_set_cache = AsyncMock()
+    cache.redis_cache = redis_cache
+
+    proxy_budget_row = MagicMock()
+    proxy_budget_row.spend = 9.0
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=proxy_budget_row
+    )
+
+    result = await _fetch_global_spend_with_event_coordination(
+        cache_key="default_user_id:spend",
+        user_api_key_cache=cache,
+        prisma_client=prisma_client,
+    )
+
+    assert result == 9.0
+    redis_cache.async_get_cache.assert_awaited_once_with(key="default_user_id:spend")
+    redis_cache.async_set_cache.assert_awaited_once_with(
+        key="default_user_id:spend", value=9.0
+    )
 
 
 @pytest.mark.asyncio

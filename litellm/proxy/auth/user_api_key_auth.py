@@ -494,6 +494,10 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
 # Reusable coordinator for global spend to prevent cache stampede
 _global_spend_coordinator: Final = EventDrivenCacheCoordinator(log_prefix="[GLOBAL SPEND]")
 
+# Cache the authoritative DB spend read for a few seconds per worker so the
+# global-proxy budget floor check does not query the DB on every request.
+_GLOBAL_PROXY_SPEND_DB_FLOOR_TTL_SECONDS: Final = 5
+
 
 async def _fetch_global_spend_with_event_coordination(
     cache_key: str,
@@ -522,14 +526,49 @@ async def _fetch_global_spend_with_event_coordination(
         )
         return float(proxy_budget_row.spend) if proxy_budget_row is not None else None
 
+    async def _authoritative_db_spend() -> float | None:
+        # Cached per-worker for a few seconds to avoid a DB query per request.
+        marker_key: Final = f"global_proxy_spend_db_floor:{cache_key}"
+        cached = user_api_key_cache.in_memory_cache.get_cache(key=marker_key)
+        if cached is not None:
+            return float(cached)
+        db_spend = await _load_global_spend()
+        if db_spend is not None:
+            user_api_key_cache.in_memory_cache.set_cache(
+                key=marker_key,
+                value=db_spend,
+                ttl=_GLOBAL_PROXY_SPEND_DB_FLOOR_TTL_SECONDS,
+            )
+        return db_spend
+
     spend_cache: Final = (
         user_api_key_cache.redis_cache if user_api_key_cache.redis_cache is not None else user_api_key_cache
     )
-    return await _global_spend_coordinator.get_or_load(
+    value = await _global_spend_coordinator.get_or_load(
         cache_key=cache_key,
         cache=spend_cache,  # pyright: ignore[reportArgumentType]
         load_fn=_load_global_spend,
     )
+    if value is None:
+        return None
+
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        numeric_value = 0.0
+
+    # Floor to the authoritative DB spend when Redis is in use. A Redis counter
+    # that was clobbered by a reset race, restarted from an old RDB snapshot,
+    # or recreated from zero after expiry can under-report current-period spend;
+    # capping the value to the DB row prevents requests from leaking past the
+    # global cap. Without Redis the coordinator already loaded the DB row.
+    if user_api_key_cache.redis_cache is not None:
+        db_spend = await _authoritative_db_spend()
+        if db_spend is not None and db_spend > numeric_value:
+            await spend_cache.async_set_cache(key=cache_key, value=db_spend)
+            numeric_value = db_spend
+
+    return numeric_value
 
 
 async def get_global_proxy_spend(
