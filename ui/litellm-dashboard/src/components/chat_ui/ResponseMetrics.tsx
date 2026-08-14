@@ -1,20 +1,25 @@
 import React from "react";
-import { Tooltip } from "antd";
 import {
-  ClockCircleOutlined,
-  NumberOutlined,
-  ImportOutlined,
-  ExportOutlined,
-  BulbOutlined,
-  ToolOutlined,
-  DollarOutlined,
-} from "@ant-design/icons";
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Clock,
+  Database,
+  DatabaseBackup,
+  DollarSign,
+  Hash,
+  Lightbulb,
+  Wrench,
+} from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 
 export interface TokenUsage {
   completionTokens?: number;
   promptTokens?: number;
   totalTokens?: number;
   reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
   cost?: number;
 }
 
@@ -25,81 +30,131 @@ interface ResponseMetricsProps {
   toolName?: string;
 }
 
+interface MetricItemProps {
+  label: string;
+  tooltip: string;
+  icon: React.ReactNode;
+  value: string;
+}
+
+function MetricItem({ label, tooltip, icon, value }: MetricItemProps) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<div className="flex items-center gap-1" aria-label={`${label}: ${value}`} />}>
+        {icon}
+        <span>
+          {label}: {value}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
+  const readTokens = usage?.cacheReadTokens ?? 0;
+  const creationTokens = usage?.cacheCreationTokens ?? 0;
+
+  return (
+    <>
+      {readTokens > 0 && (
+        <MetricItem
+          label="Cache Read"
+          tooltip={PROMPT_CACHE_READ_TOOLTIP}
+          icon={<Database className="size-3" aria-hidden="true" />}
+          value={String(readTokens)}
+        />
+      )}
+
+      {creationTokens > 0 && (
+        <MetricItem
+          label="Cache Write"
+          tooltip={PROMPT_CACHE_CREATION_TOOLTIP}
+          icon={<DatabaseBackup className="size-3" aria-hidden="true" />}
+          value={String(creationTokens)}
+        />
+      )}
+    </>
+  );
+}
+
 const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, totalLatency, usage, toolName }) => {
   if (!timeToFirstToken && !totalLatency && !usage) return null;
 
   return (
-    <div className="response-metrics mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500 flex flex-wrap gap-3">
+    <div className="response-metrics mt-2 flex flex-wrap gap-3 border-t border-gray-100 pt-2 text-xs text-gray-500">
       {timeToFirstToken !== undefined && (
-        <Tooltip title="Time to first token">
-          <div className="flex items-center">
-            <ClockCircleOutlined className="mr-1" />
-            <span>TTFT: {(timeToFirstToken / 1000).toFixed(2)}s</span>
-          </div>
-        </Tooltip>
+        <MetricItem
+          label="TTFT"
+          tooltip="Time to first token"
+          icon={<Clock className="size-3" aria-hidden="true" />}
+          value={`${(timeToFirstToken / 1000).toFixed(2)}s`}
+        />
       )}
 
       {totalLatency !== undefined && (
-        <Tooltip title="Total latency">
-          <div className="flex items-center">
-            <ClockCircleOutlined className="mr-1" />
-            <span>Total Latency: {(totalLatency / 1000).toFixed(2)}s</span>
-          </div>
-        </Tooltip>
+        <MetricItem
+          label="Total Latency"
+          tooltip="Total latency"
+          icon={<Clock className="size-3" aria-hidden="true" />}
+          value={`${(totalLatency / 1000).toFixed(2)}s`}
+        />
       )}
 
       {usage?.promptTokens !== undefined && (
-        <Tooltip title="Prompt tokens">
-          <div className="flex items-center">
-            <ImportOutlined className="mr-1" />
-            <span>In: {usage.promptTokens}</span>
-          </div>
-        </Tooltip>
+        <MetricItem
+          label="In"
+          tooltip="Prompt tokens"
+          icon={<ArrowDownToLine className="size-3" aria-hidden="true" />}
+          value={String(usage.promptTokens)}
+        />
       )}
 
+      <PromptCacheChips usage={usage} />
+
       {usage?.completionTokens !== undefined && (
-        <Tooltip title="Completion tokens">
-          <div className="flex items-center">
-            <ExportOutlined className="mr-1" />
-            <span>Out: {usage.completionTokens}</span>
-          </div>
-        </Tooltip>
+        <MetricItem
+          label="Out"
+          tooltip="Completion tokens"
+          icon={<ArrowUpFromLine className="size-3" aria-hidden="true" />}
+          value={String(usage.completionTokens)}
+        />
       )}
 
       {usage?.reasoningTokens !== undefined && (
-        <Tooltip title="Reasoning tokens">
-          <div className="flex items-center">
-            <BulbOutlined className="mr-1" />
-            <span>Reasoning: {usage.reasoningTokens}</span>
-          </div>
-        </Tooltip>
+        <MetricItem
+          label="Reasoning"
+          tooltip="Reasoning tokens"
+          icon={<Lightbulb className="size-3" aria-hidden="true" />}
+          value={String(usage.reasoningTokens)}
+        />
       )}
 
       {usage?.totalTokens !== undefined && (
-        <Tooltip title="Total tokens">
-          <div className="flex items-center">
-            <NumberOutlined className="mr-1" />
-            <span>Total: {usage.totalTokens}</span>
-          </div>
-        </Tooltip>
+        <MetricItem
+          label="Total"
+          tooltip="Total tokens"
+          icon={<Hash className="size-3" aria-hidden="true" />}
+          value={String(usage.totalTokens)}
+        />
       )}
 
       {usage?.cost !== undefined && (
-        <Tooltip title="Cost">
-          <div className="flex items-center">
-            <DollarOutlined className="mr-1" />
-            <span>${usage.cost.toFixed(6)}</span>
-          </div>
-        </Tooltip>
+        <MetricItem
+          label="Cost"
+          tooltip="Cost"
+          icon={<DollarSign className="size-3" aria-hidden="true" />}
+          value={`$${usage.cost.toFixed(6)}`}
+        />
       )}
 
       {toolName && (
-        <Tooltip title="Tool used">
-          <div className="flex items-center">
-            <ToolOutlined className="mr-1" />
-            <span>Tool: {toolName}</span>
-          </div>
-        </Tooltip>
+        <MetricItem
+          label="Tool"
+          tooltip="Tool used"
+          icon={<Wrench className="size-3" aria-hidden="true" />}
+          value={toolName}
+        />
       )}
     </div>
   );
