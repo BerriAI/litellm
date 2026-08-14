@@ -2,6 +2,7 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 
 import litellm
@@ -21,6 +22,14 @@ from litellm.types.utils import (
     StandardBuiltInToolsParams,
     Usage,
 )
+
+
+def _usage_reports_server_side_web_search_calls(usage: Usage) -> bool:
+    details: Final = getattr(usage, "server_side_tool_usage_details", None)
+    if not isinstance(details, Mapping):
+        return False
+    calls: Final = details.get("web_search_calls")
+    return isinstance(calls, int) and calls > 0
 
 
 class StandardBuiltInToolCostTracking:
@@ -351,6 +360,10 @@ class StandardBuiltInToolCostTracking:
                 # and _handle_web_search_cost() is never called.
                 if hasattr(usage, "server_tool_use") and _get_web_search_requests(usage.server_tool_use) is not None:
                     return True
+                # xAI reports usage.server_side_tool_usage_details.web_search_calls; a searched
+                # answer with no url_citation annotations has no other chat-path signal
+                if _usage_reports_server_side_web_search_calls(usage):
+                    return True
             return False
         elif isinstance(response_object, ResponsesAPIResponse):
             # response api explicitly includes web_search_call in the output
@@ -369,6 +382,8 @@ class StandardBuiltInToolCostTracking:
                     and usage.prompt_tokens_details.web_search_requests is not None
                 )
             ):
+                return True
+            if _usage_reports_server_side_web_search_calls(usage):
                 return True
 
         return False
@@ -432,7 +447,9 @@ class StandardBuiltInToolCostTracking:
         """
         output: Final = response_object.output
         for output_item in output:
-            _output_type: str | None = getattr(output_item, "type", None)
+            _output_type: str | None = (
+                output_item.get("type") if isinstance(output_item, dict) else getattr(output_item, "type", None)
+            )
             if _output_type == output_type:
                 return True
         return False

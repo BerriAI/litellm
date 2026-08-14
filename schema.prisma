@@ -30,7 +30,7 @@ model LiteLLM_BudgetTable {
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   tags LiteLLM_TagTable[] // multiple tags can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
-  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
+  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
 }
 
 // Models on proxy
@@ -452,6 +452,7 @@ model LiteLLM_VerificationToken {
     created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     updated_by String?
+    settings_updated_at DateTime?             @map("settings_updated_at")
     last_active     DateTime?  // When this key was last used
     rotation_count   Int?       @default(0) // Number of times key has been rotated
     auto_rotate      Boolean?   @default(false) // Whether this key should be auto-rotated
@@ -548,6 +549,7 @@ model LiteLLM_DeletedVerificationToken {
     created_by              String?   // Original creator
     updated_at              DateTime? // Last update timestamp before deletion
     updated_by              String?   // Last user who updated before deletion
+    settings_updated_at       DateTime? // Last configuration change before deletion
     last_active             DateTime? // When this key was last used before deletion
     rotation_count          Int?      @default(0)
     auto_rotate             Boolean?  @default(false)
@@ -893,6 +895,7 @@ model LiteLLM_DailyTeamSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  ptu_flat_cost       Float    @default(0.0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 

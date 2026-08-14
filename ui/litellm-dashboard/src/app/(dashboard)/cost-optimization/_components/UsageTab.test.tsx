@@ -7,6 +7,18 @@ import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
 const mockGetToolSpend = vi.fn();
 
+const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: useAuthorizedMock,
+}));
+
+// useCan reaches useOrganizations (react-query) through useIsOrgAdmin; stub the
+// org-admin leg so role gating flows through hasCapability without a QueryClient
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
+  default: () => false,
+}));
+
 vi.mock("@/components/networking", () => ({
   getToolSpend: (...args: unknown[]) => mockGetToolSpend(...args),
 }));
@@ -88,11 +100,18 @@ interface RenderOptions {
   toolSpend?: ToolSpendResponse;
   from?: Date;
   to?: Date;
+  userRole?: string;
 }
 
 const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
-  const { toolSpend = emptyToolSpend, from = new Date(2026, 6, 1), to = new Date(2026, 6, 14) } = options;
+  const {
+    toolSpend = emptyToolSpend,
+    from = new Date(2026, 6, 1),
+    to = new Date(2026, 6, 14),
+    userRole = "Admin",
+  } = options;
   mockGetToolSpend.mockResolvedValue(toolSpend);
+  useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
   return render(
     <UsageTab
       accessToken="test-token"
@@ -373,5 +392,39 @@ describe("UsageTab", () => {
 
     const toolLegends = getAllByTestId("chart-legend").filter((legend) => legend.textContent === "search,read_file");
     expect(toolLegends).toHaveLength(1);
+  });
+
+  // `/v1/tool/spend` is proxy-admin-only while the daily-activity charts around
+  // it are not, so this one card is dropped rather than the whole tab.
+  describe("proxy-admin-only spend-by-tool card", () => {
+    const toolSpend = {
+      by_tool: [{ tool_name: "search", spend: 4.0, call_count: 3, total_tokens: 150 }],
+      daily: [{ date: "2026-07-12", tool_name: "search", spend: 4.0, call_count: 3 }],
+      start_date: "2026-07-12",
+      end_date: "2026-07-12",
+    };
+
+    it.each(["Internal User", "Internal Viewer", "Org Admin"])(
+      "hides the card and never calls the endpoint for %s",
+      async (userRole) => {
+        const { queryByText, getByTestId } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })], {
+          toolSpend,
+          userRole,
+        });
+
+        // Liveness gate: the daily-activity charts still render for this role,
+        // so the absence below is the gate, not an empty tab.
+        expect(getByTestId("donut-chart")).toBeInTheDocument();
+        expect(queryByText("Spend by tool")).not.toBeInTheDocument();
+        await vi.waitFor(() => expect(mockGetToolSpend).not.toHaveBeenCalled());
+      },
+    );
+
+    it("keeps the card and the endpoint call for an admin", async () => {
+      const { findByText } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })], { toolSpend });
+
+      expect(await findByText("Spend by tool")).toBeInTheDocument();
+      expect(mockGetToolSpend).toHaveBeenCalled();
+    });
   });
 });
