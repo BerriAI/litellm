@@ -1688,9 +1688,15 @@ class TestTemporaryMCPSessionEndpoints:
             expires_at=datetime.utcnow() - timedelta(seconds=30),
         )
         cache = {"expired": expired_entry}
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
-            cache,
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
+                cache,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=None,
+            ),
         ):
             result = await get_cached_temporary_mcp_server("expired")
 
@@ -2265,6 +2271,10 @@ class TestTemporaryMCPSessionEndpoints:
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
                 mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=None,
             ),
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._cache_temporary_mcp_server",
@@ -3414,6 +3424,10 @@ class TestTemporaryMCPSessionEndpoints:
                 patch(
                     "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
                     {},
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                    return_value=None,
                 ),
                 patch(
                     "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
