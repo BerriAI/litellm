@@ -12,6 +12,7 @@ import pytest
 
 import litellm
 from litellm.proxy.proxy_server import _blocked_response_usage
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
 
 def test_uses_original_response_usage():
@@ -82,3 +83,44 @@ async def test_success_hook_attaches_original_response_on_block():
             )
 
     assert excinfo.value.original_response is response
+
+
+def test_responses_api_blocked_reply_carries_real_usage():
+    """Regression: /v1/responses blocked reply must carry the real upstream token counts.
+
+    The ModifyResponseException handler in responses_api used to hardcode usage to zeros.
+    """
+    import time
+
+    from litellm.proxy.response_api_endpoints.endpoints import (
+        _blocked_responses_api_usage,
+    )
+
+    original_response = ResponsesAPIResponse(
+        id="resp_orig",
+        object="response",
+        created_at=int(time.time()),
+        model="gpt-4o-mini",
+        output=[],
+        status="completed",
+        usage=ResponseAPIUsage(input_tokens=14, output_tokens=20, total_tokens=34),
+    )
+
+    usage = _blocked_responses_api_usage(original_response)
+
+    assert usage.input_tokens == 14
+    assert usage.output_tokens == 20
+    assert usage.total_tokens == 34
+
+
+def test_responses_api_blocked_reply_zero_usage_when_no_original_response():
+    """Pre-call block has no original_response, so usage must be zero."""
+    from litellm.proxy.response_api_endpoints.endpoints import (
+        _blocked_responses_api_usage,
+    )
+
+    usage = _blocked_responses_api_usage(None)
+
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 0
+    assert usage.total_tokens == 0
