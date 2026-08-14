@@ -95,9 +95,6 @@ describe("provider_info_helpers", () => {
     });
 
     it("should resolve the nvidia_riva provider value to the Nvidia Riva display name and logo", () => {
-      // The backend registers nvidia_riva and it has a docs page, but the UI
-      // registry had no entry, so it could not be picked in Add Model and the
-      // slug rendered raw with no logo.
       const result = getProviderLogoAndName("nvidia_riva");
       expect(result.displayName).toBe(Providers.NVIDIA_RIVA);
       expect(provider_map.NVIDIA_RIVA).toBe("nvidia_riva");
