@@ -1667,17 +1667,7 @@
       "count": 1
     }
   },
-  "src/app/onboarding/OnboardingErrorView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/onboarding/OnboardingFormBody.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/onboarding/OnboardingLoadingView.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1884,9 +1874,6 @@
     }
   },
   "src/components/Settings/RouterSettings/Fallbacks/AddFallbacks.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -2425,11 +2412,6 @@
       "count": 1
     }
   },
-  "src/components/key_team_helpers/TagRateLimitEditor.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/key_team_helpers/fetch_available_models_team_key.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2761,16 +2743,8 @@
       "count": 1
     }
   },
-  "src/components/router_settings/LatencyBasedConfiguration.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/router_settings/ReliabilityRetriesSection.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2779,16 +2753,8 @@
       "count": 1
     }
   },
-  "src/components/router_settings/TagFilteringToggle.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/router_settings/index.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "prefer-const": {
@@ -2830,11 +2796,6 @@
     },
     "prefer-const": {
       "count": 4
-    }
-  },
-  "src/components/shared/CreatedKeyDisplay.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/shared/advanced_date_picker.tsx": {
@@ -2900,9 +2861,6 @@
   },
   "src/components/shared/numerical_input.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
