@@ -1830,6 +1830,63 @@ async def test_add_team_members_reconciles_against_freshly_locked_row():
     assert [m.user_id for m in updated_team.members_with_roles] == ["zed", "alice", "bob"]
 
 
+@pytest.mark.asyncio
+async def test_add_team_members_cleans_up_when_the_team_is_deleted_mid_request():
+    """
+    Regression pin for the /team/member_add vs /team/delete race.
+
+    The user row and membership writes land before the reconcile takes the team
+    row lock, so a /team/delete that commits in between has already run its own
+    reference sweep and cannot see them. The empty locked SELECT is the only
+    signal that happened, and leaving it at that would strand the member on a
+    deleted team id, which authorization paths that trust `user.teams` would
+    treat as membership if the id were ever recreated. So the request must sweep
+    the references it just wrote and fail, not report success.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_members_to_team,
+    )
+
+    tx = MagicMock()
+    tx.query_raw = AsyncMock(return_value=[])
+    tx.litellm_teamtable.update = AsyncMock()
+
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+
+    prisma_client = MagicMock()
+    prisma_client.tx = MagicMock(return_value=tx_cm)
+    prisma_client.db.execute_raw = AsyncMock()
+    prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._process_team_members",
+        new=AsyncMock(return_value=([], [])),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _add_team_members_to_team(
+                data=TeamMemberAddRequest(
+                    team_id="team-deleted-mid-add",
+                    member=Member(user_id="bob", role="user"),
+                ),
+                complete_team_data=LiteLLM_TeamTable(team_id="team-deleted-mid-add", members_with_roles=[]),
+                prisma_client=cast(object, prisma_client),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                litellm_proxy_admin_name="admin",
+            )
+
+    assert exc_info.value.status_code == 404
+    tx.litellm_teamtable.update.assert_not_awaited()
+
+    assert prisma_client.db.execute_raw.await_args_list == [
+        call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-deleted-mid-add")
+    ]
+    prisma_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"team_id": {"in": ("team-deleted-mid-add",)}}
+    )
+
+
 def test_add_new_models_to_team_with_existing_models():
     """
     Test add_new_models_to_team function with existing models

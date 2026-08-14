@@ -2664,6 +2664,11 @@ async def _add_team_members_to_team(
     serialize on the row lock and each appends onto the other's committed
     result, instead of both rewriting the whole JSON array from a stale
     snapshot (which silently drops one member on the losing write).
+
+    The same lock serializes this against /team/delete: the delete cannot remove
+    the row while the reconcile holds it, and a reconcile that finds the row
+    already gone cleans up after itself rather than leaving the member pointing
+    at a deleted team id.
     """
     # Process and add new members
     updated_users, updated_team_memberships = await _process_team_members(
@@ -2674,10 +2679,41 @@ async def _add_team_members_to_team(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
-    async with prisma_client.tx() as tx:
-        complete_team_data.members_with_roles = await TeamRepository(prisma_client).get_members_with_roles_locked(
-            tx, data.team_id
+    updated_team: Final = await _write_members_with_roles_locked(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        updated_users=updated_users,
+    )
+    if updated_team is None:
+        await _sweep_deleted_team_references(team_ids=(data.team_id,), prisma_client=prisma_client)
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team={data.team_id} was deleted while this member add was running"},
         )
+
+    return updated_team, updated_users, updated_team_memberships
+
+
+async def _write_members_with_roles_locked(
+    data: TeamMemberAddRequest,
+    complete_team_data: LiteLLM_TeamTable,
+    prisma_client: PrismaClient,
+    updated_users: list[LiteLLM_UserTable],
+) -> LiteLLM_TeamTable | None:
+    """Reconcile members_with_roles under the team row lock. None when the team row is gone.
+
+    That read is at least as recent as the user and membership writes the caller
+    already made, so a missing row means /team/delete committed after them. Its
+    post-delete sweep can have run before those writes landed, which is why the
+    caller sweeps this team id again rather than only reporting the 404.
+    """
+    async with prisma_client.tx() as tx:
+        locked_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, data.team_id)
+        if locked_members is None:
+            return None
+
+        complete_team_data.members_with_roles = locked_members
 
         await _update_team_members_list(
             data=data,
@@ -2686,12 +2722,10 @@ async def _add_team_members_to_team(
         )
 
         _db_team_members: Final = [m.model_dump() for m in complete_team_data.members_with_roles]
-        updated_team: Final = await tx.litellm_teamtable.update(
+        return await tx.litellm_teamtable.update(
             where={"team_id": data.team_id},
             data={"members_with_roles": json.dumps(_db_team_members)},
         )
-
-    return updated_team, updated_users, updated_team_memberships
 
 
 def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
