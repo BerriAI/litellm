@@ -15,7 +15,7 @@ import base64
 import json
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
-from typing import Any, Final, Literal, TypedDict
+from typing import Any, Final, Literal, TypedDict  # noqa: TID251  # matches ClientSession.call_tool's real signature
 
 from mcp import ClientSession, types
 from mcp.shared.session import ProgressFnT
