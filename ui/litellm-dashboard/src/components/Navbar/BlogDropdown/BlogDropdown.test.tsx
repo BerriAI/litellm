@@ -66,6 +66,27 @@ describe("BlogDropdown", () => {
       expect(screen.getByRole("button", { name: /blog/i })).toBeInTheDocument();
     });
 
+    it("should not render menu content before the trigger is hovered", () => {
+      mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS.slice(0, 1) } };
+      renderWithProviders(<BlogDropdown />);
+
+      expect(screen.queryByRole("link", { name: /view all posts/i })).not.toBeInTheDocument();
+      expect(screen.queryByText("Post One")).not.toBeInTheDocument();
+    });
+
+    it("should open the menu on hover", async () => {
+      mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS.slice(0, 1) } };
+      renderWithProviders(<BlogDropdown />);
+
+      expect(screen.queryByText("Post One")).not.toBeInTheDocument();
+
+      await openDropdown();
+
+      await waitFor(() => {
+        expect(screen.getByText("Post One")).toBeInTheDocument();
+      });
+    });
+
     describe("loading state", () => {
       it("should show a loading spinner", async () => {
         mockUseBlogPostsResult = { ...mockUseBlogPostsResult, isLoading: true };
@@ -74,7 +95,7 @@ describe("BlogDropdown", () => {
         await openDropdown();
 
         await waitFor(() => {
-          expect(document.querySelector(".anticon-loading")).toBeInTheDocument();
+          expect(screen.getByRole("img", { name: /loading/i })).toBeInTheDocument();
         });
       });
     });

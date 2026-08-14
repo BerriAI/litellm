@@ -1855,36 +1855,8 @@
       "count": 12
     }
   },
-  "src/components/Navbar/BlogDropdown/BlogDropdown.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/Navbar/NotificationsBell/NotificationsBell.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/Navbar/UserDropdown/UserDropdown.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/Navbar/ViewSwitcher.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/Navbar/WorkerDropdown/WorkerDropdown.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
