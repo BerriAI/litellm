@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useTeams, useTeam, useDeletedTeams, DeletedTeam, teamListCall } from "./useTeams";
+import { useTeams, useTeam, useAllTeams, useDeletedTeams, DeletedTeam, teamListCall } from "./useTeams";
 import { fetchTeams } from "@/app/(dashboard)/networking";
 import { teamInfoCall } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
@@ -436,9 +436,6 @@ describe("useTeam", () => {
       showSSOBanner: false,
     });
 
-    // Import useQueryClient to get access to query client
-    const { useQueryClient } = await import("@tanstack/react-query");
-
     // Manually test the queryFn logic by calling it directly
     // This simulates what would happen if enabled check was bypassed
     const testQueryFn = async () => {
@@ -790,5 +787,180 @@ describe("useDeletedTeams", () => {
 
     expect(result.current.data).toEqual(mockDeletedTeams);
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe("useAllTeams", () => {
+  let queryClient: QueryClient;
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+    fetchMock = vi.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  const pageResponse = (teams: Team[], page: number, totalPages: number) => ({
+    ok: true,
+    json: async () => ({ teams, page, page_size: 100, total_pages: totalPages }),
+  });
+
+  const requestedPage = (url: string) => new URLSearchParams(url.split("?")[1]).get("page");
+  const requestedUserId = (url: string) => new URLSearchParams(url.split("?")[1]).get("user_id");
+  const asRole = (userRole: string, userId = "test-user-id") =>
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId,
+      userRole,
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+
+  it("paginates /v2/team/list to completion and concatenates every page", async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        requestedPage(url) === "1" ? pageResponse([mockTeams[0]], 1, 2) : pageResponse([mockTeams[1]], 2, 2),
+      ),
+    );
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual(mockTeams);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const requestedPages = fetchMock.mock.calls.map((call) => requestedPage(call[0] as string)).sort();
+    expect(requestedPages).toEqual(["1", "2"]);
+    const firstUrl = fetchMock.mock.calls[0][0] as string;
+    expect(firstUrl).toContain("/v2/team/list");
+    expect(firstUrl).toContain("page_size=100");
+  });
+
+  it("issues exactly one request for a single-page result", async () => {
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual(mockTeams);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not execute when accessToken is missing", () => {
+    mockUseAuthorized.mockReturnValue({
+      accessToken: null,
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: null,
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isFetched).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes the cache per access token so a switch of identity refetches", async () => {
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result, rerender } = renderHook(() => useAllTeams(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "a-different-users-token",
+      userId: "other-user-id",
+      userRole: "Admin",
+      token: "a-different-users-token",
+      userEmail: "other@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+    rerender();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("scopes the request to the caller for an internal user and returns their teams", async () => {
+    asRole("Internal User", "member-7");
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual(mockTeams);
+    expect(result.current.data?.length).toBeGreaterThan(0);
+    expect(requestedUserId(fetchMock.mock.calls[0][0] as string)).toBe("member-7");
+  });
+
+  it("carries user_id on every page of a scoped multi-page result", async () => {
+    asRole("Internal Viewer", "member-7");
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        requestedPage(url) === "1" ? pageResponse([mockTeams[0]], 1, 2) : pageResponse([mockTeams[1]], 2, 2),
+      ),
+    );
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const scopes = fetchMock.mock.calls.map((call) => requestedUserId(call[0] as string));
+    expect(scopes).toEqual(["member-7", "member-7"]);
+  });
+
+  it.each(["Admin", "Admin Viewer", "Org Admin"])(
+    "sends no user_id for %s so the broad list is left intact",
+    async (userRole) => {
+      asRole(userRole);
+      fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+      const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+      expect(requestedUserId(fetchMock.mock.calls[0][0] as string)).toBeNull();
+    },
+  );
+
+  it("refetches when the scope changes even though the access token has not", async () => {
+    asRole("Internal User", "member-7");
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result, rerender } = renderHook(() => useAllTeams(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    asRole("Internal User", "member-8");
+    rerender();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(requestedUserId(fetchMock.mock.calls[1][0] as string)).toBe("member-8");
   });
 });

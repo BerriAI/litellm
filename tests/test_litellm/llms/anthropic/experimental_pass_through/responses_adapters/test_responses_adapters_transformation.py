@@ -9,12 +9,20 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.openai import ResponseAPIUsage
 
 
 def _make_request(**overrides) -> AnthropicMessagesRequest:
@@ -94,17 +102,11 @@ class TestContextManagementConversion:
             }
         )
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["context_management"] == [
-            {"type": "compaction", "compact_threshold": 100000}
-        ]
+        assert kwargs["context_management"] == [{"type": "compaction", "compact_threshold": 100000}]
 
     def test_translate_request_drops_anthropic_only_context_management(self):
         """context_management with only unknown edit types is omitted from kwargs."""
-        req = _make_request(
-            context_management={
-                "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-            }
-        )
+        req = _make_request(context_management={"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]})
         kwargs = _ADAPTER.translate_request(req)
         assert "context_management" not in kwargs
 
@@ -129,9 +131,7 @@ class TestOutputConfigStructuredOutput:
 
     def test_output_config_format_json_schema_converted(self):
         """output_config.format.json_schema is converted to OpenAI text.format."""
-        req = _make_request(
-            output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}}
-        )
+        req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         fmt = kwargs["text"]["format"]
@@ -148,9 +148,7 @@ class TestOutputConfigStructuredOutput:
 
     def test_output_format_still_works(self):
         """The original output_format field still takes precedence when present."""
-        req = _make_request(
-            output_format={"type": "json_schema", "schema": self._SCHEMA}
-        )
+        req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         assert kwargs["text"]["format"]["type"] == "json_schema"
@@ -226,6 +224,106 @@ class TestTranslateMessagesToResponsesInput:
             {"type": "input_text", "text": "Second part."},
         ]
 
+    @pytest.mark.parametrize(
+        "system_content",
+        [
+            "Use the corrected result.",
+            [{"type": "text", "text": "Use the corrected result."}],
+            [
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                {"type": "text", "text": "Use the corrected result."},
+            ],
+        ],
+    )
+    def test_midturn_system_correction_stays_system_in_sequence(self, system_content: object):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01234",
+                        "name": "get_weather",
+                        "input": {"location": "Boston"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01234",
+                        "content": "Rainy, 55°F",
+                    }
+                ],
+            },
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": "Continue."},
+        ]
+
+        result = _translate_messages(messages)
+
+        assert result == [
+            {
+                "type": "function_call",
+                "call_id": "toolu_01234",
+                "name": "get_weather",
+                "arguments": '{"location": "Boston"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "toolu_01234",
+                "output": "Rainy, 55°F",
+            },
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Use the corrected result."}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue."}],
+            },
+        ]
+
+    def test_midturn_system_correction_keeps_multiple_text_blocks(self):
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "First correction."},
+                    {"type": "text", "text": "Second correction."},
+                ],
+            }
+        ]
+
+        assert _translate_messages(messages) == [
+            {
+                "type": "message",
+                "role": "system",
+                "content": [
+                    {"type": "input_text", "text": "First correction."},
+                    {"type": "input_text", "text": "Second correction."},
+                ],
+            }
+        ]
+
+    @pytest.mark.parametrize(
+        "system_content",
+        [
+            "",
+            [{"type": "text", "text": ""}],
+            [{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}],
+            None,
+        ],
+    )
+    def test_empty_or_unsupported_midturn_system_correction_is_dropped(self, system_content: object):
+        messages = [{"role": "system", "content": system_content}]
+
+        assert _translate_messages(messages) == []
+
     def test_user_base64_image(self):
         """User message with base64 image source becomes input_image with data URL."""
         messages = [
@@ -245,9 +343,7 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert len(result) == 1
-        assert result[0]["content"] == [
-            {"type": "input_image", "image_url": "data:image/png;base64,abc123"}
-        ]
+        assert result[0]["content"] == [{"type": "input_image", "image_url": "data:image/png;base64,abc123"}]
 
     def test_user_url_image(self):
         """User message with URL image source becomes input_image with the URL."""
@@ -263,9 +359,7 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "input_image", "image_url": "https://example.com/img.jpg"}
-        ]
+        assert result[0]["content"] == [{"type": "input_image", "image_url": "https://example.com/img.jpg"}]
 
     def test_user_base64_image_empty_data_skipped(self):
         """Base64 image with empty data is skipped (no URL can be formed)."""
@@ -336,9 +430,7 @@ class TestTranslateMessagesToResponsesInput:
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "call_null", "content": None}
-                ],
+                "content": [{"type": "tool_result", "tool_use_id": "call_null", "content": None}],
             }
         ]
         result = _translate_messages(messages)
@@ -365,9 +457,7 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "output_text", "text": "Here is the answer."}
-        ]
+        assert result[0]["content"] == [{"type": "output_text", "text": "Here is the answer."}]
 
     def test_assistant_tool_use_becomes_function_call(self):
         """Assistant tool_use block becomes a top-level function_call item."""
@@ -399,15 +489,11 @@ class TestTranslateMessagesToResponsesInput:
         messages = [
             {
                 "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "Let me reason step by step."}
-                ],
+                "content": [{"type": "thinking", "thinking": "Let me reason step by step."}],
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "output_text", "text": "Let me reason step by step."}
-        ]
+        assert result[0]["content"] == [{"type": "output_text", "text": "Let me reason step by step."}]
 
     def test_assistant_empty_thinking_block_skipped(self):
         """Assistant thinking block with empty thinking text is skipped."""
@@ -579,27 +665,26 @@ class TestTranslateToolsToResponsesAPI:
 
 
 class TestTranslateToolChoiceToResponsesAPI:
-    """Anthropic tool_choice -> Responses API tool_choice."""
+    """Anthropic tool_choice -> Responses API tool_choice.
 
-    def test_auto_maps_to_auto(self):
-        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "auto"}) == {
-            "type": "auto"
-        }
+    The Responses API's tool_choice schema (openai.types.responses.tool_choice_options)
+    is a bare Literal["none", "auto", "required"] for these simple cases - not an
+    object like {"type": "auto"}. Sending the object shape to an OpenAI-compatible
+    server gets rejected with a pydantic validation error.
+    """
 
-    def test_any_maps_to_required(self):
-        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "any"}) == {
-            "type": "required"
-        }
+    def test_auto_maps_to_bare_string_auto(self):
+        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "auto"}) == "auto"
+
+    def test_any_maps_to_bare_string_required(self):
+        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "any"}) == "required"
+
+    def test_none_maps_to_bare_string_none(self):
+        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "none"}) == "none"
 
     def test_specific_tool_maps_to_function(self):
-        result = _ADAPTER.translate_tool_choice_to_responses_api(
-            {"type": "tool", "name": "get_weather"}
-        )
+        result = _ADAPTER.translate_tool_choice_to_responses_api({"type": "tool", "name": "get_weather"})
         assert result == {"type": "function", "name": "get_weather"}
-
-    def test_unknown_type_defaults_to_auto(self):
-        result = _ADAPTER.translate_tool_choice_to_responses_api({"type": "none"})
-        assert result == {"type": "auto"}
 
 
 # ---------------------------------------------------------------------------
@@ -611,51 +696,65 @@ class TestTranslateThinkingToReasoning:
     """Anthropic thinking param -> Responses API reasoning param."""
 
     def test_budget_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 10000}
-        )
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
         # Default (reasoning_auto_summary=False): only effort, no summary
         assert result == {"effort": "high"}
         assert result is not None and "summary" not in result
 
     def test_budget_above_threshold_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 50000}
-        )
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 50000})
         assert result is not None
         assert result["effort"] == "high"
         assert "summary" not in result
 
     def test_budget_medium_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 7500}
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            }
         )
         assert result == {"effort": "medium"}
         assert result is not None and "summary" not in result
 
     def test_budget_low_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 3000}
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            }
         )
         assert result == {"effort": "low"}
         assert result is not None and "summary" not in result
 
     def test_budget_minimal_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 500}
-        )
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 500})
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
 
     def test_budget_at_exact_thresholds(self):
+        result_high = _ADAPTER.translate_thinking_to_reasoning(
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            }
+        )
+        assert result_high is not None
+        assert result_high["effort"] == "high"
         result_medium = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 5000}
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            }
         )
         assert result_medium is not None
         assert result_medium["effort"] == "medium"
         assert "summary" not in result_medium
         result_low = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 2000}
+            {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            }
         )
         assert result_low is not None
         assert result_low["effort"] == "low"
@@ -670,7 +769,7 @@ class TestTranslateThinkingToReasoning:
         assert result is None
 
     def test_missing_budget_defaults_to_minimal(self):
-        """Missing budget_tokens defaults to 0, which is < 2000 -> minimal."""
+        """Missing budget_tokens defaults to 0, below the low threshold -> minimal."""
         result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"})
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
@@ -682,9 +781,7 @@ class TestTranslateThinkingToReasoning:
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = True
-            result = _ADAPTER.translate_thinking_to_reasoning(
-                {"type": "enabled", "budget_tokens": 10000}
-            )
+            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
             assert result == {"effort": "high", "summary": "detailed"}
         finally:
             litellm.reasoning_auto_summary = original
@@ -698,7 +795,10 @@ class TestTranslateThinkingToReasoning:
             litellm.reasoning_auto_summary = False
             os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
             result = _ADAPTER.translate_thinking_to_reasoning(
-                {"type": "enabled", "budget_tokens": 5000}
+                {
+                    "type": "enabled",
+                    "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+                }
             )
             assert result == {"effort": "medium", "summary": "detailed"}
         finally:
@@ -724,6 +824,42 @@ class TestTranslateRequestBroaderCoverage:
         req = _make_request(system="You are a helpful assistant.")
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["instructions"] == "You are a helpful assistant."
+
+    def test_top_level_system_and_midturn_correction_are_not_duplicated(self):
+        """
+        Request level: the trusted top-level prompt goes to `instructions` only, and the
+        in-sequence correction stays a `role: "system"` input item in its original position.
+        Neither appears twice, and the surrounding turns keep their order.
+        """
+        req = _make_request(
+            system="Trusted top-level prompt.",
+            messages=[
+                {"role": "user", "content": "First question."},
+                {"role": "system", "content": "Use the corrected result."},
+                {"role": "user", "content": "Continue."},
+            ],
+        )
+
+        kwargs = _ADAPTER.translate_request(req)
+
+        assert kwargs["instructions"] == "Trusted top-level prompt."
+        assert kwargs["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "First question."}],
+            },
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Use the corrected result."}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Continue."}],
+            },
+        ]
 
     def test_system_list_of_text_blocks_joined(self):
         req = _make_request(
@@ -761,11 +897,7 @@ class TestTranslateRequestBroaderCoverage:
         assert kwargs["top_p"] == 0.9
 
     def test_tools_translated(self):
-        req = _make_request(
-            tools=[
-                {"name": "calculator", "description": "Does math.", "input_schema": {}}
-            ]
-        )
+        req = _make_request(tools=[{"name": "calculator", "description": "Does math.", "input_schema": {}}])
         kwargs = _ADAPTER.translate_request(req)
         assert len(kwargs["tools"]) == 1
         assert kwargs["tools"][0]["name"] == "calculator"
@@ -830,11 +962,19 @@ def _make_mock_response(
     model: str = "gpt-4o",
     input_tokens: int = 100,
     output_tokens: int = 50,
+    cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> MagicMock:
     """Build a minimal mock ResponsesAPIResponse."""
-    usage = MagicMock()
-    usage.input_tokens = input_tokens
-    usage.output_tokens = output_tokens
+    usage = ResponseAPIUsage(
+        input_tokens=input_tokens,
+        input_tokens_details={
+            "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
+        },
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
 
     resp = MagicMock()
     resp.id = response_id
@@ -901,9 +1041,7 @@ class TestTranslateResponse:
 
     def test_multiple_text_parts(self):
         """Multiple output_text parts become multiple text content blocks."""
-        response = _make_mock_response(
-            output=[_make_output_message(["Part 1", "Part 2"])]
-        )
+        response = _make_mock_response(output=[_make_output_message(["Part 1", "Part 2"])])
         result: Any = _ADAPTER.translate_response(response)
         assert len(result["content"]) == 2
         assert result["content"][0]["text"] == "Part 1"
@@ -969,6 +1107,32 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["input_tokens"] == 200
         assert result["usage"]["output_tokens"] == 75
+
+    def test_cache_tokens_mapped_to_anthropic_usage(self):
+        """Cache reads/writes reported by the Responses API must survive the
+        Anthropic mapping, and input_tokens must exclude them so spend is not
+        billed at the uncached input rate."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            input_tokens=4017,
+            output_tokens=5,
+            cached_tokens=4004,
+            cache_write_tokens=10,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"] == {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 4004,
+        }
+
+    def test_missing_usage_maps_to_zero_tokens(self):
+        """A response without a usage object must map to zeroed Anthropic usage."""
+        assert LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(None) == {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
 
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""

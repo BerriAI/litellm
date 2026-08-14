@@ -2,7 +2,7 @@
 DeepSeek Anthropic-compatible messages transformation config.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Final
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -23,18 +23,18 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "deepseek"
 
     def should_strip_billing_metadata(self) -> bool:
         return True
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or get_secret_str("DEEPSEEK_API_KEY") or litellm.api_key
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> str:
+    def get_api_base(api_base: str | None = None) -> str:
         return (
             api_base
             or get_secret_str("DEEPSEEK_ANTHROPIC_API_BASE")
@@ -46,19 +46,15 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
-        dynamic_api_key = self.get_api_key(api_key=api_key)
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
+        dynamic_api_key: Final = self.get_api_key(api_key=api_key)
 
-        if (
-            "x-api-key" not in headers
-            and "authorization" not in headers
-            and dynamic_api_key is not None
-        ):
+        if "x-api-key" not in headers and "authorization" not in headers and dynamic_api_key is not None:
             headers["x-api-key"] = dynamic_api_key
 
         if "anthropic-version" not in headers:
@@ -76,23 +72,20 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         base_url = self.get_api_base(api_base=api_base).rstrip("/")
 
         if base_url.endswith("/v1/messages") and "/anthropic/" in base_url:
             return base_url
-        if base_url.endswith("/v1/messages"):
-            base_url = base_url[: -len("/v1/messages")]
-        if base_url.endswith("/v1"):
-            base_url = base_url[: -len("/v1")]
-        if base_url.endswith("/beta"):
-            base_url = base_url[: -len("/beta")]
+        base_url = base_url.removesuffix("/v1/messages")
+        base_url = base_url.removesuffix("/v1")
+        base_url = base_url.removesuffix("/beta")
 
         if not base_url.endswith("/anthropic") and "/anthropic/" not in base_url:
             base_url = f"{base_url}/anthropic"
@@ -104,7 +97,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         if not isinstance(tools, list):
             return tools
 
-        sanitized_tools = []
+        sanitized_tools: Final = []
         for tool in tools:
             if isinstance(tool, dict) and tool.get("type") == "custom":
                 sanitized_tool = dict(tool)
@@ -117,12 +110,12 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
-        anthropic_messages_request = super().transform_anthropic_messages_request(
+    ) -> dict:
+        anthropic_messages_request: Final = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
@@ -130,7 +123,5 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=headers,
         )
         if "tools" in anthropic_messages_request:
-            anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(
-                anthropic_messages_request["tools"]
-            )
+            anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(anthropic_messages_request["tools"])
         return anthropic_messages_request

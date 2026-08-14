@@ -1,0 +1,577 @@
+import {
+  buildComplexityRouterConfig,
+  normalizeClassifierLlmConfig,
+  getKeywordTierRulesError,
+  getMissingTiersError,
+  getSemanticConfigError,
+  getTierLabelsError,
+  hydrateTierLabels,
+  BuildComplexityRouterConfigParams,
+} from "./build_complexity_router_config";
+
+const tiers = {
+  SIMPLE: ["gpt-4o-mini"],
+  MEDIUM: ["gpt-4o"],
+  COMPLEX: ["claude-sonnet-4"],
+  REASONING: ["o1-preview"],
+};
+
+const baseParams: BuildComplexityRouterConfigParams = {
+  tiers,
+  tierLabels: undefined,
+  classifierType: "heuristic",
+  classifierLlmConfig: undefined,
+  classifierContextWindowSize: undefined,
+  classifierContextPerTurnChars: undefined,
+  classifierContextIncludeAssistantTurns: undefined,
+  classifierFallback: undefined,
+  sessionAffinity: false,
+  deploymentAffinity: true,
+  customTechnicalKeywords: [],
+  keywordTierRules: [],
+  semanticMatchingEnabled: false,
+  embeddingModel: undefined,
+  matchThreshold: 0.5,
+  escalationKeywords: ["LITELLM ESCALATE"],
+  adaptive: false,
+  adaptiveWeights: { quality: 0.3, cost: 0.7 },
+  tierDistancePenalty: 0.5,
+  adaptiveEligible: "all",
+  returnRawModelName: false,
+};
+
+describe("buildComplexityRouterConfig", () => {
+  it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
+    const config = buildComplexityRouterConfig(baseParams);
+    expect(config).toEqual({
+      tiers,
+      classifier_type: "heuristic",
+      session_affinity: false,
+      deployment_affinity: true,
+      escalation_keywords: ["LITELLM ESCALATE"],
+    });
+  });
+
+  it("trims escalation keywords and drops blank entries", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      escalationKeywords: [" LITELLM ESCALATE ", "", "  ", "MAKE IT BETTER"],
+    });
+    expect(config.escalation_keywords).toEqual(["LITELLM ESCALATE", "MAKE IT BETTER"]);
+  });
+
+  it("emits an empty escalation_keywords list so clearing the field disables escalation", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, escalationKeywords: [] });
+    expect(config.escalation_keywords).toEqual([]);
+  });
+
+  it("passes through a tier configured with more than one model as a pool", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tiers: { ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o", "claude-haiku-4-5"] },
+    });
+    expect(config.tiers.SIMPLE).toEqual(["gpt-4o-mini", "gpt-4o", "claude-haiku-4-5"]);
+  });
+
+  it("includes classifier_llm_config only when classifier_type is llm", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    });
+    expect(config.classifier_type).toBe("llm");
+    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+  });
+
+  it("omits classifier_llm_config when classifier_type is heuristic even if config lingers in state", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "heuristic",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    });
+    expect(config.classifier_llm_config).toBeUndefined();
+  });
+
+  it("includes classifier_context_window_size and classifier_context_per_turn_chars only when classifier_type is llm", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierContextWindowSize: 5,
+      classifierContextPerTurnChars: 300,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_context_window_size).toBe(5);
+    expect(config.classifier_context_per_turn_chars).toBe(300);
+  });
+
+  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is heuristic even if values linger in state", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "heuristic",
+      classifierContextWindowSize: 5,
+      classifierContextPerTurnChars: 300,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+  });
+
+  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is llm but neither was set, leaving the backend default", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    });
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+  });
+
+  it("allows classifier_context_window_size of 0, distinct from unset, to send no prior-turn context", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierContextWindowSize: 0,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_context_window_size).toBe(0);
+  });
+
+  it("sends keyword_tier_rules with their per-tier targeting preserved (not flattened)", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      customTechnicalKeywords: ["udp"],
+      keywordTierRules: [
+        { id: "r1", keywords: ["deploy to k8s"], tier: "REASONING" },
+        { id: "r2", keywords: ["invoice", "refund"], tier: "SIMPLE" },
+      ],
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.keyword_tier_rules).toEqual([
+      { keywords: ["deploy to k8s"], tier: "REASONING" },
+      { keywords: ["invoice", "refund"], tier: "SIMPLE" },
+    ]);
+    // custom technical keywords stay their own list, not merged with rule keywords
+    expect(config.custom_technical_keywords).toEqual(["udp"]);
+    expect(config.semantic_keyword_matching).toBeUndefined();
+  });
+
+  it("includes semantic fields only when semantic matching is enabled", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      keywordTierRules: [{ id: "r1", keywords: ["k8s"], tier: "REASONING" }],
+      semanticMatchingEnabled: true,
+      embeddingModel: "openai/text-embedding-3-small",
+      matchThreshold: 0.42,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.semantic_keyword_matching).toBe(true);
+    expect(config.embedding_model).toBe("openai/text-embedding-3-small");
+    expect(config.match_threshold).toBe(0.42);
+  });
+
+  it("omits semantic fields when the toggle is off even if an embedding model lingers in state", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      keywordTierRules: [{ id: "r1", keywords: ["k8s"], tier: "REASONING" }],
+      semanticMatchingEnabled: false,
+      embeddingModel: "openai/text-embedding-3-small",
+      matchThreshold: 0.42,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.semantic_keyword_matching).toBeUndefined();
+    expect(config.embedding_model).toBeUndefined();
+    expect(config.match_threshold).toBeUndefined();
+  });
+
+  it("omits empty optional lists", () => {
+    const config = buildComplexityRouterConfig(baseParams);
+    expect(config.custom_technical_keywords).toBeUndefined();
+    expect(config.keyword_tier_rules).toBeUndefined();
+  });
+
+  it("trims keywords but keeps rules left empty, so a dropped row can never pass for a saved one", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      keywordTierRules: [
+        { id: "r1", keywords: [" deploy to k8s ", "", "  "], tier: "REASONING" },
+        { id: "r2", keywords: [], tier: "COMPLEX" }, // seeded by "Add keyword rule", never filled
+        { id: "r3", keywords: ["   "], tier: "SIMPLE" }, // whitespace only
+      ],
+    };
+    const config = buildComplexityRouterConfig(params);
+    // getKeywordTierRulesError blocks this submit; r2 and r3 survive here so the backend rejects
+    // them loudly rather than the caller's rows vanishing on a successful save.
+    expect(config.keyword_tier_rules).toEqual([
+      { keywords: ["deploy to k8s"], tier: "REASONING" },
+      { keywords: [], tier: "COMPLEX" },
+      { keywords: [], tier: "SIMPLE" },
+    ]);
+  });
+
+  it("omits adaptive fields when adaptive is disabled even if weights linger in state", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      adaptive: false,
+      adaptiveWeights: { quality: 0.9, cost: 0.1 },
+      tierDistancePenalty: 2,
+      adaptiveEligible: "classified_tier",
+    });
+    expect(config.adaptive).toBeUndefined();
+    expect(config.adaptive_weights).toBeUndefined();
+    expect(config.tier_distance_penalty).toBeUndefined();
+    expect(config.adaptive_eligible).toBeUndefined();
+  });
+
+  it("omits return_raw_model_name when disabled", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: false });
+    expect(config.return_raw_model_name).toBeUndefined();
+  });
+
+  it("writes session_affinity=true so turning the toggle on overrides the backend's off-by-default", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinity: true });
+    expect(config.session_affinity).toBe(true);
+  });
+
+  it("writes session_affinity explicitly when off, so the stored config never relies on the backend default", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinity: false });
+    expect(config.session_affinity).toBe(false);
+  });
+
+  it("includes return_raw_model_name when enabled", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: true });
+    expect(config.return_raw_model_name).toBe(true);
+  });
+
+  it("includes tier_distance_penalty when adaptive is enabled with eligible='all'", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      adaptive: true,
+      adaptiveWeights: { quality: 0.6, cost: 0.4 },
+      tierDistancePenalty: 0.75,
+      adaptiveEligible: "all",
+    });
+    expect(config.adaptive).toBe(true);
+    expect(config.adaptive_weights).toEqual({ quality: 0.6, cost: 0.4 });
+    expect(config.tier_distance_penalty).toBe(0.75);
+    expect(config.adaptive_eligible).toBe("all");
+  });
+
+  it("omits tier_distance_penalty when eligible='classified_tier', since the penalty doesn't apply there", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      adaptive: true,
+      adaptiveWeights: { quality: 0.6, cost: 0.4 },
+      tierDistancePenalty: 0.75,
+      adaptiveEligible: "classified_tier",
+    });
+    expect(config.adaptive).toBe(true);
+    expect(config.adaptive_eligible).toBe("classified_tier");
+    expect(config.tier_distance_penalty).toBeUndefined();
+  });
+});
+
+describe("getMissingTiersError", () => {
+  it("returns null when all four tiers have a model", () => {
+    expect(getMissingTiersError(tiers)).toBeNull();
+  });
+
+  it("names the specific missing tier when only one is blank", () => {
+    expect(getMissingTiersError({ ...tiers, REASONING: [] })).toBe(
+      "Select a model for the following tier(s): REASONING",
+    );
+  });
+
+  it("names multiple missing tiers in SIMPLE/MEDIUM/COMPLEX/REASONING order", () => {
+    expect(getMissingTiersError({ ...tiers, SIMPLE: [], REASONING: [] })).toBe(
+      "Select a model for the following tier(s): SIMPLE, REASONING",
+    );
+  });
+
+  it("names all four tiers when none are filled", () => {
+    const noTiers = { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] };
+    expect(getMissingTiersError(noTiers)).toBe(
+      "Select a model for the following tier(s): SIMPLE, MEDIUM, COMPLEX, REASONING",
+    );
+  });
+
+  it("treats a tier with more than one model as filled", () => {
+    expect(getMissingTiersError({ ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o"] })).toBeNull();
+  });
+});
+
+describe("getSemanticConfigError", () => {
+  const rule = { id: "r1", keywords: ["k8s"], tier: "REASONING" as const };
+
+  it("returns null when semantic matching is disabled (even with gaps)", () => {
+    expect(
+      getSemanticConfigError({ semanticMatchingEnabled: false, embeddingModel: undefined, keywordTierRules: [] }),
+    ).toBeNull();
+  });
+
+  it("errors when enabled without an embedding model", () => {
+    expect(
+      getSemanticConfigError({ semanticMatchingEnabled: true, embeddingModel: undefined, keywordTierRules: [rule] }),
+    ).toMatch(/embedding model/i);
+  });
+
+  it("errors when enabled with an embedding model but no keyword tier rules", () => {
+    expect(
+      getSemanticConfigError({ semanticMatchingEnabled: true, embeddingModel: "voyage-3-5", keywordTierRules: [] }),
+    ).toMatch(/keyword tier rule/i);
+  });
+
+  it("returns null when enabled with both an embedding model and rules", () => {
+    expect(
+      getSemanticConfigError({ semanticMatchingEnabled: true, embeddingModel: "voyage-3-5", keywordTierRules: [rule] }),
+    ).toBeNull();
+  });
+});
+
+describe("getKeywordTierRulesError", () => {
+  it("returns null when every rule carries a keyword", () => {
+    expect(
+      getKeywordTierRulesError([
+        { id: "r1", keywords: ["invoice"], tier: "MEDIUM" },
+        { id: "r2", keywords: ["deploy to k8s"], tier: "REASONING" },
+      ]),
+    ).toBeNull();
+  });
+
+  it("returns null when there are no rules at all, since the section is optional", () => {
+    expect(getKeywordTierRulesError([])).toBeNull();
+  });
+
+  // The whole point of the ticket: the semantic toggle is off by default, and an unfilled row
+  // used to be discarded silently on an otherwise successful create.
+  it("rejects a row left empty while semantic matching is off", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: [], tier: "COMPLEX" }])).toBe(
+      "Add at least one keyword to keyword rule(s): 1",
+    );
+  });
+
+  it.each([
+    ["whitespace only", ["   "]],
+    ["blank strings, as an unfilled row between filled ones leaves behind", ["", " ", ""]],
+  ])("treats %s as empty rather than as a keyword", (_label, keywords) => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords, tier: "SIMPLE" }])).toMatch(/keyword rule\(s\): 1/);
+  });
+
+  // Row numbers have to survive rules that are fine, or the message points at the wrong input.
+  it("names each offending row by its position among all rules", () => {
+    expect(
+      getKeywordTierRulesError([
+        { id: "r1", keywords: ["invoice"], tier: "MEDIUM" },
+        { id: "r2", keywords: [], tier: "COMPLEX" },
+        { id: "r3", keywords: ["billing"], tier: "SIMPLE" },
+        { id: "r4", keywords: ["  "], tier: "REASONING" },
+      ]),
+    ).toBe("Add at least one keyword to keyword rule(s): 2, 4");
+  });
+
+  it("keeps a keyword whose surrounding whitespace is the only thing trimmed", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: ["  invoice  "], tier: "MEDIUM" }])).toBeNull();
+  });
+});
+
+describe("buildComplexityRouterConfig assistant turns", () => {
+  const llmParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  };
+
+  it("emits the field when the LLM classifier is selected", () => {
+    const config = buildComplexityRouterConfig({ ...llmParams, classifierContextIncludeAssistantTurns: true });
+    expect(config.classifier_context_include_assistant_turns).toBe(true);
+  });
+
+  it("emits the switch turned off, since false is a choice the operator made and not an absent value", () => {
+    const config = buildComplexityRouterConfig({ ...llmParams, classifierContextIncludeAssistantTurns: false });
+    expect(config.classifier_context_include_assistant_turns).toBe(false);
+  });
+
+  it("omits it when classifier_type is heuristic even if a value lingers in state", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "heuristic",
+      classifierContextIncludeAssistantTurns: true,
+    });
+    expect(config.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+
+  it("omits it when unset, leaving the backend default", () => {
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+});
+
+describe("classifier prompt and fallback", () => {
+  const llmParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400 },
+  };
+
+  it("omits system_prompt when the operator never edited the prompt", () => {
+    // The backend rejects a blank string, and storing a copy of the default would freeze the
+    // rubric so later improvements never reach this router.
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: "   " },
+    });
+    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400 });
+    expect(config.classifier_llm_config).not.toHaveProperty("system_prompt");
+  });
+
+  it("keeps a custom system_prompt verbatim, whitespace and all", () => {
+    const systemPrompt = "  Grade data sensitivity.\n\nSIMPLE=public  ";
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: systemPrompt },
+    });
+    expect(config.classifier_llm_config?.system_prompt).toBe(systemPrompt);
+  });
+
+  it("emits classifier_fallback only for the llm classifier", () => {
+    expect(buildComplexityRouterConfig({ ...llmParams, classifierFallback: "default_model" }).classifier_fallback).toBe(
+      "default_model",
+    );
+    expect(buildComplexityRouterConfig({ ...baseParams, classifierFallback: "default_model" })).not.toHaveProperty(
+      "classifier_fallback",
+    );
+  });
+
+  it("omits classifier_fallback when unset so the backend default applies", () => {
+    expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
+  });
+
+  it("sends the chat preset the operator picked", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, classification_rubric: "chat" },
+    });
+    expect(config.classifier_llm_config).toEqual({
+      model: "haiku-classifier",
+      timeout_ms: 400,
+      classification_rubric: "chat",
+    });
+  });
+
+  it("omits the preset when none is set, leaving an existing router on the rubric it already had", () => {
+    // An unset preset means the pre-calibration rubric on the backend. Materializing a value here
+    // would change the tier decisions, and the bill, of a router the operator only opened to edit.
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
+  });
+
+  it("drops the preset when a custom prompt replaces the rubric, which the backend rejects together", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: {
+        model: "haiku-classifier",
+        timeout_ms: 400,
+        classification_rubric: "chat",
+        system_prompt: "Grade the data sensitivity of the request.",
+      },
+    });
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
+    expect(config.classifier_llm_config?.system_prompt).toBe("Grade the data sensitivity of the request.");
+  });
+
+  it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
+      model: "m",
+      timeout_ms: 1,
+      system_prompt: "x",
+    });
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
+      model: "m",
+      timeout_ms: 1,
+    });
+  });
+});
+
+describe("tier labels", () => {
+  it("omits tier_labels entirely when the operator renamed nothing", () => {
+    expect(buildComplexityRouterConfig(baseParams).tier_labels).toBeUndefined();
+  });
+
+  it("omits a label that only restates the default, so a later default change still reaches this router", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierLabels: { SIMPLE: "Simple", MEDIUM: "Medium", COMPLEX: "Complex", REASONING: "Reasoning" },
+    });
+    expect(config.tier_labels).toBeUndefined();
+  });
+
+  it("emits only the renamed tiers, trimmed, and leaves the tier keys canonical", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierLabels: { SIMPLE: "  Cheap  ", REASONING: "Deep" },
+    });
+    expect(config.tier_labels).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+    expect(Object.keys(config.tiers)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
+  });
+
+  it("treats a whitespace-only label as no rename rather than sending a blank the backend rejects", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, tierLabels: { SIMPLE: "   " } });
+    expect(config.tier_labels).toBeUndefined();
+  });
+});
+
+describe("getTierLabelsError", () => {
+  it("accepts an unrenamed router", () => {
+    expect(getTierLabelsError(undefined)).toBeNull();
+  });
+
+  it("accepts a full distinct rename", () => {
+    const fullRename = { SIMPLE: "Cheap", MEDIUM: "Standard", COMPLEX: "Premium", REASONING: "Deep" };
+    expect(getTierLabelsError(fullRename)).toBeNull();
+  });
+
+  it("rejects two tiers sharing a name, which would be ambiguous in the logs", () => {
+    expect(getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "Cheap" })).toMatch(/unique/i);
+  });
+
+  it("rejects names that differ only by case, since the logs would not tell them apart", () => {
+    expect(getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "cheap" })).toMatch(/unique/i);
+  });
+
+  it("rejects a rename that collides with an untouched tier's name", () => {
+    expect(getTierLabelsError({ SIMPLE: "Medium" })).toMatch(/another tier's name/i);
+  });
+
+  it("rejects a label that is another tier's canonical name", () => {
+    expect(getTierLabelsError({ SIMPLE: "COMPLEX" })).toMatch(/another tier's name/i);
+  });
+
+  it("allows a label equal to that tier's own canonical name, which is a no-op", () => {
+    expect(getTierLabelsError({ SIMPLE: "SIMPLE" })).toBeNull();
+  });
+});
+
+describe("hydrateTierLabels", () => {
+  it("returns undefined for a config that never set labels", () => {
+    expect(hydrateTierLabels(undefined)).toBeUndefined();
+  });
+
+  it("keeps the stored labels", () => {
+    expect(hydrateTierLabels({ SIMPLE: "Cheap", REASONING: "Deep" })).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+  });
+
+  it("drops non-string and blank values a hand-edited config could hold", () => {
+    const handEdited = { SIMPLE: 7, MEDIUM: "  ", COMPLEX: null, REASONING: "Deep" };
+    expect(hydrateTierLabels(handEdited)).toEqual({ REASONING: "Deep" });
+  });
+
+  it("ignores keys that are not tiers", () => {
+    expect(hydrateTierLabels({ CHEAP: "Cheap" })).toBeUndefined();
+  });
+
+  it("returns undefined for a value that is not an object", () => {
+    expect(hydrateTierLabels("Cheap")).toBeUndefined();
+    expect(hydrateTierLabels(["Cheap"])).toBeUndefined();
+  });
+});

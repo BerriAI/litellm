@@ -519,6 +519,62 @@ class TestAsyncPreCallHook:
                     assert "team" in exc_info.value.detail.lower()
 
 
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_alist_input_items_decrypts_response_id(
+        self, responses_id_security, mock_user_api_key_dict, mock_cache
+    ):
+        data = {"response_id": "resp_encrypted_789"}
+
+        with patch.object(
+            responses_id_security, "_is_encrypted_response_id", return_value=True
+        ):
+            with patch.object(
+                responses_id_security,
+                "_decrypt_response_id",
+                return_value=("resp_original_789", "test-user-123", "test-team-123"),
+            ):
+                result = await responses_id_security.async_pre_call_hook(
+                    user_api_key_dict=mock_user_api_key_dict,
+                    cache=mock_cache,
+                    data=data,
+                    call_type="alist_input_items",
+                )
+
+                assert result is not None
+                assert result["response_id"] == "resp_original_789"
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_alist_input_items_team_security(
+        self, responses_id_security, mock_cache
+    ):
+        mock_auth_team_a = MagicMock()
+        mock_auth_team_a.user_id = None
+        mock_auth_team_a.team_id = "team-a"
+        mock_auth_team_a.user_role = None
+
+        data = {"response_id": "resp_encrypted_team_b"}
+
+        with patch.object(
+            responses_id_security, "_is_encrypted_response_id", return_value=True
+        ):
+            with patch.object(
+                responses_id_security,
+                "_decrypt_response_id",
+                return_value=("resp_original_team_b", None, "team-b"),
+            ):
+                with patch("litellm.proxy.proxy_server.general_settings", {}):
+                    with pytest.raises(HTTPException) as exc_info:
+                        await responses_id_security.async_pre_call_hook(
+                            user_api_key_dict=mock_auth_team_a,
+                            cache=mock_cache,
+                            data=data,
+                            call_type="alist_input_items",
+                        )
+
+                    assert exc_info.value.status_code == 403
+                    assert "team" in exc_info.value.detail.lower()
+
+
 class TestAsyncPostCallSuccessHook:
     """Test async_post_call_success_hook function"""
 

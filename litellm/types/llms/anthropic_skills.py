@@ -2,33 +2,33 @@
 Type definitions for Anthropic Skills API
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any
 
-from pydantic import BaseModel, Field
-from typing_extensions import Required, TypedDict
+from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 # Skills API Request Types
 class CreateSkillRequest(TypedDict, total=False):
     """Request parameters for creating a skill"""
 
-    display_title: Optional[str]
+    display_title: str | None
     """Display title for the skill (optional)"""
 
-    files: Optional[List[Any]]
+    files: list[Any] | None
     """Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root."""
 
 
 class ListSkillsParams(TypedDict, total=False):
     """Query parameters for listing skills"""
 
-    limit: Optional[int]
+    limit: int | None
     """Number of results to return per page. Maximum value is 100. Defaults to 20."""
 
-    page: Optional[str]
+    page: str | None
     """Pagination token for fetching a specific page of results"""
 
-    source: Optional[str]
+    source: str | None
     """Filter skills by source ('custom' or 'anthropic')"""
 
 
@@ -42,10 +42,10 @@ class Skill(BaseModel):
     created_at: str
     """ISO 8601 timestamp of when the skill was created"""
 
-    display_title: Optional[str] = None
+    display_title: str | None = None
     """Display title for the skill"""
 
-    latest_version: Optional[str] = None
+    latest_version: str | None = None
     """The latest version identifier for the skill"""
 
     source: str
@@ -61,10 +61,10 @@ class Skill(BaseModel):
 class ListSkillsResponse(BaseModel):
     """Response from listing skills"""
 
-    data: List[Skill]
+    data: list[Skill]
     """List of skills"""
 
-    next_page: Optional[str] = None
+    next_page: str | None = None
     """Pagination token for the next page"""
 
     has_more: bool = False
@@ -85,16 +85,16 @@ class DeleteSkillResponse(BaseModel):
 class CreateSkillVersionRequest(TypedDict, total=False):
     """Request parameters for creating a skill version"""
 
-    display_title: Optional[str]
+    display_title: str | None
     """Display title for this version"""
 
-    description: Optional[str]
+    description: str | None
     """Description of this version"""
 
-    instructions: Optional[str]
+    instructions: str | None
     """Instructions for this version"""
 
-    metadata: Optional[Dict[str, Any]]
+    metadata: dict[str, Any] | None
     """Additional metadata"""
 
 
@@ -110,16 +110,16 @@ class SkillVersion(BaseModel):
     created_at: str
     """ISO 8601 timestamp of when the version was created"""
 
-    display_title: Optional[str] = None
+    display_title: str | None = None
     """Display title for this version"""
 
-    description: Optional[str] = None
+    description: str | None = None
     """Description of this version"""
 
-    instructions: Optional[str] = None
+    instructions: str | None = None
     """Instructions for this version"""
 
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
     """Additional metadata"""
 
     type: str = "skill.version"
@@ -132,13 +132,13 @@ class ListSkillVersionsResponse(BaseModel):
     object: str = "list"
     """Object type, always 'list'"""
 
-    data: List[SkillVersion]
+    data: list[SkillVersion]
     """List of skill versions"""
 
-    first_id: Optional[str] = None
+    first_id: str | None = None
     """ID of the first version in the list"""
 
-    last_id: Optional[str] = None
+    last_id: str | None = None
     """ID of the last version in the list"""
 
     has_more: bool = False

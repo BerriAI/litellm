@@ -3,9 +3,7 @@
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
-import { Organization } from "@/components/networking";
 import { CreateKeyPrefillData } from "@/components/organisms/create_key_button";
-import { fetchOrganizations } from "@/components/organizations";
 import UserDashboard from "@/components/user_dashboard";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSearchParams } from "next/navigation";
@@ -20,7 +18,6 @@ export default function ApiKeysDashboard() {
 
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<KeyResponse[] | null>([]);
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [createClicked, setCreateClicked] = useState<boolean>(false);
 
   const autoOpenCreate = searchParams.get("create") === "true";
@@ -77,9 +74,6 @@ export default function ApiKeysDashboard() {
         .then((response) => setTeams(response.teams ?? []))
         .catch(console.error);
     }
-    if (accessToken) {
-      fetchOrganizations(accessToken, setOrganizations);
-    }
   }, [accessToken, userID, userRole]);
 
   return (
@@ -94,7 +88,6 @@ export default function ApiKeysDashboard() {
       setUserEmail={setUserEmail}
       setTeams={setTeams}
       setKeys={setKeys}
-      organizations={organizations}
       addKey={addKey}
       createClicked={createClicked}
       autoOpenCreate={autoOpenCreate}

@@ -19,9 +19,10 @@ import functools
 import importlib
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Literal, Optional, Set
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from fastapi import (
     APIRouter,
@@ -39,18 +40,19 @@ from fastapi.responses import JSONResponse
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
 except ImportError:
-    RecordNotFoundError = Exception  # type: ignore
-    UniqueViolationError = Exception  # type: ignore
+    RecordNotFoundError = Exception
+    UniqueViolationError = Exception
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
-    build_env_var_setup_url,
-    collect_env_var_references,
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
+    McpServerPayloadLike,
+    build_env_var_setup_url,
+    collect_env_var_references,
     get_server_prefix,
     parse_admin_env_vars,
 )
@@ -67,17 +69,15 @@ from litellm.repositories.table_repositories import (
     MCPUserCredentialsRepository,
 )
 
-router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
+router: Final = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
 MCP_AVAILABLE: bool = True
 
-TEMPORARY_MCP_SERVER_TTL_SECONDS = 300
-TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX = "litellm:mcp:temporary_server"
+TEMPORARY_MCP_SERVER_TTL_SECONDS: Final = 300
+TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX: Final = "litellm:mcp:temporary_server"
 
 
-def does_mcp_server_exist(
-    mcp_server_records: Iterable[Any], mcp_server_id: str
-) -> bool:
+def does_mcp_server_exist(mcp_server_records: Iterable[Any], mcp_server_id: str) -> bool:
     """
     Check if the mcp server with the given id exists in the iterable of mcp servers.
 
@@ -90,12 +90,15 @@ def does_mcp_server_exist(
     return False
 
 
-DEFAULT_MCP_REGISTRY_VERSION = "1.0.0"
+DEFAULT_MCP_REGISTRY_VERSION: Final = "1.0.0"
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 try:
     importlib.import_module("mcp")
 except ImportError as e:
-    verbose_logger.debug(f"MCP module not found: {e}")
+    verbose_logger.debug("MCP module not found: %s", e)
     MCP_AVAILABLE = False
 
 if MCP_AVAILABLE:
@@ -110,16 +113,18 @@ if MCP_AVAILABLE:
             is_valid: bool = True
             warnings: list = []
 
-        def validate_tool_name(name: str) -> _ToolNameValidationResult:  # type: ignore[misc]
+        def validate_tool_name(name: str) -> _ToolNameValidationResult:
             return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
         approve_mcp_server,
+        create_draft_mcp_server,
         create_mcp_server,
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
         get_all_mcp_servers_for_user,
+        get_draft_mcp_server,
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
@@ -127,30 +132,37 @@ if MCP_AVAILABLE:
         get_user_env_vars_bulk,
         get_user_oauth_credential,
         list_user_oauth_credentials,
+        mcp_oauth_token_identity,
         merge_user_env_vars,
+        purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         store_user_credential,
         store_user_oauth_credential,
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _raise_if_not_oauth2,
         authorize_with_server,
+        client_supplied_redirect_uris,
         exchange_token_with_server,
         get_request_base_url,
+        redeem_passthrough_authorization_code,
         register_client_with_server,
+        resolve_ephemeral_dcr_client,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+        admitted_user_context,
         build_effective_auth_contexts,
+        is_ui_session_credential,
     )
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
         MCPApprovalStatus,
-        MCPEnvVarScope,
         MCPOAuthUserCredentialRequest,
         MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
@@ -178,7 +190,11 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-    from litellm.types.mcp import MCPAuth, MCPCredentials
+    from litellm.types.mcp import (
+        MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
+        MCPAuth,
+        MCPCredentials,
+    )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     @dataclass
@@ -186,11 +202,11 @@ if MCP_AVAILABLE:
         server: MCPServer
         expires_at: datetime
 
-    def _validate_mcp_server_name_fields(payload: Any) -> None:
-        candidates: List[tuple[str, Optional[str]]] = []
+    def _validate_mcp_server_name_fields(payload: McpServerPayloadLike) -> None:
+        candidates: Final[list[tuple[str, str | None]]] = []
 
-        server_name = getattr(payload, "server_name", None)
-        alias = getattr(payload, "alias", None)
+        server_name: Final = getattr(payload, "server_name", None)
+        alias: Final = getattr(payload, "alias", None)
 
         if server_name:
             candidates.append(("server_name", server_name))
@@ -205,23 +221,47 @@ if MCP_AVAILABLE:
             if validation_result.is_valid:
                 continue
 
-            error_messages_text = (
-                f"Invalid MCP tool prefix '{value}' provided via {field_name}"
-            )
+            error_messages_text = f"Invalid MCP tool prefix '{value}' provided via {field_name}"
             if validation_result.warnings:
-                error_messages_text = (
-                    error_messages_text + "\n" + "\n".join(validation_result.warnings)
-                )
+                error_messages_text = error_messages_text + "\n" + "\n".join(validation_result.warnings)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": error_messages_text},
             )
 
-    def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
+    def validate_and_normalize_mcp_server_payload(payload: McpServerPayloadLike) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
 
-    _VALID_MCP_REQUIRED_FIELDS: frozenset = frozenset(NewMCPServerRequest.model_fields)
+    def stamp_omitted_oauth2_flow(payload: NewMCPServerRequest) -> None:
+        """Fallback only: fill in oauth2_flow when an oauth2 create omits it.
+
+        An explicit oauth2_flow from the caller (the dashboard's flow selector, a REST
+        body, config.yaml) always wins and is never touched. The shape check below runs
+        solely for oauth2 creates that leave the field unset, so those rows still
+        persist a flow instead of relying on read-time inference.
+
+        The create payload carries the plaintext credentials, so the M2M-vs-interactive
+        decision is reliable here in a way it is not at read time (credentials are
+        encrypted at rest and redacted in responses). The client_credentials shape
+        mirrors the legacy inference in MCPServerManager._resolve_oauth2_flow; every
+        other oauth2 configuration is the authorization_code grant, including
+        delegate_auth_to_upstream, where the client runs that grant upstream.
+        """
+        if payload.auth_type != MCPAuth.oauth2:
+            return
+        if payload.oauth2_flow:
+            return
+        credentials: Final = payload.credentials or {}
+        has_m2m_shape: Final = bool(
+            payload.token_url
+            and credentials.get("client_id")
+            and credentials.get("client_secret")
+            and not payload.authorization_url
+        )
+        payload.oauth2_flow = "client_credentials" if has_m2m_shape else "authorization_code"
+
+    _VALID_MCP_REQUIRED_FIELDS: Final[frozenset] = frozenset(NewMCPServerRequest.model_fields)
 
     def _validate_mcp_required_fields(payload: Any) -> None:
         """Validate submission payload against admin-configured mcp_required_fields."""
@@ -229,15 +269,13 @@ if MCP_AVAILABLE:
             general_settings as proxy_general_settings,
         )
 
-        required_fields: Optional[List[str]] = proxy_general_settings.get(
-            "mcp_required_fields"
-        )
+        required_fields: Final[list[str] | None] = proxy_general_settings.get("mcp_required_fields")
         if not required_fields:
             return
 
         # Fail fast on unknown field names — a typo in the config would silently
         # block every submission with a confusing "missing fields" error.
-        unknown = [f for f in required_fields if f not in _VALID_MCP_REQUIRED_FIELDS]
+        unknown: Final = [f for f in required_fields if f not in _VALID_MCP_REQUIRED_FIELDS]
         if unknown:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -249,10 +287,10 @@ if MCP_AVAILABLE:
 
         # Mirror the UI's compliance checks (MCPStandardsSettings.tsx FIELD_GROUPS):
         # auth_type requires a real value — "none" is treated as absent.
-        _AUTH_TYPE_SENTINEL = "none"
+        _AUTH_TYPE_SENTINEL: Final = "none"
 
         def _field_present(field_name: str) -> bool:
-            value = getattr(payload, field_name, None)
+            value: Final = getattr(payload, field_name, None)
             if value is None:
                 return False
             # Treat empty string and empty list as absent (mirrors UI compliance check)
@@ -262,7 +300,7 @@ if MCP_AVAILABLE:
                 return False
             return True
 
-        missing = [f for f in required_fields if not _field_present(f)]
+        missing: Final = [f for f in required_fields if not _field_present(f)]
         if missing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -280,8 +318,8 @@ if MCP_AVAILABLE:
         return bool(proxy_general_settings.get("enable_mcp_registry"))
 
     def _build_registry_remote_url(base_url: str, path: str) -> str:
-        normalized_base = base_url.rstrip("/")
-        normalized_path = path if path.startswith("/") else f"/{path}"
+        normalized_base: Final = base_url.rstrip("/")
+        normalized_path: Final = path if path.startswith("/") else f"/{path}"
         return f"{normalized_base}{normalized_path}"
 
     def _build_mcp_registry_server_name(server: MCPServer) -> str:
@@ -291,18 +329,16 @@ if MCP_AVAILABLE:
             return server.server_name
         return server.server_id
 
-    def _build_mcp_registry_entry_for_server(
-        server: MCPServer, base_url: str
-    ) -> Dict[str, Any]:
-        server_name = _build_mcp_registry_server_name(server)
-        title = server_name
-        description = server_name
-        version = DEFAULT_MCP_REGISTRY_VERSION
+    def _build_mcp_registry_entry_for_server(server: MCPServer, base_url: str) -> dict[str, Any]:
+        server_name: Final = _build_mcp_registry_server_name(server)
+        title: Final = server_name
+        description: Final = server_name
+        version: Final = DEFAULT_MCP_REGISTRY_VERSION
 
-        server_prefix = get_server_prefix(server)
+        server_prefix: Final = get_server_prefix(server)
         if not server_prefix:
             raise ValueError("MCP server prefix is missing")
-        remote_url = _build_registry_remote_url(base_url, f"/{server_prefix}/mcp")
+        remote_url: Final = _build_registry_remote_url(base_url, f"/{server_prefix}/mcp")
 
         return {
             "name": server_name,
@@ -317,8 +353,8 @@ if MCP_AVAILABLE:
             ],
         }
 
-    def _build_builtin_registry_entry(base_url: str) -> Dict[str, Any]:
-        remote_url = _build_registry_remote_url(base_url, "/mcp")
+    def _build_builtin_registry_entry(base_url: str) -> dict[str, Any]:
+        remote_url: Final = _build_registry_remote_url(base_url, "/mcp")
         return {
             "name": LITELLM_MCP_SERVER_NAME,
             "title": LITELLM_MCP_SERVER_NAME,
@@ -332,58 +368,48 @@ if MCP_AVAILABLE:
             ],
         }
 
-    _temporary_mcp_servers: Dict[str, _TemporaryMCPServerEntry] = {}
+    _temporary_mcp_servers: Final[dict[str, _TemporaryMCPServerEntry]] = {}
 
     def _prune_expired_temporary_mcp_servers() -> None:
         if not _temporary_mcp_servers:
             return
 
-        now = datetime.utcnow()
-        expired_ids = [
-            server_id
-            for server_id, entry in _temporary_mcp_servers.items()
-            if entry.expires_at <= now
-        ]
+        now: Final = datetime.utcnow()
+        expired_ids = [server_id for server_id, entry in _temporary_mcp_servers.items() if entry.expires_at <= now]
         for server_id in expired_ids:
             _temporary_mcp_servers.pop(server_id, None)
 
     def _cache_temporary_mcp_server(server: MCPServer, ttl_seconds: int) -> MCPServer:
         ttl_seconds = max(1, ttl_seconds)
         _prune_expired_temporary_mcp_servers()
-        expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+        expires_at: Final = datetime.utcnow() + timedelta(seconds=ttl_seconds)
         _temporary_mcp_servers[server.server_id] = _TemporaryMCPServerEntry(
             server=server,
             expires_at=expires_at,
         )
         return server
 
-    async def _cache_temporary_mcp_server_in_redis(
-        server: MCPServer, ttl_seconds: int
-    ) -> None:
+    async def _cache_temporary_mcp_server_in_redis(server: MCPServer, ttl_seconds: int) -> None:
         """
         Best-effort write-through to Redis so temporary MCP OAuth sessions are
         shared across proxy instances. Keep local in-memory cache as fallback.
         """
         if litellm.cache is None or not hasattr(litellm.cache, "cache"):
             return
-        cache_backend = getattr(litellm.cache, "cache", None)
+        cache_backend: Final = getattr(litellm.cache, "cache", None)
         if cache_backend is None or not hasattr(cache_backend, "async_set_cache"):
             return
 
-        payload: Dict[str, Any] = server.model_dump(mode="json")
-        payload_json = json.dumps(payload)
+        payload: Final[dict[str, Any]] = server.model_dump(mode="json")
+        payload_json: Final = json.dumps(payload)
         try:
-            encrypted_payload = encrypt_value_helper(payload_json)
+            encrypted_payload: Final = encrypt_value_helper(payload_json)
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Failed to encrypt temporary MCP server payload for Redis cache: {str(e)}"
-            )
+            verbose_proxy_logger.debug("Failed to encrypt temporary MCP server payload for Redis cache: %s", e)
             return
 
         if not isinstance(encrypted_payload, str):
-            verbose_proxy_logger.debug(
-                "Encrypted temporary MCP payload is not a string; skipping Redis cache write"
-            )
+            verbose_proxy_logger.debug("Encrypted temporary MCP payload is not a string; skipping Redis cache write")
             return
 
         try:
@@ -393,13 +419,11 @@ if MCP_AVAILABLE:
                 ttl=max(1, ttl_seconds),
             )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Failed to write temporary MCP server to Redis cache: {str(e)}"
-            )
+            verbose_proxy_logger.debug("Failed to write temporary MCP server to Redis cache: %s", e)
 
     async def _get_temporary_mcp_server_from_redis(
         server_id: str,
-    ) -> Optional[MCPServer]:
+    ) -> MCPServer | None:
         """
         Best-effort read from Redis shared cache. Returns None on miss/errors.
 
@@ -408,18 +432,16 @@ if MCP_AVAILABLE:
         """
         if litellm.cache is None or not hasattr(litellm.cache, "cache"):
             return None
-        cache_backend = getattr(litellm.cache, "cache", None)
+        cache_backend: Final = getattr(litellm.cache, "cache", None)
         if cache_backend is None or not hasattr(cache_backend, "async_get_cache"):
             return None
 
         try:
-            cached_server = await cache_backend.async_get_cache(
+            cached_server: Final = await cache_backend.async_get_cache(
                 key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
             )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Failed reading temporary MCP server from Redis cache: {str(e)}"
-            )
+            verbose_proxy_logger.debug("Failed reading temporary MCP server from Redis cache: %s", e)
             return None
 
         if not isinstance(cached_server, str):
@@ -428,7 +450,7 @@ if MCP_AVAILABLE:
             )
             return None
 
-        decrypted_json = decrypt_value_helper(
+        decrypted_json: Final = decrypt_value_helper(
             value=cached_server,
             key="temporary_mcp_server",
             exception_type="debug",
@@ -436,69 +458,128 @@ if MCP_AVAILABLE:
         if decrypted_json is None:
             return None
         try:
-            loaded = json.loads(decrypted_json)
+            loaded: Final = json.loads(decrypted_json)
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Invalid decrypted temporary MCP payload in Redis cache: {str(e)}"
-            )
+            verbose_proxy_logger.debug("Invalid decrypted temporary MCP payload in Redis cache: %s", e)
             return None
         if not isinstance(loaded, dict):
             return None
-        payload_dict: Dict[str, Any] = loaded
+        payload_dict: Final[dict[str, Any]] = loaded
 
         try:
-            return MCPServer(**payload_dict)
+            return MCPServer.model_validate(payload_dict)
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Invalid temporary MCP server payload in Redis cache: {str(e)}"
-            )
+            verbose_proxy_logger.debug("Invalid temporary MCP server payload in Redis cache: %s", e)
             return None
+
+    def _get_prisma_client_or_none() -> "PrismaClient | None":
+        """Non-throwing counterpart to ``get_prisma_client_or_throw`` for paths that degrade
+        gracefully: a proxy configured without a database keeps the in-memory OAuth session."""
+        from litellm.proxy.proxy_server import prisma_client
+
+        return prisma_client
+
+    async def _persist_draft_mcp_server(
+        payload: NewMCPServerRequest,
+        server_id: str,
+        created_by: str,
+    ) -> None:
+        """Write the draft row that makes the OAuth session resolvable from any worker.
+
+        A failure here is raised, not swallowed: without the shared row the flow degrades to
+        the per-process cache and fails intermittently, which is the defect being fixed.
+        """
+        prisma_client: Final = _get_prisma_client_or_none()
+        if prisma_client is None:
+            return
+        await create_draft_mcp_server(
+            prisma_client,
+            payload,
+            created_by,
+            ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
+            server_id=server_id,
+        )
+
+    async def _get_draft_mcp_server_as_mcp_server(server_id: str) -> MCPServer | None:
+        """Resolve a database-backed draft, which is the only lookup that works across workers."""
+        prisma_client: Final = _get_prisma_client_or_none()
+        if prisma_client is None:
+            return None
+        draft: Final = await get_draft_mcp_server(
+            prisma_client, server_id, ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS
+        )
+        if draft is None:
+            return None
+        return await global_mcp_server_manager.build_mcp_server_from_table(draft)
 
     async def get_cached_temporary_mcp_server(
         server_id: str,
-    ) -> Optional[MCPServer]:
+    ) -> MCPServer | None:
         _prune_expired_temporary_mcp_servers()
-        entry = _temporary_mcp_servers.get(server_id)
-        if entry is None:
-            redis_server = await _get_temporary_mcp_server_from_redis(server_id)
-            if redis_server is None:
-                return None
-            # Intentionally avoid repopulating local cache from Redis to prevent
-            # extending effective lifetime beyond the remaining Redis TTL.
-            return redis_server
-        return entry.server
+        entry: Final = _temporary_mcp_servers.get(server_id)
+        if entry is not None:
+            return entry.server
+
+        # A miss here means either an expired session or, on a multi-worker or multi-replica
+        # proxy, that a different process served /session. The draft row is shared, so it
+        # resolves the second case; the in-memory hit above still serves single-process
+        # deployments with no database configured.
+        draft_server: Final = await _get_draft_mcp_server_as_mcp_server(server_id)
+        if draft_server is not None:
+            return draft_server
+
+        redis_server: Final = await _get_temporary_mcp_server_from_redis(server_id)
+        if redis_server is None:
+            return None
+        # Intentionally avoid repopulating local cache from Redis to prevent
+        # extending effective lifetime beyond the remaining Redis TTL.
+        return redis_server
 
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
     ) -> LiteLLM_MCPServerTable:
-        """Return a copy of the MCP server object with credentials removed."""
+        """Return a copy with secret credentials removed, keeping only non-secret admin config so the
+        admin form can show and clear it. Non-admin and virtual-key views strip the whole blob."""
 
         try:
             redacted_server = mcp_server.model_copy(deep=True)
         except AttributeError:
-            redacted_server = mcp_server.copy(deep=True)  # type: ignore[attr-defined]
+            redacted_server = mcp_server.copy(deep=True)
 
         if hasattr(redacted_server, "credentials"):
-            setattr(redacted_server, "credentials", None)
+            setattr(redacted_server, "credentials", _preserved_admin_config_credentials(redacted_server.credentials))
 
         return redacted_server
 
+    def _preserved_admin_config_credentials(
+        credentials: "MCPCredentials | str | None",
+    ) -> "dict[str, str] | None":
+        """Keep only the non-secret admin-config keys, which are stored unencrypted so they lift out
+        as plaintext; every secret and minted-token key is dropped.
+
+        Total over every stored shape: a dict is read directly, a JSON-object string is parsed, and
+        anything else (a malformed or non-object JSON string, a scalar, ``None``) falls back to full
+        redaction rather than raising, because this runs on every admin list and get and one bad row
+        must not fail them all."""
+        parsed: object = credentials
+        if isinstance(credentials, str):
+            try:
+                parsed = json.loads(credentials)
+            except (ValueError, TypeError):
+                return None
+        if not isinstance(parsed, dict):
+            return None
+        preserved: Final = {
+            key: value
+            for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
+            if isinstance((value := parsed.get(key)), str) and value
+        }
+        return preserved or None
+
     def _redact_mcp_credentials_list(
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
-    ) -> List[LiteLLM_MCPServerTable]:
+    ) -> list[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
-
-    def _redact_global_env_var_values(mcp_server: LiteLLM_MCPServerTable) -> None:
-        """Blank admin-supplied ``scope="global"`` env var secrets in place.
-
-        Global entries hold the admin's plaintext credential (API key,
-        password, ...) and must never reach non-admin callers. Per-user
-        entries only carry a placeholder the user fills in themselves, so
-        their value is left intact.
-        """
-        for env_var in mcp_server.env_vars or []:
-            if env_var.scope == MCPEnvVarScope.global_:
-                env_var.value = ""
 
     def _user_is_full_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """True only for ``PROXY_ADMIN``; ``PROXY_ADMIN_VIEW_ONLY`` returns False.
@@ -517,7 +598,7 @@ if MCP_AVAILABLE:
         the error: "Virtual key is not allowed to call this route...".
         """
 
-        allowed_routes = getattr(user_api_key_dict, "allowed_routes", None)
+        allowed_routes: Final = getattr(user_api_key_dict, "allowed_routes", None)
         return isinstance(allowed_routes, list) and len(allowed_routes) > 0
 
     def _sanitize_mcp_server_for_non_admin(
@@ -535,7 +616,8 @@ if MCP_AVAILABLE:
         ``LiteLLM_MCPServerTable`` (``None`` for Optional fields,
         ``[]``/``{}`` for required list/dict fields).
         """
-        sanitized = _redact_mcp_credentials(mcp_server)
+        sanitized: Final = _redact_mcp_credentials(mcp_server)
+        sanitized.credentials = None
         # URL is the highest-impact vector: many MCP integrations embed
         # the upstream API key directly in the path. spec_path can carry
         # similar tokens in the OpenAPI spec URL.
@@ -546,9 +628,14 @@ if MCP_AVAILABLE:
         sanitized.env = {}
         sanitized.command = None
         sanitized.args = []
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        sanitized.token_exchange_endpoint = None
+        sanitized.audience = None
+        sanitized.subject_token_type = None
+        sanitized.token_exchange_profile = None
         # Drop env vars entirely rather than only blanking global values: the
         # names alone (DB_PASSWORD, GITHUB_API_KEY, ...) leak what secrets the
         # admin configured. Non-admins get the per-user vars they must fill in
@@ -558,7 +645,7 @@ if MCP_AVAILABLE:
 
     def _sanitize_mcp_server_list_for_non_admin(
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
-    ) -> List[LiteLLM_MCPServerTable]:
+    ) -> list[LiteLLM_MCPServerTable]:
         return [_sanitize_mcp_server_for_non_admin(s) for s in mcp_servers]
 
     def _sanitize_mcp_server_for_virtual_key(
@@ -573,7 +660,8 @@ if MCP_AVAILABLE:
           credentials.
         """
 
-        sanitized = _redact_mcp_credentials(mcp_server)
+        sanitized: Final = _redact_mcp_credentials(mcp_server)
+        sanitized.credentials = None
 
         # Remove potentially sensitive config + identity fields.
         sanitized.url = None
@@ -587,9 +675,14 @@ if MCP_AVAILABLE:
         sanitized.teams = []
         sanitized.env_vars = None
 
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        sanitized.token_exchange_endpoint = None
+        sanitized.audience = None
+        sanitized.subject_token_type = None
+        sanitized.token_exchange_profile = None
 
         sanitized.health_check_error = None
         sanitized.last_health_check = None
@@ -609,47 +702,50 @@ if MCP_AVAILABLE:
 
     def _sanitize_mcp_server_list_for_virtual_key(
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
-    ) -> List[LiteLLM_MCPServerTable]:
+    ) -> list[LiteLLM_MCPServerTable]:
         return [_sanitize_mcp_server_for_virtual_key(server) for server in mcp_servers]
+
+    # (server attribute, credentials key) a session server inherits from the server it derives from.
+    # Declared as a table rather than a chain of ifs, which is how upstream_resource was missed.
+    _INHERITED_CREDENTIAL_FIELDS: Final[tuple[tuple[str, str], ...]] = (
+        ("authentication_token", "auth_value"),
+        ("client_id", "client_id"),
+        ("client_secret", "client_secret"),
+        ("scopes", "scopes"),
+        ("aws_access_key_id", "aws_access_key_id"),
+        ("aws_secret_access_key", "aws_secret_access_key"),
+        ("aws_session_token", "aws_session_token"),
+        ("aws_region_name", "aws_region_name"),
+        ("aws_service_name", "aws_service_name"),
+        ("upstream_resource", "upstream_resource"),
+    )
+
+    def _has_non_admin_config_credentials(credentials: "MCPCredentials | None") -> bool:
+        """Did the caller supply an actual credential? Admin config rides in the same blob but is not
+        one, so a form that round-trips it must not read as "credentials supplied"."""
+        if not credentials:
+            return False
+        as_dict: Final[dict[str, Any]] = dict(credentials)
+        return any(value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS)
 
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
-        if not payload.server_id or payload.credentials:
+        if not payload.server_id or _has_non_admin_config_credentials(payload.credentials):
             return payload
 
-        existing_server = global_mcp_server_manager.get_mcp_server_by_id(
-            payload.server_id
-        )
+        existing_server: Final = global_mcp_server_manager.get_mcp_server_by_id(payload.server_id)
         if existing_server is None:
             return payload
 
-        inherited_credentials: MCPCredentials = {}
-        if existing_server.authentication_token:
-            inherited_credentials["auth_value"] = existing_server.authentication_token
-        if existing_server.client_id:
-            inherited_credentials["client_id"] = existing_server.client_id
-        if existing_server.client_secret:
-            inherited_credentials["client_secret"] = existing_server.client_secret
-        if existing_server.scopes:
-            inherited_credentials["scopes"] = existing_server.scopes
-        # AWS SigV4 fields
-        if existing_server.aws_access_key_id:
-            inherited_credentials["aws_access_key_id"] = (
-                existing_server.aws_access_key_id
-            )
-        if existing_server.aws_secret_access_key:
-            inherited_credentials["aws_secret_access_key"] = (
-                existing_server.aws_secret_access_key
-            )
-        if existing_server.aws_session_token:
-            inherited_credentials["aws_session_token"] = (
-                existing_server.aws_session_token
-            )
-        if existing_server.aws_region_name:
-            inherited_credentials["aws_region_name"] = existing_server.aws_region_name
-        if existing_server.aws_service_name:
-            inherited_credentials["aws_service_name"] = existing_server.aws_service_name
+        inherited_credentials: dict[str, Any] = {
+            credential_key: value
+            for server_attr, credential_key in _INHERITED_CREDENTIAL_FIELDS
+            if (value := getattr(existing_server, server_attr, None))
+        }
+        # The gate above guarantees anything still supplied is admin config, which the admin just
+        # typed, so it wins over the stored value.
+        inherited_credentials = {**inherited_credentials, **dict(payload.credentials or {})}
 
         if not inherited_credentials:
             return payload
@@ -659,21 +755,45 @@ if MCP_AVAILABLE:
         except AttributeError:
             pass
 
-        payload_dict: Dict[str, Any]
+        payload_dict: dict[str, Any]
         try:
-            payload_dict = payload.model_dump()  # type: ignore[attr-defined]
+            payload_dict = payload.model_dump()
         except AttributeError:
-            payload_dict = payload.dict()  # type: ignore[attr-defined]
+            payload_dict = payload.dict()
         payload_dict["credentials"] = inherited_credentials
-        return NewMCPServerRequest(**payload_dict)
+        return NewMCPServerRequest.model_validate(payload_dict)
+
+    async def _resolve_session_server_id(payload: NewMCPServerRequest) -> str:
+        """Decide the id an OAuth session runs under.
+
+        A caller-supplied id is honoured only when it names a server that really exists, which is
+        the edit form re-authorizing a saved server against its own id. Anything else gets a fresh
+        id, so two concurrent sessions can never land on one id and silently adopt each other's
+        URL or client credentials. Without a database there is nothing shared to collide over, so
+        the supplied id is kept and behaviour is unchanged.
+        """
+        supplied: Final = payload.server_id
+        if not supplied:
+            return str(uuid.uuid4())
+        if global_mcp_server_manager.get_mcp_server_by_id(supplied) is not None:
+            return supplied
+        prisma_client: Final = _get_prisma_client_or_none()
+        if prisma_client is None:
+            return supplied
+        # A draft is another session's row, not a saved server, so re-supplying an id this
+        # endpoint previously handed back must not let a later session adopt its configuration.
+        existing: Final = await get_mcp_server(prisma_client, supplied)
+        if existing is None or existing.approval_status == MCPApprovalStatus.draft:
+            return str(uuid.uuid4())
+        return supplied
 
     def _build_temporary_mcp_server_record(
         payload: NewMCPServerRequest,
-        created_by: Optional[str],
+        created_by: str | None,
+        server_id: str,
     ) -> LiteLLM_MCPServerTable:
-        now = datetime.utcnow()
-        server_id = payload.server_id or str(uuid.uuid4())
-        server_name = payload.server_name or payload.alias or server_id
+        now: Final = datetime.utcnow()
+        server_name: Final = payload.server_name or payload.alias or server_id
         return LiteLLM_MCPServerTable(
             server_id=server_id,
             server_name=server_name,
@@ -696,12 +816,14 @@ if MCP_AVAILABLE:
             command=payload.command,
             args=payload.args,
             env=payload.env,
+            issuer=payload.issuer,
             authorization_url=payload.authorization_url,
             token_url=payload.token_url,
             registration_url=payload.registration_url,
             allow_all_keys=payload.allow_all_keys,
             available_on_public_internet=payload.available_on_public_internet,
             timeout=payload.timeout,
+            max_concurrent_requests=payload.max_concurrent_requests,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -729,13 +851,14 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
-        tools = await _list_mcp_tools(
+        listing: Final = await _list_mcp_tools(
             user_api_key_auth=user_api_key_dict,
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
         )
-        dumped_tools = [dict(tool) for tool in tools]
+        tools: Final = listing.tools
+        dumped_tools: Final = [dict(tool) for tool in tools]
 
         return {"tools": dumped_tools}
 
@@ -755,7 +878,7 @@ if MCP_AVAILABLE:
         )
         from litellm.proxy.proxy_server import prisma_client
 
-        access_groups = set()
+        access_groups: Final = set()
 
         # Get from config-loaded servers
         for server in global_mcp_server_manager.config_mcp_servers.values():
@@ -765,18 +888,15 @@ if MCP_AVAILABLE:
         # Get from DB
         if prisma_client is not None:
             try:
-                mcp_servers = await MCPServerRepository(prisma_client).table.find_many()
+                mcp_servers: Final = await MCPServerRepository(prisma_client).table.find_many()
                 for server in mcp_servers:
-                    if (
-                        hasattr(server, "mcp_access_groups")
-                        and server.mcp_access_groups
-                    ):
+                    if hasattr(server, "mcp_access_groups") and server.mcp_access_groups:
                         access_groups.update(server.mcp_access_groups)
             except Exception as e:
-                verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
+                verbose_proxy_logger.debug("Error getting MCP access groups: %s", e)
 
         # Convert to sorted list
-        access_groups_list = sorted(list(access_groups))
+        access_groups_list: Final = sorted(list(access_groups))
         return {"access_groups": access_groups_list}
 
     @router.get(
@@ -788,7 +908,7 @@ if MCP_AVAILABLE:
     async def get_client_ip(request: Request):
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
-        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
         return {"ip": client_ip}
 
     @router.get(
@@ -805,18 +925,16 @@ if MCP_AVAILABLE:
 
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
-        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
 
         verbose_proxy_logger.debug("MCP registry request from IP=%s", client_ip)
 
-        base_url = get_request_base_url(request)
-        registry_servers: List[Dict[str, Any]] = []
+        base_url: Final = get_request_base_url(request)
+        registry_servers: Final[list[dict[str, Any]]] = []
         registry_servers.append({"server": _build_builtin_registry_entry(base_url)})
 
         # Centralized IP-based filtering: external callers only see public servers
-        registered_servers = list(
-            global_mcp_server_manager.get_filtered_registry(client_ip).values()
-        )
+        registered_servers: Final = list(global_mcp_server_manager.get_filtered_registry(client_ip).values())
 
         registered_servers.sort(key=_build_mcp_registry_server_name)
 
@@ -825,7 +943,7 @@ if MCP_AVAILABLE:
                 entry = _build_mcp_registry_entry_for_server(server, base_url)
             except Exception as e:
                 verbose_proxy_logger.debug(
-                    f"Skipping MCP server {getattr(server, 'server_id', 'unknown')} in registry: {e}"
+                    "Skipping MCP server %s in registry: %s", getattr(server, "server_id", "unknown"), e
                 )
                 continue
             registry_servers.append({"server": entry})
@@ -838,14 +956,14 @@ if MCP_AVAILABLE:
             general_settings as proxy_general_settings,
         )
 
-        mode = proxy_general_settings.get("user_mcp_management_mode")
+        mode: Final = proxy_general_settings.get("user_mcp_management_mode")
         if mode == "view_all":
             return "view_all"
         return "restricted"
 
     async def _get_team_scoped_mcp_server_list(
         team_id: str,
-    ) -> List[LiteLLM_MCPServerTable]:
+    ) -> list[LiteLLM_MCPServerTable]:
         """
         Return MCP servers scoped to a team: team's allowed servers + allow_all_keys servers.
         Used by the Create Key UI to populate the MCP server dropdown.
@@ -857,35 +975,33 @@ if MCP_AVAILABLE:
         )
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
-        team_obj = await get_team_object(
+        team_obj: Final = await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
 
-        team_server_ids = await _get_team_allowed_mcp_servers(team_obj)
-        allow_all_server_ids = _get_allow_all_keys_server_ids()
-        all_allowed_ids = team_server_ids | allow_all_server_ids
+        team_server_ids: Final = await _get_team_allowed_mcp_servers(team_obj)
+        allow_all_server_ids: Final = _get_allow_all_keys_server_ids()
+        all_allowed_ids: Final = team_server_ids | allow_all_server_ids
 
         if not all_allowed_ids:
             return []
 
         # Collect servers from registry
-        servers: List[LiteLLM_MCPServerTable] = []
+        servers: Final[list[LiteLLM_MCPServerTable]] = []
         for server_id in all_allowed_ids:
             server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
             if server is not None:
-                mcp_server_table = global_mcp_server_manager._build_mcp_server_table(
-                    server
-                )
+                mcp_server_table = global_mcp_server_manager._build_mcp_server_table(server)
                 servers.append(mcp_server_table)
 
         return _redact_mcp_credentials_list(servers)
 
     async def _resolve_accessible_mcp_servers(
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> List[LiteLLM_MCPServerTable]:
+    ) -> list[LiteLLM_MCPServerTable]:
         """The server set the dashboard grid shows (GET /v1/mcp/server, no team
         filter), returned unredacted. Callers that surface this to a client must
         apply their own redaction; the per-user env-var status endpoint relies on
@@ -895,33 +1011,44 @@ if MCP_AVAILABLE:
         aligned with the cards actually rendered: an admin in view_all mode sees
         every server even when their key carries no per-server MCP grant.
         """
-        if (
-            _get_user_mcp_management_mode() == "view_all"
-            and not _is_restricted_virtual_key_request(user_api_key_dict)
-        ):
+        if _get_user_mcp_management_mode() == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             return await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
 
-        aggregated: Dict[str, LiteLLM_MCPServerTable] = {}
+        aggregated: Final[dict[str, LiteLLM_MCPServerTable]] = {}
         for auth_context in await build_effective_auth_contexts(user_api_key_dict):
-            for server in await global_mcp_server_manager.get_all_allowed_mcp_servers(
-                user_api_key_auth=auth_context
-            ):
+            for server in await global_mcp_server_manager.get_all_allowed_mcp_servers(user_api_key_auth=auth_context):
                 aggregated.setdefault(server.server_id, server)
         return list(aggregated.values())
+
+    async def _connected_app_reachable_server_ids(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+        """Server ids a connected app authorized by this dashboard user is served on the aggregate
+        MCP endpoint, resolved through the one owner of the admitted subject so the page and the
+        session cannot drift. Empty when that identity cannot be built, which is the true answer:
+        the same user cannot open a gateway session either."""
+        admitted: Final = await admitted_user_context(user_api_key_dict)
+        if admitted is None:
+            return frozenset()
+        return frozenset(await global_mcp_server_manager.get_allowed_mcp_servers(admitted))
 
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
         dependencies=[Depends(user_api_key_auth)],
-        response_model=List[LiteLLM_MCPServerTable],
+        response_model=list[LiteLLM_MCPServerTable],
     )
     async def fetch_all_mcp_servers(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        team_id: Optional[str] = Query(
+        team_id: str | None = Query(
             None,
             description="Filter MCP servers by team scope. When provided, returns only "
             "servers the team has access to plus globally available (allow_all_keys) servers. "
             "Used by the Create Key UI to show team-scoped MCP servers.",
+        ),
+        connected_app_view: bool = Query(
+            False,
+            description="Annotate each returned server with connected_app_reachable: whether a "
+            "connected app authorized by the calling user (a gateway OAuth session) is served "
+            "this server on the aggregate MCP endpoint.",
         ),
     ):
         """
@@ -937,9 +1064,7 @@ if MCP_AVAILABLE:
         """
 
         # If team_id is provided, return team-scoped servers + allow_all_keys servers
-        is_restricted_virtual_key = _is_restricted_virtual_key_request(
-            user_api_key_dict
-        )
+        is_restricted_virtual_key: Final = _is_restricted_virtual_key_request(user_api_key_dict)
         if team_id is not None and isinstance(team_id, str) and team_id.strip():
             # Restricted virtual keys must not use the team_id filter to
             # bypass their own access limitations.
@@ -951,8 +1076,8 @@ if MCP_AVAILABLE:
 
             # Only proxy admins may query another team's MCP servers.
             # Non-admins must belong to the requested team.
-            sanitized_team_id = team_id.strip()
-            is_admin = _user_has_admin_view(user_api_key_dict)
+            sanitized_team_id: Final = team_id.strip()
+            is_admin: Final = _user_has_admin_view(user_api_key_dict)
             if not is_admin:
                 from litellm.proxy.auth.auth_checks import get_team_object
                 from litellm.proxy.proxy_server import (
@@ -960,13 +1085,13 @@ if MCP_AVAILABLE:
                     user_api_key_cache,
                 )
 
-                team_obj = await get_team_object(
+                team_obj: Final = await get_team_object(
                     team_id=sanitized_team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     check_db_only=True,
                 )
-                user_in_team = any(
+                user_in_team: Final = any(
                     m.user_id is not None and m.user_id == user_api_key_dict.user_id
                     for m in team_obj.members_with_roles
                 )
@@ -976,12 +1101,15 @@ if MCP_AVAILABLE:
                         detail="You do not have permission to view MCP servers for this team.",
                     )
 
-            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(
-                sanitized_team_id
-            )
+            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(sanitized_team_id)
         else:
-            servers = await _resolve_accessible_mcp_servers(user_api_key_dict)
+            servers: Final = await _resolve_accessible_mcp_servers(user_api_key_dict)
             redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+
+        if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
+            reachable_ids: Final = await _connected_app_reachable_server_ids(user_api_key_dict)
+            for server in redacted_mcp_servers:
+                server.connected_app_reachable = server.server_id in reachable_ids
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
@@ -994,20 +1122,14 @@ if MCP_AVAILABLE:
         # Annotate has_user_credential for BYOK servers (single batched query)
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
 
-        user_id = user_api_key_dict.user_id or ""
+        user_id: Final = user_api_key_dict.user_id or ""
         if user_id and _byok_prisma_client is not None:
-            byok_server_ids = [
-                s.server_id
-                for s in redacted_mcp_servers
-                if getattr(s, "is_byok", False)
-            ]
+            byok_server_ids: Final = [s.server_id for s in redacted_mcp_servers if getattr(s, "is_byok", False)]
             if byok_server_ids:
-                cred_rows = await MCPUserCredentialsRepository(
-                    _byok_prisma_client
-                ).table.find_many(
+                cred_rows: Final = await MCPUserCredentialsRepository(_byok_prisma_client).table.find_many(
                     where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
                 )
-                cred_set = {r.server_id for r in cred_rows}
+                cred_set: Final = {r.server_id for r in cred_rows}
                 for server in redacted_mcp_servers:
                     if getattr(server, "is_byok", False):
                         server.has_user_credential = server.server_id in cred_set
@@ -1016,15 +1138,10 @@ if MCP_AVAILABLE:
         if is_restricted_virtual_key:
             return _sanitize_mcp_server_list_for_virtual_key(redacted_mcp_servers)
 
-        # Non-admin authenticated users may see the server inventory but
-        # not credential-bearing fields like `url` (often contains bearer
-        # tokens) or headers/env (often contain Authorization).
-        if not _user_has_admin_view(user_api_key_dict):
-            return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
-
+        # only a full PROXY_ADMIN sees credential-bearing fields; everyone else
+        # goes through the non-admin sanitizer
         if not _user_is_full_admin(user_api_key_dict):
-            for server in redacted_mcp_servers:
-                _redact_global_env_var_values(server)
+            return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
 
         return redacted_mcp_servers
 
@@ -1034,7 +1151,7 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
     )
     async def health_check_servers(
-        server_ids: Optional[List[str]] = Query(
+        server_ids: list[str] | None = Query(
             None,
             description="Server IDs to check. If not provided, checks all accessible servers.",
         ),
@@ -1059,22 +1176,15 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        user_mcp_management_mode = _get_user_mcp_management_mode()
+        user_mcp_management_mode: Final = _get_user_mcp_management_mode()
 
         if user_mcp_management_mode == "view_all":
-            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(
-                server_ids=server_ids
-            )
-            return [
-                {"server_id": server.server_id, "status": server.status}
-                for server in servers
-            ]
+            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
+            return [{"server_id": server.server_id, "status": server.status} for server in servers]
 
-        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+        auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
 
-        server_status_map: Dict[
-            str, Optional[Literal["healthy", "unhealthy", "unknown"]]
-        ] = {}
+        server_status_map: Final[dict[str, Literal["healthy", "unhealthy", "unknown"] | None]] = {}
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
@@ -1084,10 +1194,7 @@ if MCP_AVAILABLE:
                 if server.server_id not in server_status_map:
                     server_status_map[server.server_id] = server.status
 
-        return [
-            {"server_id": server_id, "status": status}
-            for server_id, status in server_status_map.items()
-        ]
+        return [{"server_id": server_id, "status": status} for server_id, status in server_status_map.items()]
 
     @router.post(
         "/server/register",
@@ -1117,9 +1224,7 @@ if MCP_AVAILABLE:
         if not user_api_key_dict.team_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "Registration requires an API key associated with a team. Use a team-scoped key."
-                },
+                detail={"error": "Registration requires an API key associated with a team. Use a team-scoped key."},
             )
 
         # stdio servers spawn a local subprocess on the proxy host with the
@@ -1140,11 +1245,10 @@ if MCP_AVAILABLE:
                 },
             )
 
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
         validate_and_normalize_mcp_server_payload(payload)
+        stamp_omitted_oauth2_flow(payload)
         _validate_mcp_required_fields(payload)
 
         payload.approval_status = MCPApprovalStatus.pending_review
@@ -1152,16 +1256,16 @@ if MCP_AVAILABLE:
         payload.submitted_at = datetime.now(timezone.utc)
 
         try:
-            new_mcp_server = await create_mcp_server(
+            new_mcp_server: Final = await create_mcp_server(
                 prisma_client,
                 payload,
                 touched_by=user_api_key_dict.user_id or user_api_key_dict.team_id,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error registering mcp server: {str(e)}")
+            verbose_proxy_logger.exception("Error registering mcp server: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error registering mcp server: {str(e)}"},
+                detail={"error": f"Error registering mcp server: {e}"},
             )
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
@@ -1185,19 +1289,15 @@ if MCP_AVAILABLE:
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": "Admin access required to view MCP server submissions."
-                },
+                detail={"error": "Admin access required to view MCP server submissions."},
             )
 
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
-        submissions = await get_mcp_submissions(prisma_client)
+        submissions: Final = await get_mcp_submissions(prisma_client)
+        submissions.items = _redact_mcp_credentials_list(submissions.items)
         if not _user_is_full_admin(user_api_key_dict):
-            for item in submissions.items:
-                _redact_global_env_var_values(item)
+            submissions.items = _sanitize_mcp_server_list_for_non_admin(submissions.items)
         return submissions
 
     @router.put(
@@ -1217,16 +1317,12 @@ if MCP_AVAILABLE:
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": "Admin access required to approve MCP server submissions."
-                },
+                detail={"error": "Admin access required to approve MCP server submissions."},
             )
 
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
-        existing = await get_mcp_server(prisma_client, server_id)
+        existing: Final = await get_mcp_server(prisma_client, server_id)
         if existing is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1238,11 +1334,12 @@ if MCP_AVAILABLE:
                 detail={"error": "MCP server is already active."},
             )
 
-        approved = await approve_mcp_server(
+        approved: Final = await approve_mcp_server(
             prisma_client,
             server_id,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         )
+        await global_mcp_server_manager.invalidate_byom_submitted_servers_cache(approved.submitted_by)
         await global_mcp_server_manager.reload_servers_from_database()
 
         return _redact_mcp_credentials(approved)
@@ -1265,16 +1362,12 @@ if MCP_AVAILABLE:
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": "Admin access required to reject MCP server submissions."
-                },
+                detail={"error": "Admin access required to reject MCP server submissions."},
             )
 
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
-        existing = await get_mcp_server(prisma_client, server_id)
+        existing: Final = await get_mcp_server(prisma_client, server_id)
         if existing is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1286,8 +1379,8 @@ if MCP_AVAILABLE:
                 detail={"error": "MCP server is already rejected."},
             )
 
-        was_active = existing.approval_status == MCPApprovalStatus.active
-        rejected = await reject_mcp_server(
+        was_active: Final = existing.approval_status == MCPApprovalStatus.active
+        rejected: Final = await reject_mcp_server(
             prisma_client,
             server_id,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
@@ -1318,36 +1411,27 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
         # check to see if server exists (DB first, then registry for config-based servers)
         mcp_server = await get_mcp_server(prisma_client, server_id)
-        from_db = mcp_server is not None
+        from_db: Final = mcp_server is not None
 
         if mcp_server is None:
             # Fallback: check registry (config-based servers) - list endpoint uses get_registry()
             from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
-            client_ip = IPAddressUtils.get_mcp_client_ip(request)
+            client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
             registry_server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-            if (
-                registry_server is not None
-                and not global_mcp_server_manager._is_server_accessible_from_ip(
-                    registry_server, client_ip
-                )
+            if registry_server is not None and not global_mcp_server_manager._is_server_accessible_from_ip(
+                registry_server, client_ip
             ):
                 registry_server = None
             if registry_server is None:
                 # Try lookup by server_name or alias (client may use display name in URL)
-                registry_server = global_mcp_server_manager.get_mcp_server_by_name(
-                    server_id, client_ip=client_ip
-                )
+                registry_server = global_mcp_server_manager.get_mcp_server_by_name(server_id, client_ip=client_ip)
             if registry_server is not None:
-                mcp_server = global_mcp_server_manager._build_mcp_server_table(
-                    registry_server
-                )
+                mcp_server = global_mcp_server_manager._build_mcp_server_table(registry_server)
 
         if mcp_server is None:
             raise HTTPException(
@@ -1356,26 +1440,18 @@ if MCP_AVAILABLE:
             )
 
         # Implement authz restriction from requested user
-        is_admin_view = _user_has_admin_view(user_api_key_dict)
-        is_restricted_virtual_key = _is_restricted_virtual_key_request(
-            user_api_key_dict
-        )
+        is_admin_view: Final = _user_has_admin_view(user_api_key_dict)
+        is_restricted_virtual_key: Final = _is_restricted_virtual_key_request(user_api_key_dict)
 
         if not is_admin_view:
             # Perform authz check BEFORE any health check (avoid side-effects for
             # unauthorized callers).
             if from_db:
-                mcp_server_records = await get_all_mcp_servers_for_user(
-                    prisma_client, user_api_key_dict
-                )
+                mcp_server_records: Final = await get_all_mcp_servers_for_user(prisma_client, user_api_key_dict)
                 exists = does_mcp_server_exist(mcp_server_records, server_id)
             else:
                 # Registry/config server: use same access logic as list endpoint
-                allowed_server_ids = (
-                    await global_mcp_server_manager.get_allowed_mcp_servers(
-                        user_api_key_dict
-                    )
-                )
+                allowed_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_dict)
                 exists = mcp_server.server_id in allowed_server_ids
 
             if not exists:
@@ -1395,30 +1471,24 @@ if MCP_AVAILABLE:
 
         # Perform health check on the server using server manager
         try:
-            health_result = await global_mcp_server_manager.health_check_server(
-                server_id
-            )
+            health_result: Final = await global_mcp_server_manager.health_check_server(server_id)
             # Update the server object with health check results
-            mcp_server.status = (
-                health_result.status if health_result.status else "unknown"
-            )
+            mcp_server.status = health_result.status if health_result.status else "unknown"
             mcp_server.last_health_check = health_result.last_health_check
             mcp_server.health_check_error = health_result.health_check_error
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error performing health check on server {server_id}: {e}"
-            )
+            verbose_proxy_logger.debug("Error performing health check on server %s: %s", server_id, e)
             mcp_server.status = "unknown"
             mcp_server.last_health_check = datetime.now()
             mcp_server.health_check_error = str(e)
 
-        redacted = _redact_mcp_credentials(mcp_server)
+        redacted: Final = _redact_mcp_credentials(mcp_server)
         if is_restricted_virtual_key:
             return _sanitize_mcp_server_for_virtual_key(redacted)
-        if not _user_has_admin_view(user_api_key_dict):
-            return _sanitize_mcp_server_for_non_admin(redacted)
+        # only a full PROXY_ADMIN sees credential-bearing fields; everyone else
+        # goes through the non-admin sanitizer
         if not _user_is_full_admin(user_api_key_dict):
-            _redact_global_env_var_values(redacted)
+            return _sanitize_mcp_server_for_non_admin(redacted)
         return redacted
 
     @router.post(
@@ -1432,7 +1502,7 @@ if MCP_AVAILABLE:
     async def add_mcp_server(
         payload: NewMCPServerRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        litellm_changed_by: Optional[str] = Header(
+        litellm_changed_by: str | None = Header(
             None,
             description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
         ),
@@ -1440,12 +1510,11 @@ if MCP_AVAILABLE:
         """
         Allow users to add a new external mcp server.
         """
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
         # Validate and normalize payload fields
         validate_and_normalize_mcp_server_payload(payload)
+        stamp_omitted_oauth2_flow(payload)
 
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -1463,20 +1532,16 @@ if MCP_AVAILABLE:
         ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": f"MCP Server with id {payload.server_id} is special and cannot be used."
-                },
+                detail={"error": f"MCP Server with id {payload.server_id} is special and cannot be used."},
             )
 
         if payload.server_id is not None:
             # fail if the mcp server with id already exists
-            mcp_server = await get_mcp_server(prisma_client, payload.server_id)
+            mcp_server: Final = await get_mcp_server(prisma_client, payload.server_id)
             if mcp_server is not None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."
-                    },
+                    detail={"error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."},
                 )
 
         # TODO: audit log for create
@@ -1491,16 +1556,16 @@ if MCP_AVAILABLE:
         # The database write is the commit point: if it fails nothing was
         # persisted and the request is a genuine failure.
         try:
-            new_mcp_server = await create_mcp_server(
+            new_mcp_server: Final = await create_mcp_server(
                 prisma_client,
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
+            verbose_proxy_logger.exception("Error creating mcp server: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error creating mcp server: {str(e)}"},
+                detail={"error": f"Error creating mcp server: {e}"},
             )
 
         # Registry refresh is best-effort: the row is already committed, so a
@@ -1512,8 +1577,7 @@ if MCP_AVAILABLE:
             await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"MCP server {new_mcp_server.server_id} created but in-memory "
-                f"registry refresh failed: {str(e)}"
+                "MCP server %s created but in-memory registry refresh failed: %s", new_mcp_server.server_id, e
             )
 
         return _redact_mcp_credentials(new_mcp_server)
@@ -1528,7 +1592,7 @@ if MCP_AVAILABLE:
     async def add_session_mcp_server(
         payload: NewMCPServerRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        litellm_changed_by: Optional[str] = Header(
+        litellm_changed_by: str | None = Header(
             None,
             description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
         ),
@@ -1542,6 +1606,7 @@ if MCP_AVAILABLE:
 
         # Validate and normalize payload fields (alias/server name rules)
         validate_and_normalize_mcp_server_payload(payload)
+        stamp_omitted_oauth2_flow(payload)
 
         # Restrict to proxy admins similar to the persistent create endpoint
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -1552,35 +1617,37 @@ if MCP_AVAILABLE:
                 },
             )
 
-        created_by = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
-        payload_with_credentials = _inherit_credentials_from_existing_server(payload)
-        temp_record = _build_temporary_mcp_server_record(
+        created_by: Final = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+        payload_with_credentials: Final = _inherit_credentials_from_existing_server(payload)
+        temp_record: Final = _build_temporary_mcp_server_record(
             payload_with_credentials,
             created_by,
+            await _resolve_session_server_id(payload_with_credentials),
         )
 
         try:
-            temporary_server = (
-                await global_mcp_server_manager.build_mcp_server_from_table(
-                    temp_record,
-                    credentials_are_encrypted=False,
-                )
+            temporary_server: Final = await global_mcp_server_manager.build_mcp_server_from_table(
+                temp_record,
+                credentials_are_encrypted=False,
             )
             _cache_temporary_mcp_server(
                 temporary_server,
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
+            )
+            await _persist_draft_mcp_server(
+                payload_with_credentials,
+                temp_record.server_id,
+                created_by,
             )
             await _cache_temporary_mcp_server_in_redis(
                 temporary_server,
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error caching temporary mcp server: {str(e)}"
-            )
+            verbose_proxy_logger.exception("Error caching temporary mcp server: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error caching temporary mcp server: {str(e)}"},
+                detail={"error": f"Error caching temporary mcp server: {e}"},
             )
 
         return _redact_mcp_credentials(temp_record)
@@ -1598,14 +1665,14 @@ if MCP_AVAILABLE:
 
         from litellm.proxy.proxy_server import master_key
 
-        auth_header = request.headers.get("Authorization", "")
+        auth_header: Final = request.headers.get("Authorization", "")
         api_key = auth_header  # _get_bearer_token will strip "Bearer " prefix
 
         if not api_key:
-            token_cookie = request.cookies.get("token")
+            token_cookie: Final = request.cookies.get("token")
             if token_cookie and master_key:
                 try:
-                    decoded = _jwt.decode(
+                    decoded: Final = _jwt.decode(
                         token_cookie,
                         master_key,
                         algorithms=["HS256"],
@@ -1613,7 +1680,7 @@ if MCP_AVAILABLE:
                         options={"verify_exp": False, "verify_aud": False},
                     )
                     if decoded.get("login_method") in ("sso", "username_password"):
-                        cookie_key = decoded.get("key", "")
+                        cookie_key: Final = decoded.get("key", "")
                         if cookie_key:
                             api_key = f"Bearer {cookie_key}"
                 except _jwt.InvalidTokenError:
@@ -1640,7 +1707,7 @@ if MCP_AVAILABLE:
                 get_request_route,
             )
 
-            server_id = request.path_params.get("server_id", "")
+            server_id: Final = request.path_params.get("server_id", "")
             if server_id:
                 _s = global_mcp_server_manager.get_mcp_server_by_id(server_id)
                 if not _s:
@@ -1655,10 +1722,10 @@ if MCP_AVAILABLE:
                 ):
                     # For /token, require PKCE authorization_code; refresh_token
                     # grants must NOT bypass auth (see comment above).
-                    path_lower = get_request_route(request).rstrip("/").lower()
+                    path_lower: Final = get_request_route(request).rstrip("/").lower()
                     if path_lower.endswith("/token"):
-                        body_data = await _read_request_body(request=request)
-                        grant_type = (body_data or {}).get("grant_type", "")
+                        body_data: Final = await _read_request_body(request=request)
+                        grant_type: Final = (body_data or {}).get("grant_type", "")
                         if grant_type != "authorization_code":
                             # Fall through to normal LiteLLM auth (will 401 if
                             # no key supplied).
@@ -1673,9 +1740,7 @@ if MCP_AVAILABLE:
                         return UserAPIKeyAuth()
 
         request_data = await _read_request_body(request=request)
-        request_data = populate_request_with_path_params(
-            request_data=request_data, request=request
-        )
+        request_data = populate_request_with_path_params(request_data=request_data, request=request)
 
         return await _user_api_key_auth_builder(
             request=request,
@@ -1690,21 +1755,19 @@ if MCP_AVAILABLE:
     async def _get_cached_temporary_mcp_server_or_404(
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth,
-        request: Optional[Request] = None,
+        request: Request | None = None,
     ) -> MCPServer:
         server = await get_cached_temporary_mcp_server(server_id)
-        resolved_from_temp_cache = server is not None
+        resolved_from_temp_cache: Final = server is not None
         if server is None:
             # Fall back to real DB/config server (e.g. for the user-side OAuth flow
             # which calls these endpoints with a real server_id, not a temp session id).
             from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
-            client_ip = IPAddressUtils.get_mcp_client_ip(request) if request else None
+            client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request else None
             server = global_mcp_server_manager.get_mcp_server_by_id(
                 server_id
-            ) or global_mcp_server_manager.get_mcp_server_by_name(
-                server_id, client_ip=client_ip
-            )
+            ) or global_mcp_server_manager.get_mcp_server_by_name(server_id, client_ip=client_ip)
         if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1722,13 +1785,9 @@ if MCP_AVAILABLE:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={"error": f"Access denied to MCP server {server_id}"},
                 )
-            allowed_server_ids: Set[str] = set()
+            allowed_server_ids: Final[set[str]] = set()
             for auth_context in await build_effective_auth_contexts(user_api_key_dict):
-                allowed_server_ids.update(
-                    await global_mcp_server_manager.get_allowed_mcp_servers(
-                        auth_context
-                    )
-                )
+                allowed_server_ids.update(await global_mcp_server_manager.get_allowed_mcp_servers(auth_context))
             if server.server_id not in allowed_server_ids:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -1745,19 +1804,32 @@ if MCP_AVAILABLE:
         request: Request,
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
-        client_id: Optional[str] = None,
+        client_id: str | None = None,
         redirect_uri: str = Query(...),
         state: str = "",
-        code_challenge: Optional[str] = None,
-        code_challenge_method: Optional[str] = None,
-        response_type: Optional[str] = None,
-        scope: Optional[str] = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
+        response_type: str | None = None,
+        scope: str | None = None,
     ):
-        mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, user_api_key_dict, request=request
-        )
+        mcp_server: Final = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
+        _raise_if_not_oauth2(mcp_server)
         # Use the server's stored client_id when the caller doesn't supply one
-        resolved_client_id = mcp_server.client_id or client_id or ""
+        stored_or_supplied_client_id: Final = mcp_server.client_id or client_id or ""
+        ephemeral_dcr_client: Final = (
+            await resolve_ephemeral_dcr_client(
+                request=request,
+                mcp_server=mcp_server,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                redirect_uri=redirect_uri,
+            )
+            if not stored_or_supplied_client_id
+            else None
+        )
+        resolved_client_id: Final = stored_or_supplied_client_id or (
+            ephemeral_dcr_client.client_id if ephemeral_dcr_client else ""
+        )
         if not resolved_client_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1779,6 +1851,7 @@ if MCP_AVAILABLE:
             code_challenge_method=code_challenge_method,
             response_type=response_type,
             scope=scope,
+            ephemeral_dcr_client=ephemeral_dcr_client,
         )
 
     @router.post(
@@ -1791,18 +1864,31 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
         grant_type: str = Form(...),
-        code: Optional[str] = Form(None),
-        redirect_uri: Optional[str] = Form(None),
-        client_id: Optional[str] = Form(None),
-        client_secret: Optional[str] = Form(None),
-        code_verifier: Optional[str] = Form(None),
-        refresh_token: Optional[str] = Form(None),
-        scope: Optional[str] = Form(None),
+        code: str | None = Form(None),
+        redirect_uri: str | None = Form(None),
+        client_id: str | None = Form(None),
+        client_secret: str | None = Form(None),
+        code_verifier: str | None = Form(None),
+        refresh_token: str | None = Form(None),
+        scope: str | None = Form(None),
     ):
-        mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, user_api_key_dict, request=request
+        mcp_server: Final = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
+        _raise_if_not_oauth2(mcp_server)
+        # Sealed passthrough codes exist only for the authorization_code grant. A refresh_token
+        # grant must never open one: the minted client is unrecoverable after the single flow by
+        # contract, so an expired browser-held token re-runs authorize instead.
+        sealed_code: Final = (
+            redeem_passthrough_authorization_code(code=code, mcp_server=mcp_server, code_verifier=code_verifier)
+            if grant_type == "authorization_code"
+            else None
         )
-        resolved_client_id = mcp_server.client_id or client_id or ""
+        resolved_code: Final = sealed_code.upstream_code if sealed_code else code
+        # A sealed flow ran the gateway /callback as its upstream redirect (bridge short-circuit
+        # or plain flow alike), so the exchange must present that binding, not the browser page.
+        resolved_redirect_uri: Final = f"{get_request_base_url(request)}/callback" if sealed_code else redirect_uri
+        caller_client_id: Final = sealed_code.client_id if sealed_code else client_id
+        caller_client_secret: Final = sealed_code.client_secret if sealed_code else client_secret
+        resolved_client_id: Final = mcp_server.client_id or caller_client_id or ""
         if not resolved_client_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1818,13 +1904,14 @@ if MCP_AVAILABLE:
             request=request,
             mcp_server=mcp_server,
             grant_type=grant_type,
-            code=code,
-            redirect_uri=redirect_uri,
+            code=resolved_code,
+            redirect_uri=resolved_redirect_uri,
             client_id=resolved_client_id,
-            client_secret=client_secret,
+            client_secret=caller_client_secret,
             code_verifier=code_verifier,
             refresh_token=refresh_token,
             scope=scope,
+            client_token_endpoint_auth_method=sealed_code.token_endpoint_auth_method if sealed_code else None,
         )
 
     @router.post(
@@ -1837,11 +1924,10 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
-        mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, user_api_key_dict, request=request
-        )
-        request_data = await _read_request_body(request=request)
-        data: dict = {**request_data}
+        mcp_server: Final = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
+        request_data: Final = await _read_request_body(request=request)
+        data: Final[dict] = {**request_data}
+        client_redirect_uris: Final = client_supplied_redirect_uris(data.get("redirect_uris"))
 
         return await register_client_with_server(
             request=request,
@@ -1851,6 +1937,8 @@ if MCP_AVAILABLE:
             response_types=data.get("response_types", []),
             token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
             fallback_client_id=server_id,
+            persist_credentials=_user_is_full_admin(user_api_key_dict),
+            client_redirect_uris=client_redirect_uris,
         )
 
     @router.delete(
@@ -1864,7 +1952,7 @@ if MCP_AVAILABLE:
     async def remove_mcp_server(
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        litellm_changed_by: Optional[str] = Header(
+        litellm_changed_by: str | None = Header(
             None,
             description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
         ),
@@ -1879,7 +1967,7 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        prisma_client = get_prisma_client_or_throw(
+        prisma_client: Final = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
@@ -1895,7 +1983,7 @@ if MCP_AVAILABLE:
             )
 
         # try to delete the mcp server
-        mcp_server_record_deleted = await delete_mcp_server(prisma_client, server_id)
+        mcp_server_record_deleted: Final = await delete_mcp_server(prisma_client, server_id)
 
         if mcp_server_record_deleted is None:
             raise HTTPException(
@@ -1932,30 +2020,21 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """Store a BYOK credential for the calling user."""
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        mcp_server = await get_mcp_server(prisma_client, server_id)
-        if mcp_server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        mcp_server: Final = await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
         if not getattr(mcp_server, "is_byok", False):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "This MCP server does not support BYOK credentials"},
             )
-        user_id = user_api_key_dict.user_id or ""
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
         if payload.save:
-            await store_user_credential(
-                prisma_client, user_id, server_id, payload.credential
-            )
+            await store_user_credential(prisma_client, user_id, server_id, payload.credential)
             from litellm.proxy._experimental.mcp_server.server import (
                 _invalidate_byok_cred_cache,
             )
@@ -1977,10 +2056,8 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """Remove the calling user's BYOK credential."""
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        user_id = user_api_key_dict.user_id or ""
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2012,16 +2089,9 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """Persist the OAuth2 access token obtained by the calling user."""
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        mcp_server = await get_mcp_server(prisma_client, server_id)
-        if mcp_server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
-        user_id = user_api_key_dict.user_id or ""
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2036,11 +2106,16 @@ if MCP_AVAILABLE:
             expires_in=payload.expires_in,
             scopes=payload.scopes,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            global_mcp_server_manager,
+        )
+
+        await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         # Read back the persisted record so the response reflects the stored
         # expires_at rather than recomputing it here (which could diverge by
         # milliseconds or if the storage logic ever adds a grace period).
-        stored = await get_user_oauth_credential(prisma_client, user_id, server_id)
-        expires_at: Optional[str] = stored.get("expires_at") if stored else None
+        stored: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
+        expires_at: Final[str | None] = stored.get("expires_at") if stored else None
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=True,
@@ -2060,10 +2135,8 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """Revoke/delete the user's OAuth2 credential."""
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        user_id = user_api_key_dict.user_id or ""
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2072,14 +2145,17 @@ if MCP_AVAILABLE:
         # Only delete if the stored credential is actually an OAuth2 token.
         # This prevents accidentally deleting a BYOK credential if one exists
         # for the same (user_id, server_id) pair.
-        cred_to_delete = await get_user_oauth_credential(
-            prisma_client, user_id, server_id
-        )
+        cred_to_delete: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
         if cred_to_delete is not None:
             try:
                 await delete_user_credential(prisma_client, user_id, server_id)
             except RecordNotFoundError:
                 pass  # Already gone — treat as a successful delete
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+                global_mcp_server_manager,
+            )
+
+            await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=False,
@@ -2098,25 +2174,21 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """Return credential status (has_credential, expiry) without exposing the token."""
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        user_id = user_api_key_dict.user_id or ""
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+        cred: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
         if cred is None:
-            return MCPOAuthUserCredentialStatus(
-                server_id=server_id, has_credential=False, is_expired=False
-            )
-        expires_at: Optional[str] = cred.get("expires_at")
+            return MCPOAuthUserCredentialStatus(server_id=server_id, has_credential=False, is_expired=False)
+        expires_at: Final[str | None] = cred.get("expires_at")
         is_expired = False
         if expires_at:
             try:
-                exp = datetime.fromisoformat(expires_at)
+                exp: Final = datetime.fromisoformat(expires_at)
                 is_expired = exp < datetime.now(timezone.utc)
             except Exception:
                 pass
@@ -2132,36 +2204,33 @@ if MCP_AVAILABLE:
         "/user-credentials",
         description="List all OAuth2 MCP credentials stored for the calling user",
         dependencies=[Depends(user_api_key_auth)],
-        response_model=List[MCPUserCredentialListItem],
+        response_model=list[MCPUserCredentialListItem],
     )
     @management_endpoint_wrapper
     async def list_mcp_user_credentials(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """Return all servers the calling user has connected via OAuth2."""
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        user_id = user_api_key_dict.user_id or ""
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        oauth_creds = await list_user_oauth_credentials(prisma_client, user_id)
+        oauth_creds: Final = await list_user_oauth_credentials(prisma_client, user_id)
         if not oauth_creds:
             return []
         # Fetch server metadata for display names — single batch query instead of N+1.
-        server_ids = [c["server_id"] for c in oauth_creds]
-        servers = {
-            srv.server_id: srv
-            for srv in await get_mcp_servers(prisma_client, server_ids)
-        }
-        items: List[MCPUserCredentialListItem] = []
+        server_ids: Final = [c["server_id"] for c in oauth_creds if "server_id" in c]
+        servers: Final = {srv.server_id: srv for srv in await get_mcp_servers(prisma_client, server_ids)}
+        items: Final[list[MCPUserCredentialListItem]] = []
         for cred in oauth_creds:
+            if "server_id" not in cred:
+                continue
             sid = cred["server_id"]
             srv = servers.get(sid)
-            expires_at: Optional[str] = cred.get("expires_at")
+            expires_at: str | None = cred.get("expires_at")
             items.append(
                 MCPUserCredentialListItem(
                     server_id=sid,
@@ -2182,42 +2251,48 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
     ) -> LiteLLM_MCPServerTable:
-        """Return the MCP server the caller may manage env vars for.
+        """Resolve the MCP server a caller may manage their own per-user state for.
 
-        Admins look the server up directly. Non-admins reuse the access-scoped
-        listing that already loads every server they can see, so we don't issue
-        a second per-server query just to re-fetch a record the authorization
-        check produced. A non-admin who can't see the server gets 403 (never
-        404) so server ids can't be enumerated.
+        Looks the server up in the DB, then the in-memory registry, so a
+        config-defined server (which never gets a DB row) resolves too. Admins
+        may reach any server and get a 404 for an unknown id. A non-admin may
+        only reach a server in their allowed set and otherwise gets 403 (never
+        404, so server ids can't be enumerated), using the same allowed-server
+        resolution the MCP gateway enforces on tool calls.
         """
+        server = await get_mcp_server(prisma_client, server_id)
+        if server is None:
+            registry_server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+            if registry_server is not None:
+                server = global_mcp_server_manager._build_mcp_server_table(registry_server)
+
         if _user_has_admin_view(user_api_key_dict):
-            server = await get_mcp_server(prisma_client, server_id)
             if server is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail={"error": f"MCP Server {server_id} not found"},
                 )
             return server
-        accessible = await get_all_mcp_servers_for_user(
-            prisma_client, user_api_key_dict
-        )
-        for server in accessible:
-            if server.server_id == server_id:
-                return server
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error": (
-                    f"User does not have permission to access mcp server with id {server_id}. "
-                    "You can only manage env vars for mcp servers that you have access to."
-                )
-            },
-        )
+
+        allowed_server_ids: Final[set[str]] = set()
+        for auth_context in await build_effective_auth_contexts(user_api_key_dict):
+            allowed_server_ids.update(await global_mcp_server_manager.get_allowed_mcp_servers(auth_context))
+        if server is None or server.server_id not in allowed_server_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        f"User does not have permission to access mcp server with id {server_id}. "
+                        "You can only manage mcp servers that you have access to."
+                    )
+                },
+            )
+        return server
 
     def _compute_user_env_var_status(
         *,
         server: LiteLLM_MCPServerTable,
-        stored_values: Dict[str, str],
+        stored_values: dict[str, str],
     ) -> MCPUserEnvVarsStatus:
         """Build a status object for one server given the user's stored values.
 
@@ -2225,9 +2300,7 @@ if MCP_AVAILABLE:
         each value ``is_set`` and never echoes the decrypted secret back, so a
         leaked token can't be used to exfiltrate the raw upstream credential.
         """
-        global_values, user_specs = parse_admin_env_vars(
-            getattr(server, "env_vars", None)
-        )
+        global_values, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
         # An empty-valued global is not a usable fallback, so it must not mark a
         # referenced per-user var as covered, matching the empty-global filter in
         # _resolve_static_headers_with_env_vars. Otherwise this endpoint reports no
@@ -2244,13 +2317,11 @@ if MCP_AVAILABLE:
                 static_headers = json.loads(static_headers) or {}
             except (ValueError, TypeError):
                 static_headers = {}
-        referenced = collect_env_var_references(strings=static_headers.values())
-        user_var_names = {spec["name"] for spec in user_specs}
-        blocking = {
-            name for name in (referenced & user_var_names) if name not in global_values
-        }
+        referenced: Final = collect_env_var_references(strings=static_headers.values())
+        user_var_names: Final = {spec["name"] for spec in user_specs}
+        blocking: Final = {name for name in (referenced & user_var_names) if name not in global_values}
 
-        required: List[MCPUserEnvVarSpec] = []
+        required: Final[list[MCPUserEnvVarSpec]] = []
         missing_count = 0
         for spec in user_specs:
             name = spec["name"]
@@ -2288,19 +2359,15 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ) -> MCPUserEnvVarsStatus:
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        user_id = user_api_key_dict.user_id or ""
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        server = await _authorize_and_fetch_mcp_server(
-            prisma_client, user_api_key_dict, server_id
-        )
-        stored = await get_user_env_vars(prisma_client, user_id, server_id)
+        server: Final = await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
+        stored: Final = await get_user_env_vars(prisma_client, user_id, server_id)
         return _compute_user_env_var_status(server=server, stored_values=stored)
 
     @router.post(
@@ -2321,31 +2388,23 @@ if MCP_AVAILABLE:
         payload: MCPUserEnvVarsRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ) -> MCPUserEnvVarsStatus:
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        user_id = user_api_key_dict.user_id or ""
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        server = await _authorize_and_fetch_mcp_server(
-            prisma_client, user_api_key_dict, server_id
-        )
+        server: Final = await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
         # Only known per-user var names declared by the admin are accepted —
         # never persist arbitrary keys the user invents. Submitted values are
         # merged over the existing set so a user updating one credential does
         # not have to re-enter the others (which are write-only and never shown
         # back); an omitted/empty field keeps its stored value.
         _, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
-        allowed_names = {spec["name"] for spec in user_specs}
-        updates = {
-            k: v for k, v in payload.values.items() if k in allowed_names and v != ""
-        }
-        merged = await merge_user_env_vars(
-            prisma_client, user_id, server_id, updates, allowed_names
-        )
+        allowed_names: Final = {spec["name"] for spec in user_specs}
+        updates: Final = {k: v for k, v in payload.values.items() if k in allowed_names and v != ""}
+        merged: Final = await merge_user_env_vars(prisma_client, user_id, server_id, updates, allowed_names)
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             invalidate_user_env_vars_cache,
         )
@@ -2364,18 +2423,14 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ) -> MCPUserEnvVarsStatus:
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        user_id = user_api_key_dict.user_id or ""
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        server = await _authorize_and_fetch_mcp_server(
-            prisma_client, user_api_key_dict, server_id
-        )
+        server: Final = await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
         await delete_user_env_vars(prisma_client, user_id, server_id)
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             invalidate_user_env_vars_cache,
@@ -2389,29 +2444,25 @@ if MCP_AVAILABLE:
         description="Per-user MCP env var status across every server the user can access. "
         "Used by the dashboard to highlight servers with missing per-user vars.",
         dependencies=[Depends(user_api_key_auth)],
-        response_model=List[MCPUserEnvVarsStatus],
+        response_model=list[MCPUserEnvVarsStatus],
     )
     @management_endpoint_wrapper
     async def list_mcp_user_env_var_status(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ) -> List[MCPUserEnvVarsStatus]:
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        user_id = user_api_key_dict.user_id or ""
+    ) -> list[MCPUserEnvVarsStatus]:
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             return []
-        accessible = await _resolve_accessible_mcp_servers(user_api_key_dict)
+        accessible: Final = await _resolve_accessible_mcp_servers(user_api_key_dict)
         if not accessible:
             return []
-        server_ids = [s.server_id for s in accessible]
-        stored_bulk = await get_user_env_vars_bulk(prisma_client, user_id, server_ids)
-        statuses: List[MCPUserEnvVarsStatus] = []
+        server_ids: Final = [s.server_id for s in accessible]
+        stored_bulk: Final = await get_user_env_vars_bulk(prisma_client, user_id, server_ids)
+        statuses: Final[list[MCPUserEnvVarsStatus]] = []
         for server in accessible:
             stored = stored_bulk.get(server.server_id, {})
-            status_obj = _compute_user_env_var_status(
-                server=server, stored_values=stored
-            )
+            status_obj = _compute_user_env_var_status(server=server, stored_values=stored)
             if status_obj.required:
                 statuses.append(status_obj)
         return statuses
@@ -2427,7 +2478,7 @@ if MCP_AVAILABLE:
     async def edit_mcp_server(
         payload: UpdateMCPServerRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        litellm_changed_by: Optional[str] = Header(
+        litellm_changed_by: str | None = Header(
             None,
             description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
         ),
@@ -2442,11 +2493,11 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        prisma_client = get_prisma_client_or_throw(
+        prisma_client: Final = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
-        payload_fields_set = set(payload.fields_set())
+        payload_fields_set: Final = set(payload.fields_set())
 
         # Validate and normalize payload fields
         validate_and_normalize_mcp_server_payload(payload)
@@ -2462,8 +2513,43 @@ if MCP_AVAILABLE:
                 },
             )
 
+        # Snapshot the pre-update identity so we can detect a mint-relevant change below. The read is
+        # advisory (it only feeds the stale-token purge decision), so a failure skips the purge with a
+        # warning instead of failing the edit, whose primary job is the update itself.
+        try:
+            old_server_record = await get_mcp_server(prisma_client, payload.server_id)
+            old_server_record_read_failed = False
+        except Exception as exc:  # noqa: BLE001 - advisory read; invalidation is best-effort end-to-end
+            verbose_logger.warning(
+                "MCP server %s: could not snapshot the pre-update record; skipping the stale-token check: %s",
+                payload.server_id,
+                exc,
+            )
+            old_server_record = None
+            old_server_record_read_failed = True
+
+        if (
+            payload.dcr_bridge
+            and payload.auth_type is None
+            and (old_server_record is not None or old_server_record_read_failed)
+        ):
+            stored_auth_type: Final = old_server_record.auth_type if old_server_record else None
+            stored_auth_type_name: Final = getattr(stored_auth_type, "value", stored_auth_type)
+            if stored_auth_type not in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": (
+                            "dcr_bridge is only supported for auth_type true_passthrough or "
+                            f"oauth_delegate (stored auth_type: {stored_auth_type_name!r}). Include "
+                            "the server's auth_type in the update payload or configure one of the "
+                            "client-forwarded token modes first."
+                        )
+                    },
+                )
+
         # try to update the mcp server
-        mcp_server_record_updated = await update_mcp_server(
+        mcp_server_record_updated: Final = await update_mcp_server(
             prisma_client,
             payload,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
@@ -2473,14 +2559,36 @@ if MCP_AVAILABLE:
         if mcp_server_record_updated is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": f"MCP Server not found, passed server_id={payload.server_id}"
-                },
+                detail={"error": f"MCP Server not found, passed server_id={payload.server_id}"},
             )
         await global_mcp_server_manager.update_server(mcp_server_record_updated)
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
+
+        # If a field that determines which upstream OAuth token gets minted changed (url/audience, OAuth
+        # mode/grant, authorization-server endpoints, or the OAuth client + scopes), every stored per-user
+        # token was minted for the old configuration and is stale. Purge them (DB + cache) so the next
+        # tool call re-authorizes instead of forwarding a token for a resource/AS/client that no longer
+        # matches. Best-effort: a purge failure must not fail the update, whose primary job already
+        # succeeded.
+        if old_server_record is not None and mcp_oauth_token_identity(old_server_record) != mcp_oauth_token_identity(
+            mcp_server_record_updated
+        ):
+            try:
+                purged: Final = await purge_user_oauth_credentials_for_server(prisma_client, payload.server_id)
+                if purged:
+                    verbose_logger.info(
+                        "MCP server %s: purged %d stale per-user OAuth token(s) after a mint-relevant config change",
+                        payload.server_id,
+                        purged,
+                    )
+            except Exception as exc:  # noqa: BLE001 - purge is best-effort; the server update already succeeded
+                verbose_logger.warning(
+                    "MCP server %s: failed to purge stale per-user OAuth tokens after config change: %s",
+                    payload.server_id,
+                    exc,
+                )
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:
@@ -2510,15 +2618,13 @@ if MCP_AVAILABLE:
             from litellm.proxy.proxy_server import proxy_config
 
             # Load existing config
-            config = await proxy_config.get_config()
+            config: Final = await proxy_config.get_config()
             # Check if user has admin permissions
             if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
                 raise HTTPException(
                     status_code=403,
                     detail={
-                        "error": "Only proxy admins can update public mcp servers. Your role={}".format(
-                            user_api_key_dict.user_role
-                        )
+                        "error": f"Only proxy admins can update public mcp servers. Your role={user_api_key_dict.user_role}"
                     },
                 )
 
@@ -2526,9 +2632,7 @@ if MCP_AVAILABLE:
                 litellm.public_mcp_servers = []
 
             for server_id in request.mcp_server_ids:
-                server = global_mcp_server_manager.get_mcp_server_by_id(
-                    server_id=server_id
-                )
+                server = global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id)
                 if server is None:
                     raise HTTPException(
                         status_code=404,
@@ -2541,15 +2645,13 @@ if MCP_AVAILABLE:
             if "litellm_settings" not in config or config["litellm_settings"] is None:
                 config["litellm_settings"] = {}
 
-            config["litellm_settings"][
-                "public_mcp_servers"
-            ] = litellm.public_mcp_servers
+            config["litellm_settings"]["public_mcp_servers"] = litellm.public_mcp_servers
 
             # Save the updated config
             await proxy_config.save_config(new_config=config)
 
             verbose_proxy_logger.debug(
-                f"Updated public mcp servers to: {litellm.public_mcp_servers} by user: {user_api_key_dict.user_id}"
+                "Updated public mcp servers to: %s by user: %s", litellm.public_mcp_servers, user_api_key_dict.user_id
             )
 
             return {
@@ -2560,30 +2662,28 @@ if MCP_AVAILABLE:
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error making agent public: {e}")
+            verbose_proxy_logger.exception("Error making agent public: %s", e)
             raise HTTPException(status_code=500, detail=str(e))
 
     # --- MCP Discovery ---
 
-    _MCP_REGISTRY_PATH = os.path.join(
+    _MCP_REGISTRY_PATH: Final = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "mcp_registry.json",
     )
 
-    _mcp_registry_cache: Optional[Dict[str, Any]] = None
+    _mcp_registry_cache: dict[str, Any] | None = None
 
-    def _load_mcp_registry() -> Dict[str, Any]:
+    def _load_mcp_registry() -> dict[str, Any]:
         """Load the curated MCP registry from disk. Cached after first read."""
         global _mcp_registry_cache
         if _mcp_registry_cache is not None:
             return _mcp_registry_cache
         try:
             with open(_MCP_REGISTRY_PATH, "r") as f:
-                data: Dict[str, Any] = json.load(f)
+                data: dict[str, Any] = json.load(f)
         except Exception as e:
-            verbose_proxy_logger.warning(
-                f"Failed to load MCP registry from {_MCP_REGISTRY_PATH}: {e}"
-            )
+            verbose_proxy_logger.warning("Failed to load MCP registry from %s: %s", _MCP_REGISTRY_PATH, e)
             data = {"servers": []}
         _mcp_registry_cache = data
         return data
@@ -2594,10 +2694,8 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
     )
     async def discover_mcp_servers(
-        query: Optional[str] = Query(
-            None, description="Search filter for server names and descriptions"
-        ),
-        category: Optional[str] = Query(None, description="Filter by category"),
+        query: str | None = Query(None, description="Search filter for server names and descriptions"),
+        category: str | None = Query(None, description="Filter by category"),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
@@ -2610,18 +2708,16 @@ if MCP_AVAILABLE:
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can access MCP discovery. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can access MCP discovery. Your role={user_api_key_dict.user_role}"
                 },
             )
 
-        registry = _load_mcp_registry()
+        registry: Final = _load_mcp_registry()
         servers = registry.get("servers", [])
 
         # Apply query filter
         if query:
-            query_lower = query.lower()
+            query_lower: Final = query.lower()
             servers = [
                 s
                 for s in servers
@@ -2635,8 +2731,8 @@ if MCP_AVAILABLE:
             servers = [s for s in servers if s.get("category", "") == category]
 
         # Extract unique categories from the full list (before filtering)
-        all_servers = registry.get("servers", [])
-        categories = sorted(set(s.get("category", "Other") for s in all_servers))
+        all_servers: Final = registry.get("servers", [])
+        categories: Final = sorted(set(s.get("category", "Other") for s in all_servers))
 
         return {
             "servers": servers,
@@ -2645,15 +2741,15 @@ if MCP_AVAILABLE:
 
     # --- OpenAPI Registry ---
 
-    _OPENAPI_REGISTRY_PATH = os.path.join(
+    _OPENAPI_REGISTRY_PATH: Final = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "openapi_registry.json",
     )
 
     @functools.lru_cache(maxsize=1)
-    def _load_openapi_registry() -> Dict[str, Any]:
+    def _load_openapi_registry() -> dict[str, Any]:
         with open(_OPENAPI_REGISTRY_PATH, "r") as f:
-            data: Dict[str, Any] = json.load(f)
+            data: Final[dict[str, Any]] = json.load(f)
         return data
 
     @router.get(
@@ -2668,17 +2764,13 @@ if MCP_AVAILABLE:
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can access the OpenAPI registry. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can access the OpenAPI registry. Your role={user_api_key_dict.user_role}"
                 },
             )
         try:
             return _load_openapi_registry()
         except Exception as e:
-            verbose_proxy_logger.warning(
-                f"Failed to load OpenAPI registry from {_OPENAPI_REGISTRY_PATH}: {e}"
-            )
+            verbose_proxy_logger.warning("Failed to load OpenAPI registry from %s: %s", _OPENAPI_REGISTRY_PATH, e)
             return {"apis": []}
 
     # ---------------------------------------------------------------------------
@@ -2706,18 +2798,16 @@ if MCP_AVAILABLE:
     async def add_mcp_toolset(
         payload: NewMCPToolsetRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        litellm_changed_by: Optional[str] = Header(None),
+        litellm_changed_by: str | None = Header(None),
     ):
         """Create a named toolset — a curated selection of {server_id, tool_name} pairs."""
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "Only proxy admins can create MCP toolsets."},
             )
-        touched_by = (
+        touched_by: Final = (
             get_audit_log_changed_by(
                 litellm_changed_by=litellm_changed_by,
                 user_api_key_dict=user_api_key_dict,
@@ -2726,13 +2816,11 @@ if MCP_AVAILABLE:
             or LITELLM_PROXY_ADMIN_NAME
         )
         try:
-            result = await create_mcp_toolset(prisma_client, payload, touched_by)
+            result: Final = await create_mcp_toolset(prisma_client, payload, touched_by)
         except UniqueViolationError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": f"A toolset named '{payload.toolset_name}' already exists."
-                },
+                detail={"error": f"A toolset named '{payload.toolset_name}' already exists."},
             )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -2750,16 +2838,14 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """Return toolsets the calling key is allowed to access."""
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-        is_admin = _user_has_admin_view(user_api_key_dict)
-        op = user_api_key_dict.object_permission
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        is_admin: Final = _user_has_admin_view(user_api_key_dict)
+        op: Final = user_api_key_dict.object_permission
         # mcp_toolsets=None or [] both mean "not restricted by toolsets".
         # For admins: either value → no restriction → return all.
         # For non-admins: either value → no toolsets explicitly granted → return nothing.
         # (An admin whose DB row has mcp_toolsets=[] should still see all toolsets.)
-        raw_toolsets = getattr(op, "mcp_toolsets", None) if op else None
+        raw_toolsets: Final = getattr(op, "mcp_toolsets", None) if op else None
         if not raw_toolsets:
             if is_admin:
                 return await list_mcp_toolsets(prisma_client)
@@ -2775,19 +2861,17 @@ if MCP_AVAILABLE:
         toolset_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         # Non-admin keys may only fetch toolsets they've been explicitly granted.
         if not _user_has_admin_view(user_api_key_dict):
-            op = user_api_key_dict.object_permission
-            granted = getattr(op, "mcp_toolsets", None) if op else None
+            op: Final = user_api_key_dict.object_permission
+            granted: Final = getattr(op, "mcp_toolsets", None) if op else None
             if granted is None or toolset_id not in granted:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={"error": "API key does not have access to this toolset."},
                 )
-        toolset = await get_mcp_toolset(prisma_client, toolset_id)
+        toolset: Final = await get_mcp_toolset(prisma_client, toolset_id)
         if toolset is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2803,17 +2887,15 @@ if MCP_AVAILABLE:
     async def edit_mcp_toolset(
         payload: UpdateMCPToolsetRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        litellm_changed_by: Optional[str] = Header(None),
+        litellm_changed_by: str | None = Header(None),
     ):
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "Only proxy admins can update MCP toolsets."},
             )
-        touched_by = (
+        touched_by: Final = (
             get_audit_log_changed_by(
                 litellm_changed_by=litellm_changed_by,
                 user_api_key_dict=user_api_key_dict,
@@ -2822,7 +2904,7 @@ if MCP_AVAILABLE:
             or LITELLM_PROXY_ADMIN_NAME
         )
         try:
-            result = await update_mcp_toolset(prisma_client, payload, touched_by)
+            result: Final = await update_mcp_toolset(prisma_client, payload, touched_by)
         except UniqueViolationError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -2843,9 +2925,7 @@ if MCP_AVAILABLE:
             global_mcp_server_manager,
         )
 
-        global_mcp_server_manager.invalidate_toolset_cache(
-            getattr(payload, "toolset_id", None)
-        )
+        global_mcp_server_manager.invalidate_toolset_cache(getattr(payload, "toolset_id", None))
         return result
 
     @router.delete(
@@ -2857,17 +2937,15 @@ if MCP_AVAILABLE:
     async def remove_mcp_toolset(
         toolset_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        litellm_changed_by: Optional[str] = Header(None),
+        litellm_changed_by: str | None = Header(None),
     ):
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "Only proxy admins can delete MCP toolsets."},
             )
-        deleted = await delete_mcp_toolset(prisma_client, toolset_id)
+        deleted: Final = await delete_mcp_toolset(prisma_client, toolset_id)
         if deleted is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

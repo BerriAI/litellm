@@ -10,7 +10,7 @@ API Reference:
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 import httpx
 
@@ -62,7 +62,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         BaseConfig.__init__(self, **kwargs)
         VertexBase.__init__(self)
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Vertex Agent Engine has limited OpenAI compatible params."""
         return ["user"]
 
@@ -79,7 +79,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             optional_params["user_id"] = non_default_params["user"]
         return optional_params
 
-    def _parse_model_string(self, model: str) -> Tuple[str, str]:
+    def _parse_model_string(self, model: str) -> tuple[str, str]:
         """
         Parse model string to extract resource ID.
 
@@ -89,8 +89,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         Returns: (resource_path, engine_id)
         """
         # Remove 'agent_engine/' prefix if present
-        if model.startswith("agent_engine/"):
-            model = model[len("agent_engine/") :]
+        model = model.removeprefix("agent_engine/")
 
         # Check if it's a full resource path
         if model.startswith("projects/"):
@@ -102,12 +101,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the request.
@@ -119,10 +118,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         resource_path, engine_id = self._parse_model_string(model)
 
         # Get project and location from litellm_params or environment
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params)
-        vertex_location = (
-            self.safe_get_vertex_ai_location(litellm_params) or "us-central1"
-        )
+        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params)
+        vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params) or "us-central1"
 
         # Build the full resource path if only engine_id was provided
         if not resource_path.startswith("projects/"):
@@ -133,24 +130,24 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                 )
             resource_path = f"projects/{vertex_project}/locations/{vertex_location}/reasoningEngines/{engine_id}"
 
-        base_url = get_vertex_base_url(vertex_location)
+        base_url: Final = get_vertex_base_url(vertex_location)
 
         # Always use :streamQuery endpoint for actual queries
         # The :query endpoint only supports session management methods
         # (create_session, get_session, list_sessions, delete_session, etc.)
-        endpoint = f"{base_url}/v1beta1/{resource_path}:streamQuery"
+        endpoint: Final = f"{base_url}/v1beta1/{resource_path}:streamQuery"
 
-        verbose_logger.debug(f"Vertex Agent Engine URL: {endpoint}")
+        verbose_logger.debug("Vertex Agent Engine URL: %s", endpoint)
         return endpoint
 
     def _get_auth_headers(
         self,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Get authentication headers using Google Cloud credentials."""
-        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params)
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params)
+        vertex_credentials: Final = self.safe_get_vertex_ai_credentials(litellm_params)
+        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params)
 
         # Get access token using VertexBase
         access_token, project_id = self.get_access_token(
@@ -158,9 +155,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             project_id=vertex_project,
         )
 
-        verbose_logger.debug(
-            f"Vertex Agent Engine: Authenticated for project {project_id}"
-        )
+        verbose_logger.debug("Vertex Agent Engine: Authenticated for project %s", project_id)
 
         return {
             "Authorization": f"Bearer {access_token}",
@@ -169,20 +164,20 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
     def _get_user_id(self, optional_params: dict) -> str:
         """Get or generate user ID for session management."""
-        user_id = optional_params.get("user_id") or optional_params.get("user")
+        user_id: Final = optional_params.get("user_id") or optional_params.get("user")
         if user_id:
             return user_id
         # Generate a user ID
         return f"litellm-user-{str(uuid.uuid4())[:8]}"
 
-    def _get_session_id(self, optional_params: dict) -> Optional[str]:
+    def _get_session_id(self, optional_params: dict) -> str | None:
         """Get session ID if provided."""
         return optional_params.get("session_id")
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -201,14 +196,14 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         }
         """
         # Use the last message content as the prompt
-        prompt = convert_content_list_to_str(messages[-1])
+        prompt: Final = convert_content_list_to_str(messages[-1])
 
         # Get user_id and session_id
-        user_id = self._get_user_id(optional_params)
-        session_id = self._get_session_id(optional_params)
+        user_id: Final = self._get_user_id(optional_params)
+        session_id: Final = self._get_session_id(optional_params)
 
         # Build the input
-        input_data: Dict[str, Any] = {
+        input_data: Final[dict[str, Any]] = {
             "message": prompt,
             "user_id": user_id,
         }
@@ -219,59 +214,55 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         # Build the request payload
         # Note: stream_query is used for both streaming and non-streaming
         # The difference is the endpoint (:streamQuery vs :query)
-        payload = {
+        payload: Final = {
             "class_method": "stream_query",
             "input": input_data,
         }
 
-        verbose_logger.debug(f"Vertex Agent Engine payload: {payload}")
+        verbose_logger.debug("Vertex Agent Engine payload: %s", payload)
         return payload
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """Validate environment and set up authentication headers."""
-        auth_headers = self._get_auth_headers(optional_params, litellm_params)
+        auth_headers: Final = self._get_auth_headers(optional_params, litellm_params)
         headers.update(auth_headers)
         return headers
 
     def _extract_text_from_response(self, response_data: dict) -> str:
         """Extract text content from the response."""
         # Try to get from content.parts
-        content = response_data.get("content", {})
-        parts = content.get("parts", [])
+        content: Final = response_data.get("content", {})
+        parts: Final = content.get("parts", [])
         for part in parts:
             if "text" in part:
                 return part["text"]
 
         # Try actions.state_delta
-        actions = response_data.get("actions", {})
-        state_delta = actions.get("state_delta", {})
+        actions: Final = response_data.get("actions", {})
+        state_delta: Final = actions.get("state_delta", {})
         for key, value in state_delta.items():
             if isinstance(value, str) and value:
                 return value
 
         return ""
 
-    def _calculate_usage(
-        self, model: str, messages: List[AllMessageValues], content: str
-    ) -> Optional[Usage]:
+    def _calculate_usage(self, model: str, messages: list[AllMessageValues], content: str) -> Usage | None:
         """Calculate token usage using LiteLLM's token counter."""
         try:
             from litellm.utils import token_counter
 
-            prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-            completion_tokens = token_counter(
-                model="gpt-3.5-turbo", text=content, count_response_tokens=True
-            )
-            total_tokens = prompt_tokens + completion_tokens
+            prompt_tokens: Final = token_counter(model="gpt-3.5-turbo", messages=messages)
+            completion_tokens: Final = token_counter(model="gpt-3.5-turbo", text=content, count_response_tokens=True)
+            total_tokens: Final = prompt_tokens + completion_tokens
 
             return Usage(
                 prompt_tokens=prompt_tokens,
@@ -279,7 +270,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                 total_tokens=total_tokens,
             )
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {str(e)}")
+            verbose_logger.warning("Failed to calculate token usage: %s", e)
             return None
 
     def transform_response(
@@ -289,12 +280,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform Vertex Agent Engine response to LiteLLM ModelResponse format.
@@ -303,14 +294,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         We need to collect all the chunks and extract the final response.
         """
         try:
-            content_type = raw_response.headers.get("content-type", "").lower()
-            verbose_logger.debug(
-                f"Vertex Agent Engine response Content-Type: {content_type}"
-            )
+            content_type: Final = raw_response.headers.get("content-type", "").lower()
+            verbose_logger.debug("Vertex Agent Engine response Content-Type: %s", content_type)
 
             # Parse the SSE response
-            response_text = raw_response.text
-            verbose_logger.debug(f"Response (first 500 chars): {response_text[:500]}")
+            response_text: Final = raw_response.text
+            verbose_logger.debug("Response (first 500 chars): %s", response_text[:500])
 
             # Extract content from SSE stream
             content = ""
@@ -329,28 +318,26 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                     continue
 
             # Create the message
-            message = Message(content=content, role="assistant")
+            message: Final = Message(content=content, role="assistant")
 
             # Create choices
-            choice = Choices(finish_reason="stop", index=0, message=message)
+            choice: Final = Choices(finish_reason="stop", index=0, message=message)
 
             # Update model response
             model_response.choices = [choice]
             model_response.model = model
 
             # Calculate usage
-            calculated_usage = self._calculate_usage(model, messages, content)
+            calculated_usage: Final = self._calculate_usage(model, messages, content)
             if calculated_usage:
                 setattr(model_response, "usage", calculated_usage)
 
             return model_response
 
         except Exception as e:
-            verbose_logger.error(
-                f"Error processing Vertex Agent Engine response: {str(e)}"
-            )
+            verbose_logger.error("Error processing Vertex Agent Engine response: %s", e)
             raise VertexAgentEngineError(
-                message=f"Error processing response: {str(e)}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 
@@ -374,9 +361,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, "AsyncHTTPHandler"]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for synchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
@@ -392,7 +379,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         verbose_logger.debug("Making sync streaming request to Vertex AI endpoint.")
 
         # Make streaming request
-        response = client.post(
+        response: Final = client.post(
             api_base,
             headers=headers,
             data=json.dumps(data),
@@ -401,16 +388,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         )
 
         if response.status_code != 200:
-            raise VertexAgentEngineError(
-                status_code=response.status_code, message=str(response.read())
-            )
+            raise VertexAgentEngineError(status_code=response.status_code, message=str(response.read()))
 
         # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(
-            model=model, raw_response=response
-        )
+        completion_stream: Final = self.get_streaming_response(model=model, raw_response=response)
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -437,8 +420,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         data: dict,
         messages: list,
         client: Optional["AsyncHTTPHandler"] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for asynchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
@@ -448,15 +431,13 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                llm_provider=cast(Any, "vertex_ai"), params={}
-            )
+            client = get_async_httpx_client(llm_provider=cast(Any, "vertex_ai"), params={})
 
         # Avoid logging sensitive api_base directly
         verbose_logger.debug("Making async streaming request to Vertex AI endpoint.")
 
         # Make async streaming request
-        response = await client.post(
+        response: Final = await client.post(
             api_base,
             headers=headers,
             data=json.dumps(data),
@@ -465,17 +446,15 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         )
 
         if response.status_code != 200:
-            raise VertexAgentEngineError(
-                status_code=response.status_code, message=str(await response.aread())
-            )
+            raise VertexAgentEngineError(status_code=response.status_code, message=str(await response.aread()))
 
         # Create iterator for SSE stream (async)
-        completion_stream = VertexAgentEngineResponseIterator(
+        completion_stream: Final = VertexAgentEngineResponseIterator(
             streaming_response=response.aiter_lines(),
             sync_stream=False,
         )
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -502,16 +481,14 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """Agent Engine does not allow passing `stream` in the request body."""
         return False
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VertexAgentEngineError(status_code=status_code, message=error_message)
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """Agent Engine always returns SSE streams, so we use real streaming."""
         return False

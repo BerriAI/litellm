@@ -163,6 +163,7 @@ async def test_team_object_has_object_permission_id():
         token=hashed_key,
         last_refreshed_at=time.time(),
         team_object_permission_id=permission_id,
+        team_models=["gpt-4o"],
     )
     user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
 
@@ -229,7 +230,12 @@ async def test_aaauser_personal_budgets(key_ownership):
     from starlette.datastructures import URL
     import litellm
 
-    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        ProxyErrorTypes,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
@@ -250,6 +256,7 @@ async def test_aaauser_personal_budgets(key_ownership):
             user_id=_user_id,
             team_id="my-special-team",
             team_max_budget=100,
+            team_models=["gpt-4o"],
             spend=20,
         )
 
@@ -273,14 +280,12 @@ async def test_aaauser_personal_budgets(key_ownership):
         == valid_token
     )
 
-    try:
+    if key_ownership == "user_key":
+        with pytest.raises(ProxyException) as exc_info:
+            await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    else:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-
-        if key_ownership == "user_key":
-            pytest.fail("Expected this call to fail. User is over limit.")
-    except Exception:
-        if key_ownership == "team_key":
-            pytest.fail("Expected this call to work. Key is below team budget.")
 
 
 @pytest.mark.asyncio
@@ -523,15 +528,6 @@ def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api
 
 
 def test_get_api_key_from_custom_header_bearer_token():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": f"Bearer {token}"},
-        custom_header_name="x-custom-api-key",
-        expected_api_key=token,
-    )
-
-
-def test_get_api_key_from_custom_header_raw_token():
     token = "sk-" + "1" * 8
     _assert_api_key_from_custom_header(
         headers={"x-custom-api-key": f"Bearer {token}"},
@@ -1115,6 +1111,7 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
         "team_id": None,
         "team_object": None,
         "user_id": None,
+        "user_email": None,
         "user_object": None,
         "org_id": None,
         "org_object": None,

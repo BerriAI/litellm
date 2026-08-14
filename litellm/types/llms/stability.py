@@ -4,7 +4,7 @@ Type definitions for Stability AI API
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
-from typing import List, Literal, Optional
+from typing import Final, Literal
 
 from typing_extensions import TypedDict
 
@@ -20,17 +20,15 @@ class StabilityImageGenerationRequest(TypedDict, total=False):
     """
 
     prompt: str  # Required - text prompt for image generation
-    negative_prompt: Optional[str]  # What to avoid in the image
-    aspect_ratio: Optional[
-        str
-    ]  # e.g., "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21"
-    seed: Optional[int]  # Random seed for reproducibility (0 to 4294967294)
-    output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
-    model: Optional[str]  # Model variant (e.g., "sd3.5-large", "sd3.5-medium")
-    mode: Optional[Literal["text-to-image", "image-to-image"]]  # Generation mode
-    image: Optional[str]  # Base64-encoded image for image-to-image
-    strength: Optional[float]  # How much to transform the image (0-1)
-    style_preset: Optional[str]  # Style preset name
+    negative_prompt: str | None  # What to avoid in the image
+    aspect_ratio: str | None  # e.g., "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21"
+    seed: int | None  # Random seed for reproducibility (0 to 4294967294)
+    output_format: Literal["jpeg", "png", "webp"] | None  # Output format
+    model: str | None  # Model variant (e.g., "sd3.5-large", "sd3.5-medium")
+    mode: Literal["text-to-image", "image-to-image"] | None  # Generation mode
+    image: str | None  # Base64-encoded image for image-to-image
+    strength: float | None  # How much to transform the image (0-1)
+    style_preset: str | None  # Style preset name
 
 
 class StabilityImageEditRequest(StabilityImageGenerationRequest):
@@ -40,7 +38,7 @@ class StabilityImageEditRequest(StabilityImageGenerationRequest):
     Endpoint: /v2beta/stable-image/edit/inpaint
     """
 
-    mask: Optional[str]  # Base64-encoded mask (white = edit, black = keep)
+    mask: str | None  # Base64-encoded mask (white = edit, black = keep)
 
 
 class StabilityImageGenerationResponse(TypedDict, total=False):
@@ -64,11 +62,11 @@ class StabilityUpscaleRequest(TypedDict, total=False):
     """
 
     image: str  # Required - Base64-encoded image to upscale
-    prompt: Optional[str]  # Text prompt (required for creative upscale)
-    negative_prompt: Optional[str]  # What to avoid
-    output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
-    seed: Optional[int]  # Random seed
-    creativity: Optional[float]  # Creativity level for creative upscale (0-0.35)
+    prompt: str | None  # Text prompt (required for creative upscale)
+    negative_prompt: str | None  # What to avoid
+    output_format: Literal["jpeg", "png", "webp"] | None  # Output format
+    seed: int | None  # Random seed
+    creativity: float | None  # Creativity level for creative upscale (0-0.35)
 
 
 class StabilityInpaintRequest(TypedDict, total=False):
@@ -80,11 +78,11 @@ class StabilityInpaintRequest(TypedDict, total=False):
 
     image: str  # Required - Base64-encoded image to edit
     prompt: str  # Required - Description of desired changes
-    mask: Optional[str]  # Base64-encoded mask (white = edit, black = keep)
-    negative_prompt: Optional[str]  # What to avoid
-    seed: Optional[int]  # Random seed
-    output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
-    grow_mask: Optional[int]  # Pixels to grow the mask by (0-100)
+    mask: str | None  # Base64-encoded mask (white = edit, black = keep)
+    negative_prompt: str | None  # What to avoid
+    seed: int | None  # Random seed
+    output_format: Literal["jpeg", "png", "webp"] | None  # Output format
+    grow_mask: int | None  # Pixels to grow the mask by (0-100)
 
 
 class StabilityOutpaintRequest(TypedDict, total=False):
@@ -95,15 +93,15 @@ class StabilityOutpaintRequest(TypedDict, total=False):
     """
 
     image: str  # Required - Base64-encoded image to expand
-    prompt: Optional[str]  # Description of content to generate
-    negative_prompt: Optional[str]  # What to avoid
-    left: Optional[int]  # Pixels to expand left (0-2000)
-    right: Optional[int]  # Pixels to expand right (0-2000)
-    up: Optional[int]  # Pixels to expand up (0-2000)
-    down: Optional[int]  # Pixels to expand down (0-2000)
-    seed: Optional[int]  # Random seed
-    output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
-    creativity: Optional[float]  # How creative to be (0-1)
+    prompt: str | None  # Description of content to generate
+    negative_prompt: str | None  # What to avoid
+    left: int | None  # Pixels to expand left (0-2000)
+    right: int | None  # Pixels to expand right (0-2000)
+    up: int | None  # Pixels to expand up (0-2000)
+    down: int | None  # Pixels to expand down (0-2000)
+    seed: int | None  # Random seed
+    output_format: Literal["jpeg", "png", "webp"] | None  # Output format
+    creativity: float | None  # How creative to be (0-1)
 
 
 class StabilityEraseRequest(TypedDict, total=False):
@@ -114,10 +112,10 @@ class StabilityEraseRequest(TypedDict, total=False):
     """
 
     image: str  # Required - Base64-encoded image
-    mask: Optional[str]  # Base64-encoded mask (white = erase)
-    seed: Optional[int]  # Random seed
-    output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
-    grow_mask: Optional[int]  # Pixels to grow the mask by (0-100)
+    mask: str | None  # Base64-encoded mask (white = erase)
+    seed: int | None  # Random seed
+    output_format: Literal["jpeg", "png", "webp"] | None  # Output format
+    grow_mask: int | None  # Pixels to grow the mask by (0-100)
 
 
 class StabilitySearchReplaceRequest(TypedDict, total=False):
@@ -130,10 +128,10 @@ class StabilitySearchReplaceRequest(TypedDict, total=False):
     image: str  # Required - Base64-encoded image
     prompt: str  # Required - Description of object to add
     search_prompt: str  # Required - Description of object to find and replace
-    negative_prompt: Optional[str]  # What to avoid
-    seed: Optional[int]  # Random seed
-    output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
-    grow_mask: Optional[int]  # Pixels to grow detected mask
+    negative_prompt: str | None  # What to avoid
+    seed: int | None  # Random seed
+    output_format: Literal["jpeg", "png", "webp"] | None  # Output format
+    grow_mask: int | None  # Pixels to grow detected mask
 
 
 class StabilityRemoveBackgroundRequest(TypedDict, total=False):
@@ -144,9 +142,7 @@ class StabilityRemoveBackgroundRequest(TypedDict, total=False):
     """
 
     image: str  # Required - Base64-encoded image
-    output_format: Optional[
-        Literal["png", "webp"]
-    ]  # Output format (no jpeg - needs transparency)
+    output_format: Literal["png", "webp"] | None  # Output format (no jpeg - needs transparency)
 
 
 class StabilityControlRequest(TypedDict, total=False):
@@ -161,10 +157,10 @@ class StabilityControlRequest(TypedDict, total=False):
 
     image: str  # Required - Base64-encoded control image (sketch/structure/style reference)
     prompt: str  # Required - Description of desired output
-    negative_prompt: Optional[str]  # What to avoid
-    control_strength: Optional[float]  # How strongly to follow the control (0-1)
-    seed: Optional[int]  # Random seed
-    output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
+    negative_prompt: str | None  # What to avoid
+    control_strength: float | None  # How strongly to follow the control (0-1)
+    seed: int | None  # Random seed
+    output_format: Literal["jpeg", "png", "webp"] | None  # Output format
 
 
 class StabilityEditResponse(TypedDict, total=False):
@@ -178,7 +174,7 @@ class StabilityEditResponse(TypedDict, total=False):
 
 
 # Mapping of OpenAI size to Stability aspect_ratio
-OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO = {
+OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO: Final = {
     "1024x1024": "1:1",
     "1792x1024": "16:9",
     "1024x1792": "9:16",
@@ -187,7 +183,7 @@ OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO = {
 }
 
 # Stability AI supported aspect ratios
-STABILITY_ASPECT_RATIOS = [
+STABILITY_ASPECT_RATIOS: Final = [
     "1:1",
     "16:9",
     "9:16",
@@ -202,7 +198,7 @@ STABILITY_ASPECT_RATIOS = [
 ]
 
 # Stability AI model endpoints
-STABILITY_GENERATION_MODELS = {
+STABILITY_GENERATION_MODELS: Final = {
     "sd3": "/v2beta/stable-image/generate/sd3",
     "sd3.5-large": "/v2beta/stable-image/generate/sd3",
     "sd3.5-large-turbo": "/v2beta/stable-image/generate/sd3",
@@ -214,7 +210,7 @@ STABILITY_GENERATION_MODELS = {
     "stable-image-core": "/v2beta/stable-image/generate/core",
 }
 
-STABILITY_EDIT_ENDPOINTS = {
+STABILITY_EDIT_ENDPOINTS: Final = {
     "inpaint": "/v2beta/stable-image/edit/inpaint",
     "outpaint": "/v2beta/stable-image/edit/outpaint",
     "erase": "/v2beta/stable-image/edit/erase",

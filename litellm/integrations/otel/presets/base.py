@@ -20,6 +20,4 @@ class Preset(Protocol):
     test-supplied defaults); the factory calls presets with no arguments.
     """
 
-    def __call__(
-        self, *, config_overrides: OpenTelemetryV2Config | None = None
-    ) -> OpenTelemetryV2Config: ...
+    def __call__(self, *, config_overrides: OpenTelemetryV2Config | None = None) -> OpenTelemetryV2Config: ...

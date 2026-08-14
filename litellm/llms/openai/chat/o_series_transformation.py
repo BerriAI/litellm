@@ -11,7 +11,8 @@ Translations handled by LiteLLM:
 - Logprobs => drop param (if user opts in to dropping param)
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Union, cast, overload
+from collections.abc import Coroutine
+from typing import Any, Final, Literal, cast, overload
 
 import litellm
 from litellm import verbose_logger
@@ -36,9 +37,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def translate_developer_role_to_system_role(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
+    def translate_developer_role_to_system_role(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
         O-series models support `developer` role.
         """
@@ -50,8 +49,8 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
         """
 
-        all_openai_params = super().get_supported_openai_params(model=model)
-        non_supported_params = [
+        all_openai_params: Final = super().get_supported_openai_params(model=model)
+        non_supported_params: Final = [
             "logprobs",
             "top_p",
             "presence_penalty",
@@ -59,27 +58,21 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             "top_logprobs",
         ]
 
-        o_series_only_param = ["reasoning_effort"]
+        o_series_only_param: Final = ["reasoning_effort"]
 
         all_openai_params.extend(o_series_only_param)
 
         try:
-            model, custom_llm_provider, api_base, api_key = get_llm_provider(
-                model=model
-            )
+            model, custom_llm_provider, api_base, api_key = get_llm_provider(model=model)
         except Exception:
             verbose_logger.debug(
-                f"Unable to infer model provider for model={model}, defaulting to openai for o1 supported param check"
+                "Unable to infer model provider for model=%s, defaulting to openai for o1 supported param check", model
             )
             custom_llm_provider = "openai"
 
-        _supports_function_calling = supports_function_calling(
-            model, custom_llm_provider
-        )
-        _supports_response_schema = supports_response_schema(model, custom_llm_provider)
-        _supports_parallel_tool_calls = supports_parallel_function_calling(
-            model, custom_llm_provider
-        )
+        _supports_function_calling: Final = supports_function_calling(model, custom_llm_provider)
+        _supports_response_schema: Final = supports_response_schema(model, custom_llm_provider)
+        _supports_parallel_tool_calls: Final = supports_parallel_function_calling(model, custom_llm_provider)
 
         if not _supports_function_calling:
             non_supported_params.append("tools")
@@ -93,9 +86,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         if not _supports_response_schema:
             non_supported_params.append("response_format")
 
-        return [
-            param for param in all_openai_params if param not in non_supported_params
-        ]
+        return [param for param in all_openai_params if param not in non_supported_params]
 
     def map_openai_params(
         self,
@@ -105,11 +96,9 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         drop_params: bool,
     ):
         if "max_tokens" in non_default_params:
-            optional_params["max_completion_tokens"] = non_default_params.pop(
-                "max_tokens"
-            )
+            optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
         if "temperature" in non_default_params:
-            temperature_value: Optional[float] = non_default_params.pop("temperature")
+            temperature_value: Final[float | None] = non_default_params.pop("temperature")
             if temperature_value is not None:
                 if temperature_value == 1:
                     optional_params["temperature"] = temperature_value
@@ -119,15 +108,11 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
                         pass
                     else:
                         raise litellm.utils.UnsupportedParamsError(
-                            message="O-series models don't support temperature={}. Only temperature=1 is supported. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
-                                temperature_value
-                            ),
+                            message=f"O-series models don't support temperature={temperature_value}. Only temperature=1 is supported. To drop unsupported openai params from the call, set `litellm.drop_params = True`",
                             status_code=400,
                         )
 
-        return super()._map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        return super()._map_openai_params(non_default_params, optional_params, model, drop_params)
 
     def is_model_o_series_model(self, model: str) -> bool:
         model = model.split("/")[-1]  # could be "openai/o3" or "o3"
@@ -140,38 +125,32 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """
         Handles limitations of O-1 model family.
         - modalities: image => drop param (if user opts in to dropping param)
         - role: system ==> translate to role 'user'
         """
-        _supports_system_messages = supports_system_messages(model, "openai")
+        _supports_system_messages: Final = supports_system_messages(model, "openai")
         for i, message in enumerate(messages):
             if message["role"] == "system" and not _supports_system_messages:
-                new_message = ChatCompletionUserMessage(
-                    content=message["content"], role="user"
-                )
+                new_message = ChatCompletionUserMessage(content=message["content"], role="user")
                 messages[i] = new_message  # Replace the old message with the new one
 
         if is_async:
-            return super()._transform_messages(
-                messages, model, is_async=cast(Literal[True], True)
-            )
+            return super()._transform_messages(messages, model, is_async=cast(Literal[True], True))
         else:
-            return super()._transform_messages(
-                messages, model, is_async=cast(Literal[False], False)
-            )
+            return super()._transform_messages(messages, model, is_async=cast(Literal[False], False))

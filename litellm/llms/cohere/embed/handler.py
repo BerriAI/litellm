@@ -3,7 +3,8 @@ Legacy /v1/embedding handler for Bedrock Cohere.
 """
 
 import json
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any, Final
 
 import httpx
 
@@ -23,7 +24,7 @@ from .v1_transformation import CohereEmbeddingConfig
 def validate_environment(api_key, headers: dict):
     # Create a lowercase key lookup to avoid duplicate headers with different cases
     # This is important when headers come from AWS signed requests (which use Title-Case)
-    existing_keys_lower = {k.lower(): k for k in headers.keys()}
+    existing_keys_lower: Final = {k.lower(): k for k in headers}
 
     # Only add headers if they don't already exist (case-insensitive check)
     if "request-source" not in existing_keys_lower:
@@ -41,28 +42,24 @@ class CohereError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url="https://api.cohere.ai/v1/generate"
-        )
+        self.request = httpx.Request(method="POST", url="https://api.cohere.ai/v1/generate")
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 async def async_embedding(
     model: str,
-    data: Union[dict, CohereEmbeddingRequest],
+    data: dict | CohereEmbeddingRequest,
     input: list,
     model_response: litellm.utils.EmbeddingResponse,
-    timeout: Optional[Union[float, httpx.Timeout]],
+    timeout: float | httpx.Timeout | None,
     logging_obj: LiteLLMLoggingObj,
     optional_params: dict,
     api_base: str,
-    api_key: Optional[str],
+    api_key: str | None,
     headers: dict,
     encoding: Callable,
-    client: Optional[AsyncHTTPHandler] = None,
+    client: AsyncHTTPHandler | None = None,
 ):
     ## LOGGING
     logging_obj.pre_call(
@@ -83,7 +80,7 @@ async def async_embedding(
         )
 
     try:
-        response = await client.post(api_base, headers=headers, data=json.dumps(data))
+        response: Final = await client.post(api_base, headers=headers, data=json.dumps(data))
     except httpx.HTTPStatusError as e:
         ## LOGGING
         logging_obj.post_call(
@@ -124,15 +121,15 @@ def embedding(
     optional_params: dict,
     headers: dict,
     encoding: Any,
-    data: Optional[Union[dict, CohereEmbeddingRequest]] = None,
-    complete_api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    aembedding: Optional[bool] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = httpx.Timeout(None),
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    data: dict | CohereEmbeddingRequest | None = None,
+    complete_api_base: str | None = None,
+    api_key: str | None = None,
+    aembedding: bool | None = None,
+    timeout: float | httpx.Timeout | None = httpx.Timeout(None),
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
 ):
     headers = validate_environment(api_key, headers=headers)
-    embed_url = complete_api_base or "https://api.cohere.ai/v1/embed"
+    embed_url: Final = complete_api_base or "https://api.cohere.ai/v1/embed"
     model = model
 
     data = data or CohereEmbeddingConfig()._transform_request(
@@ -153,11 +150,7 @@ def embedding(
             api_key=api_key,
             headers=headers,
             encoding=encoding,
-            client=(
-                client
-                if client is not None and isinstance(client, AsyncHTTPHandler)
-                else None
-            ),
+            client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
         )
 
     ## LOGGING
@@ -171,7 +164,7 @@ def embedding(
     if client is None or not isinstance(client, HTTPHandler):
         client = HTTPHandler(concurrent_limit=1)
 
-    response = client.post(embed_url, headers=headers, data=json.dumps(data))
+    response: Final = client.post(embed_url, headers=headers, data=json.dumps(data))
 
     return CohereEmbeddingConfig()._transform_response(
         response=response,

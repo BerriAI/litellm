@@ -11,7 +11,13 @@ sys.path.insert(
 
 import time
 
+import httpx
+from openai._legacy_response import HttpxBinaryResponseContent
+
+import litellm
+from litellm._logging import session_id_var, trace_id_var
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
 from litellm.types.utils import ModelResponse, TextCompletionResponse
@@ -28,6 +34,13 @@ def logging_obj():
         litellm_call_id="12345",
         function_id="1245",
     )
+
+
+def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
+    assert logging_obj.get_combined_callback_list(
+        dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
+        global_callbacks=["langfuse", "gcs_bucket", "arize", "logfire"],
+    ) == ["prometheus", "langfuse", "datadog", "otel", "s3", "gcs_bucket", "arize", "logfire"]
 
 
 def test_get_masked_api_base(logging_obj):
@@ -514,6 +527,26 @@ class TestUpdateFromKwargs:
         )
         assert logging_obj.litellm_params["litellm_call_id"] == "call-empty"
 
+    @pytest.mark.parametrize("caller_metadata", [None, "not-a-dict", 42])
+    def test_non_dict_caller_metadata_does_not_break_the_merge(self, logging_obj, caller_metadata):
+        logging_obj.update_from_kwargs(
+            kwargs={"metadata": caller_metadata, "litellm_metadata": {"user_api_key_hash": "hashed"}},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed", "litellm_api_version": "1.0"}},
+        )
+
+        assert logging_obj.litellm_params["metadata"]["user_api_key_hash"] == "hashed"
+
+    def test_does_not_mutate_caller_metadata_dict(self, logging_obj):
+        caller_metadata: dict = {}
+
+        logging_obj.update_from_kwargs(
+            kwargs={"metadata": caller_metadata, "litellm_metadata": {"user_api_key_hash": "hashed"}},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed", "litellm_api_version": "1.0"}},
+        )
+
+        assert caller_metadata == {}
+        assert logging_obj.litellm_params["metadata"]["user_api_key_hash"] == "hashed"
+
 
 def test_logging_prevent_double_logging(logging_obj):
     """
@@ -645,6 +678,80 @@ async def test_logging_result_for_bridge_calls(logging_obj):
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_marks_litellm_params_async():
+    """LIT-4447: the async ``anthropic_messages`` entrypoint must plant
+    ``aanthropic_messages`` in ``litellm_params`` so ``_is_sync_litellm_request``
+    classifies the request async and the sync CustomLogger hook does not fire in
+    addition to the async one, mirroring how ``acompletion`` / ``aresponses`` set
+    their own async markers."""
+    import asyncio
+
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    captured = {}
+    logged = asyncio.Event()
+
+    class CaptureLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            captured["litellm_params"] = kwargs.get("litellm_params", {})
+            logged.set()
+
+    logger = CaptureLogger()
+    logger.log_success_event = MagicMock()
+    original_callbacks = getattr(litellm, "callbacks", [])
+    try:
+        litellm.callbacks = [logger]
+        await litellm.anthropic_messages(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="anthropic/claude-sonnet-4-5",
+            mock_response="Hello, world!",
+        )
+        await asyncio.wait_for(logged.wait(), timeout=10)
+
+        assert captured["litellm_params"].get("aanthropic_messages") is True
+        assert LitellmLogging._is_sync_litellm_request(captured["litellm_params"]) is False
+        logger.log_success_event.assert_not_called()
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_agenerate_content_marks_litellm_params_async():
+    """LIT-4475: the async ``agenerate_content`` entrypoint must plant
+    ``agenerate_content`` in ``litellm_params`` so ``_is_sync_litellm_request``
+    classifies the nested delegated call async, preventing the sync CustomLogger
+    hook from firing alongside the async one."""
+    import time
+
+    import litellm
+
+    logging_obj = LitellmLogging(
+        model="gemini/gemini-2.0-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=time.time(),
+        litellm_call_id="agenerate-content-marker-check",
+        function_id="fn",
+    )
+    try:
+        await litellm.agenerate_content(
+            model="gemini/gemini-2.0-flash",
+            contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+            mock_response="hello",
+            litellm_logging_obj=logging_obj,
+        )
+    except Exception:
+        pass
+
+    litellm_params = logging_obj.model_call_details.get("litellm_params", {})
+    assert litellm_params.get("agenerate_content") is True
+    assert LitellmLogging._is_sync_litellm_request(litellm_params) is False
+
+
+@pytest.mark.asyncio
 async def test_logging_non_streaming_request():
     import asyncio
 
@@ -702,7 +809,17 @@ async def test_logging_non_streaming_request():
         litellm.callbacks = original_callbacks
 
 
-@pytest.mark.parametrize("async_flag", ["acompletion", "aresponses"])
+@pytest.mark.parametrize(
+    "async_flag",
+    [
+        "acompletion",
+        "aresponses",
+        "allm_passthrough_route",
+        "aanthropic_messages",
+        "agenerate_content",
+        "agenerate_content_stream",
+    ],
+)
 def test_success_handler_skips_sync_callbacks_for_async_requests(
     logging_obj, async_flag
 ):
@@ -790,6 +907,32 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
 def test_is_sync_litellm_request():
     assert LitellmLogging._is_sync_litellm_request({}) is True
     assert LitellmLogging._is_sync_litellm_request({"acompletion": True}) is False
+    assert (
+        LitellmLogging._is_sync_litellm_request({"allm_passthrough_route": True})
+        is False
+    )
+    assert (
+        LitellmLogging._is_sync_litellm_request({"aanthropic_messages": True}) is False
+    )
+    assert LitellmLogging._is_sync_litellm_request({"agenerate_content": True}) is False
+    assert (
+        LitellmLogging._is_sync_litellm_request({"agenerate_content_stream": True})
+        is False
+    )
+    assert (
+        LitellmLogging._is_sync_litellm_request({"aanthropic_messages": False}) is True
+    )
+
+
+def test_get_litellm_params_propagates_allm_passthrough_route():
+    """`allm_passthrough_route=True` set on kwargs by the async passthrough entrypoint
+    must land in `litellm_params` so `_is_sync_litellm_request` sees it and the
+    request is classified as async. Regression guard for LIT-4192."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+
+    params = get_litellm_params(allm_passthrough_route=True)
+    assert params.get("allm_passthrough_route") is True
+    assert LitellmLogging._is_sync_litellm_request(params) is False
 
 
 @pytest.mark.asyncio
@@ -990,6 +1133,171 @@ async def test_dispatch_success_handlers_invokes_async_callback_for_pass_through
         mock_sync_log.assert_not_called()
     finally:
         litellm._async_success_callback = original_async_callbacks
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_handlers_prefer_async_does_not_submit_sync_handler(
+    logging_obj,
+):
+    """prefer_async_handlers must await async_failure_handler and never submit the sync failure_handler.
+
+    Submitting the sync ``failure_handler`` while awaiting ``async_failure_handler``
+    lets both mutate the shared logging_obj at once, which is the concurrent-mutation
+    crash this dispatch guard exists to prevent.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(
+            logging_obj, "async_failure_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "failure_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch.object(
+            logging_obj,
+            "_should_run_sync_failure_callbacks_for_async_calls",
+            return_value=False,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_failure_handlers(
+            exception,
+            traceback_exception,
+            prefer_async_handlers=True,
+        )
+
+    mock_async.assert_awaited_once_with(exception, traceback_exception)
+    mock_sync.assert_not_called()
+    mock_submit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_handlers_async_completes_before_sync_submit(
+    logging_obj,
+):
+    """The async failure handler must fully finish before the legacy sync handler is scheduled.
+
+    Ordering proves there is no window where both handlers touch the shared
+    logging_obj concurrently: the sync submit only happens after the await returns.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+    events: list[str] = []
+
+    async def _async_failure(exc, tb, **kwargs):
+        events.append("async_start")
+        await asyncio.sleep(0)
+        events.append("async_end")
+
+    def _submit(*args, **kwargs):
+        events.append("sync_submit")
+
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(logging_obj, "async_failure_handler", side_effect=_async_failure),
+        patch.object(logging_obj, "failure_handler", new_callable=MagicMock),
+        patch.object(
+            logging_obj,
+            "_should_run_sync_failure_callbacks_for_async_calls",
+            return_value=True,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit",
+            side_effect=_submit,
+        ),
+    ):
+        await logging_obj.dispatch_failure_handlers(
+            exception,
+            traceback_exception,
+            prefer_async_handlers=True,
+        )
+
+    assert events == ["async_start", "async_end", "sync_submit"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_handlers_submits_sync_handler_for_failure_only_callbacks(
+    logging_obj,
+):
+    """A sync failure callback must still run when only failure callbacks are configured.
+
+    The legacy thread-based path always submitted the sync failure_handler, so gating it on
+    the success callback list would silently drop failure logging for any deployment that
+    registers only failure callbacks and no success callbacks. This drives the real predicate
+    (unmocked), so gating the sync failure handler on the success list fails this test.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+
+    def _sync_failure_callback(*args, **kwargs):
+        return None
+
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.dynamic_success_callbacks = None
+    logging_obj.dynamic_failure_callbacks = None
+
+    with (
+        patch.object(litellm, "success_callback", []),
+        patch.object(litellm, "failure_callback", [_sync_failure_callback]),
+        patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock),
+        patch.object(
+            logging_obj, "failure_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_failure_handlers(
+            exception,
+            traceback_exception,
+            prefer_async_handlers=True,
+        )
+
+    mock_submit.assert_called_once_with(mock_sync, exception, traceback_exception)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_handlers_sync_sdk_shortcut_runs_sync_handler_inline(
+    logging_obj,
+):
+    """A sync-SDK request (prefer_async_handlers=False) runs failure_handler inline.
+
+    ``async for`` over a stream from ``completion()`` passes prefer_async_handlers=True; a
+    plain sync request leaves it False, so the legacy sync handler runs directly and the
+    async handler is never awaited, matching dispatch_success_handlers.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(
+            logging_obj, "async_failure_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "failure_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_failure_handlers(
+            exception,
+            traceback_exception,
+            prefer_async_handlers=False,
+        )
+
+    mock_sync.assert_called_once_with(exception, traceback_exception)
+    mock_async.assert_not_awaited()
+    mock_submit.assert_not_called()
 
 
 def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj):
@@ -1420,6 +1728,125 @@ def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_ob
 
     assert response_cost is not None
     assert response_cost > 100
+
+
+def test_response_cost_calculator_native_generate_content_body_uses_usage_metadata():
+    """
+    Regression for LIT-4076: a native Google :generateContent body reports tokens
+    under ``usageMetadata`` rather than ``usage``, so the cost calculator read 0
+    tokens and returned 0.0 synchronously. The calculator now transforms the native
+    body (as the async logging path does) so the cost is the real non-zero amount.
+    """
+    from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LitellmLogging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=time.time(),
+        litellm_call_id="lit4076",
+        function_id="lit4076",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "gemini"
+    logging_obj.optional_params = {}
+
+    native_body = GenerateContentResponseBody(
+        candidates=[{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+        usageMetadata={
+            "promptTokenCount": 1000,
+            "candidatesTokenCount": 500,
+            "totalTokenCount": 1500,
+        },
+    )
+
+    expected_cost = litellm.completion_cost(
+        completion_response=ModelResponse(
+            model="gemini-2.5-flash",
+            usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        ),
+        model="gemini-2.5-flash",
+        custom_llm_provider="gemini",
+    )
+    assert expected_cost > 0
+
+    cost = logging_obj._response_cost_calculator(result=native_body)
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_response_cost_calculator_does_not_transform_non_generate_content_dict():
+    """The native-body transform must only run for generate_content call types, so a
+    plain dict on a chat completion call is left untouched (no spurious Gemini cost)."""
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit4076-2",
+        function_id="lit4076-2",
+    )
+    logging_obj.optional_params = {}
+
+    cost = logging_obj._response_cost_calculator(
+        result={"usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 500}}
+    )
+    assert not cost
+
+
+def _file_content_logging_obj(call_type: str) -> LitellmLogging:
+    logging_obj = LitellmLogging(
+        model="gemini-3-flash-preview",
+        messages="default-message-value",
+        stream=False,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id=f"file-content-{call_type}",
+        function_id=f"file-content-{call_type}",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+    logging_obj.model_call_details["input"] = "default-message-value"
+    logging_obj.optional_params = {}
+    return logging_obj
+
+
+@pytest.mark.parametrize("call_type", ["afile_content", "file_content"])
+def test_file_content_call_is_not_billed(call_type):
+    """
+    Regression for #35130: file content retrieval has no token usage, but ``function_setup``
+    stores the ``"default-message-value"`` placeholder as the logged input, which the cost
+    calculator then token-priced, billing every call at exactly 3 * input_cost_per_token.
+    """
+    result = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"file contents"))
+
+    cost = _file_content_logging_obj(call_type)._response_cost_calculator(result=result)
+
+    assert cost == 0.0
+
+
+@pytest.mark.parametrize("call_type", ["aspeech", "speech"])
+def test_speech_call_is_still_priced_from_input_characters(call_type):
+    """tts bills per input character, so speech call types must keep passing the input along."""
+    logging_obj = LitellmLogging(
+        model="tts-1",
+        messages="the quick brown fox jumped over the lazy dogs",
+        stream=False,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id=f"speech-{call_type}",
+        function_id=f"speech-{call_type}",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    logging_obj.model_call_details["input"] = "the quick brown fox jumped over the lazy dogs"
+    logging_obj.optional_params = {}
+
+    result = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"audio bytes"))
+
+    cost = logging_obj._response_cost_calculator(result=result)
+
+    assert cost is not None
+    assert cost > 0
 
 
 def test_sentry_event_scrubber_initialization(monkeypatch):
@@ -2156,6 +2583,53 @@ def test_get_error_information_prefers_message_attribute_over_str():
     assert result["error_class"] == "ProxyExceptionLike"
 
 
+def test_get_error_information_budget_exceeded_structured_fields():
+    """
+    Regression for LIT-4458: a budget-rejected request's failure
+    StandardLoggingPayload must identify WHICH budget blocked the call
+    as structured fields, not only inside the free-text error_str
+    ("ExceededBudget: User=... over budget. Spend=..., Budget=...").
+
+    Asserts get_error_information copies entity_type / entity_id /
+    max_budget / current_cost off BudgetExceededError into
+    error_budget_entity_type / error_budget_entity_id /
+    error_budget_limit / error_budget_spend, and leaves all four None
+    for non-budget exceptions.
+    """
+    from litellm.exceptions import BudgetExceededError
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    exc = BudgetExceededError(
+        current_cost=3.4e-05,
+        max_budget=1e-06,
+        message="ExceededBudget: User=repro-user over budget. Spend=3.4e-05, Budget=1e-06",
+        entity_type="user",
+        entity_id="repro-user",
+    )
+
+    result = StandardLoggingPayloadSetup.get_error_information(exc)
+    assert result["error_budget_entity_type"] == "user"
+    assert result["error_budget_entity_id"] == "repro-user"
+    assert result["error_budget_limit"] == 1e-06
+    assert result["error_budget_spend"] == 3.4e-05
+    assert result["error_code"] == "429"
+    assert result["error_class"] == "BudgetExceededError"
+    assert result["error_rate_limit_type"] == "budget"
+
+    legacy_exc = BudgetExceededError(current_cost=2.0, max_budget=1.0)
+    legacy_result = StandardLoggingPayloadSetup.get_error_information(legacy_exc)
+    assert legacy_result["error_budget_entity_type"] is None
+    assert legacy_result["error_budget_entity_id"] is None
+    assert legacy_result["error_budget_limit"] == 1.0
+    assert legacy_result["error_budget_spend"] == 2.0
+
+    non_budget_result = StandardLoggingPayloadSetup.get_error_information(ValueError("boom"))
+    assert non_budget_result["error_budget_entity_type"] is None
+    assert non_budget_result["error_budget_entity_id"] is None
+    assert non_budget_result["error_budget_limit"] is None
+    assert non_budget_result["error_budget_spend"] is None
+
+
 def test_get_error_information_preserves_explicit_empty_message():
     """
     An exception that deliberately sets `.message = ""` must surface
@@ -2596,6 +3070,58 @@ def test_function_setup_litellm_metadata_populates_metadata():
     ), "litellm_params['metadata'] should be a copy, not the same object"
 
 
+def test_function_setup_litellm_metadata_guardrail_writes_visible_after_setup():
+    """
+    Regression test for LIT-4512: guardrail writes into the request's
+    "litellm_metadata" bucket that happen AFTER function_setup (the proxy
+    initializes the logging object before pre-call guardrails run) must be
+    visible to the logging object and survive merge_litellm_metadata, so
+    /v1/messages spend logs carry guardrail_information and
+    applied_guardrails just like /v1/chat/completions.
+    """
+    import litellm
+    from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    kwargs = {
+        "model": "claude-3-5-sonnet",
+        "messages": [{"role": "user", "content": "hello"}],
+        "litellm_call_id": "test-call-id-lit4512",
+        "litellm_metadata": {
+            "user_api_key_hash": "sk-hashed-lit4512",
+            "guardrails": ["pam-ethical-request"],
+        },
+    }
+
+    logging_obj, returned_kwargs = litellm.utils.function_setup(
+        original_function="anthropic_messages",
+        rules_obj=litellm.utils.Rules(),
+        start_time=time.time(),
+        **kwargs,
+    )
+
+    guardrail_entry = {
+        "guardrail_name": "pam-ethical-request",
+        "guardrail_mode": "pre_call",
+        "guardrail_status": "success",
+    }
+    _, metadata_bucket = get_or_create_metadata_bucket(returned_kwargs)
+    metadata_bucket["standard_logging_guardrail_information"] = [guardrail_entry]
+    metadata_bucket["applied_guardrails"] = ["pam-ethical-request"]
+
+    litellm_params = logging_obj.model_call_details.get("litellm_params", {})
+    litellm_metadata = litellm_params.get("litellm_metadata")
+    assert litellm_metadata is not None
+    assert litellm_metadata.get("standard_logging_guardrail_information") == [
+        guardrail_entry
+    ], "guardrail writes after function_setup must be visible to the logging object"
+    assert litellm_metadata.get("applied_guardrails") == ["pam-ethical-request"]
+
+    merged = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+    assert merged.get("standard_logging_guardrail_information") == [guardrail_entry]
+    assert merged.get("applied_guardrails") == ["pam-ethical-request"]
+
+
 def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
     """
     Test that when BOTH metadata and litellm_metadata are present (e.g., user sets
@@ -2785,6 +3311,51 @@ def test_failure_handler_runs_sync_callbacks_for_non_pass_through_requests(
         )
 
     dummy_logger.log_failure_event.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_failure_handler_runs_callbacks_and_restores_correlation_context(logging_obj):
+    """await logging_obj.async_failure_handler(...) must dispatch async failure callbacks
+    and, once its own body completes, restore trace_id/session_id contextvars via
+    _restore_correlation_context() (the fix for the nested-call context leak)."""
+    from litellm._logging import session_id_var, trace_id_var
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.call_type = "acompletion"
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.async_log_failure_event = AsyncMock()
+
+    # logging_obj is constructed by the fixture (before this line runs), so it
+    # already captured whatever was ambient at that point as its own pre-call
+    # value - assert restoration lands back on THAT captured value, not a
+    # value set here (which would be too late to affect __init__'s snapshot).
+    trace_id_var.set("mutated-during-call")
+    session_id_var.set("mutated-during-call")
+    try:
+        with patch.object(
+            logging_obj,
+            "get_combined_callback_list",
+            return_value=[dummy_logger],
+        ):
+            await logging_obj.async_failure_handler(
+                exception=Exception("test error"),
+                traceback_exception="",
+            )
+
+        dummy_logger.async_log_failure_event.assert_called_once()
+        assert trace_id_var.get() == logging_obj._pre_call_trace_id
+        assert session_id_var.get() == logging_obj._pre_call_session_id
+        assert trace_id_var.get() != "mutated-during-call"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
 
 
 def test_merge_hidden_params_from_response_into_metadata_populates_metadata():
@@ -3408,6 +3979,140 @@ def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_resp
     assert result.usage.prompt_tokens == 4  # type: ignore[attr-defined]
 
 
+class _SuccessCapturingLogger(CustomLogger):
+    """Records the success payload. success_payload is populated only in
+    async_log_success_event, so it stays None when the buggy no-op
+    async_log_stream_event path runs for streaming."""
+
+    def __init__(self):
+        super().__init__()
+        self.success_payload = None
+        self.success_calls = 0
+        self.stream_event_calls = 0
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_calls += 1
+        self.success_payload = kwargs.get("standard_logging_object")
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        self.stream_event_calls += 1
+
+
+def _responses_stream_sse_bytes():
+    """A full Responses stream: an opened message item, two text deltas, then the
+    terminal response.completed carrying usage. Exercises mid-stream delta handling
+    in addition to end-of-stream success logging."""
+    import json
+
+    events = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": "msg-1",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg-1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "hello ",
+            "sequence_number": 2,
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg-1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "world",
+            "sequence_number": 3,
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 4,
+            "response": _responses_api_response_with_text("hello world").model_dump(),
+        },
+    ]
+    return [f"data: {json.dumps(e)}\n\n".encode("utf-8") for e in events]
+
+
+def _fake_streaming_responses_http_response():
+    sse_chunks = _responses_stream_sse_bytes()
+
+    async def aiter_bytes(*args, **kwargs):
+        for chunk in sse_chunks:
+            yield chunk
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.headers = {}
+    resp.aiter_bytes = aiter_bytes
+    return resp
+
+
+def _chunk_text(chunk):
+    if isinstance(chunk, (bytes, bytearray)):
+        return chunk.decode("utf-8", "ignore")
+    return str(chunk)
+
+
+async def _drain_until_logged(logger, max_iter=30):
+    for _ in range(max_iter):
+        if logger.success_payload is not None:
+            break
+        await asyncio.sleep(0.1)
+
+
+@pytest.mark.asyncio
+async def test_streaming_anthropic_messages_openai_bridge_fires_success_logging(
+    monkeypatch,
+):
+    """Regression for #28595 / #28943. The existing tests above call
+    _handle_anthropic_messages_response_logging directly; they do not cover the
+    streaming wiring that originally broke. Drive a real streaming
+    anthropic_messages call routed to the OpenAI Responses backend (upstream SSE
+    mocked) and assert the bridge surfaces delta chunks and fires success logging
+    exactly once with real cost. On the broken version the stream ran but only the
+    no-op async_log_stream_event was called, so success_payload stayed None and the
+    SpendLogs row never landed."""
+    logger = _SuccessCapturingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    chunks = []
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_fake_streaming_responses_http_response()),
+    ):
+        stream = await litellm.anthropic_messages(
+            model="openai/gpt-4o",
+            api_key="sk-test-28595",
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=16,
+            stream=True,
+        )
+        async for chunk in stream:  # logging fires on stream end; must drain fully
+            chunks.append(chunk)
+
+    await _drain_until_logged(logger)
+
+    assert chunks, "stream yielded no chunks"
+    assert any("content_block_delta" in _chunk_text(c) for c in chunks), (
+        "no delta chunks surfaced; the streaming text deltas were not forwarded"
+    )
+    assert logger.success_payload is not None, (
+        "async_log_success_event never fired for streaming /v1/messages -> openai "
+        "Responses bridge; the no-op stream path dropped the spend row"
+    )
+    assert logger.success_calls == 1, "bridge call must log success exactly once"
+    assert logger.success_payload["response_cost"] > 0
+    assert logger.success_payload["call_type"] == "anthropic_messages"
+
+
 def test_failure_handler_records_recovered_partial_spend(logging_obj):
     """A stream interrupted mid-flight still billed the provider for the chunks
     already delivered. When the router stashes that recovered usage as
@@ -3449,3 +4154,388 @@ def test_failure_handler_zeroes_spend_without_recovered_usage(logging_obj):
     assert payload["status"] == "failure"
     assert payload["response_cost"] == 0
     assert payload["total_tokens"] == 0
+
+
+def test_set_cost_breakdown_stores_reasoning_cost():
+    """reasoning_cost is stored only when positive, mirroring the cache-cost fields."""
+    from datetime import datetime
+
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="reasoning-cost-set",
+        function_id="f",
+    )
+    logging_obj.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        reasoning_cost=0.0005,
+    )
+    assert logging_obj.cost_breakdown["reasoning_cost"] == 0.0005
+
+    no_reasoning = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="reasoning-cost-absent",
+        function_id="f",
+    )
+    no_reasoning.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    assert "reasoning_cost" not in no_reasoning.cost_breakdown
+
+
+def _build_payload_for_media_response(logging_obj, init_response_obj, kwargs=None):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.datetime.now()
+    return get_standard_logging_object_payload(
+        kwargs=kwargs or {"litellm_call_id": "media-call-id", "model": "test-model", "messages": []},
+        init_response_obj=init_response_obj,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+
+def test_image_response_sets_output_image_count_on_usage_object(logging_obj):
+    """Generated-image count must land on metadata.usage_object for callbacks (e.g. Prometheus)."""
+    from litellm.types.utils import ImageResponse
+
+    response = ImageResponse(created=1, data=[{"url": "https://img/1"}, {"url": "https://img/2"}])
+
+    payload = _build_payload_for_media_response(logging_obj, response)
+
+    assert payload is not None
+    assert payload["metadata"]["usage_object"]["output_image_count"] == 2
+
+
+def test_output_image_count_survives_message_redaction(logging_obj, monkeypatch):
+    """Redaction replaces the ImageResponse body, so the count must be captured pre-redaction."""
+    import litellm
+    from litellm.types.utils import ImageResponse
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    response = ImageResponse(created=1, data=[{"url": "https://img/1"}])
+
+    payload = _build_payload_for_media_response(logging_obj, response)
+
+    assert payload is not None
+    assert payload["response"] == {"text": "redacted-by-litellm"}
+    assert payload["metadata"]["usage_object"]["output_image_count"] == 1
+
+
+def test_non_image_response_has_no_output_image_count(logging_obj):
+    payload = _build_payload_for_media_response(
+        logging_obj, {"id": "chatcmpl-1", "usage": {"prompt_tokens": 1, "completion_tokens": 2}}
+    )
+
+    assert payload is not None
+    assert "output_image_count" not in payload["metadata"]["usage_object"]
+
+
+def test_zero_token_video_usage_preserves_duration_seconds(logging_obj):
+    """Video usage bills by duration; the payload must keep duration_seconds even with zero tokens."""
+    payload = _build_payload_for_media_response(
+        logging_obj, {"id": "video-1", "usage": {"duration_seconds": 4.0}}
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["usage_object"]["duration_seconds"] == 4.0
+    assert payload["total_tokens"] == 0
+    assert payload["completion_tokens"] == 0
+
+
+def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
+    """
+    pre_call/post_call must not stash their locals (full messages, the Logging
+    object, complete_input_dict) into module-level state. That pinned the most
+    recent request's entire payload in memory for the life of the worker,
+    which with multi-hundred-KB requests is a permanent per-worker leak.
+    """
+    litellm.error_logs.clear()
+    big_input = [{"role": "user", "content": "x" * 10_000}]
+
+    logging_obj.pre_call(input=big_input, api_key="sk-test")
+    logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
+
+    assert litellm.error_logs == {}
+
+
+def test_handle_anthropic_messages_response_logging_preserves_fast_mode_speed():
+    """/v1/messages non-streaming rebuilds usage by re-transforming the raw Anthropic
+    response. Anthropic's fast-mode multiplier is applied off ``usage.speed``, which the
+    response body never carries, so the request's optional params have to be passed in or
+    fast-mode spend is logged at the standard rate."""
+    import httpx
+
+    logging_obj = LitellmLogging(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="lit-5115",
+        function_id="lit-5115",
+    )
+    logging_obj.optional_params = {"speed": "fast"}
+    logging_obj.model_call_details["httpx_response"] = httpx.Response(
+        status_code=200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-4-8",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 100},
+        },
+    )
+
+    result = logging_obj._handle_anthropic_messages_response_logging(result=None)
+
+    assert getattr(result.usage, "speed", None) == "fast"
+
+
+def test_handle_anthropic_messages_parsed_response_logging_preserves_fast_mode_speed():
+    """The Rust messages bridge hands logging a parsed Anthropic response with no
+    httpx_response in model_call_details, which routes through transform_parsed_response;
+    the request's speed has to be threaded there too or rust-served fast-mode calls are
+    logged at the standard rate."""
+    logging_obj = LitellmLogging(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="lit-5115-rust",
+        function_id="lit-5115-rust",
+    )
+    logging_obj.optional_params = {"speed": "fast"}
+
+    result = logging_obj._handle_anthropic_messages_response_logging(
+        result={
+            "id": "msg_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-4-8",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 100},
+        }
+    )
+
+    assert getattr(result.usage, "speed", None) == "fast"
+
+
+def test_logging_init_sets_trace_id():
+    """Logging.__init__() must call set_trace_id with self.litellm_trace_id."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("")
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-001",
+        function_id="fn-001",
+        kwargs={},
+    )
+    assert trace_id_var.get() == log_obj.litellm_trace_id
+
+
+def test_logging_init_skips_stamping_when_correlation_logging_unsupported():
+    """supports_correlation_logging=False (what wrapper(), the sync entry
+    point, always passes) must leave trace_id_var/session_id_var completely
+    untouched, even though self.litellm_trace_id/litellm_session_id (the
+    plain attributes used by StandardLoggingPayload) are still populated as
+    usual - only the ambient contextvar stamping is gated."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("")
+    session_id_var.set("")
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-sync-excluded",
+        function_id="fn-sync-excluded",
+        kwargs={"litellm_session_id": "should-not-be-stamped"},
+        litellm_trace_id="should-not-be-stamped-either",
+        supports_correlation_logging=False,
+    )
+
+    assert trace_id_var.get() == ""
+    assert session_id_var.get() == ""
+    # The plain attributes are unaffected - only the contextvar stamping is gated.
+    assert log_obj.litellm_trace_id == "should-not-be-stamped-either"
+    assert log_obj.litellm_session_id == "should-not-be-stamped"
+
+
+def test_logging_init_sets_session_id_when_provided():
+    """Logging.__init__() must call set_session_id when litellm_session_id is in kwargs."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    session_id_var.set("")
+
+    Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-002",
+        function_id="fn-002",
+        kwargs={"litellm_session_id": "my-session-99"},
+    )
+    assert session_id_var.get() == "my-session-99"
+
+
+def test_logging_init_resets_session_id_to_empty_when_absent():
+    """When no session_id is in kwargs, Logging.__init__() must reset session_id_var to ""
+    so a prior request's session_id does not leak into subsequent log records."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    session_id_var.set("preexisting-sid")
+
+    Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-003",
+        function_id="fn-003",
+        kwargs={},
+    )
+    assert session_id_var.get() == ""
+
+
+def test_restore_correlation_context_resets_to_pre_call_value():
+    """_restore_correlation_context() must put trace_id_var/session_id_var back to
+    whatever they were immediately before this Logging instance was constructed.
+    This is the mechanism that prevents a nested call (e.g. a guardrail's own
+    LLM-as-judge call sharing the same asyncio Task) from leaking its trace_id/
+    session_id into the outer call's subsequent log lines."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        inner = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="inner-call",
+            function_id="fn-inner",
+            kwargs={"litellm_session_id": "inner-session"},
+        )
+        assert trace_id_var.get() == inner.litellm_trace_id
+        assert session_id_var.get() == "inner-session"
+
+        inner._restore_correlation_context()
+
+        assert trace_id_var.get() == "outer-trace"
+        assert session_id_var.get() == "outer-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_restore_correlation_context_safe_to_call_repeatedly():
+    """Calling _restore_correlation_context() more than once must not raise.
+
+    It's deliberately NOT guarded against repeat calls: wrapper()'s finally
+    block and a terminal handler (success_handler/failure_handler) can both
+    end up calling it for the same instance, potentially from different
+    asyncio Tasks - each call needs to take effect in its own Task's view of
+    the contextvars, so repeat calls are expected, not just tolerated."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-idempotent",
+        function_id="fn-idempotent",
+        kwargs={},
+    )
+    log_obj._restore_correlation_context()
+    log_obj._restore_correlation_context()  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_restore_correlation_context_works_across_asyncio_task_boundary():
+    """_restore_correlation_context() must succeed even when it's called from a
+    different asyncio Task than the one Logging.__init__() ran in - exactly what
+    happens on litellm's real async success path, where async_success_handler is
+    dispatched via asyncio.create_task / the global logging worker rather than
+    awaited directly in the request's own task.
+
+    A contextvars.Token can only be reset in the exact Context it was created in
+    and raises ValueError otherwise (verified separately against raw contextvars,
+    not just this codebase). The fix uses a plain set() of the captured pre-call
+    value instead, which works regardless of which Task calls it. This test
+    fails with a token-based implementation - the child task's reset() would
+    raise, get silently swallowed, and leave the child's view unrestored - and
+    passes with the value-based one.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-cross-task")
+    session_id_var.set("outer-session-cross-task")
+    try:
+        # __init__ runs in THIS (outer) task's context.
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=None,
+            litellm_call_id="cross-task-call",
+            function_id="fn-cross-task",
+            kwargs={"litellm_session_id": "cross-task-session"},
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "cross-task-session"
+
+        async def restore_in_new_task():
+            # Simulates async_success_handler running in a task spawned after
+            # __init__ already ran elsewhere - a different Context object.
+            log_obj._restore_correlation_context()
+            return trace_id_var.get(), session_id_var.get()
+
+        trace_in_child, session_in_child = await asyncio.create_task(restore_in_new_task())
+
+        assert trace_in_child == "outer-trace-cross-task"
+        assert session_in_child == "outer-session-cross-task"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")

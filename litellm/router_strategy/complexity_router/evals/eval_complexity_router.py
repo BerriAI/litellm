@@ -12,12 +12,11 @@ import sys
 
 # ruff: noqa: T201
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 from unittest.mock import MagicMock
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
+
+from typing import Final
 
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.config import ComplexityTier
@@ -30,14 +29,14 @@ class EvalCase:
     prompt: str
     expected_tier: ComplexityTier
     description: str
-    system_prompt: Optional[str] = None
+    system_prompt: str | None = None
     # Allow some flexibility - if actual tier is in acceptable_tiers, still passes
-    acceptable_tiers: Optional[List[ComplexityTier]] = None
+    acceptable_tiers: list[ComplexityTier] | None = None
 
 
 # ─── Evaluation Dataset ───
 
-EVAL_CASES: List[EvalCase] = [
+EVAL_CASES: Final[list[EvalCase]] = [
     # === SIMPLE tier cases ===
     EvalCase(
         prompt="Hello!",
@@ -232,7 +231,7 @@ EVAL_CASES: List[EvalCase] = [
 ]
 
 
-def run_eval() -> Tuple[int, int, List[dict]]:
+def run_eval() -> tuple[int, int, list[dict]]:
     """
     Run the evaluation suite.
 
@@ -240,15 +239,15 @@ def run_eval() -> Tuple[int, int, List[dict]]:
         Tuple of (passed, total, failures)
     """
     # Create router with default config
-    mock_router = MagicMock()
-    router = ComplexityRouter(
+    mock_router: Final = MagicMock()
+    router: Final = ComplexityRouter(
         model_name="eval-router",
         litellm_router_instance=mock_router,
     )
 
     passed = 0
-    total = len(EVAL_CASES)
-    failures = []
+    total: Final = len(EVAL_CASES)
+    failures: Final = []
 
     print("=" * 70)
     print("COMPLEXITY ROUTER EVALUATION")
@@ -260,9 +259,7 @@ def run_eval() -> Tuple[int, int, List[dict]]:
 
         # Check if pass
         is_exact_match = tier == case.expected_tier
-        is_acceptable = (
-            case.acceptable_tiers is not None and tier in case.acceptable_tiers
-        )
+        is_acceptable = case.acceptable_tiers is not None and tier in case.acceptable_tiers
         is_pass = is_exact_match or is_acceptable
 
         if is_pass:
@@ -274,28 +271,18 @@ def run_eval() -> Tuple[int, int, List[dict]]:
                 {
                     "case": i,
                     "description": case.description,
-                    "prompt": (
-                        case.prompt[:80] + "..."
-                        if len(case.prompt) > 80
-                        else case.prompt
-                    ),
+                    "prompt": (case.prompt[:80] + "..." if len(case.prompt) > 80 else case.prompt),
                     "expected": case.expected_tier.value,
                     "actual": tier.value,
                     "score": round(score, 3),
                     "signals": signals,
-                    "acceptable": (
-                        [t.value for t in case.acceptable_tiers]
-                        if case.acceptable_tiers
-                        else None
-                    ),
+                    "acceptable": ([t.value for t in case.acceptable_tiers] if case.acceptable_tiers else None),
                 }
             )
 
         # Print result
         print(f"[{i:2d}] {status} | {case.description}")
-        print(
-            f"     Expected: {case.expected_tier.value:10s} | Got: {tier.value:10s} | Score: {score:+.3f}"
-        )
+        print(f"     Expected: {case.expected_tier.value:10s} | Got: {tier.value:10s} | Score: {score:+.3f}")
         if signals:
             print(f"     Signals: {', '.join(signals)}")
         if not is_pass:
@@ -304,7 +291,7 @@ def run_eval() -> Tuple[int, int, List[dict]]:
 
     # Summary
     print("=" * 70)
-    print(f"RESULTS: {passed}/{total} passed ({100*passed/total:.1f}%)")
+    print(f"RESULTS: {passed}/{total} passed ({100 * passed / total:.1f}%)")
     print("=" * 70)
 
     if failures:
@@ -312,9 +299,7 @@ def run_eval() -> Tuple[int, int, List[dict]]:
         print("-" * 70)
         for f in failures:
             print(f"Case {f['case']}: {f['description']}")
-            print(
-                f"  Expected: {f['expected']}, Got: {f['actual']} (score: {f['score']})"
-            )
+            print(f"  Expected: {f['expected']}, Got: {f['actual']} (score: {f['score']})")
             print(f"  Signals: {f['signals']}")
             if f["acceptable"]:
                 print(f"  Acceptable: {f['acceptable']}")
@@ -328,7 +313,7 @@ def main():
     passed, total, failures = run_eval()
 
     # Exit with error code if too many failures
-    pass_rate = passed / total
+    pass_rate: Final = passed / total
     if pass_rate < 0.80:
         print(f"\n❌ EVAL FAILED: Pass rate {pass_rate:.1%} is below 80% threshold")
         sys.exit(1)

@@ -10,6 +10,8 @@ Usage:
 
 import os
 import time
+from collections.abc import AsyncIterable, Iterable
+from typing import Final
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
@@ -22,7 +24,7 @@ from litellm.integrations.mock_client_factory import (
 # Use factory for should_use_mock and MockResponse
 # Braintrust uses both HTTPHandler (sync) and AsyncHTTPHandler (async)
 # Braintrust needs endpoint-specific responses, so we use custom HTTPHandler.post patching
-_config = MockClientConfig(
+_config: Final = MockClientConfig(
     "BRAINTRUST",
     "BRAINTRUST_MOCK",
     default_latency_ms=100,
@@ -51,7 +53,7 @@ _original_http_handler_post = None
 _mocks_initialized = False
 
 # Default mock latency in seconds
-_MOCK_LATENCY_SECONDS = float(os.getenv("BRAINTRUST_MOCK_LATENCY_MS", "100")) / 1000.0
+_MOCK_LATENCY_SECONDS: Final = float(os.getenv("BRAINTRUST_MOCK_LATENCY_MS", "100")) / 1000.0
 
 
 def _is_braintrust_url(url: str) -> bool:
@@ -59,8 +61,8 @@ def _is_braintrust_url(url: str) -> bool:
     if not isinstance(url, str):
         return False
 
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
+    parsed: Final = urlparse(url)
+    host: Final = (parsed.hostname or "").lower()
 
     if not host:
         return False
@@ -83,18 +85,18 @@ def _mock_http_handler_post(
     timeout=None,
     stream=False,
     files=None,
-    content=None,
+    content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
     logging_obj=None,
 ):
     """Monkey-patched HTTPHandler.post that intercepts Braintrust calls with endpoint-specific responses."""
     # Only mock Braintrust API calls
     if isinstance(url, str) and _is_braintrust_url(url):
-        verbose_logger.info(f"[BRAINTRUST MOCK] POST to {url}")
+        verbose_logger.info("[BRAINTRUST MOCK] POST to %s", url)
         time.sleep(_MOCK_LATENCY_SECONDS)
         # Return appropriate mock response based on endpoint
         if "/project" in url:
             # Project creation/retrieval/register endpoint
-            project_name = json.get("name", "litellm") if json else "litellm"
+            project_name: Final = json.get("name", "litellm") if json else "litellm"
             mock_data = {"id": f"mock-project-id-{project_name}", "name": project_name}
         elif "/project_logs" in url:
             # Log insertion endpoint
@@ -149,18 +151,14 @@ def create_mock_braintrust_client():
 
     if _original_http_handler_post is None:
         _original_http_handler_post = HTTPHandler.post
-        HTTPHandler.post = _mock_http_handler_post  # type: ignore
+        HTTPHandler.post = _mock_http_handler_post
         verbose_logger.debug("[BRAINTRUST MOCK] Patched HTTPHandler.post")
 
     # CRITICAL: Call the factory's initialization function to patch AsyncHTTPHandler.post
     # This is required for async calls to be mocked
     create_mock_braintrust_factory_client()
 
-    verbose_logger.debug(
-        f"[BRAINTRUST MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS*1000:.0f}ms"
-    )
-    verbose_logger.debug(
-        "[BRAINTRUST MOCK] Braintrust mock client initialization complete"
-    )
+    verbose_logger.debug(f"[BRAINTRUST MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms")
+    verbose_logger.debug("[BRAINTRUST MOCK] Braintrust mock client initialization complete")
 
     _mocks_initialized = True

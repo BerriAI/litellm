@@ -1,7 +1,55 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+import math
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
+
+
+# Defined above the `litellm.proxy.*` imports so the name is bound even when
+# this module is imported first through the proxy import cycle (CodeQL:
+# module-level cyclic import). Depends only on `math` + `HTTPException`.
+def validate_finite_spend(spend: float | None) -> None:
+    """Reject NaN/±inf spend before it reaches the DB / spend counter.
+
+    A non-finite spend would otherwise slip past `spend >= max_budget`
+    enforcement, since any comparison with NaN (and `-inf >= max_budget`)
+    is False, letting the entity keep spending past its configured budget.
+    """
+    if spend is not None and not math.isfinite(spend):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"spend must be a finite number. Received: {spend}"},
+        )
+
+
+def validate_budget_duration(budget_duration: str | None) -> None:
+    """Reject budget durations that can't be parsed, are non-positive, or
+    overflow date math, so a bad value can't be persisted and later crash the
+    budget reset job.
+
+    A non-positive duration also resolves to a reset time of "now", which leaves
+    the row permanently due: the reset job re-reads it every tick and, once
+    enough of them exist, they fill each batch and starve every other tenant's
+    reset.
+    """
+    if budget_duration is None:
+        return
+
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    try:
+        if duration_in_seconds(budget_duration) <= 0:
+            raise ValueError("budget_duration must be positive")
+        get_budget_reset_time(budget_duration=budget_duration)
+    except (ValueError, OverflowError):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."
+            },
+        )
+
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -50,8 +98,7 @@ def require_caller_user_id_for_non_admin(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "error": (
-                    "Service-account keys cannot query user analytics. "
-                    "Use a user-bound key, or call as a proxy admin."
+                    "Service-account keys cannot query user analytics. Use a user-bound key, or call as a proxy admin."
                 )
             },
         )
@@ -75,35 +122,25 @@ def _check_passthrough_routes_caller_permission(
     if getattr(data, "allowed_passthrough_routes", None):
         raise HTTPException(
             status_code=403,
-            detail={
-                "error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."
-            },
+            detail={"error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."},
         )
-    metadata = getattr(data, "metadata", None)
+    metadata: Final = getattr(data, "metadata", None)
     if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
         raise HTTPException(
             status_code=403,
-            detail={
-                "error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."
-            },
+            detail={"error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."},
         )
 
 
-def _is_user_team_admin(
-    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
-) -> bool:
+def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
     for member in team_obj.members_with_roles:
-        if (
-            member.user_id is not None and member.user_id == user_api_key_dict.user_id
-        ) and member.role == "admin":
+        if (member.user_id is not None and member.user_id == user_api_key_dict.user_id) and member.role == "admin":
             return True
 
     return False
 
 
-async def _is_user_org_admin_for_team(
-    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
-) -> bool:
+async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
     """
     Check if user is an org admin for the team's organization.
 
@@ -121,7 +158,7 @@ async def _is_user_org_admin_for_team(
         user_api_key_cache,
     )
 
-    caller_user = await get_user_object(
+    caller_user: Final = await get_user_object(
         user_id=user_api_key_dict.user_id,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
@@ -132,10 +169,7 @@ async def _is_user_org_admin_for_team(
         return False
 
     for m in caller_user.organization_memberships or []:
-        if (
-            m.organization_id == team_obj.organization_id
-            and m.user_role == LitellmUserRoles.ORG_ADMIN.value
-        ):
+        if m.organization_id == team_obj.organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value:
             return True
 
     return False
@@ -188,7 +222,7 @@ async def _user_has_admin_privileges(
     from litellm.proxy.auth.auth_checks import get_user_object
 
     try:
-        user_obj = await get_user_object(
+        user_obj: Final = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache or DualCacheImport(),
@@ -208,22 +242,16 @@ async def _user_has_admin_privileges(
         # Check if user is team admin for any team
         if user_obj.teams is not None and len(user_obj.teams) > 0:
             # Get all teams user is in
-            teams = await TeamRepository(prisma_client).table.find_many(
-                where={"team_id": {"in": user_obj.teams}}
-            )
+            teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_obj.teams}})
 
             for team in teams:
-                team_obj = LiteLLM_TeamTable(**team.model_dump())
-                if _is_user_team_admin(
-                    user_api_key_dict=user_api_key_dict, team_obj=team_obj
-                ):
+                team_obj = LiteLLM_TeamTable.model_validate(team.model_dump())
+                if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     return True
 
     except Exception as e:
         # If there's an error checking, default to False for security
-        verbose_proxy_logger.debug(
-            f"Error checking admin privileges for user {user_api_key_dict.user_id}: {e}"
-        )
+        verbose_proxy_logger.debug("Error checking admin privileges for user %s: %s", user_api_key_dict.user_id, e)
         return False
 
     return False
@@ -246,7 +274,7 @@ def _org_admin_can_invite_user(
     """
     if admin_user_obj.organization_memberships is None:
         return False
-    admin_org_ids = {
+    admin_org_ids: Final = {
         m.organization_id
         for m in admin_user_obj.organization_memberships
         if m.user_role == LitellmUserRoles.ORG_ADMIN.value
@@ -255,9 +283,7 @@ def _org_admin_can_invite_user(
         return False
     if target_user_obj.organization_memberships is None:
         return False
-    target_org_ids = {
-        m.organization_id for m in target_user_obj.organization_memberships
-    }
+    target_org_ids: Final = {m.organization_id for m in target_user_obj.organization_memberships}
     return bool(admin_org_ids & target_org_ids)
 
 
@@ -285,20 +311,18 @@ async def _team_admin_can_invite_user(
     if not target_user_obj.teams or len(target_user_obj.teams) == 0:
         return False
 
-    teams = await TeamRepository(prisma_client).table.find_many(
-        where={"team_id": {"in": admin_user_obj.teams}}
-    )
-    admin_team_ids = [
+    teams: Final = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": admin_user_obj.teams}})
+    admin_team_ids: Final = [
         team.team_id
         for team in teams
         if _is_user_team_admin(
             user_api_key_dict=user_api_key_dict,
-            team_obj=LiteLLM_TeamTable(**team.model_dump()),
+            team_obj=LiteLLM_TeamTable.model_validate(team.model_dump()),
         )
     ]
     if not admin_team_ids:
         return False
-    target_team_ids = set(target_user_obj.teams)
+    target_team_ids: Final = set(target_user_obj.teams)
     return bool(set(admin_team_ids) & target_team_ids)
 
 
@@ -337,8 +361,8 @@ async def admin_can_invite_user(
     from litellm.proxy.auth.auth_checks import get_user_object
 
     try:
-        cache = user_api_key_cache or DualCacheImport()
-        admin_user_obj = await get_user_object(
+        cache: Final = user_api_key_cache or DualCacheImport()
+        admin_user_obj: Final = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
             user_api_key_cache=cache,
@@ -348,7 +372,7 @@ async def admin_can_invite_user(
         if admin_user_obj is None:
             return False
 
-        target_user_obj = await get_user_object(
+        target_user_obj: Final = await get_user_object(
             user_id=target_user_id,
             prisma_client=prisma_client,
             user_api_key_cache=cache,
@@ -371,9 +395,7 @@ async def admin_can_invite_user(
 
         return False
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Error checking invite permission for user {user_api_key_dict.user_id}: {e}"
-        )
+        verbose_proxy_logger.debug("Error checking invite permission for user %s: %s", user_api_key_dict.user_id, e)
         return False
 
 
@@ -404,7 +426,7 @@ def _set_object_metadata_field(
     object_data.metadata[field_name] = value
 
 
-_TEAM_MEMBER_BUDGET_LIMIT_FIELDS = (
+_TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
     "max_budget",
     "soft_budget",
     "max_parallel_requests",
@@ -424,13 +446,10 @@ def _is_set_budget_value(value: Any) -> bool:
     return True
 
 
-def _has_meaningful_budget_limit(budget_values: Dict[str, Any]) -> bool:
+def _has_meaningful_budget_limit(budget_values: dict[str, Any]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
-    return any(
-        _is_set_budget_value(budget_values.get(field))
-        for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS
-    )
+    return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
 
 
 async def _upsert_budget_and_membership(
@@ -438,10 +457,10 @@ async def _upsert_budget_and_membership(
     *,
     team_id: str,
     user_id: str,
-    existing_budget_id: Optional[str],
+    existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    budget_patch: Dict[str, Any],
-    team_default_budget_id: Optional[str] = None,
+    budget_patch: dict[str, Any],
+    team_default_budget_id: str | None = None,
 ):
     """
     Apply a merge-patch of per-member budget fields to a team membership.
@@ -460,16 +479,14 @@ async def _upsert_budget_and_membership(
     if not budget_patch:
         return
 
-    write_data = dict(budget_patch)
+    write_data: Final = dict(budget_patch)
     if "budget_duration" in write_data:
-        duration = write_data["budget_duration"]
+        duration: Final = write_data["budget_duration"]
         write_data["budget_reset_at"] = (
-            get_budget_reset_time(budget_duration=duration)
-            if duration is not None
-            else None
+            get_budget_reset_time(budget_duration=duration) if duration is not None else None
         )
 
-    is_shared_default = (
+    is_shared_default: Final = (
         existing_budget_id is not None
         and team_default_budget_id is not None
         and existing_budget_id == team_default_budget_id
@@ -482,10 +499,8 @@ async def _upsert_budget_and_membership(
         )
 
     if existing_budget_id is not None and not is_shared_default:
-        existing_budget = await tx.litellm_budgettable.find_unique(
-            where={"budget_id": existing_budget_id}
-        )
-        merged = existing_budget.model_dump() if existing_budget is not None else {}
+        existing_budget: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        merged: Final = existing_budget.model_dump() if existing_budget is not None else {}
         merged.update(write_data)
         if not _has_meaningful_budget_limit(merged):
             await _disconnect()
@@ -496,17 +511,15 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    create_data: Dict[str, Any] = {
+    create_data: Final[dict[str, Any]] = {
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
     }
 
     if is_shared_default:
-        default_budget_row = await tx.litellm_budgettable.find_unique(
-            where={"budget_id": existing_budget_id}
-        )
+        default_budget_row: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
         if default_budget_row is not None:
-            default_budget_dict = default_budget_row.model_dump()
+            default_budget_dict: Final = default_budget_row.model_dump()
             for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
                 value = default_budget_dict.get(field)
                 if _is_set_budget_value(value):
@@ -515,9 +528,7 @@ async def _upsert_budget_and_membership(
     create_data.update(write_data)
 
     if create_data.get("budget_duration") is not None:
-        create_data["budget_reset_at"] = get_budget_reset_time(
-            budget_duration=create_data["budget_duration"]
-        )
+        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
     else:
         create_data.pop("budget_reset_at", None)
 
@@ -526,7 +537,7 @@ async def _upsert_budget_and_membership(
             await _disconnect()
         return
 
-    new_budget = await tx.litellm_budgettable.create(
+    new_budget: Final = await tx.litellm_budgettable.create(
         data=create_data,
         include={"team_membership": True},
     )
@@ -572,7 +583,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv
-        _value = updated_kv.pop(field_name)
+        _value: Final = updated_kv.pop(field_name)
         if "metadata" in updated_kv and updated_kv["metadata"] is not None:
             updated_kv["metadata"][field_name] = _value
         else:

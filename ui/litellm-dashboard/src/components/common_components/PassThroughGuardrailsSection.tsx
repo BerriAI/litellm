@@ -99,13 +99,13 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
             <div className="text-xs space-y-1 mt-2">
               <div className="font-medium">Common Examples:</div>
               <div>
-                • <code className="bg-gray-100 px-1 rounded">query</code> - Single field
+                • <code className="bg-gray-100 px-1 rounded-sm">query</code> - Single field
               </div>
               <div>
-                • <code className="bg-gray-100 px-1 rounded">documents[*].text</code> - All text in documents array
+                • <code className="bg-gray-100 px-1 rounded-sm">documents[*].text</code> - All text in documents array
               </div>
               <div>
-                • <code className="bg-gray-100 px-1 rounded">messages[*].content</code> - All message contents
+                • <code className="bg-gray-100 px-1 rounded-sm">messages[*].content</code> - All message contents
               </div>
             </div>
           </div>
@@ -170,7 +170,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                           const current = guardrailSettings[guardrailName]?.request_fields || [];
                           handleFieldChange(guardrailName, "request_fields", [...current, "query"]);
                         }}
-                        className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50"
+                        className="text-xs px-2 py-1 bg-white border border-gray-300 rounded-sm hover:bg-gray-50"
                         disabled={disabled}
                       >
                         + query
@@ -181,7 +181,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                           const current = guardrailSettings[guardrailName]?.request_fields || [];
                           handleFieldChange(guardrailName, "request_fields", [...current, "documents[*]"]);
                         }}
-                        className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50"
+                        className="text-xs px-2 py-1 bg-white border border-gray-300 rounded-sm hover:bg-gray-50"
                         disabled={disabled}
                       >
                         + documents[*]
@@ -224,7 +224,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                           const current = guardrailSettings[guardrailName]?.response_fields || [];
                           handleFieldChange(guardrailName, "response_fields", [...current, "results[*]"]);
                         }}
-                        className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50"
+                        className="text-xs px-2 py-1 bg-white border border-gray-300 rounded-sm hover:bg-gray-50"
                         disabled={disabled}
                       >
                         + results[*]
