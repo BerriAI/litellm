@@ -4,6 +4,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
 import EvalViewer from "../EvalViewer/EvalViewer";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
@@ -12,6 +13,7 @@ import { VectorStoreViewer } from "../VectorStoreViewer";
 import { TruncatedValue } from "./TruncatedValue";
 import { TokenFlow } from "./TokenFlow";
 import { JsonViewer } from "./JsonViewer";
+import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
 import {
   formatData,
   checkHasMessages,
@@ -136,6 +138,9 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
           </Descriptions>
         </Card>
       </div>
+
+      {/* Routing */}
+      <RoutingDecisionCard decision={metadata?.routing_decision as RoutingDecision | undefined} />
 
       {/* Metrics */}
       <MetricsSection logEntry={logEntry} metadata={metadata} />
@@ -281,10 +286,6 @@ function getUncachedInputTextTokens(metadata: Record<string, any>): number | und
 
 const RESPONSE_CACHE_TOOLTIP =
   "Whether this request was served from LiteLLM's response cache (e.g. Redis / in-memory), skipping the LLM provider call entirely. This is separate from provider prompt caching; a Miss here does not mean prompt caching failed.";
-const PROMPT_CACHE_READ_TOOLTIP =
-  "Input tokens read from the LLM provider's prompt cache (e.g. Anthropic / OpenAI), billed at a discounted rate. Reported by the provider.";
-const PROMPT_CACHE_CREATION_TOOLTIP =
-  "Input tokens written to the LLM provider's prompt cache for reuse by later requests.";
 const RESPONSE_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/proxy/caching";
 const PROMPT_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/completion/prompt_caching";
 

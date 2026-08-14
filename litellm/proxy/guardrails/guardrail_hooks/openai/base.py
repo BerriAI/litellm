@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_last_user_message,
@@ -13,7 +13,7 @@ class OpenAIGuardrailBase:
     Base class for OpenAI guardrails.
     """
 
-    def get_user_prompt(self, messages: List["AllMessageValues"]) -> Optional[str]:
+    def get_user_prompt(self, messages: list["AllMessageValues"]) -> str | None:
         """
         Get the last consecutive block of messages from the user.
 

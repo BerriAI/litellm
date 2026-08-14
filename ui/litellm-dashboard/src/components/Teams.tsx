@@ -1,4 +1,5 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
 import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
@@ -8,26 +9,31 @@ import { Accordion, AccordionBody, AccordionHeader, TextInput } from "@tremor/re
 import { Button, Form, Input, Layout, Modal, Select, Switch, Tabs, theme, Tooltip, Typography } from "antd";
 import { Plus, Users } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { parseAsString, useQueryState } from "nuqs";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
+import MetadataKeyValueFields, { metadataPairsToObject } from "./common_components/MetadataKeyValueFields";
+import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "./common_components/RouterSettingsAccordion";
-import {
-  fetchAvailableModelsForTeamOrKey,
-  unfurlWildcardModelsInList,
-} from "./key_team_helpers/fetch_available_models_team_key";
+import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import type { Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
+import { extractProxyErrorMessage } from "@/lib/http/client";
+import BudgetDurationDropdown, {
+  getBudgetDurationLabel,
+  NEVER_RESETS_BUDGET_DURATION,
+} from "./common_components/budget_duration_dropdown";
+import { Organization, getDefaultTeamSettings, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./search_tools/SearchToolSelector";
@@ -39,34 +45,10 @@ interface TeamProps {
   premiumUser?: boolean;
 }
 
-interface EditTeamModalProps {
-  visible: boolean;
-  onCancel: () => void;
-  team: any; // Assuming TeamType is a type representing your team object
-  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
-}
-
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { teamCreateCall } from "./networking";
+import { normalizeTeamModelSelection } from "./team/teamModelAccess";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
-
-const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
-  let tempModelsToPick = [];
-
-  if (organization) {
-    if (organization.models.length > 0) {
-      tempModelsToPick = organization.models;
-    } else {
-      // show all available models if the team has no models set
-      tempModelsToPick = userModels;
-    }
-  } else {
-    // no team set, show all available models
-    tempModelsToPick = userModels;
-  }
-
-  return unfurlWildcardModelsInList(tempModelsToPick, userModels);
-};
 
 const canCreateOrManageTeams = (
   userRole: string | null,
@@ -108,57 +90,49 @@ const getAdminOrganizations = (
   return [];
 };
 
-const getOrganizationAlias = (
-  organizationId: string | null | undefined,
-  organizations: Organization[] | null | undefined,
-): string => {
-  if (!organizationId || !organizations) {
-    return organizationId || "N/A";
-  }
-
-  const organization = organizations.find((org) => org.organization_id === organizationId);
-  return organization?.organization_alias || organizationId;
-};
-
 // @deprecated
 const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
   const organizations = organizationsData ?? null;
+  const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
   const refreshTeams = () => queryClient.invalidateQueries({ queryKey: teamsTableKeys.all });
   const [currentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
 
   const [form] = Form.useForm();
-  const [memberForm] = Form.useForm();
-  const [value, setValue] = useState("");
-  const [editModalVisible, setEditModalVisible] = useState(false);
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useQueryState("team", parseAsString.withOptions({ history: "push" }));
   const [editTeam, setEditTeam] = useState<boolean>(false);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
-  const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
-  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
-  const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [isTeamDeleting, setIsTeamDeleting] = useState(false);
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
+  const { data: defaultTeamSettings } = useQuery({
+    queryKey: ["defaultTeamSettings"],
+    queryFn: () => getDefaultTeamSettings(accessToken as string),
+    enabled: isTeamModalVisible && accessToken != null,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const defaultBudgetDuration: string | undefined = defaultTeamSettings?.values?.budget_duration ?? undefined;
+  const budgetDurationPlaceholder = defaultBudgetDuration
+    ? `Default: ${getBudgetDurationLabel(defaultBudgetDuration)} (${defaultBudgetDuration})`
+    : "n/a";
+
   useEffect(() => {
-    const models = getOrganizationModels(currentOrgForCreateTeam, userModels);
-    setModelsToPick(models);
     form.setFieldValue("models", []);
   }, [currentOrgForCreateTeam, userModels]);
 
@@ -212,24 +186,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     };
 
     fetchGuardrails();
-    fetchPolicies();
-  }, [accessToken]);
-
-  const fetchMcpAccessGroups = async () => {
-    try {
-      if (accessToken == null) {
-        return;
-      }
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
-
-  useEffect(() => {
-    fetchMcpAccessGroups();
-  }, [accessToken]);
+    if (canViewPolicies) fetchPolicies();
+  }, [accessToken, canViewPolicies]);
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
@@ -240,12 +198,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     setRouterSettingsKey((prev) => prev + 1);
   };
 
-  const handleMemberOk = () => {
-    setIsAddMemberModalVisible(false);
-    setIsEditMemberModalVisible(false);
-    memberForm.resetFields();
-  };
-
   const handleCancel = () => {
     setIsTeamModalVisible(false);
     form.resetFields();
@@ -253,12 +205,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     setModelAliases({});
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
-  };
-
-  const handleMemberCancel = () => {
-    setIsAddMemberModalVisible(false);
-    setIsEditMemberModalVisible(false);
-    memberForm.resetFields();
   };
 
   const handleDelete = async (team: Team) => {
@@ -319,27 +265,17 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           formValues.organization_id = organizationId.trim();
         }
 
+        if (formValues.budget_duration === NEVER_RESETS_BUDGET_DURATION) {
+          formValues.budget_duration = null;
+        }
+
         NotificationsManager.info("Creating Team");
 
-        // Handle logging settings in metadata
-        if (loggingSettings.length > 0) {
-          let metadata = {};
-          if (formValues.metadata) {
-            try {
-              metadata = JSON.parse(formValues.metadata);
-            } catch (e) {
-              console.warn("Invalid JSON in metadata field, starting with empty object");
-            }
-          }
-
-          // Add logging settings to metadata
-          metadata = {
-            ...metadata,
-            logging: loggingSettings.filter((config) => config.callback_name), // Only include configs with callback_name
-          };
-
-          formValues.metadata = JSON.stringify(metadata);
-        }
+        const metadataObject = {
+          ...metadataPairsToObject(formValues.metadata),
+          ...(loggingSettings.length > 0 ? { logging: loggingSettings.filter((config) => config.callback_name) } : {}),
+        };
+        formValues.metadata = Object.keys(metadataObject).length > 0 ? JSON.stringify(metadataObject) : undefined;
 
         if (formValues.secret_manager_settings) {
           if (typeof formValues.secret_manager_settings === "string") {
@@ -438,7 +374,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           }
         }
 
-        await teamCreateCall(accessToken, formValues);
+        await teamCreateCall(accessToken, { ...formValues, models: normalizeTeamModelSelection(formValues.models) });
         NotificationsManager.success("Team created");
         await refreshTeams();
         form.resetFields();
@@ -450,7 +386,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
       }
     } catch (error) {
       console.error("Error creating the team:", error);
-      NotificationsManager.fromBackend("Error creating the team: " + error);
+      NotificationsManager.fromBackend("Error creating the team: " + extractProxyErrorMessage(error));
     }
   };
 
@@ -482,12 +418,12 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             userID={userID}
             onSelectTeam={(team) => {
               setSelectedTeam(team);
-              setSelectedTeamId(team.team_id);
+              void setSelectedTeamId(team.team_id);
               setEditTeam(false);
             }}
             onEditTeam={(team) => {
               setSelectedTeam(team);
-              setSelectedTeamId(team.team_id);
+              void setSelectedTeamId(team.team_id);
               setEditTeam(true);
             }}
             onDeleteTeam={handleDelete}
@@ -547,11 +483,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           }}
           onClose={() => {
             setSelectedTeam(null);
-            setSelectedTeamId(null);
+            void setSelectedTeamId(null);
             setEditTeam(false);
           }}
           accessToken={accessToken}
-          is_team_admin={is_team_admin(selectedTeam)}
+          is_team_admin={is_team_admin(selectedTeam?.team_id === selectedTeamId ? selectedTeam : null)}
           is_proxy_admin={userRole == "Admin"}
           userModels={userModels}
           editTeam={editTeam}
@@ -592,6 +528,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           footer={null}
           onOk={handleOk}
           onCancel={handleCancel}
+          destroyOnHidden
         >
           <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
             <>
@@ -704,17 +641,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 label={
                   <span>
                     Models{" "}
-                    <Tooltip title="These are the models that your selected team has access to">
+                    <Tooltip title="These are the models that your selected team has access to. Leave empty to grant no models directly, e.g. when the team gets its models from access groups">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
                 }
-                rules={[
-                  {
-                    required: true,
-                    message: "Please select at least one model",
-                  },
-                ]}
                 name="models"
               >
                 <ModelSelect
@@ -734,11 +665,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 <NumericalInput step={0.01} precision={2} width={200} />
               </Form.Item>
               <Form.Item className="mt-8" label="Reset Budget" name="budget_duration">
-                <Select defaultValue={null} placeholder="n/a">
-                  <Select.Option value="24h">daily</Select.Option>
-                  <Select.Option value="7d">weekly</Select.Option>
-                  <Select.Option value="30d">monthly</Select.Option>
-                </Select>
+                <BudgetDurationDropdown showNeverResets placeholder={budgetDurationPlaceholder} />
               </Form.Item>
               <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
                 <NumericalInput step={1} width={400} />
@@ -746,16 +673,18 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                 <NumericalInput step={1} width={400} />
               </Form.Item>
-
-              <Accordion
-                className="mt-20 mb-8"
-                onClick={() => {
-                  if (!mcpAccessGroupsLoaded) {
-                    fetchMcpAccessGroups();
-                    setMcpAccessGroupsLoaded(true);
-                  }
-                }}
+              <Form.Item
+                label="Metadata"
+                help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
               >
+                <MetadataKeyValueFields
+                  form={form}
+                  schemaFields={teamMetadataSchemaFields}
+                  schemaLoading={isTeamMetadataSchemaLoading}
+                />
+              </Form.Item>
+
+              <Accordion className="mt-20 mb-8">
                 <AccordionHeader>
                   <b>Additional Settings</b>
                 </AccordionHeader>
@@ -799,13 +728,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     tooltip="The TPM (Tokens Per Minute) limit for individual team members"
                   >
                     <NumericalInput step={1} width={400} />
-                  </Form.Item>
-                  <Form.Item
-                    label="Metadata"
-                    name="metadata"
-                    help="Additional team metadata. Enter metadata as JSON object."
-                  >
-                    <Input.TextArea rows={4} />
                   </Form.Item>
                   <Form.Item
                     label="Secret Manager Settings"
@@ -891,36 +813,38 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       }
                     />
                   </Form.Item>
-                  <Form.Item
-                    label={
-                      <span>
-                        Policies{" "}
-                        <Tooltip title="Apply policies to this team to control guardrails and other settings">
-                          <a
-                            href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </a>
-                        </Tooltip>
-                      </span>
-                    }
-                    name="policies"
-                    className="mt-8"
-                    help="Select existing policies or enter new ones"
-                  >
-                    <Select
-                      mode="tags"
-                      style={{ width: "100%" }}
-                      placeholder="Select or enter policies"
-                      options={policiesList.map((name) => ({
-                        value: name,
-                        label: name,
-                      }))}
-                    />
-                  </Form.Item>
+                  {canViewPolicies && (
+                    <Form.Item
+                      label={
+                        <span>
+                          Policies{" "}
+                          <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                            <a
+                              href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </span>
+                      }
+                      name="policies"
+                      className="mt-8"
+                      help="Select existing policies or enter new ones"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: "100%" }}
+                        placeholder="Select or enter policies"
+                        options={policiesList.map((name) => ({
+                          value: name,
+                          label: name,
+                        }))}
+                      />
+                    </Form.Item>
+                  )}
                   <Form.Item
                     label={
                       <span>
@@ -956,25 +880,23 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       placeholder="Select vector stores (optional)"
                     />
                   </Form.Item>
-                  <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes" className="mt-8">
-                    <Tooltip
-                      title={
-                        !premiumUser
-                          ? "Premium feature - Upgrade to set allowed pass through routes"
-                          : !isProxyAdminRole(userRole || "")
-                            ? "Only proxy admins can set allowed pass through routes"
-                            : ""
-                      }
-                      placement="top"
-                    >
-                      <PassThroughRoutesSelector
-                        onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-                        value={form.getFieldValue("allowed_passthrough_routes")}
-                        accessToken={accessToken || ""}
-                        placeholder="Select pass through routes (optional)"
-                        disabled={!premiumUser || !isProxyAdminRole(userRole || "")}
-                      />
-                    </Tooltip>
+                  <Form.Item
+                    label="Allowed Pass Through Routes"
+                    name="allowed_passthrough_routes"
+                    className="mt-8"
+                    tooltip={
+                      !premiumUser
+                        ? "Premium feature - Upgrade to set allowed pass through routes"
+                        : !isProxyAdminRole(userRole || "")
+                          ? "Only proxy admins can set allowed pass through routes"
+                          : undefined
+                    }
+                  >
+                    <PassThroughRoutesSelector
+                      accessToken={accessToken || ""}
+                      placeholder="Select pass through routes (optional)"
+                      disabled={!premiumUser || !isProxyAdminRole(userRole || "")}
+                    />
                   </Form.Item>
                 </AccordionBody>
               </Accordion>

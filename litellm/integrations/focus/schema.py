@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Final
+
 import polars as pl
 
 # see: https://focus.finops.org/focus-specification/v1-2/
-FOCUS_NORMALIZED_SCHEMA = pl.Schema(
+FOCUS_NORMALIZED_SCHEMA: Final = pl.Schema(
     [
         ("BilledCost", pl.Decimal(18, 6)),
         ("BillingAccountId", pl.String),

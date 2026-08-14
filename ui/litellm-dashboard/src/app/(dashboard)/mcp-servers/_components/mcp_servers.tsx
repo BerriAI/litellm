@@ -24,7 +24,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
-import CreateMCPServer from "./create_mcp_server";
+import CreateMCPServer from "./CreateMCPServer";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
 import { MCPServerView } from "./mcp_server_view";

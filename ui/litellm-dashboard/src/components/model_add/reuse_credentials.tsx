@@ -2,7 +2,7 @@ import React from "react";
 import { Form, Button, Tooltip, Typography, Modal } from "antd";
 import { TextInput } from "@tremor/react";
 import { CredentialItem } from "../networking";
-const { Title, Link } = Typography;
+const { Link } = Typography;
 
 interface ReuseCredentialsModalProps {
   isVisible: boolean;
