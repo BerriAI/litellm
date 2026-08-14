@@ -2219,6 +2219,29 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
+                # Content-less candidate (e.g. thinking model out of budget):
+                # emit an empty choice with a mapped truncation reason, not an
+                # empty choices list. Non-streaming only.
+                if isinstance(model_response, ModelResponse):
+                    finish_reason = candidate.get("finishReason")
+                    mapped_finish_reason = (
+                        VertexGeminiConfig._check_finish_reason(None, finish_reason)
+                        if finish_reason is not None
+                        else "length"
+                    )
+                    empty_message: ChatCompletionResponseMessage = {
+                        "role": "assistant",
+                        "content": "",
+                    }
+                    model_response.choices.append(
+                        litellm.Choices(
+                            finish_reason=mapped_finish_reason,
+                            index=candidate.get("index", idx),
+                            message=empty_message,
+                            logprobs=None,
+                            enhancements=None,
+                        )
+                    )
                 continue
 
             # Extract metadata using helper function
