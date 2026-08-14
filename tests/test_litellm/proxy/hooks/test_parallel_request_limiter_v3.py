@@ -3247,6 +3247,62 @@ async def test_project_model_itpm_and_tpm_limits_coexist_v3():
 
 
 @pytest.mark.asyncio
+async def test_enforce_project_io_token_quota_for_frame_blocks_over_limit_otpm():
+    """VERIA regression: the Responses WebSocket connection-level pre-call
+    hook only runs once, but a connection accepts many response.create
+    frames. enforce_project_io_token_quota_for_frame is the per-frame check
+    that closes that gap; it must reserve against the caller's project OTPM
+    limit and reject once a frame's estimated output tokens exceed it."""
+    _api_key = hash_token("sk-ws-frame-otpm")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        project_id="proj-mantle-ws",
+        project_metadata={"model_otpm_limit": {"gpt-4o": 50}},
+    )
+
+    await handler.enforce_project_io_token_quota_for_frame(
+        user_api_key_dict=user_api_key_dict,
+        requested_model="gpt-4o",
+        estimated_input_tokens=1,
+        estimated_output_tokens=30,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await handler.enforce_project_io_token_quota_for_frame(
+            user_api_key_dict=user_api_key_dict,
+            requested_model="gpt-4o",
+            estimated_input_tokens=1,
+            estimated_output_tokens=30,
+        )
+
+    assert exc.value.status_code == 429
+    assert "model_per_project_otpm" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_enforce_project_io_token_quota_for_frame_noop_without_project_limits():
+    """A key with no project ITPM/OTPM configured must never be blocked by
+    the per-frame check (no descriptors to reserve against)."""
+    _api_key = hash_token("sk-ws-frame-no-limits")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+
+    await handler.enforce_project_io_token_quota_for_frame(
+        user_api_key_dict=user_api_key_dict,
+        requested_model="gpt-4o",
+        estimated_input_tokens=10_000_000,
+        estimated_output_tokens=10_000_000,
+    )
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook_keeps_internal_stash_out_of_request_body():
     """Regression for #27001 / #35197: the limiter's per-request bookkeeping
     must never touch the outgoing request body — no top-level keys and no
