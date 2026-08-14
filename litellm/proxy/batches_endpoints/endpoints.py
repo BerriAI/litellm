@@ -25,7 +25,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     apply_team_provider_credentials,
     decode_model_from_file_id,
-    add_internal_model_credentials_for_batch,
+    add_internal_model_credentials,
     encode_batch_response_ids,
     encode_file_id_with_model,
     ensure_batch_response_managed_file_ids,
@@ -539,7 +539,7 @@ async def retrieve_batch(
                 )
 
             if unified_batch_id:
-                add_internal_model_credentials_for_batch(
+                add_internal_model_credentials(
                     data=data,
                     llm_router=llm_router,
                     model_id=get_model_id_from_unified_batch_id(unified_batch_id),

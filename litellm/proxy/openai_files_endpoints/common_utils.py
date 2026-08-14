@@ -465,7 +465,7 @@ def apply_team_provider_credentials(
     prepare_data_with_credentials(data=data, credentials=credentials)
 
 
-def add_internal_model_credentials_for_batch(
+def add_internal_model_credentials(
     data: dict,
     llm_router: "Router",
     model_id: str | None,
