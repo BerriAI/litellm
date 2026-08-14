@@ -70,6 +70,7 @@ const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   AUTH_TYPE.TRUE_PASSTHROUGH,
   AUTH_TYPE.OAUTH_DELEGATE,
 ];
+const AUTH_TYPES_SHARING_TOKEN_EXCHANGE_COLUMNS = [AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, AUTH_TYPE.OAUTH2_ID_JAG];
 export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
@@ -857,9 +858,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2 && restValues.auth_type !== AUTH_TYPE.OAUTH2
           ? { issuer: null, authorization_url: null, token_url: null, registration_url: null }
           : {}),
+        ...(AUTH_TYPES_SHARING_TOKEN_EXCHANGE_COLUMNS.includes(mcpServer.auth_type ?? "") &&
+        !AUTH_TYPES_SHARING_TOKEN_EXCHANGE_COLUMNS.includes(restValues.auth_type ?? "")
+          ? { token_exchange_endpoint: null, audience: null, subject_token_type: null }
+          : {}),
         ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
         restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE
-          ? { token_exchange_endpoint: null, audience: null, subject_token_type: null, token_exchange_profile: null }
+          ? { token_exchange_profile: null }
           : {}),
         server_id: mcpServer.server_id,
         mcp_info: {
