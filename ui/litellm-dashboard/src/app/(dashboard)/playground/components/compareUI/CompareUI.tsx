@@ -2,9 +2,12 @@
 
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import { ClearOutlined, DeleteOutlined, FilePdfOutlined, PlusOutlined } from "@ant-design/icons";
+import { Eraser, FileText, Plus, Trash2 } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
-import { Button, Input, Select, Tooltip } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import ChatImageUpload from "../chat_ui/ChatImageUpload";
@@ -692,17 +695,22 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
               <span className="text-sm font-medium text-gray-600">Virtual Key Source</span>
               <Select
                 value={apiKeySource}
-                onChange={(value) => setApiKeySource(value as "session" | "custom")}
+                onValueChange={(value) => setApiKeySource(value as "session" | "custom")}
                 disabled={disabledPersonalKeyCreation}
-                className="w-48"
               >
-                <Select.Option value="session" disabled={!canUseSessionKey}>
-                  Current UI Session
-                </Select.Option>
-                <Select.Option value="custom">Virtual Key</Select.Option>
+                <SelectTrigger className="w-48" aria-label="Virtual Key Source">
+                  <SelectValue>{apiKeySource === "custom" ? "Virtual Key" : "Current UI Session"}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="session" disabled={!canUseSessionKey}>
+                    Current UI Session
+                  </SelectItem>
+                  <SelectItem value="custom">Virtual Key</SelectItem>
+                </SelectContent>
               </Select>
               {apiKeySource === "custom" && (
-                <Input.Password
+                <Input
+                  type="password"
                   value={customApiKey}
                   onChange={(event) => setCustomApiKey(event.target.value)}
                   placeholder="Enter Virtual Key"
@@ -712,30 +720,34 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-gray-600">Endpoint</span>
-              <Select
-                value={selectedEndpoint}
-                onChange={(value) => setSelectedEndpoint(value as EndpointIdType)}
-                className="w-56"
-              >
-                {getAvailableEndpoints().map((endpoint) => (
-                  <Select.Option key={endpoint.value} value={endpoint.value}>
-                    {endpoint.label}
-                  </Select.Option>
-                ))}
+              <Select value={selectedEndpoint} onValueChange={(value) => setSelectedEndpoint(value as EndpointIdType)}>
+                <SelectTrigger className="w-56" aria-label="Endpoint">
+                  <SelectValue>{endpointConfig.label}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {getAvailableEndpoints().map((endpoint) => (
+                    <SelectItem key={endpoint.value} value={endpoint.value}>
+                      {endpoint.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div className="flex items-center gap-3">
-              <Button onClick={clearAllChats} disabled={!hasMessages} icon={<ClearOutlined />}>
+              <Button variant="outline" onClick={clearAllChats} disabled={!hasMessages}>
+                <Eraser />
                 Clear All Chats
               </Button>
-              <Tooltip
-                title={
-                  comparisons.length >= maxComparisons ? "Compare up to 3 models at a time" : "Add another comparison"
-                }
-              >
-                <Button onClick={addComparison} disabled={comparisons.length >= maxComparisons} icon={<PlusOutlined />}>
-                  Add Comparison
-                </Button>
+              <Tooltip>
+                <TooltipTrigger render={<span className="inline-flex" />}>
+                  <Button variant="outline" onClick={addComparison} disabled={comparisons.length >= maxComparisons}>
+                    <Plus />
+                    Add Comparison
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {comparisons.length >= maxComparisons ? "Compare up to 3 models at a time" : "Add another comparison"}
+                </TooltipContent>
               </Tooltip>
             </div>
           </div>
@@ -807,8 +819,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                   <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                     <div className="relative inline-block">
                       {isUploadedFilePdf ? (
-                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
-                          <FilePdfOutlined style={{ fontSize: "16px", color: "white" }} />
+                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center text-white">
+                          <FileText className="size-4" aria-label="file-pdf" />
                         </div>
                       ) : (
                         <img
@@ -825,8 +837,9 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                     <button
                       className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
                       onClick={handleRemoveFile}
+                      aria-label="Remove attachment"
                     >
-                      <DeleteOutlined style={{ fontSize: "12px" }} />
+                      <Trash2 className="size-3" />
                     </button>
                   </div>
                 </div>

@@ -803,7 +803,27 @@ class ChunkProcessor:
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
+            inference_geo=self._last_provider_pricing_field(chunks, "inference_geo"),
+            speed=self._last_provider_pricing_field(chunks, "speed"),
         )
+
+    def _last_provider_pricing_field(
+        self,
+        chunks: Sequence["_UsageBearingChunk | ModelResponse"],
+        field: str,
+    ) -> str | None:
+        """
+        Last value of a provider-specific usage field that changes pricing but is not a
+        declared ``Usage`` field, e.g. Anthropic's ``speed`` (fast mode multiplies
+        non-cache token cost) and ``inference_geo``.
+        """
+        values: Final = [
+            value
+            for chunk in chunks
+            if (usage_chunk := self._extract_usage_chunk(chunk)) is not None
+            and isinstance(value := getattr(usage_chunk, field, None), str)
+        ]
+        return values[-1] if values else None
 
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
@@ -934,7 +954,16 @@ class ChunkProcessor:
 
         # Return a new usage object with the new values
 
-        returned_usage = Usage(**returned_usage.model_dump())
+        provider_pricing_fields: Final = {
+            field: value
+            for field, value in (
+                ("inference_geo", calculated_usage_per_chunk["inference_geo"]),
+                ("speed", calculated_usage_per_chunk["speed"]),
+            )
+            if value is not None
+        }
+
+        returned_usage = Usage(**returned_usage.model_dump(), **provider_pricing_fields)
 
         return returned_usage
 

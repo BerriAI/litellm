@@ -233,15 +233,7 @@ async def chat_completion_pass_through_endpoint(
         # skip router if user passed their key
         if "api_key" in data:
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
-        elif llm_router is not None and data["model"] in router_model_names:  # model in router model list
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
-        elif (
-            llm_router is not None
-            and llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
-        ):  # model set in model_group_alias
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
-        elif llm_router is not None and llm_router.has_model_id(data["model"]):  # model in router model list
+        elif llm_router is not None and llm_router.is_recognized_model(data["model"]):
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
         elif (
             llm_router is not None
@@ -565,6 +557,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # real parent span.
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
+        _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         _metadata.update(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )

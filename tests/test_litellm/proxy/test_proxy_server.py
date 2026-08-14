@@ -1708,6 +1708,149 @@ def test_add_team_models_to_all_models():
     assert result == {"gpt-4-model-2": {"team1"}}
 
 
+def _make_router_with_access_groups(model_names, model_access_groups, deployments):
+    llm_router = MagicMock()
+    llm_router.get_model_names.return_value = model_names
+    llm_router.get_model_access_groups.return_value = model_access_groups
+
+    def get_model_list(model_name=None, team_id=None):
+        matched = [
+            deployment
+            for deployment in deployments
+            if deployment["model_name"] == model_name
+            and (
+                team_id is None
+                or deployment.get("model_info", {}).get("team_id") is None
+                or deployment.get("model_info", {}).get("team_id") == team_id
+            )
+        ]
+        return matched or None
+
+    llm_router.get_model_list.side_effect = get_model_list
+    return llm_router
+
+
+def test_add_team_models_to_all_models_resolves_config_access_group():
+    """
+    LIT-4433: a CONFIG-defined access group (model_info.access_groups) named in
+    team.models must resolve to its member deployments' ids. The pre-fix code
+    passed the group name straight to get_model_list, which never matched, so the
+    team's /v2/model/info?include_team_models=true result was empty.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["test-access-group"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["team-allowed-model-a"],
+        model_access_groups={"test-access-group": ["team-allowed-model-a"]},
+        deployments=[{"model_name": "team-allowed-model-a", "model_info": {"id": "model-a-id"}}],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"model-a-id": {"team-a"}}
+
+
+def test_add_team_models_to_all_models_resolves_mixed_literal_and_access_group():
+    """A team.models list mixing a literal model name and a config access-group
+    name must resolve both to their deployment ids."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["team-allowed-model-b", "test-access-group"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["team-allowed-model-a", "team-allowed-model-b"],
+        model_access_groups={"test-access-group": ["team-allowed-model-a"]},
+        deployments=[
+            {"model_name": "team-allowed-model-a", "model_info": {"id": "model-a-id"}},
+            {"model_name": "team-allowed-model-b", "model_info": {"id": "model-b-id"}},
+        ],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"model-a-id": {"team-a"}, "model-b-id": {"team-a"}}
+
+
+def test_add_team_models_to_all_models_keeps_literal_model_colliding_with_group_name():
+    """A team.models entry that names BOTH a deployed model and an access group
+    grants both at runtime, so the /v2 team map must contain the literal
+    deployment's id alongside the group members' ids."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["beta-models"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["beta-models", "member-a"],
+        model_access_groups={"beta-models": ["member-a"]},
+        deployments=[
+            {"model_name": "beta-models", "model_info": {"id": "collision-id"}},
+            {"model_name": "member-a", "model_info": {"id": "member-a-id"}},
+        ],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"collision-id": {"team-a"}, "member-a-id": {"team-a"}}
+
+
+def test_add_team_models_to_all_models_excludes_other_access_group():
+    """Only the access group named in team.models is expanded; deployments that
+    belong solely to a different access group must not leak into the team map."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["test-access-group"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["team-allowed-model-a", "forbidden-model"],
+        model_access_groups={
+            "test-access-group": ["team-allowed-model-a"],
+            "other-access-group": ["forbidden-model"],
+        },
+        deployments=[
+            {"model_name": "team-allowed-model-a", "model_info": {"id": "model-a-id"}},
+            {"model_name": "forbidden-model", "model_info": {"id": "forbidden-id"}},
+        ],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"model-a-id": {"team-a"}}
+
+
+def test_add_team_models_to_all_models_excludes_other_teams_byok_with_shared_name():
+    """A BYOK deployment owned by a DIFFERENT team but sharing the resolved model
+    name must not be added for this team. Guards the team_id filter passed to
+    get_model_list: dropping it would leak the other team's private deployment."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["test-access-group"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["team-allowed-model-a"],
+        model_access_groups={"test-access-group": ["team-allowed-model-a"]},
+        deployments=[
+            {"model_name": "team-allowed-model-a", "model_info": {"id": "model-a-id", "team_id": "team-a"}},
+            {"model_name": "team-allowed-model-a", "model_info": {"id": "other-team-byok-id", "team_id": "team-b"}},
+        ],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"model-a-id": {"team-a"}}
+
+
 @pytest.mark.asyncio
 async def test_apply_search_filter_matches_team_public_model_name():
     """
@@ -6727,6 +6870,91 @@ async def test_update_general_settings_propagates_apply_user_budget_to_team_keys
         import litellm.proxy.proxy_server as ps
 
         assert ps.general_settings["apply_user_budget_to_team_keys"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_propagates_spend_log_cleanup_bounds():
+    """The dashboard writes the cleanup bounds straight to the DB config, so
+    without runtime propagation the scheduled job never sees them and the knobs
+    do nothing until the process restarts."""
+    from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+        SPEND_LOG_CLEANUP_BOUND_SETTINGS,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    db_settings = {
+        "maximum_spend_logs_cleanup_batch_size": 2000,
+        "maximum_spend_logs_cleanup_max_batches": 250,
+        "maximum_spend_logs_cleanup_run_budget": "90s",
+        "maximum_spend_logs_cleanup_batch_timeout": "10s",
+    }
+    assert set(db_settings) == set(SPEND_LOG_CLEANUP_BOUND_SETTINGS)
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(db_general_settings=db_settings)
+
+        import litellm.proxy.proxy_server as ps
+
+        assert {key: ps.general_settings.get(key) for key in db_settings} == db_settings
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clears_a_spend_log_cleanup_bound_dropped_from_the_db():
+    """Blanking the field in the dashboard deletes the key outright, so leaving
+    the last value in memory would keep a bound the operator just removed."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"maximum_spend_logs_cleanup_run_budget": "90s", "maximum_spend_logs_cleanup_batch_timeout": "10s"},
+    ):
+        await proxy_config._update_general_settings(
+            db_general_settings={"maximum_spend_logs_cleanup_batch_timeout": "10s"}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] is None
+        assert ps.general_settings["maximum_spend_logs_cleanup_batch_timeout"] == "10s"
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_keeps_a_yaml_set_spend_log_cleanup_bound():
+    """A YAML-set bound never appears in the DB object, so treating its absence
+    as a dashboard clear would discard the deployed config on every reload."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_spend_log_cleanup_bounds = {"maximum_spend_logs_cleanup_run_budget": "90s"}
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_cleanup_run_budget": "90s"}):
+        await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] == "90s"
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clearing_a_db_override_falls_back_to_the_yaml_bound():
+    """Clearing a dashboard override of a YAML-declared bound must restore the
+    YAML value. Leaving the deleted override in memory would keep enforcing the
+    bound the operator just removed, until the process restarted."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_spend_log_cleanup_bounds = {"maximum_spend_logs_cleanup_run_budget": "90s"}
+
+    # Memory currently holds the dashboard override, and the DB no longer carries it.
+    with patch("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_cleanup_run_budget": "30s"}):
+        await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] == "90s"
 
 
 @pytest.mark.asyncio

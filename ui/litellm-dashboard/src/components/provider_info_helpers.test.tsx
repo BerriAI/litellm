@@ -94,6 +94,14 @@ describe("provider_info_helpers", () => {
       expect(result.displayName).toBe(Providers.ZAI);
     });
 
+    it("should resolve the nvidia_riva provider value to the Nvidia Riva display name and logo", () => {
+      const result = getProviderLogoAndName("nvidia_riva");
+      expect(result.displayName).toBe(Providers.NVIDIA_RIVA);
+      expect(provider_map.NVIDIA_RIVA).toBe("nvidia_riva");
+      expect(result.logo).toBe(providerLogoMap[Providers.NVIDIA_RIVA]);
+      expect(result.logo).toBeTruthy();
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);
@@ -223,6 +231,15 @@ describe("provider_info_helpers", () => {
 
     it("should return zai/glm-4.5 placeholder for Z.AI provider", () => {
       expect(getPlaceholder(Providers.ZAI)).toBe("zai/glm-4.5");
+    });
+
+    it("should return the riva asr placeholder for NVIDIA_RIVA provider", () => {
+      expect(getPlaceholder(Providers.NVIDIA_RIVA)).toBe("nvidia_riva/nvidia/parakeet-ctc-1_1b-asr");
+    });
+
+    it("should resolve enum keys from the provider dropdown, not just enum values", () => {
+      expect(getPlaceholder("NVIDIA_RIVA")).toBe("nvidia_riva/nvidia/parakeet-ctc-1_1b-asr");
+      expect(getPlaceholder("WATSONX")).toBe("watsonx/ibm/granite-3-3-8b-instruct");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
