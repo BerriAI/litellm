@@ -374,11 +374,6 @@ describe("MCPServerPermissions", () => {
   });
 
   it("should use the neutral badge variant unless MCP access is blocked", async () => {
-    /**
-     * The header badge sits next to the Vector Stores and Agents badges, which both render
-     * variant="secondary". "default" renders solid bg-primary (black), so it only belongs on
-     * the blocked state, which uses "destructive".
-     */
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
 
     const { rerender } = render(
