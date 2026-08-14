@@ -366,9 +366,9 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
     return _command
 
 
-def agent_commands() -> list[click.Command]:
+def agent_commands() -> tuple[click.Command, ...]:
     """Build one top-level command per known agent, e.g. `lite claude`."""
-    return [_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items()]
+    return tuple(_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items())
 
 
 __all__ = [
