@@ -163,6 +163,28 @@ class TestLoggingSafeMcpHeaders:
 
         assert safe == {"x-user-email": "alice@corp.example"}
 
+    @pytest.mark.parametrize(
+        "configured",
+        [
+            [{"header_name": "X-User", "litellm_user_role": "customer"}],
+            {"header_name": "X-User", "litellm_user_role": "customer"},
+        ],
+        ids=["list-of-mappings", "bare-mapping"],
+    )
+    def test_keeps_identity_header_from_user_header_mappings(self, configured):
+        """get_internal_user_header_from_mapping and get_customer_user_header_from_mapping both
+        accept a bare mapping as well as a list, and config_settings.md documents the key as a
+        dict, so the exemption has to read both shapes."""
+        with patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"user_header_mappings": configured},
+            clear=False,
+        ):
+            with _configured_servers(_server_forwarding("X-User", "X-GitHub-Token")):
+                safe = logging_safe_mcp_headers({"x-user": "alice", "x-github-token": "ghp_secret"})
+
+        assert safe == {"x-user": "alice"}
+
     def test_keeps_authorization_classification_for_oauth_passthrough(self):
         """clean_headers already strips authorization, and claiming it here would change which
         header authenticated_with_header resolves to on a config that lists it by design."""

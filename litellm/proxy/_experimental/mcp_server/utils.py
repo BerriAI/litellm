@@ -914,7 +914,12 @@ def _identity_header_names() -> frozenset[str]:
     """Lowercased header names the deployment reads the caller's identity out of. A name here
     is a claim about who the caller is rather than a secret, and ``get_user_from_headers``
     resolves it off the request this module reconstructs, so dropping one would lose end user
-    attribution on the MCP paths that leave ``end_user_id`` unset at connect time."""
+    attribution on the MCP paths that leave ``end_user_id`` unset at connect time.
+
+    ``user_header_mappings`` is accepted as a bare mapping as well as a list of them, matching
+    ``get_internal_user_header_from_mapping`` and ``get_customer_user_header_from_mapping``.
+    Iterating the bare form without normalizing yields its keys, which would silently exempt
+    nothing."""
     try:
         from litellm.proxy.proxy_server import general_settings
     except ImportError:
@@ -922,7 +927,8 @@ def _identity_header_names() -> frozenset[str]:
     if not general_settings:
         return frozenset()
     user_header: Final = general_settings.get("user_header_name")
-    mappings: Final = general_settings.get("user_header_mappings") or ()
+    configured: Final = general_settings.get("user_header_mappings")
+    mappings: Final = configured if isinstance(configured, list) else (configured,) if configured else ()
     mapped: Final = (mapping.get("header_name") for mapping in mappings if isinstance(mapping, Mapping))
     return frozenset(name.lower() for name in (user_header, *mapped) if isinstance(name, str) and name)
 
