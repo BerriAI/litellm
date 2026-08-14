@@ -1,5 +1,5 @@
 import React from "react";
-import { Form, Switch, Select, Tooltip } from "antd";
+import { Form, Switch, Select, Tooltip, DatePicker } from "antd";
 import { Text, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
 import { Row, Col, Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
@@ -9,6 +9,19 @@ import CacheControlSettings from "./cache_control_settings";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { Tag } from "../tag_management/types";
 import { formItemValidateJSON } from "../../utils/textUtils";
+import {
+  PTU_COUNT_FIELD,
+  PTU_RATE_FIELD,
+  PTU_START_FIELD,
+  ptuCountRules,
+  ptuNoUsageCostRule,
+  ptuPairRule,
+  ptuRateRules,
+  ptuStartRequiredRule,
+  ptuWindowOrderRule,
+  PTU_END_FIELD,
+} from "../../utils/ptuValidation";
+import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
 const { Link } = Typography;
 
 interface AdvancedSettingsProps {
@@ -32,6 +45,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   const [customPricing, setCustomPricing] = React.useState(false);
   const [pricingModel, setPricingModel] = React.useState<"per_token" | "per_second">("per_token");
   const [showCacheControl, setShowCacheControl] = React.useState(false);
+  const ptuCostAttributionEnabled = usePtuCostAttributionEnabled();
 
   // Add validation function for numbers
   const validateNumber = (_: any, value: string) => {
@@ -182,6 +196,54 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               />
             </Form.Item>
 
+            {ptuCostAttributionEnabled && (
+              <>
+                <Form.Item
+                  label="PTU Count"
+                  name={PTU_COUNT_FIELD}
+                  dependencies={[PTU_RATE_FIELD]}
+                  rules={[{ validator: validateNumber }, ...ptuCountRules, ptuPairRule(PTU_RATE_FIELD)]}
+                  tooltip="Provisioned throughput units for this deployment. Set together with Cost per PTU / Hour and a Team to attribute a flat daily cost."
+                  className="mb-4"
+                >
+                  <TextInput placeholder="e.g. 15" />
+                </Form.Item>
+
+                <Form.Item
+                  label="Calculated Cost per PTU / Hour (USD)"
+                  name={PTU_RATE_FIELD}
+                  dependencies={[PTU_COUNT_FIELD]}
+                  rules={[{ validator: validateNumber }, ...ptuRateRules, ptuPairRule(PTU_COUNT_FIELD)]}
+                  tooltip="Flat cost = PTU count * this rate * active hours, attributed to the deployment's team."
+                  className="mb-4"
+                >
+                  <TextInput placeholder="e.g. 2.00" />
+                </Form.Item>
+
+                <Form.Item
+                  label="PTU Effective From (UTC)"
+                  name={PTU_START_FIELD}
+                  dependencies={[PTU_COUNT_FIELD, PTU_END_FIELD]}
+                  rules={[ptuStartRequiredRule(PTU_COUNT_FIELD), ptuWindowOrderRule(PTU_END_FIELD, "start")]}
+                  tooltip="Start of the PTU window, required when PTU Count is set. Flat cost accrues by the hour within the window; a window opening at 23:00 charges one hour that day."
+                  className="mb-4"
+                >
+                  <DatePicker showTime style={{ width: "100%" }} />
+                </Form.Item>
+
+                <Form.Item
+                  label="PTU Effective To (UTC)"
+                  name={PTU_END_FIELD}
+                  dependencies={[PTU_START_FIELD]}
+                  rules={[ptuWindowOrderRule(PTU_START_FIELD, "end")]}
+                  tooltip="Optional end of the PTU window (exclusive). Leave blank for open-ended."
+                  className="mb-4"
+                >
+                  <DatePicker showTime style={{ width: "100%" }} />
+                </Form.Item>
+              </>
+            )}
+
             {customPricing && (
               <div className="ml-6 pl-4 border-l-2 border-gray-200">
                 <Form.Item label="Pricing Model" name="pricing_model" className="mb-4">
@@ -200,7 +262,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <Form.Item
                       label="Input Cost (per 1M tokens)"
                       name="input_cost_per_token"
-                      rules={[{ validator: validateNumber }]}
+                      dependencies={[PTU_COUNT_FIELD]}
+                      rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       className="mb-4"
                     >
                       <TextInput />
@@ -208,7 +271,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <Form.Item
                       label="Output Cost (per 1M tokens)"
                       name="output_cost_per_token"
-                      rules={[{ validator: validateNumber }]}
+                      dependencies={[PTU_COUNT_FIELD]}
+                      rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       className="mb-4"
                     >
                       <TextInput />
@@ -216,7 +280,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <Form.Item
                       label="Cache Read Cost (per 1M tokens)"
                       name="cache_read_input_token_cost"
-                      rules={[{ validator: validateNumber }]}
+                      dependencies={[PTU_COUNT_FIELD]}
+                      rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       tooltip="If left blank, defaults to Input Cost."
                       className="mb-4"
                     >
@@ -225,7 +290,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <Form.Item
                       label="Cache Write Cost (per 1M tokens)"
                       name="cache_creation_input_token_cost"
-                      rules={[{ validator: validateNumber }]}
+                      dependencies={[PTU_COUNT_FIELD]}
+                      rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       tooltip="If left blank, defaults to Input Cost (the backend falls back to input_cost_per_token when no cache-write rate is set)."
                       className="mb-4"
                     >
@@ -236,7 +302,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   <Form.Item
                     label="Cost Per Second"
                     name="input_cost_per_second"
-                    rules={[{ validator: validateNumber }]}
+                    dependencies={[PTU_COUNT_FIELD]}
+                    rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                     className="mb-4"
                   >
                     <TextInput />

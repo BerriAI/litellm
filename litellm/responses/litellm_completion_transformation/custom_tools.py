@@ -111,7 +111,7 @@ class _CustomToolFormat(BaseModel):
 _ALLOWED_CALLERS_ADAPTER: Final = TypeAdapter(list[str] | None)
 
 
-def _validated_allowed_callers(value: object) -> list[str] | None:
+def validated_allowed_callers(value: object) -> list[str] | None:
     try:
         return _ALLOWED_CALLERS_ADAPTER.validate_python(value, strict=True)
     except ValidationError as exc:
@@ -143,7 +143,7 @@ def convert_custom_tool_to_function_tool(tool: Mapping[str, object]) -> ChatComp
     name: Final = raw_name if isinstance(raw_name, str) else ""
     raw_description: Final = tool.get("description")
     description = (raw_description if isinstance(raw_description, str) else "") + _grammar_suffix(tool.get("format"))
-    allowed_callers: Final = _validated_allowed_callers(tool.get("allowed_callers"))
+    allowed_callers: Final = validated_allowed_callers(tool.get("allowed_callers"))
     function_chunk: Final = ChatCompletionToolParamFunctionChunk(
         name=name,
         description=description,

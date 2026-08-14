@@ -82,19 +82,6 @@ def test_handle_any_messages_to_chat_completion_str_messages_conversion_list():
     assert result[1] == messages[1]
 
 
-def test_handle_any_messages_to_chat_completion_str_messages_conversion_list_infinite_loop():
-    # Test that list handling doesn't cause infinite recursion
-    messages = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there"},
-    ]
-    # This should complete without stack overflow
-    result = handle_any_messages_to_chat_completion_str_messages_conversion(messages)
-    assert len(result) == 2
-    assert result[0] == messages[0]
-    assert result[1] == messages[1]
-
-
 def test_handle_any_messages_to_chat_completion_str_messages_conversion_dict():
     # Test with single dictionary message
     message = {"role": "user", "content": "Hello"}
@@ -721,6 +708,49 @@ class TestUnpackLegacyDefs:
         out = unpack_legacy_defs(schema)
         assert "components" not in out
         assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
+
+
+class TestTextCompletionPromptToMessages:
+    """`/v1/completions` prompt wrapping, shared by the real-time and batch paths."""
+
+    def test_string_prompt_becomes_single_user_message(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            text_completion_prompt_to_messages,
+        )
+
+        assert text_completion_prompt_to_messages("summarize this") == (
+            {"role": "user", "content": "summarize this"},
+        )
+
+    def test_list_of_strings_becomes_one_message_each(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            text_completion_prompt_to_messages,
+        )
+
+        assert text_completion_prompt_to_messages(["first", "second"]) == (
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+        )
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            [1, 2, 3],
+            [[1, 2], [3, 4]],
+            ["ok", 7],
+            [],
+            "",
+            None,
+            {"role": "user"},
+        ],
+    )
+    def test_unsupported_prompt_shapes_raise(self, prompt):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            text_completion_prompt_to_messages,
+        )
+
+        with pytest.raises(ValueError, match="non-empty string or a non-empty list of strings"):
+            text_completion_prompt_to_messages(prompt)
 
 
 class TestCustomToolFormatShapeConversion:

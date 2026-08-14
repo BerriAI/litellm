@@ -3,7 +3,7 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Union, cast
+from typing import TYPE_CHECKING, Any, Final, TypedDict, Union, cast
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import (
@@ -30,6 +30,7 @@ from litellm.types.utils import (
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
         UsagePerChunk,
     )
@@ -37,6 +38,60 @@ if TYPE_CHECKING:
         ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
     )
+
+
+class _ThinkingBlockFragment(TypedDict, total=False):
+    type: str | None
+    data: str | None
+    thinking: str | None
+    signature: str | None
+
+
+class _ThinkingDelta(TypedDict, total=False):
+    thinking_blocks: Sequence[_ThinkingBlockFragment]
+
+
+class _ThinkingChoice(TypedDict, total=False):
+    delta: _ThinkingDelta
+
+
+class _ThinkingChunk(TypedDict):
+    choices: Sequence[_ThinkingChoice]
+
+
+class _ContentChoice(TypedDict, total=False):
+    delta: Mapping[str, str | None]
+
+
+class _ContentChunk(TypedDict):
+    choices: Sequence[_ContentChoice]
+
+
+class _AudioDelta(TypedDict, total=False):
+    audio: ChatCompletionAudioDelta | None
+
+
+class _AudioChoice(TypedDict, total=False):
+    delta: _AudioDelta
+
+
+class _AudioChunk(TypedDict):
+    choices: Sequence[_AudioChoice]
+
+
+class _UsageBearingChunk(TypedDict, total=False):
+    usage: Usage | None
+    _hidden_params: Mapping[str, str]
+
+
+class _UsageSummary(TypedDict):
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    cache_creation_input_tokens: int | None
+    cache_read_input_tokens: int | None
+    completion_tokens_details: CompletionTokensDetails | None
+    prompt_tokens_details: PromptTokensDetailsWrapper | None
+    cost: float | None
 
 
 def capture_cache_creation_token_details(
@@ -78,7 +133,7 @@ class ChunkProcessor:
             return []
 
         first_chunk: Final = chunks[0]
-        first_hidden_params: dict[str, Any] = {}
+        first_hidden_params: dict[str, object] = {}
         if isinstance(first_chunk, dict):
             candidate = first_chunk.get("_hidden_params", {})
             if isinstance(candidate, dict):
@@ -90,7 +145,7 @@ class ChunkProcessor:
 
         if first_hidden_params.get("created_at"):
 
-            def _created_at(chunk: Any) -> int | float:
+            def _created_at(chunk: object) -> int | float:
                 if isinstance(chunk, dict):
                     params = chunk.get("_hidden_params", {})
                 else:
@@ -103,7 +158,7 @@ class ChunkProcessor:
         return chunks
 
     def update_model_response_with_hidden_params(
-        self, model_response: ModelResponse, chunk: dict[str, Any] | None = None
+        self, model_response: ModelResponse, chunk: Mapping[str, dict[str, object]] | None = None
     ) -> ModelResponse:
         if chunk is None:
             return model_response
@@ -115,13 +170,13 @@ class ChunkProcessor:
     @staticmethod
     def apply_provider_assembled_streaming_metadata(
         response: ModelResponse,
-        chunks: list[Any],
-        logging_obj: Any | None = None,
+        chunks: list[object],
+        logging_obj: "Logging | None" = None,
     ) -> None:
         if not chunks:
             return
 
-        model: Final = getattr(response, "model", None)
+        model: Final[str | None] = getattr(response, "model", None)
         if not model:
             return
 
@@ -159,7 +214,7 @@ class ChunkProcessor:
             )
 
     @staticmethod
-    def _get_chunk_id(chunks: list[dict[str, Any]]) -> str:
+    def _get_chunk_id(chunks: Sequence[Mapping[str, str]]) -> str:
         """
         Chunks:
         [{"id": ""}, {"id": "1"}, {"id": "1"}]
@@ -170,7 +225,7 @@ class ChunkProcessor:
         return ""
 
     @staticmethod
-    def _get_model_from_chunks(chunks: list[dict[str, Any]], first_chunk_model: str) -> str:
+    def _get_model_from_chunks(chunks: Sequence[Mapping[str, str]], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
 
@@ -456,7 +511,7 @@ class ChunkProcessor:
         )
 
     def get_combined_content(
-        self, chunks: list[dict[str, Any]], delta_key: str = "content"
+        self, chunks: Sequence["_ContentChunk"], delta_key: str = "content"
     ) -> ChatCompletionAssistantContentValue:
         content_list: Final[list[str]] = []
         for chunk in chunks:
@@ -475,7 +530,7 @@ class ChunkProcessor:
         return combined_content
 
     def get_combined_thinking_content(
-        self, chunks: list[dict[str, Any]]
+        self, chunks: Sequence["_ThinkingChunk"]
     ) -> list[Union["ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]] | None:
         from litellm.types.llms.openai import (
             ChatCompletionRedactedThinkingBlock,
@@ -532,10 +587,10 @@ class ChunkProcessor:
             return thinking_blocks
         return None
 
-    def get_combined_reasoning_content(self, chunks: list[dict[str, Any]]) -> ChatCompletionAssistantContentValue:
+    def get_combined_reasoning_content(self, chunks: Sequence["_ContentChunk"]) -> ChatCompletionAssistantContentValue:
         return self.get_combined_content(chunks, delta_key="reasoning_content")
 
-    def get_combined_audio_content(self, chunks: list[dict[str, Any]]) -> ChatCompletionAudioResponse:
+    def get_combined_audio_content(self, chunks: Sequence["_AudioChunk"]) -> ChatCompletionAudioResponse:
         base64_data_list: Final[list[str]] = []
         transcript_list: Final[list[str]] = []
         expires_at: int | None = None
@@ -544,7 +599,7 @@ class ChunkProcessor:
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
-                delta = choice.get("delta") or {}
+                delta: _AudioDelta = choice.get("delta") or {}
                 audio: ChatCompletionAudioDelta | None = delta.get("audio")
                 if audio is not None:
                     for k, v in audio.items():
@@ -565,7 +620,7 @@ class ChunkProcessor:
             id=id,
         )
 
-    def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> dict:
+    def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> "_UsageSummary":
         prompt_tokens = 0
         completion_tokens = 0
         ## anthropic prompt caching information ##
@@ -623,8 +678,8 @@ class ChunkProcessor:
         return reasoning_tokens
 
     @staticmethod
-    def _extract_usage_chunk(chunk: dict[str, Any] | ModelResponse | ModelResponseStream) -> Usage | None:
-        usage_chunk: Usage | dict[str, Any] | None = None
+    def _extract_usage_chunk(chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream") -> Usage | None:
+        usage_chunk: Usage | None = None
         if hasattr(chunk, "usage") and chunk.usage is not None:
             usage_chunk = chunk.usage
         elif "usage" in chunk:
@@ -640,7 +695,7 @@ class ChunkProcessor:
 
     def _calculate_usage_per_chunk(
         self,
-        chunks: list[dict[str, Any] | ModelResponse],
+        chunks: Sequence["_UsageBearingChunk | ModelResponse"],
     ) -> "UsagePerChunk":
         from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
             UsagePerChunk,
@@ -721,13 +776,7 @@ class ChunkProcessor:
                         "web_search_requests",
                     )
 
-                prompt_tokens_details = (
-                    cast(
-                        PromptTokensDetailsWrapper | None,
-                        usage_chunk_dict["prompt_tokens_details"],
-                    )
-                    or prompt_tokens_details
-                )
+                prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"] or prompt_tokens_details
 
                 cache_creation_token_details = capture_cache_creation_token_details(
                     prompt_tokens_details, cache_creation_token_details
@@ -754,11 +803,31 @@ class ChunkProcessor:
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
+            inference_geo=self._last_provider_pricing_field(chunks, "inference_geo"),
+            speed=self._last_provider_pricing_field(chunks, "speed"),
         )
+
+    def _last_provider_pricing_field(
+        self,
+        chunks: Sequence["_UsageBearingChunk | ModelResponse"],
+        field: str,
+    ) -> str | None:
+        """
+        Last value of a provider-specific usage field that changes pricing but is not a
+        declared ``Usage`` field, e.g. Anthropic's ``speed`` (fast mode multiplies
+        non-cache token cost) and ``inference_geo``.
+        """
+        values: Final = [
+            value
+            for chunk in chunks
+            if (usage_chunk := self._extract_usage_chunk(chunk)) is not None
+            and isinstance(value := getattr(usage_chunk, field, None), str)
+        ]
+        return values[-1] if values else None
 
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
-        chunks: list[dict[str, Any] | ModelResponse],
+        chunks: Sequence["_UsageBearingChunk | ModelResponse"],
         completion_tokens: int,
         completion_usage_updates: int,
     ) -> int:
@@ -797,7 +866,7 @@ class ChunkProcessor:
 
     def calculate_usage(
         self,
-        chunks: list[dict[str, Any] | ModelResponse],
+        chunks: Sequence["_UsageBearingChunk | ModelResponse"],
         model: str,
         completion_output: str,
         messages: list | None = None,
@@ -851,8 +920,8 @@ class ChunkProcessor:
             setattr(returned_usage, "cache_read_input_tokens", cache_read_input_tokens)  # for anthropic
         if completion_tokens_details is not None:
             if isinstance(completion_tokens_details, CompletionTokensDetails):
-                returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(
-                    **completion_tokens_details.model_dump()
+                returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper.model_validate(
+                    completion_tokens_details.model_dump()
                 )
             else:
                 returned_usage.completion_tokens_details = completion_tokens_details
@@ -885,7 +954,16 @@ class ChunkProcessor:
 
         # Return a new usage object with the new values
 
-        returned_usage = Usage(**returned_usage.model_dump())
+        provider_pricing_fields: Final = {
+            field: value
+            for field, value in (
+                ("inference_geo", calculated_usage_per_chunk["inference_geo"]),
+                ("speed", calculated_usage_per_chunk["speed"]),
+            )
+            if value is not None
+        }
+
+        returned_usage = Usage(**returned_usage.model_dump(), **provider_pricing_fields)
 
         return returned_usage
 

@@ -47,6 +47,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
 }));
 
+const mockUsePtuCostAttributionEnabled = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () => ({
+  usePtuCostAttributionEnabled: () => mockUsePtuCostAttributionEnabled(),
+}));
+
 const mockNotificationsManager = vi.mocked(NotificationsManager);
 const mockModelInfoV1Call = vi.mocked(networking.modelInfoV1Call);
 const mockCredentialGetCall = vi.mocked(networking.credentialGetCall);
@@ -99,6 +104,7 @@ describe("ModelInfoView", () => {
       },
     });
     vi.clearAllMocks();
+    mockUsePtuCostAttributionEnabled.mockReturnValue(false);
 
     mockUseModelsInfo.mockReturnValue({
       data: {
@@ -606,6 +612,169 @@ describe("ModelInfoView", () => {
 
     const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
     expect(updatePayload.litellm_params).not.toHaveProperty("vector_store_ids");
+  });
+
+  describe("PTU cost attribution gate", () => {
+    const ptuModelData = {
+      ...defaultModelData,
+      // Zero per-token pricing is what the backend stores for a PTU deployment, since the flat
+      // cost of its reserved capacity already covers the traffic that capacity serves.
+      litellm_params: { ...defaultModelData.litellm_params, input_cost_per_token: 0, output_cost_per_token: 0 },
+      model_info: {
+        ...defaultModelData.model_info,
+        team_id: "team-1",
+        input_cost_per_token: 0,
+        output_cost_per_token: 0,
+        ptu_count: 15,
+        cost_per_ptu_per_hour: 2,
+        ptu_effective_from: "2026-07-01T00:00:00+00:00",
+        ptu_effective_to: "2026-08-01T00:00:00+00:00",
+      },
+    };
+
+    const renderWithPtuModel = () => {
+      mockUseModelsInfo.mockReturnValue({ data: { data: [ptuModelData] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [ptuModelData] });
+      return render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    };
+
+    it("hides the PTU fields when disabled, even for a model that already stores PTU config", async () => {
+      renderWithPtuModel();
+
+      await waitFor(() => {
+        expect(screen.getByText("Model Settings")).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText("PTU Count")).not.toBeInTheDocument();
+      expect(screen.queryByText("Cost per PTU / Hour (USD)")).not.toBeInTheDocument();
+      expect(screen.queryByText("PTU Effective From (UTC)")).not.toBeInTheDocument();
+      expect(screen.queryByText("PTU Effective To (UTC)")).not.toBeInTheDocument();
+    });
+
+    it("shows the PTU fields when enabled", async () => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      renderWithPtuModel();
+
+      await waitFor(() => {
+        expect(screen.getByText("PTU Count")).toBeInTheDocument();
+      });
+      expect(screen.getByText("Cost per PTU / Hour (USD)")).toBeInTheDocument();
+      expect(screen.getByText("PTU Effective From (UTC)")).toBeInTheDocument();
+      expect(screen.getByText("PTU Effective To (UTC)")).toBeInTheDocument();
+    });
+
+    it("omits PTU fields from the save payload when disabled, so an unrelated edit cannot clear stored config", async () => {
+      const user = userEvent.setup();
+      renderWithPtuModel();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+
+      const modelInfo = mockModelPatchUpdateCall.mock.calls[0][1].model_info;
+      expect(modelInfo).not.toHaveProperty("ptu_count");
+      expect(modelInfo).not.toHaveProperty("cost_per_ptu_per_hour");
+      expect(modelInfo).not.toHaveProperty("ptu_effective_from");
+      expect(modelInfo).not.toHaveProperty("ptu_effective_to");
+    });
+
+    it("shows a zeroed PTU price as 0.0000 rather than Not Set", async () => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      renderWithPtuModel();
+
+      await waitFor(() => {
+        expect(screen.getByText("Input Cost (per 1M tokens)")).toBeInTheDocument();
+      });
+      for (const label of ["Input Cost (per 1M tokens)", "Output Cost (per 1M tokens)"]) {
+        expect(screen.getByText(label).parentElement).toHaveTextContent("0.0000");
+      }
+    });
+
+    it("blocks the save once the operator types a non-zero per-token cost alongside PTU config", async () => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      const user = userEvent.setup();
+      renderWithPtuModel();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("Enter input cost")).toBeInTheDocument();
+      });
+      await user.clear(screen.getByPlaceholderText("Enter input cost"));
+      await user.type(screen.getByPlaceholderText("Enter input cost"), "2.5");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/bills by reserved capacity/i)).toBeInTheDocument();
+      });
+      expect(mockModelPatchUpdateCall).not.toHaveBeenCalled();
+    });
+
+    it("lets the operator put a cost-map-priced deployment on PTU without clearing the seeded rate", async () => {
+      // A rate the form seeded from /model/info is the server's own, so refusing it blocked
+      // every attempt to enable PTU from the dashboard.
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      const seededModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1", input_cost_per_token: 0.0000003 },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [seededModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [seededModel] });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("e.g. 15")).toBeInTheDocument();
+      });
+      await user.type(screen.getByPlaceholderText("e.g. 15"), "15");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(screen.queryByText(/bills by reserved capacity/i)).not.toBeInTheDocument();
+      });
+    });
+
+    it("sends the PTU fields on save when enabled", async () => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      const user = userEvent.setup();
+      renderWithPtuModel();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+
+      const modelInfo = mockModelPatchUpdateCall.mock.calls[0][1].model_info;
+      expect(modelInfo.ptu_count).toBe(15);
+      expect(modelInfo.cost_per_ptu_per_hour).toBe(2);
+    });
   });
 
   it("should not include input_cost_per_token or output_cost_per_token in update payload when user does not touch cost fields", async () => {

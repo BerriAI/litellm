@@ -15,6 +15,7 @@ import ChatMessages from "@/components/chat/ChatMessages";
 import MCPConnectPicker from "@/components/chat/MCPConnectPicker";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
+import type { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import type { MCPEvent } from "@/components/chat/types";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 
@@ -202,8 +203,8 @@ export default function ChatConversationPage() {
             accumulatedReasoning += rc;
             updateLastAssistantMessage(convId!, { reasoningContent: accumulatedReasoning });
           },
-          undefined,
-          undefined,
+          (timeToFirstToken: number) => updateLastAssistantMessage(convId!, { timeToFirstToken }),
+          (usage: TokenUsage) => updateLastAssistantMessage(convId!, { usage }),
           undefined,
           undefined,
           undefined,
@@ -216,6 +217,14 @@ export default function ChatConversationPage() {
             // one full localStorage write per MCP event during streaming.
             accumulatedMCPEvents.push(event);
           },
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          true,
+          (totalLatency: number) => updateLastAssistantMessage(convId!, { totalLatency }),
         );
         streamCompletedCleanly = true;
       } catch (err: unknown) {
