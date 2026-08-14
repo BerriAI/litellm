@@ -397,7 +397,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 other_keys,
                 model,
             )
-        if "reasoning_effort" in optional_params or "thinking" in optional_params:
+        if any(key in optional_params or key in extra_body for key in ("reasoning_effort", "thinking")):
             verbose_logger.debug(
                 "fireworks_ai ignoring chat_template_kwargs; explicit reasoning_effort/thinking takes precedence."
             )

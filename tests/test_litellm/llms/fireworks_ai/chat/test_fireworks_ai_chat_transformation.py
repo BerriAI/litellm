@@ -1418,6 +1418,25 @@ def test_map_extra_body_params_chat_template_kwargs_native_thinking_wins():
     assert result == {"thinking": thinking}
 
 
+def test_map_extra_body_params_chat_template_kwargs_extra_body_thinking_wins():
+    config = FireworksAIConfig()
+    thinking = {"type": "enabled", "budget_tokens": 4096}
+    result = config.map_extra_body_params(
+        {"extra_body": {"thinking": thinking, "chat_template_kwargs": {"enable_thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"extra_body": {"thinking": thinking}}
+
+
+def test_map_extra_body_params_chat_template_kwargs_extra_body_reasoning_effort_wins():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"reasoning_effort": "high", "chat_template_kwargs": {"enable_thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"extra_body": {"reasoning_effort": "high"}}
+
+
 def test_map_extra_body_params_chat_template_kwargs_dropped_for_non_reasoning_model():
     config = FireworksAIConfig()
     result = config.map_extra_body_params(

@@ -73,6 +73,16 @@ def test_map_extra_body_params_chat_template_kwargs_dropped_for_non_reasoning_mo
     assert result == {}
 
 
+def test_map_extra_body_params_chat_template_kwargs_extra_body_thinking_wins():
+    config = FireworksAITextCompletionConfig()
+    thinking = {"type": "enabled", "budget_tokens": 4096}
+    result = config.map_extra_body_params(
+        {"extra_body": {"thinking": thinking, "chat_template_kwargs": {"enable_thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"extra_body": {"thinking": thinking}}
+
+
 def test_map_extra_body_params_top_level_reasoning_effort_moves_into_extra_body():
     config = FireworksAITextCompletionConfig()
     result = config.map_extra_body_params(

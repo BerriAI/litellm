@@ -127,7 +127,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
         effort: Final = _effort_from_chat_template_kwargs(chat_template_kwargs)
         if effort is None:
             return result
-        if "reasoning_effort" in result or "thinking" in optional_params:
+        if any(key in result or key in optional_params for key in ("reasoning_effort", "thinking")):
             verbose_logger.debug(
                 "fireworks_ai ignoring chat_template_kwargs; explicit reasoning_effort/thinking takes precedence."
             )
