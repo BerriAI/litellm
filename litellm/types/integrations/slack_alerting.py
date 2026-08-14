@@ -125,6 +125,10 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         ge=60,
         description="How often (in seconds) to check per-user spend thresholds and anomalies. Default is hourly.",
     )
+    spend_report_include_tags: bool = Field(
+        default=True,
+        description="If false, spend reports drop the per-tag breakdown and keep the per-team one. Tags stay tracked.",
+    )
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):

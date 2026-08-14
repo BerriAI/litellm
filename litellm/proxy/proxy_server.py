@@ -15243,7 +15243,7 @@ async def alerting_settings(
     Used by UI to generate 'alerting settings' page
     {
         field_name=field_name,
-        field_type=allowed_args[field_name]["type"], # string/int
+        field_type=allowed_args[field_name], # string/int
         field_description=field_info.description or "", # human-friendly description
         field_value=general_settings.get(field_name, None), # example value
     }
@@ -15294,6 +15294,7 @@ async def alerting_settings(
             "spend_anomaly_baseline_days": "Integer",
             "spend_anomaly_min_spend": "Float",
             "user_spend_check_interval": "Integer",
+            "spend_report_include_tags": "Boolean",
         }
     )
 
