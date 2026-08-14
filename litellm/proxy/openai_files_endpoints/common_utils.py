@@ -1273,6 +1273,7 @@ async def update_batch_in_database(
     db_batch_object=None,
     operation: str = "update",
     user_api_key_dict=None,
+    poller_owns_accounting: bool | None = None,
 ):
     """
     Update batch status and object in ManagedObjectTable.
@@ -1287,6 +1288,12 @@ async def update_batch_in_database(
         db_batch_object: Optional existing database object; fetched by unified_object_id when omitted
         operation: Description of operation ("update", "cancel", etc.)
         user_api_key_dict: Optional auth context for creating managed file IDs
+        poller_owns_accounting: Whether the caller already decided that the cost poller
+            owns this batch's accounting. Callers that suppress their own inline
+            accounting must pass the same decision they acted on, because re-deciding
+            here can observe a poller that became usable in between and leave the batch
+            unmarked after it was already accounted for, billing it twice. Left None by
+            callers that record no cost themselves.
     """
     import litellm.utils
 
@@ -1336,7 +1343,10 @@ async def update_batch_in_database(
             "updated_at": litellm.utils.get_utc_datetime(),
         }
 
-        if db_status == "complete" and not batch_cost_poller_is_active():
+        poller_owns: Final = (
+            batch_cost_poller_is_active() if poller_owns_accounting is None else poller_owns_accounting
+        )
+        if db_status == "complete" and not poller_owns:
             update_data["batch_processed"] = True
 
         try:
