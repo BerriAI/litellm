@@ -9,11 +9,14 @@ key only when the group lists the key's token (or the key's team). The access-gr
 endpoints maintain both halves already; this module is what the key write paths call
 so an edit from that side is mirrored back.
 
-Both writes are single guarded statements rather than read-modify-writes. Prisma has no
+Every write is a single guarded statement rather than a read-modify-write. Prisma has no
 atomic scalar-list removal (see `TeamRepository.remove_member`), and the read-modify-write
 it otherwise forces is not safe here: a lost update would put an already revoked token back
 into a group and restore its grants, or drop a grant an admin just made. The guards also
-make each statement idempotent, so a retry cannot duplicate an entry.
+make each statement idempotent, so a retry cannot duplicate an entry. Each statement covers
+every group the request touches at once, so the size of the caller's id list does not turn
+into a matching number of round trips, and returns the ids it actually moved so only those
+groups are dropped from cache.
 
 It deliberately lives outside `access_group_endpoints`, which is a lazily
 registered feature router (see `_lazy_features.LAZY_FEATURES`). Importing that
@@ -24,6 +27,8 @@ schema.
 
 from collections.abc import Sequence
 from typing import Final, Protocol
+
+from pydantic import BaseModel
 
 from litellm.proxy._types import (
     LiteLLM_VerificationToken,
@@ -36,20 +41,33 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.repositories.table_repositories import AccessGroupRepository
 
 
+class _MovedGroupRow(BaseModel):
+    access_group_id: str
+
+
 class _RawExecutor(Protocol):
-    async def execute_raw(self, query: str, *args: str) -> int: ...
+    async def query_raw(self, query: str, *args: str | Sequence[str]) -> Sequence[object]: ...
 
 
 _ATTACH_KEY_SQL: Final = (
     'UPDATE "LiteLLM_AccessGroupTable" '
     'SET "assigned_key_ids" = array_append("assigned_key_ids", $1) '
-    'WHERE "access_group_id" = $2 AND NOT ($1 = ANY("assigned_key_ids"))'
+    'WHERE "access_group_id" = ANY($2::text[]) AND NOT ($1 = ANY("assigned_key_ids")) '
+    'RETURNING "access_group_id"'
 )
 
 _DETACH_KEY_SQL: Final = (
     'UPDATE "LiteLLM_AccessGroupTable" '
     'SET "assigned_key_ids" = array_remove("assigned_key_ids", $1) '
-    'WHERE "access_group_id" = $2 AND $1 = ANY("assigned_key_ids")'
+    'WHERE "access_group_id" = ANY($2::text[]) AND $1 = ANY("assigned_key_ids") '
+    'RETURNING "access_group_id"'
+)
+
+_REPOINT_KEY_SQL: Final = (
+    'UPDATE "LiteLLM_AccessGroupTable" '
+    'SET "assigned_key_ids" = array_append(array_remove(array_remove("assigned_key_ids", $1), $2), $2) '
+    'WHERE $1 = ANY("assigned_key_ids") '
+    'RETURNING "access_group_id"'
 )
 
 
@@ -74,11 +92,18 @@ async def _invalidate_access_group_cache(access_group_id: str) -> None:
     )
 
 
-async def _write_membership(prisma_client: object, sql: str, access_group_id: str, key_token: str) -> None:
-    """Run one guarded membership statement, invalidating the group's cache only if a row moved."""
-    rows_changed: Final = await _raw_executor(prisma_client).execute_raw(sql, key_token, access_group_id)
-    if rows_changed:
-        await _invalidate_access_group_cache(access_group_id)
+async def _invalidate_moved_groups(moved_rows: Sequence[object]) -> None:
+    for row in moved_rows:
+        await _invalidate_access_group_cache(_MovedGroupRow.model_validate(row).access_group_id)
+
+
+async def _write_membership(prisma_client: object, sql: str, access_group_ids: frozenset[str], key_token: str) -> None:
+    """Run one guarded membership statement for every listed group, dropping the cache of those it moved."""
+    if not access_group_ids:
+        return
+    await _invalidate_moved_groups(
+        await _raw_executor(prisma_client).query_raw(sql, key_token, sorted(access_group_ids))
+    )
 
 
 async def sync_key_access_group_membership(
@@ -90,13 +115,9 @@ async def sync_key_access_group_membership(
     """Mirror a key-side change to `access_group_ids` onto each access group's `assigned_key_ids`."""
     previous: Final = frozenset(previous_access_group_ids or ())
     updated: Final = frozenset(updated_access_group_ids or ())
-    added: Final = updated - previous
-    removed: Final = previous - updated
 
-    for access_group_id in added:
-        await _write_membership(prisma_client, _ATTACH_KEY_SQL, access_group_id, key_token)
-    for access_group_id in removed:
-        await _write_membership(prisma_client, _DETACH_KEY_SQL, access_group_id, key_token)
+    await _write_membership(prisma_client, _ATTACH_KEY_SQL, updated - previous, key_token)
+    await _write_membership(prisma_client, _DETACH_KEY_SQL, previous - updated, key_token)
 
 
 async def sync_key_update_access_group_membership(
@@ -135,22 +156,18 @@ async def sync_key_regeneration_access_group_membership(
 
     Regeneration replaces the token, which is the identity `assigned_key_ids` stores, so
     leaving the old hash behind both points the group at a row that no longer exists and
-    denies the regenerated key the group's grants.
+    denies the regenerated key the group's grants. The swap is driven by the groups that
+    hold the old token when the statement runs, not by the key row read earlier, so a group
+    edited in between is neither resurrected nor skipped. Removing the new token before
+    appending it keeps a re-run from duplicating it.
     """
-    regenerated_access_group_ids: Final = (
-        data.access_group_ids
-        if data is not None and "access_group_ids" in data.model_fields_set
-        else existing_key_row.access_group_ids
+    await _invalidate_moved_groups(
+        await _raw_executor(prisma_client).query_raw(_REPOINT_KEY_SQL, previous_key_token, new_key_token)
     )
-    await sync_key_access_group_membership(
-        prisma_client=prisma_client,
-        key_token=previous_key_token,
-        previous_access_group_ids=existing_key_row.access_group_ids,
-        updated_access_group_ids=None,
-    )
-    await sync_key_access_group_membership(
-        prisma_client=prisma_client,
-        key_token=new_key_token,
-        previous_access_group_ids=None,
-        updated_access_group_ids=regenerated_access_group_ids,
-    )
+    if data is not None:
+        await sync_key_update_access_group_membership(
+            prisma_client=prisma_client,
+            key_token=new_key_token,
+            data=data,
+            existing_key_row=existing_key_row,
+        )

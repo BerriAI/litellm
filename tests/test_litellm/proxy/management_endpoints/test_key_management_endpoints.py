@@ -791,7 +791,7 @@ async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=MagicMock(object_permission_id=None)
     )
-    mock_prisma_client.db.execute_raw = AsyncMock(return_value=0)
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
 
     captured_key_data = {}
 
@@ -15707,6 +15707,7 @@ async def test_key_generate_omitted_budget_duration_still_filled_by_upperbound(m
 from litellm.proxy.management_helpers.access_group_key_sync import (
     _ATTACH_KEY_SQL,
     _DETACH_KEY_SQL,
+    _REPOINT_KEY_SQL,
 )
 
 ACCESS_GROUP_SYNC_TOKEN = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
@@ -15716,29 +15717,63 @@ def _access_group_table_mocks(monkeypatch, mock_prisma_client, access_groups):
     """
     Back the access group table with an in-memory dict so the sync's writes are observable.
 
-    The sync writes through two guarded SQL statements, so this emulates exactly what
-    Postgres does with them, including the guard that makes each one idempotent.
+    The sync writes through guarded set-based SQL statements, so this emulates exactly what
+    Postgres does with them, including the guards that make each one idempotent and the
+    `RETURNING` clause that reports which groups actually moved.
     """
 
-    async def _execute_raw(query, *args):
-        key_token, access_group_id = args
-        stored = access_groups.get(access_group_id)
-        if stored is None:
-            return 0
-        current = stored["assigned_key_ids"]
-        if query == _ATTACH_KEY_SQL:
-            if key_token in current:
-                return 0
-            stored["assigned_key_ids"] = [*current, key_token]
-            return 1
-        assert query == _DETACH_KEY_SQL, f"unexpected statement: {query}"
-        if key_token not in current:
-            return 0
-        stored["assigned_key_ids"] = [t for t in current if t != key_token]
-        return 1
+    def _repoint(previous_token, new_token):
+        moved = [
+            group_id
+            for group_id, stored in access_groups.items()
+            if previous_token in stored["assigned_key_ids"]
+        ]
+        for group_id in moved:
+            current = access_groups[group_id]["assigned_key_ids"]
+            access_groups[group_id]["assigned_key_ids"] = [
+                *(t for t in current if t not in (previous_token, new_token)),
+                new_token,
+            ]
+        return moved
 
-    raw_mock = AsyncMock(side_effect=_execute_raw)
-    mock_prisma_client.db.execute_raw = raw_mock
+    def _attach(key_token, access_group_ids):
+        moved = [
+            group_id
+            for group_id in access_group_ids
+            if group_id in access_groups
+            and key_token not in access_groups[group_id]["assigned_key_ids"]
+        ]
+        for group_id in moved:
+            stored = access_groups[group_id]
+            stored["assigned_key_ids"] = [*stored["assigned_key_ids"], key_token]
+        return moved
+
+    def _detach(key_token, access_group_ids):
+        moved = [
+            group_id
+            for group_id in access_group_ids
+            if group_id in access_groups
+            and key_token in access_groups[group_id]["assigned_key_ids"]
+        ]
+        for group_id in moved:
+            stored = access_groups[group_id]
+            stored["assigned_key_ids"] = [
+                t for t in stored["assigned_key_ids"] if t != key_token
+            ]
+        return moved
+
+    async def _query_raw(query, *args):
+        if query == _REPOINT_KEY_SQL:
+            moved = _repoint(*args)
+        elif query == _ATTACH_KEY_SQL:
+            moved = _attach(*args)
+        else:
+            assert query == _DETACH_KEY_SQL, f"unexpected statement: {query}"
+            moved = _detach(*args)
+        return [{"access_group_id": group_id} for group_id in moved]
+
+    raw_mock = AsyncMock(side_effect=_query_raw)
+    mock_prisma_client.db.query_raw = raw_mock
     return raw_mock
 
 
@@ -15862,8 +15897,8 @@ async def test_update_key_syncs_access_group_assigned_key_ids_in_both_directions
     # can put an already revoked token back and restore its grants.
     assert sorted(call.args for call in raw_mock.call_args_list) == sorted(
         [
-            (_ATTACH_KEY_SQL, ACCESS_GROUP_SYNC_TOKEN, "ag-add"),
-            (_DETACH_KEY_SQL, ACCESS_GROUP_SYNC_TOKEN, "ag-drop"),
+            (_ATTACH_KEY_SQL, ACCESS_GROUP_SYNC_TOKEN, ["ag-add"]),
+            (_DETACH_KEY_SQL, ACCESS_GROUP_SYNC_TOKEN, ["ag-drop"]),
         ]
     )
     assert {call.args[0] for call in invalidate_cache.call_args_list} == {
@@ -16216,8 +16251,8 @@ async def test_key_write_paths_revoke_the_key_cache_before_syncing_access_groups
     )
     mock_prisma_client.update_data = AsyncMock(return_value={"data": {}})
     _access_group_table_mocks(monkeypatch, mock_prisma_client, access_groups)
-    mock_prisma_client.db.execute_raw = AsyncMock(
-        side_effect=lambda *a, **k: order.append("sync") or 1
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=lambda *a, **k: order.append("sync") or []
     )
     _setup_update_key_mocks(monkeypatch, mock_prisma_client)
 
@@ -16244,3 +16279,168 @@ async def test_key_write_paths_revoke_the_key_cache_before_syncing_access_groups
         )
 
     assert order == ["revoke_key_cache", "sync"]
+
+
+@pytest.mark.asyncio
+async def test_update_key_syncs_many_access_groups_in_one_statement_per_direction(
+    monkeypatch,
+):
+    """
+    The number of groups on a request must not become a matching number of round trips.
+
+    Anyone allowed to assign access groups picks the size of `access_group_ids`, so a
+    per-group statement lets one /key/update hold a connection for hundreds of sequential
+    writes. Both halves are set-based, so the cost is two statements no matter the size.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    dropped = [f"ag-drop-{i}" for i in range(60)]
+    added = [f"ag-add-{i}" for i in range(60)]
+    key_in_db = LiteLLM_VerificationToken(
+        token=ACCESS_GROUP_SYNC_TOKEN,
+        user_id="test-user",
+        access_group_ids=dropped,
+    )
+    access_groups = {
+        **{
+            group_id: {
+                "assigned_key_ids": [ACCESS_GROUP_SYNC_TOKEN],
+                "access_model_names": [f"{group_id}-model"],
+            }
+            for group_id in dropped
+        },
+        **{
+            group_id: {"assigned_key_ids": [], "access_model_names": [f"{group_id}-model"]}
+            for group_id in added
+        },
+    }
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_in_db
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": {}})
+    raw_mock = _access_group_table_mocks(
+        monkeypatch, mock_prisma_client, access_groups
+    )
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_helpers.access_group_key_sync._invalidate_access_group_cache",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(
+                key=ACCESS_GROUP_SYNC_TOKEN, access_group_ids=added
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin-user",
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert [call.args[0] for call in raw_mock.call_args_list] == [
+        _ATTACH_KEY_SQL,
+        _DETACH_KEY_SQL,
+    ]
+    assert sorted(raw_mock.call_args_list[0].args[2]) == sorted(added)
+    assert sorted(raw_mock.call_args_list[1].args[2]) == sorted(dropped)
+    assert all(
+        access_groups[group_id]["assigned_key_ids"] == [ACCESS_GROUP_SYNC_TOKEN]
+        for group_id in added
+    )
+    assert all(access_groups[group_id]["assigned_key_ids"] == [] for group_id in dropped)
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_repoints_live_membership_not_the_key_row_it_read(
+    monkeypatch,
+):
+    """
+    Regeneration must move whatever the groups hold when it writes, not the key row's list.
+
+    That list is read before the new token exists, so replaying it re-adds the key to a
+    group an admin revoked in between and leaves the dead hash in a group an admin attached
+    in between, which silently restores one grant and drops another.
+    """
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+    from litellm.proxy.utils import hash_token
+
+    new_token_hash = hash_token("sk-newtoken1234ab12")
+    existing_key = LiteLLM_VerificationToken(
+        token="abc123",
+        user_id="user-1",
+        models=["gpt-4"],
+        access_group_ids=["ag-revoked-since"],
+    )
+    access_groups = {
+        "ag-revoked-since": {
+            "assigned_key_ids": [],
+            "access_model_names": ["revoked-model"],
+        },
+        "ag-attached-since": {
+            "assigned_key_ids": ["abc123"],
+            "access_model_names": ["attached-model"],
+        },
+    }
+
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    _access_group_table_mocks(monkeypatch, mock_prisma_client, access_groups)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_helpers.access_group_key_sync._invalidate_access_group_cache",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert access_groups["ag-revoked-since"]["assigned_key_ids"] == []
+    assert access_groups["ag-attached-since"]["assigned_key_ids"] == [new_token_hash]
+    assert await _authorized_models_for_key(
+        access_groups, new_token_hash, ["ag-revoked-since", "ag-attached-since"]
+    ) == ["attached-model"]
