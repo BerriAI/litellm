@@ -3112,7 +3112,7 @@ async def test_file_list_cursors_follow_the_owner_scoped_page():
 
     upstream_page = AsyncCursorPage[FileObject].construct(
         data=[_raw_file("file-someone-else"), _raw_file("file-mine")],
-        has_more=False,
+        has_more=True,
         first_id="file-someone-else",
         last_id="file-mine",
         object="list",
@@ -3146,3 +3146,4 @@ async def test_file_list_cursors_follow_the_owner_scoped_page():
     assert [file_object.id for file_object in response.data] == ["litellm_proxy:mine"]
     assert response.first_id == "litellm_proxy:mine"
     assert response.last_id == "litellm_proxy:mine"
+    assert response.has_more is False

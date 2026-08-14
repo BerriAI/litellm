@@ -3,7 +3,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Final, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -22,6 +22,15 @@ if TYPE_CHECKING:
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
+
+TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
+    "completed",
+    "complete",
+    "failed",
+    "expired",
+    "cancelled",
+    "stale_expired",
+)
 
 
 class CheckBatchCost:
@@ -132,11 +141,11 @@ class CheckBatchCost:
         in non-terminal states as 'stale_expired'. These will never complete and
         should not be polled.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
-        result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+        cutoff: Final = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+        result: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
             where={
                 "file_purpose": "batch",
-                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
+                "status": {"not_in": list(TERMINAL_MANAGED_OBJECT_STATUSES)},
                 "created_at": {"lt": cutoff},
             },
             data={"status": "stale_expired"},
@@ -145,6 +154,26 @@ class CheckBatchCost:
             verbose_proxy_logger.warning(
                 f"CheckBatchCost: marked {result} stale managed objects "
                 f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
+            )
+
+        if not self._has_batch_processed_column:
+            return
+
+        # A row already in a terminal status is never rewritten by the sweep above, so
+        # without this it keeps a poll-page slot forever and starves newer batches.
+        retired: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            where={
+                "file_purpose": "batch",
+                "batch_processed": False,
+                "status": {"in": ["complete", "completed"]},
+                "created_at": {"lt": cutoff},
+            },
+            data={"batch_processed": True},
+        )
+        if retired > 0:
+            verbose_proxy_logger.warning(
+                f"CheckBatchCost: gave up on {retired} completed managed objects older than "
+                f"{MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days that were never costed"
             )
 
     async def _fallback_find_jobs(self) -> list:
@@ -166,6 +195,68 @@ class CheckBatchCost:
             take=MAX_OBJECTS_PER_POLL_CYCLE,
             order={"created_at": "asc"},
         )
+
+    async def _retire_job(self, job: "LiteLLM_ManagedObjectTable", reason: str) -> None:
+        """
+        Take a row that can never be costed out of the poll page. Leaving it selectable
+        would burn one of the MAX_OBJECTS_PER_POLL_CYCLE slots on every future cycle, and
+        once enough such rows accumulate no newer batch is ever reached. Older schemas
+        without batch_processed can only be excluded through the status filter.
+        """
+        data: Final = (
+            {"batch_processed": True}
+            if self._has_batch_processed_column
+            else {"status": "stale_expired"}
+        )
+        try:
+            await self.prisma_client.db.litellm_managedobjecttable.update(
+                where={"id": job.id},
+                data=data,
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: failed to retire uncostable job {job.id} ({reason}): {db_err}"
+            )
+            return
+        verbose_proxy_logger.warning(
+            f"CheckBatchCost: job {job.id} can never be costed ({reason}), "
+            "so it will no longer be polled"
+        )
+
+    @staticmethod
+    def _has_unified_id_without_model(job: "LiteLLM_ManagedObjectTable") -> bool:
+        """A unified id that decodes but carries no model_id can never be routed."""
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            convert_b64_uid_to_unified_uid,
+            get_model_id_from_unified_batch_id,
+        )
+
+        decoded: Final = convert_b64_uid_to_unified_uid(job.unified_object_id)
+        return (
+            decoded != job.unified_object_id
+            and get_model_id_from_unified_batch_id(decoded) is None
+        )
+
+    @staticmethod
+    def _is_batch_gone_at_provider(error: Exception, batch_id: str) -> bool:
+        """
+        A 404 naming the batch means the provider dropped its record of it, so no later
+        retrieve can ever succeed. A 404 about anything else, a renamed Azure deployment
+        or a fallback deployment that never saw this batch, is still fixable in config, so
+        it keeps retrying.
+        """
+        import openai
+
+        from litellm.exceptions import NotFoundError
+
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and batch_id in str(error)
+
+    def _batch_deployment_exists(self, model_id: str) -> bool:
+        """A 404 only proves the batch is gone when it came from the batch's own
+        deployment. Once that deployment leaves the router, default fallbacks can
+        silently send the retrieve to a provider that never saw the batch, so its
+        404 must not retire the row; the staleness sweep bounds it instead."""
+        return self.llm_router.get_deployment(model_id=model_id) is not None
 
     @staticmethod
     def _record_error(
@@ -645,6 +736,8 @@ class CheckBatchCost:
         for job in jobs:
             routing = self._resolve_job_routing(job, prom_logger)
             if routing is None:
+                if self._has_unified_id_without_model(job):
+                    await self._retire_job(job, "unified object id has no model id")
                 continue
             model_id, batch_id = routing
 
@@ -667,6 +760,8 @@ class CheckBatchCost:
                 )
                 if prom_logger:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
+                if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
+                    await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
