@@ -104,6 +104,7 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
             handleOk={handleCreated}
             accessToken={accessToken}
             userRole={userRole}
+            userId={userID}
             createScope={createScope}
           />
         </DialogContent>

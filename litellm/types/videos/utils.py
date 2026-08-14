@@ -6,7 +6,7 @@ Format: vid_{base64_encoded_string}
 """
 
 import base64
-from typing import Final, Optional, Tuple
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import SpecialEnums
@@ -20,8 +20,8 @@ CHARACTER_ID_TEMPLATE: Final = "litellm:custom_llm_provider:{};model_id:{};chara
 class DecodedCharacterId(dict):
     """Structure representing a decoded character ID."""
 
-    custom_llm_provider: Optional[str]
-    model_id: Optional[str]
+    custom_llm_provider: str | None
+    model_id: str | None
     character_id: str
 
 
@@ -35,7 +35,7 @@ def _add_base64_padding(value: str) -> str:
     return value
 
 
-def encode_video_id_with_provider(video_id: str, provider: str, model_id: Optional[str] = None) -> str:
+def encode_video_id_with_provider(video_id: str, provider: str, model_id: str | None = None) -> str:
     """Encode provider and model_id into video_id using base64."""
     if not provider or not video_id:
         return video_id
@@ -119,7 +119,7 @@ def extract_original_video_id(encoded_video_id: str) -> str:
     return decoded.get("video_id", encoded_video_id)
 
 
-def encode_character_id_with_provider(character_id: str, provider: str, model_id: Optional[str] = None) -> str:
+def encode_character_id_with_provider(character_id: str, provider: str, model_id: str | None = None) -> str:
     """Encode provider and model_id into character_id using base64."""
     if not provider or not character_id:
         return character_id

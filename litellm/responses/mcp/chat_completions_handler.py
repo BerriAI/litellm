@@ -233,7 +233,7 @@ async def acompletion_with_mcp(
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
 
-            async def __aiter__(self):
+            def __aiter__(self):
                 return self
 
             def _add_mcp_list_tools_to_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
@@ -497,12 +497,12 @@ async def acompletion_with_mcp(
         # Create a wrapper class that delegates to our custom iterator
         # We'll use a simple approach: just replace the __aiter__ method
         class MCPStreamWrapper(CustomStreamWrapper):
-            def __init__(self, original_wrapper, custom_iterator):
+            def __init__(self, original_wrapper: CustomStreamWrapper, custom_iterator: MCPStreamingIterator):
                 # Initialize with the same parameters as original wrapper
                 super().__init__(
                     completion_stream=None,
                     model=getattr(original_wrapper, "model", "unknown"),
-                    logging_obj=getattr(original_wrapper, "logging_obj", None),
+                    logging_obj=original_wrapper.logging_obj,
                     custom_llm_provider=getattr(original_wrapper, "custom_llm_provider", None),
                     stream_options=getattr(original_wrapper, "stream_options", None),
                     make_call=getattr(original_wrapper, "make_call", None),

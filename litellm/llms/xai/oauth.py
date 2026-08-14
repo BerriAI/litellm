@@ -40,7 +40,7 @@ class XAIOAuthLoginRequiredError(XAIOAuthError):
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
-    server: "_CallbackServer"
+    server: "_CallbackServer"  # pyright: ignore[reportIncompatibleVariableOverride]  # stdlib stubs type server as BaseServer; _CallbackServer is the only server this handler is registered on
 
     def do_GET(self) -> None:
         parsed: Final = urlparse(self.path)

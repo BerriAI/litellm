@@ -31,7 +31,7 @@ class PromptTemplate:
         self.output_format = self.metadata.get("output", {}).get("format")
         self.output_schema = self.metadata.get("output", {}).get("schema", {})
         self.optional_params = {}
-        for key in self.metadata.keys():
+        for key in self.metadata:
             if key not in restricted_keys:
                 self.optional_params[key] = self.metadata[key]
 
@@ -253,7 +253,7 @@ class PromptManager:
             "dict": dict,
         }
 
-        return type_mapping.get(schema_type.lower(), str)  # type: ignore
+        return type_mapping.get(schema_type.lower(), str)
 
     def get_prompt(self, prompt_id: str, version: int | None = None) -> PromptTemplate | None:
         """

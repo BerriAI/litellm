@@ -35,7 +35,7 @@ async def create_invitation_for_user(
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 "updated_at": current_time,
                 "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }  # type: ignore
+            }
         )
         return response
     except Exception as e:

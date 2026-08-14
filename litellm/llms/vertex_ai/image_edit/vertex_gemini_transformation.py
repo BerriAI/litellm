@@ -53,9 +53,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         mapped_params: Final[dict[str, Any]] = {}
 
         if "size" in filtered_params:
-            mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(
-                filtered_params["size"]  # type: ignore[arg-type]
-            )
+            mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(filtered_params["size"])
 
         return mapped_params
 
@@ -145,7 +143,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:generateContent"
 
-    def transform_image_edit_request(  # type: ignore[override]
+    def transform_image_edit_request(
         self,
         model: str,
         prompt: str | None,

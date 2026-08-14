@@ -168,7 +168,7 @@ class PangeaHandler(CustomGuardrail):
 
         ai_guard_payload: Final = {
             "debug": False,
-            "input": {"messages": messages, "tools": data.get("tools")},  # type: ignore
+            "input": {"messages": messages, "tools": data.get("tools")},
             "event_type": "input",
         }
         if self.pangea_input_recipe:
@@ -182,7 +182,7 @@ class PangeaHandler(CustomGuardrail):
 
         output: Final = ai_guard_response.get("result", {}).get("output", {})
         if call_type == "text_completion" or call_type == "atext_completion":
-            data = transformer.update_original_body(output["messages"])  # type: ignore
+            data = transformer.update_original_body(output["messages"])
         else:
             data["messages"] = output["messages"]
         return data

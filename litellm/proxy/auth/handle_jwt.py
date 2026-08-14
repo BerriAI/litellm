@@ -385,7 +385,7 @@ class JWTHandler:
                         team_id[0],
                     )
                     team_id = team_id[0]
-                return team_id  # type: ignore[return-value]
+                return team_id
             elif self.litellm_jwtauth.team_id_default is not None:
                 team_id = self.litellm_jwtauth.team_id_default
             else:
@@ -945,9 +945,9 @@ class JWTHandler:
             public_key_obj: Final = PyJWK.from_dict(self._get_jwk_from_public_key(public_key=public_key)).key
             return jwt.decode(
                 token,
-                public_key_obj,  # type: ignore
+                public_key_obj,
                 algorithms=self.SUPPORTED_JWT_ALGORITHMS,
-                options=decode_options,  # type: ignore[arg-type]
+                options=decode_options,
                 audience=audience,
                 issuer=issuer,
                 leeway=self.leeway,
@@ -964,7 +964,7 @@ class JWTHandler:
             algorithms=self.SUPPORTED_JWT_ALGORITHMS,
             audience=audience,
             issuer=issuer,
-            options=decode_options,  # type: ignore[arg-type]
+            options=decode_options,
             leeway=self.leeway,
         )
 

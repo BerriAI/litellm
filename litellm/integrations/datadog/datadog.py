@@ -500,7 +500,7 @@ class DataDogLogger(
 
             response: Final = self.sync_client.post(
                 url=self.intake_url,
-                json=dd_payload,  # type: ignore
+                json=dd_payload,
                 headers=headers,
             )
 
@@ -616,7 +616,7 @@ class DataDogLogger(
 
         response: Final = await self.async_client.post(
             url=self.intake_url,
-            data=compressed_data,  # type: ignore
+            data=compressed_data,
             headers=headers,
         )
         return response

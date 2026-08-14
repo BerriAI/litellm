@@ -95,7 +95,7 @@ def _normalize_tool_dialect(
 
 def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
     messages: Final = data.get("messages")
-    if isinstance(messages, list) and len(messages) > 0:
+    if isinstance(messages, list) and messages:
         return True
     return "messages" in data and "input" not in data
 
@@ -121,7 +121,7 @@ def _parse_cursor_model_variant(model: str) -> _CursorModelVariant:
 def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
     if llm_router is None:
         return False
-    if model in llm_router.model_names or model in llm_router.model_group_alias:
+    if llm_router.is_recognized_model(model):
         return True
     if model in llm_router.team_public_model_names:
         return True
@@ -356,7 +356,7 @@ async def responses_api(
         # Store in managed objects table if background mode is enabled
         if data.get("background") and isinstance(response, ResponsesAPIResponse):
             if response.status in ["queued", "in_progress"]:
-                from litellm_enterprise.proxy.hooks.managed_files import (  # type: ignore
+                from litellm_enterprise.proxy.hooks.managed_files import (
                     _PROXY_LiteLLMManagedFiles,
                 )
 
@@ -1327,7 +1327,7 @@ async def responses_websocket_endpoint(
     async def return_body():
         return _body_bytes
 
-    request.body = return_body  # type: ignore
+    request.body = return_body
 
     # Phase 1: pre-call processing (auth, guardrails, rate limits)
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)

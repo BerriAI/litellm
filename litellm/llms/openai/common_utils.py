@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
 
 def _get_client_init_params(cls: type) -> tuple[str, ...]:
     """Extract __init__ parameter names (excluding 'self') from a class."""
-    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")  # type: ignore[misc]
+    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")
 
 
 _OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(OpenAI)
@@ -129,12 +129,32 @@ class BaseOpenAILLM:
         return _cached_client
 
     @staticmethod
+    def owns_wrapped_http_client(http_client: httpx.Client | httpx.AsyncClient | None) -> bool:
+        """Whether litellm may close an SDK client built around ``http_client``.
+
+        ``_get_async_http_client`` / ``_get_sync_http_client`` hand back
+        ``litellm.aclient_session`` / ``litellm.client_session`` when the caller
+        configured one. The SDK's ``close()`` closes whatever http client it was
+        given, so an SDK client wrapping one of those shared sessions must never be
+        closed on eviction; the caller goes on using the session. ``None`` means the
+        SDK built its own http client, which litellm does own.
+        """
+        if http_client is None:
+            return True
+        return http_client is not litellm.aclient_session and http_client is not litellm.client_session
+
+    @staticmethod
     def set_cached_openai_client(
         openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI,
         client_type: Literal["openai", "azure"],
         client_initialization_params: dict,
+        litellm_owned_client: bool = False,
     ):
-        """Stores the OpenAI client in the in-memory cache for _DEFAULT_TTL_FOR_HTTPX_CLIENTS SECONDS"""
+        """Stores the OpenAI client in the in-memory cache for _DEFAULT_TTL_FOR_HTTPX_CLIENTS SECONDS
+
+        ``litellm_owned_client`` says litellm built this client, so the cache may close it once it
+        is evicted. A client the caller supplied stays open, since litellm does not own it.
+        """
         _cache_key: Final = BaseOpenAILLM.get_openai_client_cache_key(
             client_initialization_params=client_initialization_params,
             client_type=client_type,
@@ -143,6 +163,7 @@ class BaseOpenAILLM:
             key=_cache_key,
             value=openai_client,
             ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+            litellm_owned_client=litellm_owned_client,
         )
 
     @staticmethod

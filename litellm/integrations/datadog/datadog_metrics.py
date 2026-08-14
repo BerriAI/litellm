@@ -91,9 +91,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
         metadata: Final = log.get("metadata", {}) or {}
         team_tag: Final = (
             metadata.get("user_api_key_team_alias")
-            or metadata.get("team_alias")  # type: ignore
+            or metadata.get("team_alias")
             or metadata.get("user_api_key_team_id")
-            or metadata.get("team_id")  # type: ignore
+            or metadata.get("team_id")
         )
 
         if team_tag:
@@ -193,7 +193,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
             # Extract status code from error information
             status_code = "500"  # default
             error_information: Final = standard_logging_object.get("error_information", {}) or {}
-            error_code: Final = error_information.get("error_code")  # type: ignore
+            error_code: Final = error_information.get("error_code")
             if error_code is not None:
                 status_code = str(error_code)
 
@@ -237,7 +237,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         response: Final = await self.async_client.post(
             self.upload_url,
             content=compressed_data,
-            headers=headers,  # type: ignore
+            headers=headers,
         )
 
         response.raise_for_status()

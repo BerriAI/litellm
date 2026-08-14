@@ -7,7 +7,7 @@ Handles guardrail execution for passthrough endpoints with:
 - Automatic inheritance from org/team/key levels when enabled
 """
 
-from typing import Any, Final, Union
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -19,10 +19,10 @@ from litellm.proxy.pass_through_endpoints.jsonpath_extractor import JsonPathExtr
 
 # Type for raw guardrails config input (before normalization)
 # Can be a list of names or a dict with settings
-PassThroughGuardrailsConfigInput = Union[
-    list[str],  # Simple list: ["guard-1", "guard-2"]
-    PassThroughGuardrailsConfig,  # Dict: {"guard-1": {"request_fields": [...]}}
-]
+PassThroughGuardrailsConfigInput = (
+    list[str]  # Simple list: ["guard-1", "guard-2"]
+    | PassThroughGuardrailsConfig  # Dict: {"guard-1": {"request_fields": [...]}}
+)
 
 
 class PassthroughGuardrailHandler:
@@ -246,7 +246,7 @@ class PassthroughGuardrailHandler:
         guardrails_to_run: Final[dict[str, bool]] = {}
 
         # Add passthrough-specific guardrails
-        for guardrail_name in normalized_config.keys():
+        for guardrail_name in normalized_config:
             guardrails_to_run[guardrail_name] = True
             verbose_proxy_logger.debug("Added passthrough-specific guardrail: %s", guardrail_name)
 
