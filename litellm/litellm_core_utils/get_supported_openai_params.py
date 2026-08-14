@@ -108,6 +108,8 @@ def get_supported_openai_params(
         return litellm.DeepSeekChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "tencent":
         return litellm.TencentChatConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "melious":
+        return litellm.MeliousChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
         return litellm.CohereChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "maritalk":

@@ -59,6 +59,9 @@ from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_pe
 from litellm.llms.lemonade.cost_calculator import (
     cost_per_token as lemonade_cost_per_token,
 )
+from litellm.llms.melious.cost_calculator import (
+    cost_per_token as melious_cost_per_token,
+)
 from litellm.llms.openai.cost_calculation import (
     _video_output_cost_per_second,
 )
@@ -622,6 +625,8 @@ def cost_per_token(
         return deepseek_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "tencent":
         return tencent_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "melious":
+        return melious_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
         return perplexity_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "xai":
