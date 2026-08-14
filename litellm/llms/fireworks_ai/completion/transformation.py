@@ -8,15 +8,15 @@ from litellm.utils import supports_reasoning
 from ...base_llm.completion.transformation import BaseTextCompletionConfig
 from ...openai.completion.utils import _transform_prompt
 from ..chat.transformation import (
-    _EFFORT_KWARG_KEYS,
-    _NIM_VLLM_STRIP_PARAMS,
+    EFFORT_KWARG_KEYS,
+    NIM_VLLM_STRIP_PARAMS,
     FireworksAIConfig,
-    _effort_from_chat_template_kwargs,
+    effort_from_chat_template_kwargs,
 )
 from ..common_utils import FireworksAIMixin
 
 _TEXT_COMPLETION_STRIP_PARAMS: Final = (
-    frozenset({"truncate_prompt_tokens", "prompt_truncate_len"}) | _NIM_VLLM_STRIP_PARAMS
+    frozenset({"truncate_prompt_tokens", "prompt_truncate_len"}) | NIM_VLLM_STRIP_PARAMS
 )
 
 
@@ -117,14 +117,14 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
                 type(chat_template_kwargs).__name__,
             )
             return result
-        other_keys: Final = tuple(sorted(k for k in chat_template_kwargs if k not in _EFFORT_KWARG_KEYS))
+        other_keys: Final = tuple(sorted(k for k in chat_template_kwargs if k not in EFFORT_KWARG_KEYS))
         if other_keys:
             verbose_logger.debug(
                 "fireworks_ai does not support chat_template_kwargs keys %s for model=%s; dropping them.",
                 other_keys,
                 model,
             )
-        effort: Final = _effort_from_chat_template_kwargs(chat_template_kwargs)
+        effort: Final = effort_from_chat_template_kwargs(chat_template_kwargs)
         if effort is None:
             return result
         if any(key in result or key in optional_params for key in ("reasoning_effort", "thinking")):
@@ -144,7 +144,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
     def _translate_guided_into_extra_body(
         extra_body: Mapping[str, object], optional_params: Mapping[str, object]
     ) -> dict:  # mutable-ok: JSON request body
-        guided_response_format: Final = FireworksAIConfig._translate_guided_params(extra_body, optional_params)
+        guided_response_format: Final = FireworksAIConfig.translate_guided_params(extra_body, optional_params)
         remaining: Final = {  # mutable-ok: JSON request body
             k: v for k, v in extra_body.items() if k not in ("guided_json", "guided_grammar", "guided_choice")
         }
