@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _parse_prompt_tokens_details,
     calculate_cache_writing_cost,
     generic_cost_per_token,
+    get_provider_specific_geo_multiplier,
 )
 
 if TYPE_CHECKING:
@@ -82,11 +83,7 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
         model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
         provider_specific_entry: Final[dict] = model_info.get("provider_specific_entry") or {}
 
-        geo_multiplier: Final = (
-            provider_specific_entry.get(usage.inference_geo.lower(), 1.0)
-            if getattr(usage, "inference_geo", None) and usage.inference_geo.lower() not in ("global", "not_available")
-            else 1.0
-        )
+        geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
         speed_multiplier: Final = (
             provider_specific_entry.get("fast", 1.0) if getattr(usage, "speed", None) == "fast" else 1.0
         )
