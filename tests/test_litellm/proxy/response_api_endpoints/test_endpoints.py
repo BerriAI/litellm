@@ -1748,3 +1748,68 @@ class TestCursorGateRecognizesRoutingGroups:
         resolved = _resolve_cursor_model_variant(body, router)
         assert resolved["model"] == "grouped-thinking-high"
         assert "reasoning_effort" not in resolved
+
+class TestBlockedResponsesAPIUsage(unittest.TestCase):
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/6022-style bug:
+    a guardrail-blocked /v1/responses reply must report the real upstream usage
+    carried on ModifyResponseException.original_response, not hardcoded zeros.
+    """
+
+    def test_none_original_response_returns_zero_usage(self):
+        """Pre-call block: no upstream call ever happened, so usage stays zero."""
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _blocked_responses_api_usage,
+        )
+
+        usage = _blocked_responses_api_usage(None)
+
+        assert usage.input_tokens == 0
+        assert usage.output_tokens == 0
+        assert usage.total_tokens == 0
+
+    def test_responses_api_shaped_usage_passed_through(self):
+        """Post-call block on a native /v1/responses upstream call: usage is
+        already input_tokens/output_tokens-shaped and should be lifted directly.
+        """
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _blocked_responses_api_usage,
+        )
+
+        mock_usage = MagicMock()
+        mock_usage.input_tokens = 14
+        mock_usage.output_tokens = 20
+        mock_usage.total_tokens = 34
+        del mock_usage.prompt_tokens  # ensure hasattr(usage, "prompt_tokens") is False
+
+        mock_original_response = MagicMock()
+        mock_original_response.usage = mock_usage
+
+        usage = _blocked_responses_api_usage(mock_original_response)
+
+        assert usage.input_tokens == 14
+        assert usage.output_tokens == 20
+        assert usage.total_tokens == 34
+
+    def test_chat_shaped_usage_is_field_mapped(self):
+        """Post-call block on a bridged chat ModelResponse: prompt_tokens/
+        completion_tokens must map to input_tokens/output_tokens.
+        """
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _blocked_responses_api_usage,
+        )
+
+        mock_usage = MagicMock()
+        del mock_usage.input_tokens  # ensure the ResponseAPIUsage-shape branch is skipped
+        mock_usage.prompt_tokens = 14
+        mock_usage.completion_tokens = 18
+        mock_usage.total_tokens = 32
+
+        mock_original_response = MagicMock()
+        mock_original_response.usage = mock_usage
+
+        usage = _blocked_responses_api_usage(mock_original_response)
+
+        assert usage.input_tokens == 14
+        assert usage.output_tokens == 18
+        assert usage.total_tokens == 32

@@ -93,6 +93,38 @@ def _normalize_tool_dialect(
     return {**data, **{key: value for key, value in replaceable if key in data}}  # mutable-ok: plain body dict
 
 
+def _blocked_responses_api_usage(original_response: Any | None) -> ResponseAPIUsage:
+    """
+    Token usage for a synthetic guardrail-blocked /v1/responses reply.
+
+    A post-call block replaces the LLM's response with the violation message,
+    but the upstream call already consumed tokens -- report that real usage
+    (carried on ``ModifyResponseException.original_response``) rather than
+    discarding it, mirroring ``_blocked_response_usage`` in proxy_server.py
+    for /v1/chat/completions. Pre-call blocks never invoked the LLM (no
+    original_response), so usage is zero.
+
+    original_response can be a native ResponsesAPIResponse (usage already in
+    input_tokens/output_tokens shape) or a bridged chat ModelResponse (usage
+    in prompt_tokens/completion_tokens shape, needing a field-name mapping).
+    """
+    usage: Final = getattr(original_response, "usage", None) if original_response is not None else None
+    if usage is None:
+        return ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0)
+    if hasattr(usage, "input_tokens"):
+        return ResponseAPIUsage(
+            input_tokens=getattr(usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(usage, "output_tokens", 0) or 0,
+            total_tokens=getattr(usage, "total_tokens", 0) or 0,
+        )
+    if hasattr(usage, "prompt_tokens"):
+        return ResponseAPIUsage(
+            input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+            output_tokens=getattr(usage, "completion_tokens", 0) or 0,
+            total_tokens=getattr(usage, "total_tokens", 0) or 0,
+        )
+    return ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0)
+
 def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
     messages: Final = data.get("messages")
     if isinstance(messages, list) and messages:
@@ -415,7 +447,7 @@ async def responses_api(
             model=e.model or data.get("model"),
             output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
             status="completed",
-            usage=ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+            usage=_blocked_responses_api_usage(e.original_response),
         )
         return response_obj
     except Exception as e:
