@@ -1639,6 +1639,13 @@ async def health_drain(request: Request):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     _authorize_drain_request(request)
     GracefulShutdownManager.start_shutdown()
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is not None:
+            llm_router.shutdown_routing_strategy()
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error shutting down routing strategy: {e}")
     drained = await GracefulShutdownManager.wait_for_drain(exclude_self=True)
     return {"status": "drained", "drained_requests": drained}
 

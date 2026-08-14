@@ -145,6 +145,7 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
         self._observed_load_model_list_load_keys: Set[str] = set()
         self._observed_load_model_list_synced = False
         self._observed_load_lock = threading.Lock()
+        self._observed_load_shutdown_event = threading.Event()
         self._observed_load_sync_thread: Optional[threading.Thread] = None
         self._observed_load_last_error_log: Dict[str, float] = {}
         self._observed_load_success_logged: Dict[str, bool] = {}
@@ -677,7 +678,12 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
             10,
         )
         if self.observed_load_enabled:
+            self._observed_load_shutdown_event.clear()
             self._start_observed_load_sync_thread()
+        else:
+            existing_thread = self._observed_load_sync_thread
+            if existing_thread is not None and existing_thread.is_alive():
+                self._observed_load_shutdown_event.set()
 
     def _start_observed_load_sync_thread(self) -> None:
         existing_thread = self._observed_load_sync_thread
@@ -698,19 +704,58 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
         )
 
     def _observed_load_sync_loop(self) -> None:
-        while self.observed_load_enabled:
+        while self.observed_load_enabled and not self._observed_load_shutdown_event.is_set():
             if not self._should_run_observed_load_sync():
-                time.sleep(self.observed_load_poll_interval)
+                self._observed_load_shutdown_event.wait(self.observed_load_poll_interval)
                 continue
 
             backends = self._get_observed_load_backends_for_sync()
 
             for load_key, api_base in backends:
-                if not self.observed_load_enabled:
+                if not self.observed_load_enabled or self._observed_load_shutdown_event.is_set():
                     break
                 self._sync_observed_load_for_backend(load_key, api_base)
 
-            time.sleep(self.observed_load_poll_interval)
+            self._observed_load_shutdown_event.wait(self.observed_load_poll_interval)
+
+    def shutdown_observed_load_sync(self) -> None:
+        self.observed_load_enabled = False
+        self._observed_load_shutdown_event.set()
+        self._set_observed_load_leader_state(False, "shutdown")
+        self._release_observed_load_sync_lock()
+
+    def _release_observed_load_sync_lock(self) -> None:
+        redis_cache = self.router_cache.redis_cache
+        if (
+            redis_cache is None
+            or not hasattr(redis_cache, "redis_client")
+            or redis_cache.redis_client is None
+        ):
+            return
+
+        lock_key = redis_cache.check_and_fix_namespace(key=self._get_observed_load_sync_lock_key())
+        redis_client = redis_cache.redis_client
+        try:
+            released = redis_client.eval(
+                (
+                    "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                    "return redis.call('DEL', KEYS[1]) "
+                    "end "
+                    "return 0"
+                ),
+                1,
+                lock_key,
+                self._observed_load_sync_owner,
+            )
+            verbose_router_logger.info(
+                f"[StickyLeastBusyWeighted OBSERVED-LOAD] action=release_leader_lock "
+                f"lock_key={lock_key}, released={bool(released)}, owner={self._observed_load_sync_owner}"
+            )
+        except Exception as exc:
+            verbose_router_logger.warning(
+                f"[StickyLeastBusyWeighted OBSERVED-LOAD] action=release_leader_lock_failed "
+                f"lock_key={lock_key}, owner={self._observed_load_sync_owner}, error={exc}"
+            )
 
     def _get_observed_load_backends_for_sync(self) -> List[Tuple[str, str]]:
         with self._observed_load_lock:
@@ -735,12 +780,19 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
         return "sticky_lb_weighted:observed_load_sync:lock"
 
     def _should_run_observed_load_sync(self) -> bool:
+        if self._observed_load_shutdown_event.is_set():
+            self._set_observed_load_leader_state(False, "shutdown")
+            return False
+
         redis_cache = self.router_cache.redis_cache
         if (
             redis_cache is None
             or not hasattr(redis_cache, "redis_client")
             or redis_cache.redis_client is None
         ):
+            if self._observed_load_shutdown_event.is_set():
+                self._set_observed_load_leader_state(False, "shutdown")
+                return False
             self._set_observed_load_leader_state(True, "redis_not_configured")
             return True
 
@@ -754,6 +806,10 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
                 nx=True,
             )
             if acquired:
+                if self._observed_load_shutdown_event.is_set():
+                    self._release_observed_load_sync_lock()
+                    self._set_observed_load_leader_state(False, "shutdown")
+                    return False
                 self._set_observed_load_leader_state(True, "acquired")
                 return True
 
@@ -761,6 +817,10 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
             if isinstance(current_owner, bytes):
                 current_owner = current_owner.decode("utf-8", errors="replace")
             if current_owner == self._observed_load_sync_owner:
+                if self._observed_load_shutdown_event.is_set():
+                    self._release_observed_load_sync_lock()
+                    self._set_observed_load_leader_state(False, "shutdown")
+                    return False
                 redis_client.expire(lock_key, self._observed_load_sync_lease_ttl)
                 self._set_observed_load_leader_state(True, "renewed")
                 return True

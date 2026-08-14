@@ -81,6 +81,27 @@ class RecordingDualCache(DualCache):
         )
 
 
+class FakeRedisClient:
+    def __init__(self, value):
+        self.value = value
+        self.eval_calls = []
+
+    def eval(self, script, numkeys, key, owner):
+        self.eval_calls.append((script, numkeys, key, owner))
+        if self.value == owner:
+            self.value = None
+            return 1
+        return 0
+
+
+class FakeRedisCache:
+    def __init__(self, redis_client):
+        self.redis_client = redis_client
+
+    def check_and_fix_namespace(self, key):
+        return f"test:{key}"
+
+
 class TestWeightedHashRing:
     def test_vnodes_scale_with_weight(self):
         handler = StickyLeastBusyWeightedLoggingHandler(
@@ -592,6 +613,36 @@ sglang:num_queue_reqs{rank="1"} 2
         handler = StickyLeastBusyWeightedLoggingHandler(router_cache=DualCache())
 
         assert handler._should_run_observed_load_sync() is True
+
+    def test_shutdown_releases_owned_observed_load_lock(self):
+        cache = DualCache()
+        handler = StickyLeastBusyWeightedLoggingHandler(router_cache=cache)
+        redis_client = FakeRedisClient(handler._observed_load_sync_owner)
+        cache.redis_cache = FakeRedisCache(redis_client)
+        handler.observed_load_enabled = True
+        handler._set_observed_load_leader_state(True, "test")
+
+        handler.shutdown_observed_load_sync()
+
+        assert handler.observed_load_enabled is False
+        assert handler._observed_load_shutdown_event.is_set()
+        assert redis_client.value is None
+        assert redis_client.eval_calls[0][1:] == (
+            1,
+            "test:sticky_lb_weighted:observed_load_sync:lock",
+            handler._observed_load_sync_owner,
+        )
+
+    def test_shutdown_does_not_release_another_pods_observed_load_lock(self):
+        cache = DualCache()
+        handler = StickyLeastBusyWeightedLoggingHandler(router_cache=cache)
+        redis_client = FakeRedisClient("other-owner")
+        cache.redis_cache = FakeRedisCache(redis_client)
+        handler.observed_load_enabled = True
+
+        handler.shutdown_observed_load_sync()
+
+        assert redis_client.value == "other-owner"
 
 
 class TestPrometheusMetrics:

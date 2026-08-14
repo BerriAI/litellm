@@ -1001,6 +1001,25 @@ class Router:
         if isinstance(litellm.input_callback, list):
             litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
 
+    def shutdown_routing_strategy(self) -> None:
+        selectors = [
+            getattr(self, attr, None)
+            for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()
+        ]
+        selectors.extend(
+            selector
+            for group_selectors in getattr(self, "_group_selectors", {}).values()
+            for selector in group_selectors.values()
+        )
+        seen_selector_ids: Set[int] = set()
+        for selector in selectors:
+            if selector is None or id(selector) in seen_selector_ids:
+                continue
+            seen_selector_ids.add(id(selector))
+            shutdown = getattr(selector, "shutdown_observed_load_sync", None)
+            if callable(shutdown):
+                shutdown()
+
     def routing_strategy_init(self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict):
         verbose_router_logger.info(f"Routing strategy: {routing_strategy}")
         self._validate_routing_strategy(routing_strategy)

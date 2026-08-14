@@ -1071,6 +1071,11 @@ async def proxy_startup_event(app: FastAPI):
     # Shutdown event - drain in-flight requests before tearing down dependencies
     # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
     GracefulShutdownManager.start_shutdown()
+    if llm_router is not None:
+        try:
+            llm_router.shutdown_routing_strategy()
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error shutting down routing strategy: {e}")
     await GracefulShutdownManager.wait_for_drain()
 
     # Shutdown event - close shared aiohttp session
