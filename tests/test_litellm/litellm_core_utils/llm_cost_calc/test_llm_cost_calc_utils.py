@@ -1546,6 +1546,7 @@ def test_service_tier_fallback_pricing():
     [
         "gemini-3-pro-image-preview",
         "gemini-3.1-flash-image-preview",
+        "gemini-3.1-flash-lite-image",
     ],
 )
 def test_gemini_image_generation_cost_with_zero_text_tokens(model: str):
