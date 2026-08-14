@@ -18,10 +18,10 @@ test.describe("Internal User with team memberships", () => {
     await page.getByRole("button", { name: /Create New Key/i }).click();
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
-    const teamSelect = page.locator(".ant-select", { hasText: "Search or select a team" });
+    const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
 
-    const dropdown = page.locator(".ant-select-dropdown:visible").first();
+    const dropdown = page.locator('[data-slot="combobox-content"]:visible').first();
     await expect(dropdown).toBeVisible({ timeout: 5_000 });
 
     // Both seeded memberships render, and nothing else does — proving the

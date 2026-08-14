@@ -989,9 +989,8 @@ describe("TeamInfoView", () => {
       const user = userEvent.setup({ delay: null });
       const resetBudgetItem = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
 
-      const clearIcon = resetBudgetItem.querySelector(".ant-select-clear");
-      expect(clearIcon).not.toBeNull();
-      fireEvent.mouseDown(clearIcon as Element);
+      await user.click(within(resetBudgetItem).getByRole("combobox"));
+      await user.click(await screen.findByText("Never resets"));
 
       await waitFor(() => {
         expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
@@ -1554,13 +1553,14 @@ describe("TeamInfoView", () => {
 
       await user.click(within(routesFormItem).getByRole("combobox"));
 
-      const option = await screen.findByTitle("POST /bedrock-passthrough");
+      const option = await screen.findByText("POST /bedrock-passthrough");
       await user.click(option);
 
       await waitFor(() => {
         expect(within(routesFormItem).getByText(/\/bedrock-passthrough/)).toBeInTheDocument();
       });
 
+      await user.keyboard("{Escape}");
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
