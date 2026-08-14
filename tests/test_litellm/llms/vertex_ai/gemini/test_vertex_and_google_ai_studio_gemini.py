@@ -5606,3 +5606,28 @@ def test_vertex_ai_content_less_candidate_without_finish_reason_not_stop():
     assert model_response.choices[0].finish_reason == "length"
     assert model_response.choices[0].finish_reason != "stop"
     assert model_response.choices[0].message.content == ""
+
+
+def test_vertex_ai_multiple_content_less_candidates_each_rescued():
+    """Every content-less candidate is rescued independently, preserving each
+    candidate's index and mapping its own finishReason (MAX_TOKENS -> length,
+    SAFETY -> content_filter), rather than dropping any of them.
+    """
+    v = VertexGeminiConfig()
+    model_response = ModelResponse()
+    model_response.choices = []
+
+    v._process_candidates(
+        _candidates=[
+            {"finishReason": "MAX_TOKENS", "index": 0},
+            {"finishReason": "SAFETY", "index": 1},
+        ],
+        model_response=model_response,
+        standard_optional_params={},
+    )
+
+    assert len(model_response.choices) == 2
+    by_index = {c.index: c for c in model_response.choices}
+    assert by_index[0].finish_reason == "length"
+    assert by_index[1].finish_reason == "content_filter"
+    assert all(c.message.content == "" for c in model_response.choices)
