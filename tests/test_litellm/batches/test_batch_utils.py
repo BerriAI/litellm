@@ -17,6 +17,7 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 import json
 import os
 import sys
+from types import MappingProxyType
 
 import httpx
 import pytest
@@ -1229,3 +1230,16 @@ async def test_calculate_batch_cost_and_usage_anthropic_end_to_end():
     assert cost == pytest.approx(1000 * 3e-6 / 2 + 8000 * 3e-7 / 2 + 2000 * 3.75e-6 / 2 + 200 * 15e-6 / 2)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (11000, 200, 11200)
     assert models == ["claude-sonnet-4-5"]
+
+
+def test_extract_credentials_forwards_the_trusted_model_credential_snapshot():
+    """Bedrock resolves a batch's output bucket only from the immutable server-side
+    snapshot, never from a request param, so cost accounting on the retrieve path cannot
+    read the output file unless this key is forwarded. Without it the accounting raises
+    "S3 bucket_name is required" for a bucket the deployment has configured, and the
+    batch's cost is never recorded."""
+    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"})
+
+    credentials = bu._extract_file_access_credentials({"_litellm_internal_model_credentials": snapshot})
+
+    assert credentials["_litellm_internal_model_credentials"] is snapshot
