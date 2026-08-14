@@ -31,7 +31,6 @@ from litellm.llms.parallel_ai.search.transformation import ParallelAISearchConfi
 from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
 from litellm.llms.searchapi.search.transformation import SearchAPIConfig
 from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
-from litellm.llms.serpapi.search.transformation import SerpApiSearchConfig
 from litellm.llms.serper.search.transformation import SerperSearchConfig
 from litellm.llms.tavily.search.transformation import TavilySearchConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
@@ -51,7 +50,6 @@ _BASE_ENV_VARS = (
     "FIRECRAWL_API_BASE",
     "LINKUP_API_BASE",
     "SEARCHAPI_API_BASE",
-    "SERPAPI_API_BASE",
     "GOOGLE_PSE_API_BASE",
     "PARALLEL_AI_API_BASE",
     "YOUCOM_API_BASE",
@@ -81,7 +79,6 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     (FirecrawlSearchConfig, {"FIRECRAWL_API_KEY": "srv"}, "caller-key", {}),
     (LinkupSearchConfig, {"LINKUP_API_KEY": "srv"}, "caller-key", {}),
     (SearchAPIConfig, {"SEARCHAPI_API_KEY": "srv"}, "caller-key", {}),
-    (SerpApiSearchConfig, {"SERPAPI_KEY": "srv"}, "caller-key", {}),
     (
         GooglePSESearchConfig,
         {"GOOGLE_PSE_API_KEY": "srv"},
@@ -285,7 +282,6 @@ async def test_asearch_does_not_leak_server_key_to_caller_api_base(
     "provider, key_env, server_key, extra_env",
     [
         ("searchapi", "SEARCHAPI_API_KEY", "sk-server-searchapi", {}),
-        ("serpapi", "SERPAPI_KEY", "sk-server-serpapi", {}),
         (
             "google_pse",
             "GOOGLE_PSE_API_KEY",

@@ -19,7 +19,6 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResponse,
     SearchResult,
 )
-from litellm.secret_managers.main import get_secret_str
 
 _SERPAPI_PARAMS_KEY: Final = "_serpapi_params"
 _SERPAPI_REQUEST_KEYS: Final = frozenset(("engine", "q", "num", "gl"))
@@ -73,16 +72,15 @@ class SerpApiSearchConfig(BaseSearchConfig):
     def _resolve_api_key(
         self,
         api_key: str | None,
-        api_base: str | None,
     ) -> str:
         """
-        Resolve a caller or configured SerpApi key for the target API base.
+        Resolve a caller or configured SerpApi key.
         """
         resolved_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
-            caller_api_base=api_base,
+            caller_api_base=None,
             key_env_vars=("SERPAPI_KEY", "SERPAPI_API_KEY"),
-            base_env_var="SERPAPI_API_BASE",
+            base_env_var=None,
             default_api_base=self.SERPAPI_API_BASE,
         )
         if not resolved_key:
@@ -99,7 +97,7 @@ class SerpApiSearchConfig(BaseSearchConfig):
         """
         Validate SerpApi credentials and return request headers.
         """
-        self._resolve_api_key(api_key=api_key, api_base=api_base)
+        self._resolve_api_key(api_key=api_key)
         resolved_headers: Final = MappingProxyType({**headers, "Content-Type": "application/json"})
         return resolved_headers.copy()
 
@@ -118,7 +116,7 @@ class SerpApiSearchConfig(BaseSearchConfig):
 
         SerpApi uses GET requests and includes api_key in query params.
         """
-        resolved_base: Final = api_base or get_secret_str("SERPAPI_API_BASE") or self.SERPAPI_API_BASE
+        resolved_base: Final = self.SERPAPI_API_BASE
         if not isinstance(data, Mapping) or _SERPAPI_PARAMS_KEY not in data:
             return resolved_base
 
@@ -131,7 +129,7 @@ class SerpApiSearchConfig(BaseSearchConfig):
             raise ValueError(
                 f"Invalid SerpApi URL parameter value for: {invalid_params or 'request parameters'}"
             ) from None
-        resolved_key: Final = self._resolve_api_key(api_key=api_key, api_base=api_base)
+        resolved_key: Final = self._resolve_api_key(api_key=api_key)
         query_params: Final = tuple(
             (
                 key,

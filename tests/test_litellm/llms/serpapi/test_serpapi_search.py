@@ -210,20 +210,6 @@ def test_serpapi_rejects_unencodable_passthrough_param(
     assert str(exc_info.value) == "Invalid SerpApi URL parameter value for: nested"
 
 
-def test_serpapi_rejects_server_key_for_untrusted_api_base(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
-    monkeypatch.setenv("SERPAPI_KEY", "server-api-key")
-    config = SerpApiSearchConfig()
-
-    with pytest.raises(ValueError, match="Refusing to send"):
-        config.validate_environment(
-            headers={},
-            api_base="https://example.com/search.json",
-        )
-
-
 def test_serpapi_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SERPAPI_KEY", raising=False)
     monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
