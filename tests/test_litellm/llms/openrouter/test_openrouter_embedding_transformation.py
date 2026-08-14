@@ -2,6 +2,12 @@
 Unit tests for OpenRouter embedding transformation logic.
 """
 
+from unittest.mock import Mock
+
+import httpx
+from litellm.cost_calculator import response_cost_calculator
+from litellm.types.utils import EmbeddingResponse
+
 from litellm.llms.openrouter.embedding.transformation import (
     OpenrouterEmbeddingConfig,
 )
@@ -131,3 +137,115 @@ def test_openrouter_embedding_map_params():
     assert result["timeout"] == 30
     # Unsupported params should not be included
     assert "unsupported" not in result
+
+
+def test_openrouter_embedding_preserves_provider_reported_cost():
+    config = OpenrouterEmbeddingConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "data": [{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}],
+            "id": "gen-emb-test",
+            "model": "text-embedding-3-small",
+            "object": "list",
+            "provider": "OpenAI",
+            "usage": {
+                "prompt_tokens": 3,
+                "total_tokens": 3,
+                "cost": 0.00000006,
+                "is_byok": False,
+                "cost_details": {
+                    "upstream_inference_cost": 0.00000006,
+                    "upstream_inference_prompt_cost": 0.00000006,
+                    "upstream_inference_completions_cost": 0,
+                },
+            },
+        },
+    )
+
+    response = config.transform_embedding_response(
+        model="openrouter/openai/text-embedding-3-small",
+        raw_response=raw_response,
+        model_response=EmbeddingResponse(),
+        logging_obj=Mock(),
+        api_key="test-api-key",
+        request_data={},
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.00000006
+    assert response._hidden_params["response_cost_details"] == {
+        "upstream_inference_cost": 0.00000006,
+        "upstream_inference_prompt_cost": 0.00000006,
+        "upstream_inference_completions_cost": 0,
+    }
+    assert (
+        response_cost_calculator(
+            response_object=response,
+            model="openai/text-embedding-3-small",
+            custom_llm_provider="openrouter",
+            call_type="embedding",
+            optional_params={},
+        )
+        == 0.00000006
+    )
+
+
+def test_openrouter_embedding_accepts_usage_without_cost():
+    config = OpenrouterEmbeddingConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "data": [{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}],
+            "model": "text-embedding-3-small",
+            "object": "list",
+            "usage": {"prompt_tokens": 3, "total_tokens": 3},
+        },
+    )
+
+    response = config.transform_embedding_response(
+        model="openrouter/openai/text-embedding-3-small",
+        raw_response=raw_response,
+        model_response=EmbeddingResponse(),
+        logging_obj=Mock(),
+        api_key="test-api-key",
+        request_data={},
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert "llm_provider-x-litellm-response-cost" not in response._hidden_params.get("additional_headers", {})
+    assert "response_cost_details" not in response._hidden_params
+
+
+def test_openrouter_embedding_accepts_partial_cost_details():
+    config = OpenrouterEmbeddingConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "data": [{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}],
+            "model": "text-embedding-3-small",
+            "object": "list",
+            "usage": {
+                "prompt_tokens": 3,
+                "total_tokens": 3,
+                "cost": 0.00000006,
+                "cost_details": {"upstream_inference_cost": 0.00000005},
+            },
+        },
+    )
+
+    response = config.transform_embedding_response(
+        model="openrouter/openai/text-embedding-3-small",
+        raw_response=raw_response,
+        model_response=EmbeddingResponse(),
+        logging_obj=Mock(),
+        api_key="test-api-key",
+        request_data={},
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.00000006
+    assert response._hidden_params["response_cost_details"] == {"upstream_inference_cost": 0.00000005}
