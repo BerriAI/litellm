@@ -199,12 +199,8 @@ describe("CostTrackingSettings", () => {
 
     it("should hold the confirmation open while the removal is still in flight", async () => {
       mockDiscountConfig.mockReturnValue({ openai: 0.05 });
-      let settleRemoval: () => void = () => {};
-      mockRemoveDiscount.mockReturnValue(
-        new Promise<void>((resolve) => {
-          settleRemoval = resolve;
-        }),
-      );
+      const { promise, resolve: settleRemoval } = Promise.withResolvers<void>();
+      mockRemoveDiscount.mockReturnValue(promise);
 
       const user = await expandAndRemove("Provider Discounts", "Remove discount for openai");
       await user.click(await screen.findByRole("button", { name: "Remove" }));
