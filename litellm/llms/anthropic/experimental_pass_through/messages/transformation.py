@@ -225,9 +225,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         stream: bool | None = None,
     ) -> str:
         api_base = AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
-        if not api_base.endswith("/v1/messages"):
-            api_base = f"{api_base}/v1/messages"
-        return api_base
+        # Normalize like OpenAILikeAnthropicMessagesConfig: an api_base that
+        # already ends in /v1 must not become /v1/v1/messages.
+        base = api_base.rstrip("/")
+        if base.endswith("/v1/messages"):
+            return base
+        base = base.removesuffix("/v1")
+        return f"{base}/v1/messages"
 
     def validate_anthropic_messages_environment(
         self,
