@@ -6873,6 +6873,91 @@ async def test_update_general_settings_propagates_apply_user_budget_to_team_keys
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_propagates_spend_log_cleanup_bounds():
+    """The dashboard writes the cleanup bounds straight to the DB config, so
+    without runtime propagation the scheduled job never sees them and the knobs
+    do nothing until the process restarts."""
+    from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+        SPEND_LOG_CLEANUP_BOUND_SETTINGS,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    db_settings = {
+        "maximum_spend_logs_cleanup_batch_size": 2000,
+        "maximum_spend_logs_cleanup_max_batches": 250,
+        "maximum_spend_logs_cleanup_run_budget": "90s",
+        "maximum_spend_logs_cleanup_batch_timeout": "10s",
+    }
+    assert set(db_settings) == set(SPEND_LOG_CLEANUP_BOUND_SETTINGS)
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(db_general_settings=db_settings)
+
+        import litellm.proxy.proxy_server as ps
+
+        assert {key: ps.general_settings.get(key) for key in db_settings} == db_settings
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clears_a_spend_log_cleanup_bound_dropped_from_the_db():
+    """Blanking the field in the dashboard deletes the key outright, so leaving
+    the last value in memory would keep a bound the operator just removed."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"maximum_spend_logs_cleanup_run_budget": "90s", "maximum_spend_logs_cleanup_batch_timeout": "10s"},
+    ):
+        await proxy_config._update_general_settings(
+            db_general_settings={"maximum_spend_logs_cleanup_batch_timeout": "10s"}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] is None
+        assert ps.general_settings["maximum_spend_logs_cleanup_batch_timeout"] == "10s"
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_keeps_a_yaml_set_spend_log_cleanup_bound():
+    """A YAML-set bound never appears in the DB object, so treating its absence
+    as a dashboard clear would discard the deployed config on every reload."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_spend_log_cleanup_bounds = {"maximum_spend_logs_cleanup_run_budget": "90s"}
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_cleanup_run_budget": "90s"}):
+        await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] == "90s"
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clearing_a_db_override_falls_back_to_the_yaml_bound():
+    """Clearing a dashboard override of a YAML-declared bound must restore the
+    YAML value. Leaving the deleted override in memory would keep enforcing the
+    bound the operator just removed, until the process restarted."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_spend_log_cleanup_bounds = {"maximum_spend_logs_cleanup_run_budget": "90s"}
+
+    # Memory currently holds the dashboard override, and the DB no longer carries it.
+    with patch("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_cleanup_run_budget": "30s"}):
+        await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] == "90s"
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins():
     """A DB value must not silently override an explicit YAML setting on reload."""
     from litellm.proxy.proxy_server import ProxyConfig

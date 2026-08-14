@@ -176,13 +176,14 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
     request_body["messages"] = new_messages
 
 
-def remove_custom_field_from_tools(request_body: dict) -> None:
+def normalize_custom_field_on_tools(request_body: dict) -> None:
     """
-    Remove ``custom`` field from each tool in the request body.
+    Drop the ``custom`` field from each tool, first hoisting a boolean
+    ``custom.defer_loading`` onto the top-level ``defer_loading`` flag that
+    Bedrock and Anthropic actually document, unless the tool already carries one.
 
-    Claude Code (v2.1.69+) sends ``custom: {defer_loading: true}`` on tool
-    definitions, which Anthropic's API accepts but Bedrock rejects with
-    ``"Extra inputs are not permitted"``.
+    Claude Code (v2.1.69+) is reported to send ``custom: {defer_loading: true}`` on
+    tool definitions, which Bedrock rejects with ``"Extra inputs are not permitted"``.
 
     Args:
         request_body: The request dictionary to modify in-place.
@@ -193,8 +194,14 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
     if not tools or not isinstance(tools, list):
         return
     for tool in tools:
-        if isinstance(tool, dict):
-            tool.pop("custom", None)
+        if not isinstance(tool, dict):
+            continue
+        custom: dict[str, object] | None = tool.pop("custom", None)
+        if not isinstance(custom, dict) or "defer_loading" in tool:
+            continue
+        deferred: object = custom.get("defer_loading")
+        if isinstance(deferred, bool):
+            tool["defer_loading"] = deferred
 
 
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
