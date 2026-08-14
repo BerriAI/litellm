@@ -4,12 +4,32 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.utils import (
+    _upstream_credential_headers,
     build_synthetic_mcp_request,
     logging_safe_mcp_headers,
     validate_and_normalize_mcp_server_payload,
     validate_tool_display_names,
 )
 from litellm.proxy._types import NewMCPServerRequest
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+def _server_forwarding(*header_names: str) -> MCPServer:
+    return MCPServer(
+        server_id="srv-1",
+        name="deepwiki",
+        transport="http",
+        url="https://mcp.example.com/mcp",
+        extra_headers=list(header_names),
+    )
+
+
+def _configured_servers(*servers: MCPServer):
+    return patch.dict(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
+        {server.server_id: server for server in servers},
+        clear=False,
+    )
 
 
 class TestValidateToolDisplayNames:
@@ -114,6 +134,28 @@ class TestLoggingSafeMcpHeaders:
 
         assert safe == {"x-nuid": "nuid-1"}
 
+    def test_strips_headers_a_server_forwards_upstream(self):
+        """mcp_servers.<name>.extra_headers names the headers the proxy relays upstream, so a
+        caller supplied value under one of them is an upstream credential no prefix rule can spot.
+        Config is written in canonical casing while the wire header arrives lowercased."""
+        with _configured_servers(_server_forwarding("X-GitHub-Token", "X-Tenant")):
+            safe = logging_safe_mcp_headers({"x-github-token": "ghp_secret", "x-tenant": "acct-1", "x-nuid": "nuid-1"})
+
+        assert safe == {"x-nuid": "nuid-1"}
+
+    def test_keeps_authorization_classification_for_oauth_passthrough(self):
+        """clean_headers already strips authorization, and claiming it here would change which
+        header authenticated_with_header resolves to on a config that lists it by design."""
+        with _configured_servers(_server_forwarding("Authorization", "X-GitHub-Token")):
+            assert "authorization" not in _upstream_credential_headers(["authorization", "x-github-token"])
+            assert "x-github-token" in _upstream_credential_headers(["authorization", "x-github-token"])
+
+    def test_keeps_headers_when_no_server_forwards_them(self):
+        with _configured_servers(_server_forwarding("x-github-token")):
+            safe = logging_safe_mcp_headers({"x-other-token": "not-forwarded", "x-nuid": "nuid-1"})
+
+        assert safe == {"x-other-token": "not-forwarded", "x-nuid": "nuid-1"}
+
 
 class TestBuildSyntheticMcpRequest:
     def test_forwards_client_headers_without_upstream_credentials(self):
@@ -147,3 +189,25 @@ class TestBuildSyntheticMcpRequest:
 
         assert request.headers.get("x-nuid") == "nuid-1"
         assert "x-company-key" not in request.headers
+
+    def test_drops_caller_host_so_the_logged_url_is_not_client_steerable(self):
+        """add_litellm_data_to_request records str(request.url) as proxy_server_request.url, and
+        Request.url is built from the host header, so forwarding it hands the caller that value."""
+        request = build_synthetic_mcp_request(
+            path="/mcp/tools/call",
+            raw_headers={"host": "evil.attacker.example", "x-nuid": "nuid-1"},
+        )
+
+        assert "evil.attacker.example" not in str(request.url)
+        assert "host" not in request.headers
+        assert request.headers.get("x-nuid") == "nuid-1"
+
+    def test_drops_headers_a_server_forwards_upstream(self):
+        with _configured_servers(_server_forwarding("x-github-token")):
+            request = build_synthetic_mcp_request(
+                path="/mcp/tools/call",
+                raw_headers={"x-github-token": "ghp_secret", "x-nuid": "nuid-1"},
+            )
+
+        assert "x-github-token" not in request.headers
+        assert request.headers.get("x-nuid") == "nuid-1"
