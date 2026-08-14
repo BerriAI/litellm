@@ -14,12 +14,12 @@ survives.
 import base64
 import json
 from datetime import timedelta
-from typing import Any, Final, Mapping, Sequence
+from typing import Any, Final, Literal, Mapping, Sequence, TypedDict
 
 from mcp import ClientSession, types
 from mcp.shared.session import ProgressFnT
 from mcp.types import CallToolResult as MCPCallToolResult
-from pydantic import ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 
 def _block_is_valid(block: object) -> bool:
@@ -30,27 +30,49 @@ def _block_is_valid(block: object) -> bool:
     return True
 
 
-def _resource_text(resource: Mapping[str, Any]) -> str | None:
-    text: Final = resource.get("text")
-    if isinstance(text, str):
-        return text
-    blob: Final = resource.get("blob")
-    mime_type: Final = resource.get("mimeType")
-    if not isinstance(blob, str) or not isinstance(mime_type, str) or not mime_type.startswith("text/"):
+class _ResourcePayload(BaseModel):
+    """Lenient shape of an ``EmbeddedResource.resource``: every field a non-compliant upstream
+    might have gotten wrong is optional, so this never itself fails to validate."""
+
+    model_config = ConfigDict(extra="allow")
+
+    text: str | None = None
+    blob: str | None = None
+    mimeType: str | None = None  # noqa: N815  # mirrors the MCP wire field name
+
+
+class _TextContentBlock(TypedDict):
+    type: Literal["text"]
+    text: str
+
+
+def _resource_text(resource: _ResourcePayload) -> str | None:
+    if resource.text is not None:
+        return resource.text
+    if resource.blob is None or resource.mimeType is None or not resource.mimeType.startswith("text/"):
         return None
     try:
-        return base64.b64decode(blob, validate=True).decode("utf-8")
+        return base64.b64decode(resource.blob, validate=True).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
         return None
 
 
-def _as_text_block(block: object) -> dict[str, Any]:
+def _validate_resource(raw_resource: Mapping[str, object]) -> _ResourcePayload | None:
+    try:
+        return _ResourcePayload.model_validate(raw_resource)
+    except ValidationError:
+        return None
+
+
+def _as_text_block(block: object) -> _TextContentBlock:
     if isinstance(block, Mapping):
-        resource: Final = block.get("resource")
-        if isinstance(resource, Mapping):
-            text: Final = _resource_text(resource)
-            if text is not None:
-                return {"type": "text", "text": text}
+        raw_resource: Final = block.get("resource")
+        if isinstance(raw_resource, Mapping):
+            resource: Final = _validate_resource(raw_resource)
+            if resource is not None:
+                text: Final = _resource_text(resource)
+                if text is not None:
+                    return {"type": "text", "text": text}
     return {"type": "text", "text": json.dumps(block, default=str)}
 
 
