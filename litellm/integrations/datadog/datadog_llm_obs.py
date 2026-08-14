@@ -57,7 +57,7 @@ def _parse_tool_call_arguments(raw: object) -> object:
         return raw
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
+    except (RecursionError, json.JSONDecodeError):
         return raw
 
 

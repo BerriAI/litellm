@@ -366,3 +366,14 @@ class TestDataDogLLMObsCacheTokenMetrics:
             assert "cache_write_input_tokens" not in metrics
             assert "non_cached_input_tokens" not in metrics
             assert metrics["input_tokens"] == 20.0
+
+
+def test_parse_tool_call_arguments_survives_deeply_nested_json():
+    """A hostile/degenerate arguments string must fall back to the raw
+    string, not raise RecursionError and drop the span."""
+    from litellm.integrations.datadog.datadog_llm_obs import (
+        _parse_tool_call_arguments,
+    )
+
+    hostile = "[" * 50000
+    assert _parse_tool_call_arguments(hostile) == hostile
