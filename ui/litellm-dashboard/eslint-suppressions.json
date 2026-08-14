@@ -3506,28 +3506,14 @@
       "count": 1
     }
   },
-  "src/components/view_logs/CostBreakdownViewer.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/EvalViewer/EvalViewer.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
   "src/components/view_logs/GuardrailViewer/CompliancePanel.tsx": {
     "no-nested-ternary": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -3541,30 +3527,16 @@
   "src/components/view_logs/GuardrailViewer/GuardrailViewer.tsx": {
     "no-nested-ternary": {
       "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/DrawerHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx": {
     "no-nested-ternary": {
       "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/view_logs/LogDetailsDrawer/LogDetailsDrawer.tsx": {
     "no-nested-ternary": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
@@ -3575,34 +3547,9 @@
       "count": 2
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/useKeyboardNavigation.ts": {
     "react-hooks/immutability": {
       "count": 2
-    }
-  },
-  "src/components/view_logs/ToolsSection/FormattedToolView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/ToolsSection/ToolExpandedContent.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/ToolsSection/ToolItem.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/VectorStoreViewer.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/view_logs/columns.tsx": {
