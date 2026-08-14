@@ -2311,7 +2311,7 @@ async def delete_user(
         fetch_all_teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_row.teams}})
         teams_to_update = []
         for team in fetch_all_teams:
-            is_member_in_team, new_team_members = _cleanup_members_with_roles(
+            removed_team_members, new_team_members = _cleanup_members_with_roles(
                 existing_team_row=LiteLLM_TeamTable.model_validate(team.model_dump()),
                 data=TeamMemberDeleteRequest(
                     team_id=team.team_id,
@@ -2319,7 +2319,7 @@ async def delete_user(
                     user_email=user_row.user_email,
                 ),
             )
-            if is_member_in_team:
+            if removed_team_members:
                 _db_new_team_members: list[dict] = [m.model_dump() for m in new_team_members]
                 team.members_with_roles = json.dumps(_db_new_team_members)
                 teams_to_update.append(team)
