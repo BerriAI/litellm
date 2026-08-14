@@ -164,6 +164,13 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
         _safe_set_request_parsed_body(request=request, parsed_body=resolved)
 
 
+def _blocked_responses_api_usage(original_response: Any) -> ResponseAPIUsage:
+    usage: Final = getattr(original_response, "usage", None) if original_response is not None else None
+    if isinstance(usage, ResponseAPIUsage):
+        return usage
+    return ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0)
+
+
 @router.post(
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
@@ -415,7 +422,7 @@ async def responses_api(
             model=e.model or data.get("model"),
             output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
             status="completed",
-            usage=ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+            usage=_blocked_responses_api_usage(e.original_response),
         )
         return response_obj
     except Exception as e:
