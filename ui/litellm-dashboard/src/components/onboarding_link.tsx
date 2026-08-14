@@ -1,7 +1,7 @@
 import React from "react";
-import { Button, Modal, Typography } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Text } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import NotificationsManager from "./molecules/notifications_manager";
 
 export interface InvitationLink {
@@ -58,10 +58,7 @@ export default function OnboardingModal({
   invitationLinkData,
   modalType = "invitation",
 }: OnboardingProps) {
-  const { Paragraph } = Typography;
-  const handleInvitationOk = () => {
-    setIsInvitationLinkModalVisible(false);
-  };
+  const linkLabel = modalType === "invitation" ? "Invitation Link" : "Reset Password Link";
 
   const handleInvitationCancel = () => {
     setIsInvitationLinkModalVisible(false);
@@ -76,36 +73,30 @@ export default function OnboardingModal({
     });
 
   return (
-    <Modal
-      title={modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}
-      open={isInvitationLinkModalVisible}
-      width={800}
-      footer={null}
-      onOk={handleInvitationOk}
-      onCancel={handleInvitationCancel}
-    >
-      <Paragraph>
-        {modalType === "invitation"
-          ? "Copy and send the generated link to onboard this user to the proxy."
-          : "Copy and send the generated link to the user to reset their password."}
-      </Paragraph>
-      <div className="flex justify-between pt-5 pb-2">
-        <Text className="text-base">User ID</Text>
-        <Text>{invitationLinkData?.user_id}</Text>
-      </div>
-      <div className="flex justify-between pt-5 pb-2">
-        <Text>{modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}</Text>
-        <Text>
-          <Text>{getInvitationUrl()}</Text>
-        </Text>
-      </div>
-      <div className="flex justify-end mt-5">
-        <CopyToClipboard text={getInvitationUrl()} onCopy={() => NotificationsManager.success("Copied!")}>
-          <Button type="primary">
-            {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
-          </Button>
-        </CopyToClipboard>
-      </div>
-    </Modal>
+    <Dialog open={isInvitationLinkModalVisible} onOpenChange={(open) => !open && handleInvitationCancel()}>
+      <DialogContent className="z-[1100] max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>{linkLabel}</DialogTitle>
+        </DialogHeader>
+        <p>
+          {modalType === "invitation"
+            ? "Copy and send the generated link to onboard this user to the proxy."
+            : "Copy and send the generated link to the user to reset their password."}
+        </p>
+        <div className="flex justify-between pt-5 pb-2">
+          <span className="text-base">User ID</span>
+          <span className="min-w-0 break-words">{invitationLinkData?.user_id}</span>
+        </div>
+        <div className="flex justify-between pt-5 pb-2">
+          <span>{linkLabel}</span>
+          <span className="min-w-0 break-words">{getInvitationUrl()}</span>
+        </div>
+        <div className="flex justify-end mt-5">
+          <CopyToClipboard text={getInvitationUrl()} onCopy={() => NotificationsManager.success("Copied!")}>
+            <Button>{modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}</Button>
+          </CopyToClipboard>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
