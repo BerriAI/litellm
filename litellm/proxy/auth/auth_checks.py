@@ -65,6 +65,7 @@ from litellm.proxy.auth.budget_throttle import (
     should_throttle_budget_exceeded,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
@@ -2016,6 +2017,44 @@ async def _cache_team_object(
             )
 
 
+async def delete_cache_team_object(
+    team_id: str,
+    team_alias: str | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    """
+    Evict both keys `_cache_team_object` writes.
+
+    `get_team_object` reads the id key and the JWT `team_alias_jwt_field` path reads the alias key,
+    so leaving either behind keeps a deleted team resolvable for auth until its TTL expires.
+
+    Mirrors `delete_cached_project_object`: evicting locally only reaches the worker handling the
+    delete, so every key is also broadcast to drop the other workers' in-memory copies.
+
+    Eviction is best-effort, matching `_cache_team_object`. `delete_team` calls this after the team
+    rows are already gone, so letting an unreachable cache backend raise here would fail a request
+    whose delete has committed.
+    """
+    keys: Final = (f"team_id:{team_id}", *((f"team_alias:{team_alias}",) if team_alias else ()))
+
+    for key in keys:
+        try:
+            user_api_key_cache.delete_cache(key=key)
+
+            ## UPDATE REDIS CACHE ##
+            if proxy_logging_obj is not None:
+                await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not abort the delete
+            verbose_proxy_logger.warning(
+                "Failed to invalidate cached team entry %s on delete; "
+                "a deleted team may be served until its TTL expires: %s",
+                key,
+                e,
+            )
+        await publish_auth_cache_invalidation(cache_key=key)
+
+
 async def _cache_key_object(
     hashed_token: str,
     user_api_key_obj: UserAPIKeyAuth,
@@ -2066,6 +2105,44 @@ class TeamNotFoundError(HTTPException):
             status_code=404,
             detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
         )
+
+
+async def delete_cache_key_objects(
+    hashed_tokens: Sequence[str],
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    """
+    Evict a batch of key objects, for callers that delete keys in bulk rather than through
+    `/key/delete`. Auth resolves a cached key object without re-reading its team, so a key left
+    cached after its row is gone keeps buying access until its TTL expires.
+
+    Evicting locally only reaches this worker, so each token is also broadcast: a deleted key left
+    in a peer worker's in-memory cache still authenticates there until its TTL expires.
+
+    Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
+    cache backend must not abort the caller partway through its own cascade.
+    """
+    results: Final = await asyncio.gather(
+        *(
+            _delete_cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            for hashed_token in hashed_tokens
+        ),
+        return_exceptions=True,
+    )
+
+    for hashed_token, result in zip(hashed_tokens, results):
+        if isinstance(result, BaseException):
+            verbose_proxy_logger.warning(
+                "Failed to evict cached key entry for %s; a deleted key may authenticate until its TTL expires: %s",
+                hashed_token,
+                result,
+            )
+        await publish_auth_cache_invalidation(cache_key=hashed_token)
 
 
 @log_db_metrics
