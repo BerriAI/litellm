@@ -1585,15 +1585,17 @@ class AmazonConverseConfig(BaseConfig):
                     bedrock_tools.append(ToolBlock(cachePoint=cache_point))
                     break
 
+        tool_choice_values: ToolChoiceValuesBlock | None = inference_params.pop("tool_choice", None)
         bedrock_tool_config: ToolConfigBlock | None = None
         if len(bedrock_tools) > 0:
-            tool_choice_values: Final[ToolChoiceValuesBlock] = inference_params.pop("tool_choice", None)
             bedrock_tool_config = ToolConfigBlock(
                 tools=bedrock_tools,
             )
             if tool_choice_values is not None:
                 bedrock_tool_config["toolChoice"] = tool_choice_values
                 self._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
+        else:
+            additional_request_params.pop("tool_choice", None)
 
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
