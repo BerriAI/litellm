@@ -151,6 +151,7 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
         self._observed_load_sync_owner = f"{socket.gethostname()}:{os.getpid()}:{id(self)}"
         self._observed_load_sync_lease_ttl = 15
         self._observed_load_is_leader = False
+        self._backend_info_label_values: Set[Tuple[str, str, str, str, str, str]] = set()
 
         # Streaming dedup: track which litellm_call_ids we've already incremented.
         # log_pre_api_call fires for every SSE chunk in streaming - only increment once.
@@ -250,6 +251,18 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
                 "Inference-engine observed backend load used by sticky routing",
                 ["load_key", "source"],
             )
+            self._backend_info = Gauge(
+                "litellm_sticky_weighted_backend_info",
+                "Backend identity metadata for sticky weighted routing",
+                [
+                    "model_group",
+                    "deployment_id",
+                    "litellm_model",
+                    "api_base",
+                    "load_key",
+                    "load_key_source",
+                ],
+            )
             self._observed_load_sync_events = Counter(
                 "litellm_sticky_weighted_observed_load_sync_events_total",
                 "Observed backend load sync events",
@@ -303,6 +316,7 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
             self._observed_backend_load = REGISTRY._names_to_collectors.get(
                 "litellm_sticky_weighted_observed_backend_load"
             )
+            self._backend_info = REGISTRY._names_to_collectors.get("litellm_sticky_weighted_backend_info")
             self._observed_load_sync_events = REGISTRY._names_to_collectors.get(
                 "litellm_sticky_weighted_observed_load_sync_events_total"
             )
@@ -336,6 +350,7 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
                 self._counter_resets,
                 self._counter_events,
                 self._observed_backend_load,
+                self._backend_info,
                 self._observed_load_sync_events,
                 self._observed_load_sync_leader,
                 self._observed_load_registered_backends,
@@ -360,6 +375,7 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
                 self._counter_resets = self._counter_resets or NoOpMetric()
                 self._counter_events = self._counter_events or NoOpMetric()
                 self._observed_backend_load = self._observed_backend_load or NoOpMetric()
+                self._backend_info = self._backend_info or NoOpMetric()
                 self._observed_load_sync_events = self._observed_load_sync_events or NoOpMetric()
                 self._observed_load_sync_leader = self._observed_load_sync_leader or NoOpMetric()
                 self._observed_load_registered_backends = (
@@ -385,6 +401,7 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
             self._counter_resets = NoOpMetric()
             self._counter_events = NoOpMetric()
             self._observed_backend_load = NoOpMetric()
+            self._backend_info = NoOpMetric()
             self._observed_load_sync_events = NoOpMetric()
             self._observed_load_sync_leader = NoOpMetric()
             self._observed_load_registered_backends = NoOpMetric()
@@ -786,6 +803,83 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
 
         return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "/metrics", "", "", ""))
 
+    @classmethod
+    def _api_base_label(cls, api_base: object) -> str:
+        normalized_api_base = cls._normalize_load_key_part(api_base)
+        if normalized_api_base is None:
+            return "unknown"
+
+        parse_input = normalized_api_base if "://" in normalized_api_base else f"http://{normalized_api_base}"
+        parsed = urllib.parse.urlparse(parse_input)
+        if not parsed.scheme or not parsed.netloc:
+            return normalized_api_base
+
+        try:
+            port = parsed.port
+        except ValueError:
+            port = None
+
+        host = parsed.hostname
+        if host is None:
+            return normalized_api_base
+
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        netloc = f"{host}:{port}" if port is not None else host
+        return urllib.parse.urlunparse((parsed.scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
+
+    @staticmethod
+    def _metric_label_value(value: object) -> str:
+        normalized_value = StickyLeastBusyWeightedLoggingHandler._normalize_load_key_part(value)
+        return normalized_value if normalized_value is not None else "unknown"
+
+    def _set_backend_info_for_deployment(
+        self,
+        model_group: object,
+        deployment: dict,
+        load_key: Optional[str],
+        load_key_source: str,
+    ) -> Optional[Tuple[str, str, str, str, str, str]]:
+        if load_key is None:
+            return None
+
+        model_info = deployment.get("model_info") if isinstance(deployment, dict) else None
+        litellm_params = deployment.get("litellm_params") if isinstance(deployment, dict) else None
+        deployment_id = model_info.get("id") if isinstance(model_info, dict) else None
+        litellm_model = litellm_params.get("model") if isinstance(litellm_params, dict) else None
+        api_base = litellm_params.get("api_base") if isinstance(litellm_params, dict) else None
+        label_values = (
+            self._metric_label_value(model_group),
+            self._metric_label_value(deployment_id),
+            self._metric_label_value(litellm_model),
+            self._api_base_label(api_base),
+            load_key,
+            load_key_source,
+        )
+
+        with self._observed_load_lock:
+            if label_values in self._backend_info_label_values:
+                return label_values
+            self._backend_info_label_values.add(label_values)
+
+        self._backend_info.labels(*label_values).set(1)
+        return label_values
+
+    def _remove_stale_backend_info(self, active_label_values: Set[Tuple[str, str, str, str, str, str]]) -> None:
+        with self._observed_load_lock:
+            stale_label_values = self._backend_info_label_values - active_label_values
+            self._backend_info_label_values = active_label_values
+
+        remove = getattr(self._backend_info, "remove", None)
+        if not callable(remove):
+            return
+
+        for label_values in stale_label_values:
+            try:
+                remove(*label_values)
+            except KeyError:
+                continue
+
     def _register_observed_load_backend(
         self,
         deployment: dict,
@@ -826,6 +920,7 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
 
         active_backends: Dict[str, str] = {}
         active_last_seen: Dict[str, float] = {}
+        active_backend_info_label_values: Set[Tuple[str, str, str, str, str, str]] = set()
         now = time.time()
         for deployment in model_list:
             load_key, load_key_source = self._get_load_key_for_deployment(deployment)
@@ -839,6 +934,14 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
 
             active_backends[load_key] = str(api_base)
             active_last_seen[load_key] = now
+            label_values = self._set_backend_info_for_deployment(
+                deployment.get("model_name"),
+                deployment,
+                load_key,
+                load_key_source,
+            )
+            if label_values is not None:
+                active_backend_info_label_values.add(label_values)
 
         with self._observed_load_lock:
             if not active_backends and not self._observed_load_model_list_synced:
@@ -862,6 +965,8 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
                 self._observed_load_last_error_log.pop(load_key, None)
                 self._observed_load_success_logged.pop(load_key, None)
             self._observed_load_registered_backends.set(len(active_backends))
+
+        self._remove_stale_backend_info(active_backend_info_label_values)
 
         verbose_router_logger.info(
             f"[StickyLeastBusyWeighted OBSERVED-LOAD] action=sync_backends_from_model_list "
@@ -1813,6 +1918,7 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
             if isinstance(dep_id, int):
                 dep_id = str(dep_id)
             load_key, load_key_source = self._get_load_key_for_deployment(d)
+            self._set_backend_info_for_deployment(model_group, d, load_key, load_key_source)
             self._register_observed_load_backend(d, load_key, load_key_source)
             cache_key = self._get_request_count_cache_key(model_group, dep_id, load_key)
             observed_cache_key = self._get_observed_load_cache_key(load_key) if load_key is not None else None
@@ -1868,6 +1974,7 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
             if isinstance(dep_id, int):
                 dep_id = str(dep_id)
             load_key, load_key_source = self._get_load_key_for_deployment(d)
+            self._set_backend_info_for_deployment(model_group, d, load_key, load_key_source)
             self._register_observed_load_backend(d, load_key, load_key_source)
             cache_key = self._get_request_count_cache_key(model_group, dep_id, load_key)
             observed_cache_key = self._get_observed_load_cache_key(load_key) if load_key is not None else None

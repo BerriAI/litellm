@@ -595,6 +595,31 @@ sglang:num_queue_reqs{rank="1"} 2
 
 
 class TestPrometheusMetrics:
+    def test_backend_info_metric_exposes_sanitized_load_key_mapping(self):
+        handler = StickyLeastBusyWeightedLoggingHandler(router_cache=DualCache())
+        deployment = _make_deployment("backend-info-deployment")
+        deployment["litellm_params"]["api_base"] = (
+            "http://user:secret@backend-info-node:8000/v1?api_key=secret"
+        )
+        load_key, load_key_source = handler._get_load_key_for_deployment(deployment)
+
+        handler._get_request_counts(MG, [deployment])
+
+        assert (
+            _metric_sample_value(
+                handler._backend_info,
+                {
+                    "model_group": MG,
+                    "deployment_id": "backend-info-deployment",
+                    "litellm_model": "openai/gpt-4",
+                    "api_base": "http://backend-info-node:8000/v1",
+                    "load_key": load_key,
+                    "load_key_source": load_key_source,
+                },
+            )
+            == 1
+        )
+
     def test_selection_metrics_reuse_calculated_loads(self):
         handler = StickyLeastBusyWeightedLoggingHandler(
             router_cache=DualCache(), imbalance_threshold=1.5
