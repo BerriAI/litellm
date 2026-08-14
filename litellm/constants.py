@@ -1736,6 +1736,33 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
 
 UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
 
+# Read/management routes that run through the same request processing and logging
+# lifecycle as inference, but never send a prompt to a model. Their responses can still
+# carry a usage object (a retrieved response replays the usage of the call that created
+# it), so pricing them bills the same tokens twice.
+NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        "get_responses",
+        "aget_responses",
+        "delete_responses",
+        "adelete_responses",
+        "cancel_responses",
+        "acancel_responses",
+        "list_input_items",
+        "alist_input_items",
+        "vector_store_create",
+        "avector_store_create",
+        "vector_store_retrieve",
+        "avector_store_retrieve",
+        "vector_store_list",
+        "avector_store_list",
+        "vector_store_update",
+        "avector_store_update",
+        "vector_store_delete",
+        "avector_store_delete",
+    }
+)
+
 # PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
 # sentinel api_key so PTU flat cost stays distinguishable from real per-request
 # spend under the table's composite unique constraint.

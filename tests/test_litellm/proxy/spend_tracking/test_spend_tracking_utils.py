@@ -2959,3 +2959,46 @@ def test_user_traffic_carries_no_internal_call_origin():
     )
     metadata = json.loads(payload["metadata"])
     assert metadata["internal_call_origin"] is None
+
+
+def _spend_log_for_call_type(call_type: str) -> dict:
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    return cast(
+        dict,
+        get_logging_payload(
+            kwargs={
+                "model": "gpt-4o",
+                "call_type": call_type,
+                "response_cost": 0.0,
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+            response_obj=ResponsesAPIResponse(
+                id="resp_lit5602",
+                created_at=1234567890,
+                model="gpt-4o",
+                output=[],
+                usage={"input_tokens": 4000, "output_tokens": 2000, "total_tokens": 6000},
+            ),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        ),
+    )
+
+
+def test_spend_log_for_response_retrieval_does_not_replay_the_created_responses_tokens():
+    """A retrieved response carries the usage of the call that created it, so counting it again
+    bills the same tokens twice. Regression test for LIT-5602."""
+    payload = _spend_log_for_call_type("aget_responses")
+
+    assert payload["prompt_tokens"] == 0
+    assert payload["completion_tokens"] == 0
+    assert payload["total_tokens"] == 0
+    assert payload["spend"] == 0.0
+
+
+def test_spend_log_for_response_creation_still_counts_tokens():
+    """Guards the test above: the same response object must still be counted on the create path."""
+    payload = _spend_log_for_call_type("aresponses")
+
+    assert payload["total_tokens"] == 6000

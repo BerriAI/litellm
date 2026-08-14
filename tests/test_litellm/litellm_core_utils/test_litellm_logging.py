@@ -4539,3 +4539,93 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+class TestNonInferenceCallTypesAreNotBilled:
+    """A retrieved response replays the usage of the call that created it, so pricing a read
+    of it double bills the same tokens. Regression tests for LIT-5602."""
+
+    RETRIEVED_RESPONSE_USAGE = {"input_tokens": 4000, "output_tokens": 2000, "total_tokens": 6000}
+
+    def _logging_obj(self, call_type: str):
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        obj = LiteLLMLoggingObj(
+            model="gpt-4o",
+            messages=[],
+            stream=False,
+            call_type=call_type,
+            start_time=time.time(),
+            litellm_call_id=f"lit5602-{call_type}",
+            function_id="fn-lit5602",
+        )
+        obj.update_environment_variables(
+            model="gpt-4o",
+            user="",
+            optional_params={},
+            litellm_params={"api_base": "", "custom_llm_provider": "openai"},
+        )
+        return obj
+
+    def _retrieved_response(self):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        return ResponsesAPIResponse(
+            id="resp_lit5602",
+            created_at=1234567890,
+            model="gpt-4o",
+            output=[],
+            usage=self.RETRIEVED_RESPONSE_USAGE,
+        )
+
+    def test_creating_a_response_is_still_priced(self):
+        """Guards the tests below: the same response object must cost money on the create path."""
+        cost = self._logging_obj("aresponses")._response_cost_calculator(result=self._retrieved_response())
+        assert cost is not None and cost > 0
+
+    @pytest.mark.parametrize(
+        "call_type",
+        ["aget_responses", "adelete_responses", "acancel_responses", "alist_input_items", "avector_store_delete"],
+    )
+    def test_read_and_management_calls_cost_nothing(self, call_type):
+        cost = self._logging_obj(call_type)._response_cost_calculator(result=self._retrieved_response())
+        assert cost == 0.0
+
+    def test_retrieved_usage_is_not_re_reported_in_standard_logging_payload(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            get_standard_logging_object_payload,
+        )
+
+        from datetime import datetime
+
+        logging_obj = self._logging_obj("aget_responses")
+        now = datetime.now()
+        payload = get_standard_logging_object_payload(
+            kwargs={
+                "litellm_call_id": "lit5602-payload",
+                "model": "gpt-4o",
+                "call_type": "aget_responses",
+                "litellm_params": {},
+            },
+            init_response_obj=self._retrieved_response(),
+            start_time=now,
+            end_time=now,
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+        assert payload is not None
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["response_cost"] == 0.0
+
+    def test_read_calls_do_not_log_a_placeholder_chat_message(self):
+        logging_obj, _ = litellm.utils.function_setup(
+            original_function="aget_responses",
+            rules_obj=litellm.utils.Rules(),
+            start_time=time.time(),
+            **{"litellm_call_id": "lit5602-setup", "response_id": "resp_lit5602"},
+        )
+
+        assert logging_obj.model_call_details["messages"] == ()

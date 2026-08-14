@@ -14,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
 )
 from litellm.constants import (
@@ -258,7 +259,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     usage: dict = {}
     if call_type in ["ocr", "aocr"]:
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
-    else:
+    elif call_type not in NON_INFERENCE_CALL_TYPES:
         # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
         _usage: Final = response_obj_dict.get("usage", None) or {}
         if isinstance(_usage, litellm.Usage):

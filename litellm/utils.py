@@ -72,6 +72,7 @@ from litellm.constants import (
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
+    NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
@@ -1070,6 +1071,8 @@ def function_setup(
             except Exception as e:
                 verbose_logger.debug("Error extracting messages from Google contents: %s", e)
                 messages = "default-message-value"
+        elif call_type in NON_INFERENCE_CALL_TYPES:
+            messages = ()
         else:
             messages = "default-message-value"
         stream = False
