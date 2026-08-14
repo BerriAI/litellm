@@ -573,7 +573,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """
         try:
             raw_response_json: Final = raw_response.json()
-        except Exception:
+        except Exception: # noqa: BLE001    
             raise AnthropicError(message=raw_response.text, status_code=raw_response.status_code)
         return AnthropicMessagesResponse(**raw_response_json)
 
