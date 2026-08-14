@@ -426,8 +426,10 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.ZAI]: "zai/glm-4.5",
 };
 
-export const getPlaceholder = (selectedProvider: string): string =>
-  providerPlaceholderMap[selectedProvider as Providers] ?? "gpt-3.5-turbo";
+export const getPlaceholder = (selectedProvider: string): string => {
+  const resolvedProvider = Providers[selectedProvider as keyof typeof Providers] ?? (selectedProvider as Providers);
+  return providerPlaceholderMap[resolvedProvider] ?? "gpt-3.5-turbo";
+};
 
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
   let providerKey = provider;
