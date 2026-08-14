@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.utils import (
+    logging_safe_mcp_headers,
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
@@ -653,6 +654,7 @@ class LiteLLM_Proxy_MCP_Handler:
         tool_results: Final[list[MCPToolResult]] = []
         tool_call_id: str | None = None
         rules_obj: Final = Rules()
+        logging_safe_headers: Final = logging_safe_mcp_headers(raw_headers)
         for tool_call in tool_calls:
             logging_request_data: dict[str, object] = {}
             tool_name: str | None = None
@@ -697,6 +699,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     "tool_call_id": tool_call_id,
                     "tool_name": sanitized_tool_name,
                     "server_name": server_name,
+                    "headers": logging_safe_headers,
                 }
                 logging_request_data = {
                     "model": f"MCP: {tool_name}",
@@ -708,7 +711,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     "proxy_server_request": {
                         "url": "/mcp/tools/call",
                         "method": "POST",
-                        "headers": {},
+                        "headers": logging_safe_headers,
                         "body": {
                             "name": sanitized_tool_name,
                             "arguments": parsed_arguments,
