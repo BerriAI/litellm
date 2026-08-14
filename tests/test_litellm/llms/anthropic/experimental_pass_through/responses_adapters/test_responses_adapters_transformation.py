@@ -18,6 +18,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -1207,3 +1208,150 @@ class TestTranslateResponse:
         assert "text" in types
         assert "tool_use" in types
         assert result["stop_reason"] == "tool_use"
+
+
+class TestToolResultImages:
+    """Images inside tool_result blocks must survive translation: the
+    function_call_output carries a text placeholder and the image is sent as an
+    input_image part in a user message emitted after the tool outputs."""
+
+    B64_DATA = "iVBORw0KGgoAAAANSUhEUg=="
+    DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    HTTP_URL = "https://example.com/screenshot.png"
+
+    def _messages(self, tool_result_content):
+        return [
+            {"role": "user", "content": "read the screenshot"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_01", "name": "read", "input": {}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}
+                ],
+            },
+        ]
+
+    def _translate(self, tool_result_content):
+        return _ADAPTER.translate_messages_to_responses_input(self._messages(tool_result_content))
+
+    @staticmethod
+    def _input_images(items):
+        return [
+            part
+            for item in items
+            if item.get("type") == "message" and item.get("role") == "user"
+            for part in item.get("content", [])
+            if part.get("type") == "input_image"
+        ]
+
+    @staticmethod
+    def _image_message(items):
+        return next(
+            item
+            for item in items
+            if item.get("type") == "message"
+            and any(part.get("type") == "input_image" for part in item.get("content", []))
+        )
+
+    def test_base64_image_survives(self):
+        items = self._translate(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
+        )
+
+        images = self._input_images(items)
+        assert len(images) == 1
+        assert images[0]["image_url"] == self.DATA_URI
+
+        outputs = [item for item in items if item.get("type") == "function_call_output"]
+        assert len(outputs) == 1
+        assert outputs[0]["call_id"] == "toolu_01"
+        assert "image" in outputs[0]["output"]
+
+    def test_url_image_survives(self):
+        items = self._translate([{"type": "image", "source": {"type": "url", "url": self.HTTP_URL}}])
+
+        images = self._input_images(items)
+        assert len(images) == 1
+        assert images[0]["image_url"] == self.HTTP_URL
+
+    def test_text_and_image_keeps_text_in_output(self):
+        items = self._translate(
+            [
+                {"type": "text", "text": "screenshot saved"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}},
+            ]
+        )
+
+        outputs = [item for item in items if item.get("type") == "function_call_output"]
+        assert outputs[0]["output"].startswith("screenshot saved")
+        assert len(self._input_images(items)) == 1
+
+    def test_two_images_both_survive(self):
+        items = self._translate(
+            [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}},
+                {"type": "image", "source": {"type": "url", "url": self.HTTP_URL}},
+            ]
+        )
+
+        images = self._input_images(items)
+        assert [img["image_url"] for img in images] == [self.DATA_URI, self.HTTP_URL]
+
+    def test_image_user_message_comes_after_function_call_output(self):
+        items = self._translate(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
+        )
+
+        fco_index = next(i for i, item in enumerate(items) if item.get("type") == "function_call_output")
+        assert fco_index < items.index(self._image_message(items))
+
+    def test_boundary_text_precedes_hoisted_images(self):
+        items = self._translate(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
+        )
+
+        assert self._image_message(items)["content"] == [
+            {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+            {"type": "input_image", "image_url": self.DATA_URI},
+        ]
+
+    def test_sibling_user_blocks_stay_out_of_boundary_message(self):
+        messages = self._messages(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
+        )
+        messages[-1]["content"].append({"type": "text", "text": "what changed?"})
+
+        items = _ADAPTER.translate_messages_to_responses_input(messages)
+
+        assert self._image_message(items)["content"] == [
+            {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+            {"type": "input_image", "image_url": self.DATA_URI},
+        ]
+        assert any(
+            part == {"type": "input_text", "text": "what changed?"}
+            for item in items
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+        )
+
+    def test_text_only_tool_result_unchanged(self):
+        items = self._translate([{"type": "text", "text": "plain result"}])
+
+        outputs = [item for item in items if item.get("type") == "function_call_output"]
+        assert outputs[0]["output"] == "plain result"
+        assert self._input_images(items) == []
+
+    def test_image_without_source_dict_keeps_plain_text_output(self):
+        items = self._translate(
+            [
+                {"type": "text", "text": "screenshot saved"},
+                {"type": "image", "source": self.HTTP_URL},
+            ]
+        )
+
+        outputs = [item for item in items if item.get("type") == "function_call_output"]
+        assert outputs[0]["output"] == "screenshot saved"
+        assert self._input_images(items) == []
