@@ -3,7 +3,7 @@ import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDe
 import { Plus, SearchIcon, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
@@ -61,7 +61,7 @@ export function AccessGroupsPage() {
   return (
     <div className="p-6 px-12">
       <div className="mb-4">
-        <PageHeader
+        <LegacyPageHeader
           title="Access Groups"
           subtitle="Manage resource permissions for your organization"
           actions={

@@ -6,7 +6,7 @@ import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Accordion, AccordionBody, AccordionHeader, TextInput } from "@tremor/react";
-import { Button, Form, Input, Layout, Modal, Select, Switch, Tabs, theme, Tooltip, Typography } from "antd";
+import { Button, Form, Input, Layout, Modal, Select, Switch, Tabs, Tooltip, Typography } from "antd";
 import { Plus, Users } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -403,7 +403,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     return false;
   };
 
-  const { token } = theme.useToken();
   const { Text } = Typography;
   const { Content } = Layout;
 
@@ -474,7 +473,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   ];
 
   return (
-    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
+    <Content className={selectedTeamId ? "px-12 py-6" : "p-8"}>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -494,30 +493,26 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           premiumUser={premiumUser}
         />
       ) : (
-        <>
-          <div className="mb-4">
-            <PageHeader
-              icon={<Users className="size-5" />}
-              title="Teams"
-              subtitle="Manage teams, members, and their access to models and budgets"
+        <PageHeader
+          icon={<Users />}
+          title="Teams"
+          subtitle="Manage teams, members, and their access to models and budgets"
+          primaryAction={
+            canCreateOrManageTeams(userRole, userID, organizations) ? (
+              <UIButton onClick={() => setIsTeamModalVisible(true)} data-testid="create-team-button">
+                <Plus className="size-4" />
+                Create Team
+              </UIButton>
+            ) : undefined
+          }
+          tabs={({ leadingControls }) => (
+            <Tabs
+              items={tabItems}
+              tabBarExtraContent={{ left: leadingControls }}
+              className="[&>.ant-tabs-nav]:!mb-6 [&>.ant-tabs-nav]:before:!border-b-0 [&_.ant-tabs-ink-bar]:!h-0.5 [&_.ant-tabs-tab]:!py-[7px] [&_.ant-tabs-tab+_.ant-tabs-tab]:!ml-[22px] [&_.ant-tabs-tab-active]:font-semibold"
             />
-          </div>
-
-          <Tabs
-            items={tabItems}
-            tabBarExtraContent={{
-              left: canCreateOrManageTeams(userRole, userID, organizations) ? (
-                <div className="flex items-center gap-4 pr-4">
-                  <UIButton onClick={() => setIsTeamModalVisible(true)} data-testid="create-team-button">
-                    <Plus className="size-4" />
-                    Create Team
-                  </UIButton>
-                  <div className="h-6 w-px bg-gray-200" />
-                </div>
-              ) : undefined,
-            }}
-          />
-        </>
+          )}
+        />
       )}
 
       {canCreateOrManageTeams(userRole, userID, organizations) && (
