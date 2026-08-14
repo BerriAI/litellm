@@ -1688,9 +1688,15 @@ class TestTemporaryMCPSessionEndpoints:
             expires_at=datetime.utcnow() - timedelta(seconds=30),
         )
         cache = {"expired": expired_entry}
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
-            cache,
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
+                cache,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=None,
+            ),
         ):
             result = await get_cached_temporary_mcp_server("expired")
 
@@ -2274,6 +2280,10 @@ class TestTemporaryMCPSessionEndpoints:
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._cache_temporary_mcp_server_in_redis",
                 AsyncMock(),
             ) as redis_cache_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=None,
+            ),
         ):
             response = await add_session_mcp_server(
                 payload=payload,
@@ -3418,6 +3428,10 @@ class TestTemporaryMCPSessionEndpoints:
                 patch(
                     "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
                     return_value=serialized,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                    return_value=None,
                 ),
             ):
                 result = await get_cached_temporary_mcp_server("from-redis")
