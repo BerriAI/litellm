@@ -886,7 +886,16 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         if not configured:
             return
 
-        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(kwargs)
+        # kwargs here is Logging.model_call_details, not the router's flat
+        # request kwargs admission sees: metadata/litellm_metadata are never
+        # top-level here, only nested under kwargs["litellm_params"] (see
+        # Logging.update_environment_variables). Resolving the field name
+        # against kwargs itself always picks the "metadata" default, so on
+        # LITELLM_METADATA_ROUTES (/v1/messages, /responses, ...) this read
+        # the caller's native, tag-less metadata instead of the real,
+        # server-computed litellm_metadata.tags admission already used.
+        litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
+        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(litellm_params_for_metadata)
         tags: Final = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
         if not tags:
             return

@@ -475,6 +475,53 @@ async def test_log_success_event_increments_configured_units(time_controller):
     assert await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None) is None
 
 
+@pytest.mark.asyncio
+async def test_log_success_event_reads_nested_litellm_metadata_when_that_is_authoritative(time_controller):
+    """
+    kwargs here is Logging.model_call_details: on LITELLM_METADATA_ROUTES
+    (/v1/messages, /responses, ...) metadata/litellm_metadata are never
+    top-level keys, only nested under kwargs["litellm_params"] -- and the
+    caller's own native "metadata" can be present there with no tags at all,
+    while the real, server-computed tags live in "litellm_metadata".
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "token_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"tags": []},
+            "litellm_metadata": {"tags": ["end_user_id:u1"]},
+        },
+        "standard_logging_object": {
+            "model_group": "grp",
+            "model_id": "dep-1",
+            "total_tokens": 42,
+            "response_cost": 0.01,
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    token_key = f"{{tag_rl:grp:tokens:daily:end_user_id:chain:u1}}:{int(now) // 86400}"
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
+    )
+
+
 # ---------------------------------------------------------------------------
 # concurrency limits -- reserve at admission, release on success/failure
 # ---------------------------------------------------------------------------
