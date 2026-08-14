@@ -30,7 +30,8 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         fields LIT012 keeps ReadOnly, not a growable accumulator, so it is exempt along
         with the dict literals nested in it (nested TypedDict fields); any other
         construction inside still counts. Detection is name-based: Final/ClassVar/
-        Optional (and Annotated's first argument) unwrap, and any remaining named head
+        Optional (and Annotated's first argument) unwrap, a PEP 604 union
+        (`MyTD | None`) qualifies through either arm, and any remaining named head
         outside the mutable collections and Mapping/Any/object is taken to be a
         TypedDict, since a dict literal assigned to any other named type would not
         survive basedpyright. Suppress with `# mutable-ok: <reason>`.
@@ -514,10 +515,11 @@ def _is_typeddict_annotation(annotation: ast.expr) -> bool:
     """True iff the annotation names a TypedDict, by the name-based heuristic.
 
     Final/ClassVar/Optional unwrap (as does Annotated's first argument, the only
-    one that is type syntax), string forward references are parsed, and whatever
-    named head remains counts as a TypedDict unless it is a mutable collection or
-    Mapping/Any/object -- the heads that can type a dict literal without being
-    one. Bare wrappers (`x: Final = ...`) name no type and never qualify.
+    one that is type syntax), a PEP 604 union qualifies through either arm, string
+    forward references are parsed, and whatever named head remains counts as a
+    TypedDict unless it is a mutable collection or Mapping/Any/object -- the heads
+    that can type a dict literal without being one. Bare wrappers
+    (`x: Final = ...`) name no type and never qualify.
     """
     if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
         try:
@@ -525,6 +527,8 @@ def _is_typeddict_annotation(annotation: ast.expr) -> bool:
         except SyntaxError:
             return False
         return _is_typeddict_annotation(inner)
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        return _is_typeddict_annotation(annotation.left) or _is_typeddict_annotation(annotation.right)
     if isinstance(annotation, ast.Subscript):
         head = _head_name(annotation.value)
         if head in TYPEDDICT_ANNOTATION_WRAPPERS:
