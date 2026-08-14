@@ -140,6 +140,23 @@ describe("ModelSelect", () => {
     expect(mockOnChange).toHaveBeenCalledWith(["gpt-4"]);
   });
 
+  it("should append a second model to the existing selection", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["gpt-4"]}
+        context="user"
+        options={{ showAllProxyModelsOverride: true }}
+      />,
+    );
+
+    await openModelList(user);
+    await user.click(screen.getAllByText("claude-3")[0]);
+
+    expect(mockOnChange).toHaveBeenCalledWith(["gpt-4", "claude-3"]);
+  });
+
   it("should offer both special options when they are enabled", async () => {
     const user = userEvent.setup();
     mockUseOrganization.mockReturnValue({
