@@ -4,7 +4,7 @@ import json
 import os
 import sys
 from datetime import timezone
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -2962,8 +2962,8 @@ def test_user_traffic_carries_no_internal_call_origin():
     assert metadata["internal_call_origin"] is None
 
 
-REDACTED_RESPONSE_PLACEHOLDER = {"text": "redacted-by-litellm"}
-CONSTANT_ID_FROM_HASHED_PLACEHOLDER = "00fcbef15a3b0097e14b0ca016ed30a0"
+REDACTED_RESPONSE_PLACEHOLDER: Final = {"text": "redacted-by-litellm"}
+CONSTANT_ID_FROM_HASHED_PLACEHOLDER: Final = "00fcbef15a3b0097e14b0ca016ed30a0"
 
 
 @pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
