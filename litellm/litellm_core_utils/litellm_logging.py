@@ -4561,7 +4561,9 @@ def _init_custom_logger_compatible_class(
             _in_memory_loggers.append(dynamic_rate_limiter_obj_v3)
             return dynamic_rate_limiter_obj_v3
         elif logging_integration == "tag_rate_limiter":
-            from litellm.proxy.hooks.tag_rate_limiter import _PROXY_TagRateLimiter
+            from litellm.proxy.hooks.tag_rate_limiter import (
+                _PROXY_TagRateLimiter,  # pyright: ignore[reportPrivateUsage]  # resolved by name like every other opt-in callback here
+            )
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, _PROXY_TagRateLimiter):
@@ -5017,7 +5019,9 @@ def get_custom_logger_compatible_class(
                     return callback
 
         elif logging_integration == "tag_rate_limiter":
-            from litellm.proxy.hooks.tag_rate_limiter import _PROXY_TagRateLimiter
+            from litellm.proxy.hooks.tag_rate_limiter import (
+                _PROXY_TagRateLimiter,  # pyright: ignore[reportPrivateUsage]  # resolved by name like every other opt-in callback here
+            )
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, _PROXY_TagRateLimiter):

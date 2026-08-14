@@ -14,16 +14,18 @@ from litellm.caching.dual_cache import DualCache
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs,
+    _get_parent_otel_span_from_kwargs,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching dynamic_rate_limiter_v3's identical import
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3,
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # this hook explicitly reuses its Redis/TTL-preserving increment machinery, see module docstring
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router import Router
-from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+from litellm.router_strategy.tag_based_routing import (
+    _get_tags_from_request_kwargs,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching dynamic_rate_limiter_v3's identical import
+)
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import TagRateLimitEntry, TagRateLimits
