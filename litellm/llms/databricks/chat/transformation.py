@@ -428,6 +428,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
+            if "thinking_blocks" in _message or "reasoning_content" in _message:
+                _message = self._move_reasoning_into_content_block(_message)
             _sanitize_empty_content(cast(dict[str, Any], _message))
             new_messages.append(_message)
 
@@ -461,6 +463,54 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 "text": content,
                 "cache_control": cache_control,
             }
+        ]
+        return cast(AllMessageValues, transformed_message)
+
+    def _move_reasoning_into_content_block(self, message: AllMessageValues) -> AllMessageValues:
+        """
+        Converts LiteLLM's message-level reasoning fields into the reasoning content block
+        Databricks accepts, so extended thinking survives a multi-turn round trip.
+
+        Transforms:
+            {"role": "assistant", "content": "text", "thinking_blocks": [{"thinking": "t", "signature": "s"}]}
+        Into:
+            {"role": "assistant", "content": [
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "t", "signature": "s"}]},
+                {"type": "text", "text": "text"},
+            ]}
+
+        Databricks rejects both message-level keys outright, and constrains the replacement to
+        exactly one reasoning block holding exactly one summary entry, whose signature is
+        required. Blocks without a signature cannot be replayed, so the keys are dropped rather
+        than sent in a form the API refuses. reasoning_content is a plain-text mirror of the
+        same thinking, so it carries nothing the signed summary does not.
+        """
+        transformed_message: Final = cast(dict[str, Any], message.copy())
+        thinking_blocks: Final = transformed_message.pop("thinking_blocks", None)
+        transformed_message.pop("reasoning_content", None)
+        signed_block: Final = next(
+            (block for block in thinking_blocks or [] if isinstance(block, dict) and block.get("signature")),
+            None,
+        )
+        if signed_block is None:
+            return cast(AllMessageValues, transformed_message)
+
+        content: Final = transformed_message.get("content")
+        existing_blocks: Final = (
+            [{"type": "text", "text": content}] if isinstance(content, str) and content else list(content or [])
+        )
+        transformed_message["content"] = [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": signed_block.get("thinking") or "",
+                        "signature": signed_block["signature"],
+                    }
+                ],
+            },
+            *existing_blocks,
         ]
         return cast(AllMessageValues, transformed_message)
 

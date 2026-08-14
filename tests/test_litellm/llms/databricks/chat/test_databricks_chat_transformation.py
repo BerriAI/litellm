@@ -496,3 +496,113 @@ def test_chunk_parser_without_usage_still_parses_content():
     assert result.id == "chatcmpl-test"
     assert result.model == "databricks-claude-sonnet-5"
     assert result.choices[0]["delta"]["content"] == "hi"
+def _thinking_message(thinking_blocks, content="391"):
+    return {"role": "assistant", "content": content, "thinking_blocks": thinking_blocks}
+
+
+def test_thinking_blocks_become_a_reasoning_content_block():
+    """Databricks rejects the message-level thinking_blocks key outright, so extended
+    thinking never survived a second turn. It must become a reasoning content block
+    carrying exactly one signed summary entry."""
+    result = DatabricksConfig()._move_reasoning_into_content_block(
+        _thinking_message([{"type": "thinking", "thinking": "let me work it out", "signature": "sig-abc"}])
+    )
+
+    assert "thinking_blocks" not in result
+    assert result["content"] == [
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "let me work it out", "signature": "sig-abc"}],
+        },
+        {"type": "text", "text": "391"},
+    ]
+
+
+def test_thinking_blocks_conversion_preserves_existing_content_blocks():
+    result = DatabricksConfig()._move_reasoning_into_content_block(
+        _thinking_message(
+            [{"type": "thinking", "thinking": "", "signature": "sig-abc"}],
+            content=[{"type": "text", "text": "391"}, {"type": "text", "text": "trailing"}],
+        )
+    )
+
+    assert result["content"][0]["type"] == "reasoning"
+    assert result["content"][1:] == [{"type": "text", "text": "391"}, {"type": "text", "text": "trailing"}]
+
+
+def test_thinking_blocks_collapse_to_a_single_summary_entry():
+    """Databricks accepts exactly one reasoning block with one summary entry; sending two
+    of either is rejected, so extra blocks are dropped rather than sent in a refused shape."""
+    result = DatabricksConfig()._move_reasoning_into_content_block(
+        _thinking_message(
+            [
+                {"type": "thinking", "thinking": "first", "signature": "sig-1"},
+                {"type": "thinking", "thinking": "second", "signature": "sig-2"},
+            ]
+        )
+    )
+
+    reasoning_blocks = [b for b in result["content"] if b.get("type") == "reasoning"]
+    assert len(reasoning_blocks) == 1
+    assert reasoning_blocks[0]["summary"] == [{"type": "summary_text", "text": "first", "signature": "sig-1"}]
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        None,
+        [],
+        [{"type": "redacted_thinking", "data": "opaque"}],
+    ],
+    ids=["none", "empty", "unsigned_only"],
+)
+def test_unreplayable_thinking_blocks_are_dropped(thinking_blocks):
+    """A signature is mandatory, so blocks that lack one cannot be replayed. The key is
+    still removed, since leaving it would fail the request outright."""
+    result = DatabricksConfig()._move_reasoning_into_content_block(_thinking_message(thinking_blocks))
+
+    assert "thinking_blocks" not in result
+    assert result["content"] == "391"
+
+
+def test_transform_messages_strips_thinking_blocks():
+    messages = [
+        {"role": "user", "content": "what is 17 * 23?"},
+        _thinking_message([{"type": "thinking", "thinking": "t", "signature": "sig-abc"}]),
+        {"role": "user", "content": "now double it"},
+    ]
+
+    result = DatabricksConfig()._transform_messages(messages=messages, model="databricks-claude-opus-5")
+
+    assert all("thinking_blocks" not in m for m in result)
+    assert result[1]["content"][0]["type"] == "reasoning"
+
+
+def test_reasoning_content_is_dropped_even_when_empty():
+    """reasoning_content is an empty string on Databricks responses, so a truthiness check
+    would leave it in place and the request would still be rejected."""
+    result = DatabricksConfig()._move_reasoning_into_content_block(
+        {"role": "assistant", "content": "391", "reasoning_content": ""}
+    )
+
+    assert "reasoning_content" not in result
+    assert result["content"] == "391"
+
+
+def test_transform_messages_strips_both_reasoning_fields():
+    """A verbatim assistant turn from a Databricks thinking response carries both keys."""
+    messages = [
+        {"role": "user", "content": "what is 17 * 23?"},
+        {
+            "role": "assistant",
+            "content": "391",
+            "reasoning_content": "",
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig-abc"}],
+        },
+        {"role": "user", "content": "now double it"},
+    ]
+
+    result = DatabricksConfig()._transform_messages(messages=messages, model="databricks-claude-opus-5")
+
+    assert all("thinking_blocks" not in m and "reasoning_content" not in m for m in result)
+    assert result[1]["content"][0]["summary"][0]["signature"] == "sig-abc"
