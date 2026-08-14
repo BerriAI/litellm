@@ -1607,3 +1607,164 @@ def test_add_deployment_registers_arbitrary_above_threshold_pricing():
             assert "cache_read_input_token_cost_above_32k_tokens" not in shared_entry
     finally:
         _restore_model_cost_entries(original_entries)
+
+
+def test_upsert_deployment_removes_withdrawn_arbitrary_above_threshold_pricing():
+    """Updating a deployment must not retain arbitrary pricing tiers that were removed."""
+    backend_model = "openai/gpt-4o-mini"
+    model_id = "upsert-withdrawn-above-32k-pricing-34378"
+    shared_keys = ("gpt-4o-mini", backend_model)
+
+    original_entries = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (*shared_keys, model_id)
+    }
+
+    try:
+        router = Router(model_list=[])
+
+        router.add_deployment(
+            deployment=Deployment(
+                model_name="upsert-custom-above-32k-model",
+                litellm_params=LiteLLM_Params(
+                    model=backend_model,
+                    api_key="fake-key",
+                    input_cost_per_token=1e-6,
+                    output_cost_per_token=2e-6,
+                    input_cost_per_token_above_32k_tokens=9e-6,
+                ),
+                model_info=ModelInfo(id=model_id),
+            )
+        )
+
+        assert litellm.model_cost[model_id]["input_cost_per_token_above_32k_tokens"] == 9e-6
+
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="upsert-custom-above-32k-model",
+                litellm_params=LiteLLM_Params(
+                    model=backend_model,
+                    api_key="fake-key",
+                    input_cost_per_token=1e-6,
+                    output_cost_per_token=2e-6,
+                ),
+                model_info=ModelInfo(id=model_id),
+            )
+        )
+
+        registered = litellm.model_cost[model_id]
+        assert registered["input_cost_per_token"] == 1e-6
+        assert "input_cost_per_token_above_32k_tokens" not in registered
+    finally:
+        _restore_model_cost_entries(original_entries)
+
+
+def test_price_data_reload_preserves_arbitrary_above_threshold_pricing(monkeypatch):
+    """Arbitrary pricing thresholds must survive Router cost-map replay."""
+    from litellm import utils as litellm_utils
+
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    model_id = "reload-custom-above-32k-pricing-34378"
+    saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "reload-custom-above-32k-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "fake-key",
+                        "input_cost_per_token": 1e-6,
+                        "output_cost_per_token": 2e-6,
+                        "input_cost_per_token_above_32k_tokens": 9e-6,
+                        "output_cost_per_token_above_32k_tokens": 18e-6,
+                        "cache_read_input_token_cost_above_32k_tokens": 4e-6,
+                    },
+                    "model_info": {"id": model_id},
+                }
+            ]
+        )
+
+        before = litellm.model_cost[model_id]
+        assert before["input_cost_per_token_above_32k_tokens"] == 9e-6
+        assert before["output_cost_per_token_above_32k_tokens"] == 18e-6
+        assert before["cache_read_input_token_cost_above_32k_tokens"] == 4e-6
+
+        _simulate_price_data_reload(
+            {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}},
+        )
+
+        rebuilt = litellm.model_cost[model_id]
+        assert rebuilt["input_cost_per_token_above_32k_tokens"] == 9e-6
+        assert rebuilt["output_cost_per_token_above_32k_tokens"] == 18e-6
+        assert rebuilt["cache_read_input_token_cost_above_32k_tokens"] == 4e-6
+        assert router.model_list
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_strategy_router_alias_pricing_never_enters_model_cost(monkeypatch):
+    """
+    A strategy-router alias is never the deployment actually called or billed,
+    so custom pricing configured on it must not be registered under its
+    model_id - an explicit zero there makes the budget check treat the alias
+    as a genuinely free model while requests bill as a real deployment. The
+    strip must also survive a price-data reload, which rebuilds entries by
+    walking the live routers.
+    """
+    from litellm import utils as litellm_utils
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router/smart-router",
+                    "complexity_router_default_model": "paid-model",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "input_cost_per_token_above_32k_tokens": 9e-6,
+                    "complexity_router_config": {"tiers": {"simple": "paid-model"}},
+                },
+                "model_info": {"id": "strategy-alias-id", "max_input_tokens": 128000},
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                "model_info": {"id": "strategy-alias-paid-id"},
+            },
+        ],
+    )
+
+    def _assert_alias_unpriced():
+        entry = litellm.model_cost.get("strategy-alias-id")
+        assert entry is not None, "Alias metadata should still be registered"
+        assert entry["max_input_tokens"] == 128000
+        assert "input_cost_per_token" not in entry
+        assert "output_cost_per_token" not in entry
+        assert "input_cost_per_token_above_32k_tokens" not in entry
+
+    _assert_alias_unpriced()
+
+    saved_model_cost = litellm.model_cost
+    try:
+        _simulate_price_data_reload(
+            {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}},
+        )
+        _assert_alias_unpriced()
+        assert router.model_list
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()

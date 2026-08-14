@@ -59,6 +59,12 @@ _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
+_INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
+
+
+def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
+    return custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
+
 
 def _get_token_detail_value(details: object, key: str) -> int | None:
     if isinstance(details, dict):
@@ -212,7 +218,11 @@ def _parse_above_token_threshold(key: str) -> float:
 
 
 def _get_token_base_cost(
-    model_info: ModelInfo, usage: Usage, service_tier: str | None = None
+    model_info: ModelInfo,
+    usage: Usage,
+    service_tier: str | None = None,
+    *,
+    threshold_is_inclusive: bool = False,
 ) -> tuple[float, float, float, float, float]:
     """
     Return prompt cost, completion cost, and cache costs for a given model and usage.
@@ -220,6 +230,9 @@ def _get_token_base_cost(
     For each token cost type, use its highest configured
     `*_above_[x]k_tokens` or `*_above_[x]_tokens` rate when prompt tokens
     exceed that threshold.
+
+    `threshold_is_inclusive` switches that comparison to >=, for providers such as xAI
+    that bill the higher tier once the prompt reaches the threshold.
 
     Returns:
         Tuple[float, float, float, float] - (prompt_cost, completion_cost, cache_creation_cost, cache_read_cost)
@@ -262,7 +275,7 @@ def _get_token_base_cost(
         except (IndexError, ValueError):
             continue
 
-        if usage.prompt_tokens <= threshold:
+        if usage.prompt_tokens < threshold or (usage.prompt_tokens == threshold and not threshold_is_inclusive):
             continue
 
         base_key = match.group("base_key")
@@ -722,7 +735,12 @@ def generic_cost_per_token(
         cache_creation_cost,
         cache_creation_cost_above_1hr,
         cache_read_cost,
-    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
+    ) = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    )
 
     prompt_cost = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
@@ -854,7 +872,12 @@ def get_token_type_cost_breakdown(
         cache_creation_cost_rate,
         cache_creation_cost_above_1hr_rate,
         cache_read_cost_rate,
-    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
+    ) = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    )
 
     reasoning_tokens = (
         _parse_completion_tokens_details(usage)["reasoning_tokens"]
@@ -941,9 +964,13 @@ def calculate_image_response_cost_from_usage(
     input_tokens_details: Final = getattr(usage, "input_tokens_details", None)
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     if input_tokens_details is not None:
+        # input_tokens_details may be a dict (e.g. OpenAI image edit responses)
+        # or an object; read it tolerantly like the output side below, so image
+        # input tokens are priced at input_cost_per_image_token instead of
+        # silently falling back to the text rate.
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            text_tokens=getattr(input_tokens_details, "text_tokens", None),
-            image_tokens=getattr(input_tokens_details, "image_tokens", None),
+            text_tokens=_get_token_detail_value(input_tokens_details, "text_tokens"),
+            image_tokens=_get_token_detail_value(input_tokens_details, "image_tokens"),
             cached_tokens=0,
         )
 

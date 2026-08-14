@@ -18,13 +18,14 @@ from litellm.types.proxy.claude_code_endpoints import (
     UpdatePluginRequest,
 )
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
+    get_marketplace,
     register_plugin,
     update_plugin,
 )
 
 
 def _make_mock_prisma():
-    """Stateful prisma mock that supports find_unique, create, and update."""
+    """Stateful prisma mock that supports find_unique, find_many, create, and update."""
     store: dict = {}
 
     mock_client = MagicMock()
@@ -33,6 +34,12 @@ def _make_mock_prisma():
 
     async def _find_unique(where):
         return store.get(where.get("name"))
+
+    async def _find_many(where=None):
+        records = list(store.values())
+        if where and "enabled" in where:
+            return [r for r in records if r.enabled == where["enabled"]]
+        return records
 
     async def _create(data):
         record = MagicMock()
@@ -52,6 +59,7 @@ def _make_mock_prisma():
         return record
 
     mock_table.find_unique = AsyncMock(side_effect=_find_unique)
+    mock_table.find_many = AsyncMock(side_effect=_find_many)
     mock_table.create = AsyncMock(side_effect=_create)
     mock_table.update = AsyncMock(side_effect=_update)
     mock_client.db.litellm_claudecodeplugintable = mock_table
@@ -209,6 +217,23 @@ async def test_update_plugin_db_error_maps_to_structured_500():
 
     assert exc_info.value.status_code == 500
     assert "connection lost" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace_skips_plugin_with_null_manifest():
+    await register_plugin(
+        request=RegisterPluginRequest(name="good-plugin", source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    await table.create(data={"name": "null-manifest-plugin", "manifest_json": None, "enabled": True})
+
+    response = await get_marketplace()
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert [plugin["name"] for plugin in body["plugins"]] == ["good-plugin"]
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,6 @@
-import { Typography } from "antd";
 import { JsonView, defaultStyles } from "react-json-view-lite";
 import "react-json-view-lite/dist/index.css";
 import { JSON_MAX_HEIGHT, COLOR_BG_LIGHT, SPACING_LARGE } from "./constants";
-
-const { Text } = Typography;
 
 interface JsonViewerProps {
   data: any;
@@ -15,7 +12,7 @@ interface JsonViewerProps {
  * Uses an interactive tree component for easy navigation.
  */
 export function JsonViewer({ data }: JsonViewerProps) {
-  if (!data) return <Text type="secondary">No data</Text>;
+  if (!data) return <span className="text-muted-foreground">No data</span>;
 
   return (
     <div

@@ -117,6 +117,17 @@ def test_typing_alias_and_forward_ref_annotations_are_flagged(tmp_path):
     assert "LIT001" in _codes(tmp_path, 'x: "dict[str, int]"\n')
 
 
+def test_literal_string_args_are_values_not_forward_refs(tmp_path):
+    assert "LIT001" not in _codes(tmp_path, 'from typing import Literal\nx: Literal["list"] = "list"\n')
+    assert "LIT001" not in _codes(
+        tmp_path,
+        'from typing import Literal\ndef f(op: Literal["create", "list"] = "create") -> None:\n    return None\n',
+    )
+    assert "LIT001" not in _codes(tmp_path, 'import typing\nx: typing.Literal["dict"] = "dict"\n')
+    assert "LIT001" in _codes(tmp_path, 'from typing import Literal\nx: dict[str, Literal["a"]]\n')
+    assert "LIT001" in _codes(tmp_path, "x: \"Literal['x'] | list[int]\"\n")
+
+
 def test_readonly_annotations_are_clean(tmp_path):
     for ann in ("Mapping[str, int]", "Sequence[int]", "tuple[int, ...]", "frozenset[int]"):
         assert "LIT001" not in _codes(tmp_path, f"from typing import Mapping, Sequence\nx: {ann}\n")
@@ -173,6 +184,13 @@ def test_mutable_nested_inside_frozen_wrapper_still_counts(tmp_path):
 
 def test_unfrozen_literal_still_counts(tmp_path):
     assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nd = {'a': 1}\nm = MappingProxyType(d)\n")
+
+
+def test_lit002_fix_message_names_mappingproxytype(tmp_path):
+    f = tmp_path / "snippet.py"
+    f.write_text("x = {'a': 1}\n", encoding="utf-8")
+    messages = [v.message for v in checker.check_file(f) if v.code == "LIT002"]
+    assert "MappingProxyType" in messages[0]
 
 
 def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
@@ -520,6 +538,100 @@ def test_walrus_in_nested_defaults_rebinds_the_enclosing_parameter(tmp_path):
         "        return None\n"
     )
     assert "LIT011" in _codes(tmp_path, src)
+
+
+# --------------------------------------------------------------------------- #
+# Writable TypedDict fields (LIT012)
+# --------------------------------------------------------------------------- #
+
+
+def test_typeddict_writable_field_is_flagged(tmp_path):
+    src = "from typing import TypedDict\nclass P(TypedDict):\n    a: int\n"
+    assert "LIT012" in _codes(tmp_path, src)
+
+
+def test_typeddict_readonly_field_is_clean(tmp_path):
+    src = (
+        "from typing_extensions import ReadOnly, TypedDict\n"
+        "class P(TypedDict):\n"
+        "    a: ReadOnly[int]\n"
+    )
+    assert "LIT012" not in _codes(tmp_path, src)
+
+
+def test_readonly_nests_with_qualifiers_annotated_and_forward_refs(tmp_path):
+    src = (
+        "import typing_extensions\n"
+        "from typing import Annotated, TypedDict\n"
+        "from typing_extensions import NotRequired, ReadOnly, Required\n"
+        "class P(TypedDict):\n"
+        "    a: Required[ReadOnly[int]]\n"
+        "    b: NotRequired[typing_extensions.ReadOnly[int]]\n"
+        "    c: ReadOnly[Required[int]]\n"
+        "    d: Annotated[ReadOnly[int], 'meta']\n"
+        "    e: 'Required[ReadOnly[int]]'\n"
+    )
+    assert "LIT012" not in _codes(tmp_path, src)
+
+
+def test_readonly_in_annotated_metadata_position_does_not_qualify(tmp_path):
+    src = (
+        "from typing import Annotated, TypedDict\n"
+        "from typing_extensions import ReadOnly, Required\n"
+        "class P(TypedDict):\n"
+        "    a: Annotated[int, ReadOnly]\n"
+        "    b: Required[int]\n"
+    )
+    assert _codes(tmp_path, src).count("LIT012") == 2
+
+
+def test_typeddict_subclass_in_same_module_is_flagged(tmp_path):
+    src = (
+        "from typing import TypedDict\n"
+        "class Base(TypedDict):\n"
+        "    pass\n"
+        "class Child(Base, total=False):\n"
+        "    a: int\n"
+    )
+    assert "LIT012" in _codes(tmp_path, src)
+
+
+def test_plain_class_annotations_are_exempt(tmp_path):
+    src = "class C:\n    a: int\nclass D(C):\n    b: int\n"
+    assert "LIT012" not in _codes(tmp_path, src)
+
+
+def test_functional_typeddict_fields_are_checked(tmp_path):
+    src = (
+        "from typing import Final, TypedDict\n"
+        "from typing_extensions import ReadOnly\n"
+        "P: Final = TypedDict('P', {'a': int, 'b': ReadOnly[int]})\n"
+    )
+    f = tmp_path / "snippet.py"
+    f.write_text(src, encoding="utf-8")
+    flagged = [v for v in checker.check_file(f) if v.code == "LIT012"]
+    assert len(flagged) == 1
+    assert "`a` of `P`" in flagged[0].message
+
+
+def test_writable_ok_with_reason_suppresses_lit012(tmp_path):
+    src = (
+        "from typing import TypedDict\n"
+        "class P(TypedDict):\n"
+        "    a: int  # writable-ok: accumulated in place across stream chunks\n"
+    )
+    assert "LIT012" not in _codes(tmp_path, src)
+
+
+def test_writable_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
+    src = (
+        "from typing import TypedDict\n"
+        "class P(TypedDict):\n"
+        "    a: int  # writable-ok\n"
+    )
+    codes = _codes(tmp_path, src)
+    assert "LIT005" in codes
+    assert "LIT012" in codes
 
 
 # --------------------------------------------------------------------------- #

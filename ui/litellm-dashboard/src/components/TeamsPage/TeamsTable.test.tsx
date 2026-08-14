@@ -107,8 +107,8 @@ it("renders a team row with alias, organization, and spend/budget", async () => 
   await waitFor(() => {
     expect(screen.getByText("Acme Team")).toBeInTheDocument();
     expect(screen.getByText("Test Organization")).toBeInTheDocument();
-    expect(screen.getByText("$42.5000")).toBeInTheDocument();
-    expect(screen.getByText("of $100")).toBeInTheDocument();
+    expect(screen.getByText("$42.50")).toBeInTheDocument();
+    expect(screen.getByText("of $100.00")).toBeInTheDocument();
   });
 });
 
