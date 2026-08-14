@@ -36,8 +36,10 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         disqualifies every name, since what it binds is statically invisible),
         every field it declares or inherits in-module must be
         `ReadOnly[...]`, only the display itself is exempt (nested mutables still
-        count), and a TypedDict imported from another module is out of reach,
-        exactly as in LIT012. Suppress with `# mutable-ok: <reason>`.
+        count), a TypedDict imported from another module is out of reach, exactly
+        as in LIT012, and a dotted annotation (`x: mod.Td = {...}`) never
+        matches, since it cannot name a local class. Suppress with
+        `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
@@ -499,10 +501,15 @@ def _frozen_argument_ids(tree: ast.AST) -> frozenset[int]:
 
 
 def _declared_type_name(annotation: ast.expr) -> str | None:
-    """The head name of an AnnAssign annotation, looking through a `Final[...]` wrapper."""
+    """The bare name an AnnAssign annotation spells, looking through a `Final[...]` wrapper.
+
+    Qualified annotations (`x: mod.Td`) yield None: a dotted name refers to another
+    module's attribute, which can never be a class defined in the file being checked,
+    so reducing it to its tail would let an imported type borrow a local one's name.
+    """
     if isinstance(annotation, ast.Subscript) and _head_name(annotation.value) == "Final":
-        return _head_name(annotation.slice)
-    return _head_name(annotation)
+        return annotation.slice.id if isinstance(annotation.slice, ast.Name) else None
+    return annotation.id if isinstance(annotation, ast.Name) else None
 
 
 def _binding_names(node: ast.AST) -> tuple[str, ...]:
