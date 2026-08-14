@@ -25,11 +25,8 @@ _PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset] = frozenset(
 # Header name prefix used to block AWS SigV4 signing headers from being overridden.
 _PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple] = ("x-amz-",)
 
-# Client headers that must never reach the upstream provider. `accept-encoding` is
-# dropped so httpx negotiates a content coding it actually has a decoder for: an
-# encoding it cannot decode (e.g. brotli, absent the optional `brotli` package)
-# leaves the body compressed while get_response_headers strips Content-Encoding,
-# handing the client bytes it has no way to read.
+# `accept-encoding` is dropped so httpx negotiates a coding it has a decoder for: one it
+# cannot decode leaves the body compressed while Content-Encoding is stripped downstream.
 _NON_FORWARDED_REQUEST_HEADERS: Final[frozenset[str]] = frozenset(
     {
         "content-length",
