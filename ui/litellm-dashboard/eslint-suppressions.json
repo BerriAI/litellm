@@ -1756,11 +1756,6 @@
       "count": 1
     }
   },
-  "src/components/DebugWarningBanner.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/DeprecationBanner.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1809,11 +1804,6 @@
   },
   "src/components/HelpLink.test.tsx": {
     "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/LicenseExpiryBanner.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2578,9 +2568,6 @@
   "src/components/logging_settings_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/mcp_server_management/MCPServerSelector.tsx": {
@@ -2646,16 +2633,10 @@
   "src/components/model_filters.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/model_group_alias_settings.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -2719,9 +2700,6 @@
   "src/components/navbar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/networking.tsx": {
@@ -2746,9 +2724,6 @@
   },
   "src/components/object_permissions_view.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -3366,9 +3341,6 @@
   },
   "src/components/user_dashboard.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "prefer-const": {
