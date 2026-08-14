@@ -6122,6 +6122,36 @@ async def test_global_proxy_spend_none_when_proxy_budget_row_missing():
 
 
 @pytest.mark.asyncio
+async def test_global_proxy_spend_reads_shared_redis_scalar_when_configured():
+    """With Redis, the global spend read goes straight to the shared Redis
+    scalar instead of a per-worker in-memory copy, which can go stale across
+    resets and falsely reject requests at auth time."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _fetch_global_spend_with_event_coordination,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value=8.5)
+    cache.redis_cache = redis_cache
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=AssertionError("a Redis hit must not hit the DB")
+    )
+
+    result = await _fetch_global_spend_with_event_coordination(
+        cache_key="default_user_id:spend",
+        user_api_key_cache=cache,
+        prisma_client=prisma_client,
+    )
+
+    assert result == 8.5
+    redis_cache.async_get_cache.assert_awaited_once_with(key="default_user_id:spend")
+
+
+@pytest.mark.asyncio
 async def test_temp_budget_increase_applied_for_cached_key():
     """
     Regression for https://github.com/BerriAI/litellm/issues/25760

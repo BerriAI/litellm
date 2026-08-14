@@ -262,19 +262,19 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _invalidate_global_proxy_spend_cache() -> None:
-        """Zero the cached global-proxy spend accumulator after the proxy
-        budget aggregate row is reset so atomic increments start from a known floor.
+        """Drop the cached global-proxy spend accumulator after the proxy
+        budget aggregate row is reset so the next auth-time read reloads the
+        zeroed DB row. Reads and writes are atomic now (increment-if-present on
+        Redis), so deleting cannot resurrect a stale pre-reset value, and it
+        cannot clobber a concurrent increment the way a plain SET to zero could.
         """
         try:
             from litellm.proxy.proxy_server import user_api_key_cache
 
-            await user_api_key_cache.async_set_cache(
-                key=GLOBAL_PROXY_SPEND_CACHE_KEY,
-                value=0.0,
-            )
-        except Exception as e:  # noqa: BLE001  # cache zero failure must not break budget reset
+            await user_api_key_cache.async_delete_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
+        except Exception as e:  # noqa: BLE001  # cache invalidation failure must not break budget reset
             verbose_proxy_logger.warning(
-                "Failed to zero global proxy spend cache after budget reset: %s",
+                "Failed to invalidate global proxy spend cache after budget reset: %s",
                 e,
             )
 

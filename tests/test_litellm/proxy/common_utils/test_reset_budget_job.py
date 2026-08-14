@@ -1092,8 +1092,8 @@ def test_reset_budget_for_users_invalidates_redis_counter(reset_budget_job, mock
 def test_reset_budget_for_proxy_budget_row_resets_global_spend_cache(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
-    """Resetting the proxy-wide budget aggregate row zeroes the cached
-    global-spend accumulator so the next period starts from a known floor."""
+    """Resetting the proxy-wide budget aggregate row invalidates the cached
+    global-spend accumulator so the next read reloads the zeroed DB row."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
 
     now = datetime.now(timezone.utc)
@@ -1113,15 +1113,15 @@ def test_reset_budget_for_proxy_budget_row_resets_global_spend_cache(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
 
-    counter_cache.user_api_key_cache.async_set_cache.assert_any_call(
-        key="default_user_id:spend", value=0.0
+    counter_cache.user_api_key_cache.async_delete_cache.assert_any_call(
+        key="default_user_id:spend"
     )
 
 
 def test_reset_budget_for_ordinary_user_does_not_touch_global_spend_cache(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
-    """The global-spend accumulator must only be zeroed when the proxy
+    """The global-spend accumulator must only be invalidated when the proxy
     budget aggregate row itself resets, not on every user reset."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
 
@@ -1150,6 +1150,33 @@ def test_reset_budget_for_ordinary_user_does_not_touch_global_spend_cache(
         call.kwargs.get("key") == "default_user_id:spend"
         for call in counter_cache.user_api_key_cache.async_set_cache.call_args_list
     )
+
+
+def test_reset_budget_for_proxy_budget_row_swallows_global_spend_cache_failure(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """A failure invalidating the global spend cache must not break the reset."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.user_api_key_cache.async_delete_cache = AsyncMock(
+        side_effect=RuntimeError("redis down")
+    )
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        type(
+            "User",
+            (),
+            {
+                "spend": 150.0,
+                "budget_duration": "30d",
+                "budget_reset_at": now,
+                "id": "row-1",
+                "user_id": "litellm-proxy-budget",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
 
 
 def test_reset_budget_for_teams_invalidates_redis_counter(reset_budget_job, mock_prisma_client, monkeypatch):

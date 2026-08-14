@@ -506,6 +506,14 @@ async def _fetch_global_spend_with_event_coordination(
 
     Reads the proxy budget aggregate user row, which accrues proxy-wide spend
     per request and is zeroed by ResetBudgetJob every ``litellm.budget_duration``.
+
+    With Redis configured, the shared scalar is read straight from Redis: the
+    global spend is incremented by every worker, so a per-worker in-memory copy
+    can go stale across resets and falsely reject requests at auth time. Reading
+    the Redis value directly keeps the budget check on the shared total. On a
+    Redis miss the coordinator loads the authoritative DB spend once and
+    repopulates Redis. Without Redis (single process), the normal DualCache
+    coordinator path is used.
     """
 
     async def _load_global_spend() -> float | None:
@@ -514,9 +522,12 @@ async def _fetch_global_spend_with_event_coordination(
         )
         return float(proxy_budget_row.spend) if proxy_budget_row is not None else None
 
+    spend_cache: Final = (
+        user_api_key_cache.redis_cache if user_api_key_cache.redis_cache is not None else user_api_key_cache
+    )
     return await _global_spend_coordinator.get_or_load(
         cache_key=cache_key,
-        cache=user_api_key_cache,  # pyright: ignore[reportArgumentType]
+        cache=spend_cache,  # pyright: ignore[reportArgumentType]
         load_fn=_load_global_spend,
     )
 

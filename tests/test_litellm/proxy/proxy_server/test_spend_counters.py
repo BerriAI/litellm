@@ -1400,3 +1400,37 @@ async def test_update_cache_global_proxy_spend_mirrors_authoritative_value(monke
         ttl=ps.get_management_object_ttl(cache),
     )
     assert await cache.async_get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY) == 3.5
+
+
+@pytest.mark.asyncio
+async def test_update_cache_global_proxy_spend_swallows_redis_failure(monkeypatch):
+    """A Redis failure on the global spend increment must not fail the request."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.caching import DualCache
+
+    redis_cache = MagicMock()
+    redis_cache.async_increment_if_exists = AsyncMock(
+        side_effect=RuntimeError("redis down")
+    )
+    cache = DualCache(redis_cache=redis_cache, default_in_memory_ttl=300)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    await cache.async_set_cache(
+        key="user-redis-down",
+        value={"user_id": "user-redis-down", "spend": 0.0},
+    )
+    await ps.update_cache(
+        token=None,
+        user_id="user-redis-down",
+        end_user_id=None,
+        team_id=None,
+        response_cost=1.0,
+        parent_otel_span=None,
+    )
+
+    redis_cache.async_increment_if_exists.assert_awaited_once_with(
+        key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY,
+        value=1.0,
+        ttl=ps.get_management_object_ttl(cache),
+    )

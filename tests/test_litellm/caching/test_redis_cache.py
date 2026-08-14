@@ -460,6 +460,24 @@ async def test_async_increment_if_exists_increments_present_key(
 
 
 @pytest.mark.asyncio
+async def test_async_increment_if_exists_decodes_bytes_result(
+    monkeypatch, redis_no_ping
+):
+    """Redis returns bytes; the method decodes them to a float."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=None)
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.eval = AsyncMock(return_value=b"7.0")
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        result = await redis_cache.async_increment_if_exists(key="k", value=2.0)
+
+    assert result == 7.0
+
+
+@pytest.mark.asyncio
 async def test_async_increment_if_exists_leaves_missing_key_absent(
     monkeypatch, redis_no_ping
 ):
