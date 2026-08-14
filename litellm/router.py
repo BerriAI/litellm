@@ -29,6 +29,7 @@ import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
@@ -9080,12 +9081,19 @@ class Router:
         model_info: Final = litellm.get_model_info(model=model_info_name)
 
         ## CHECK USER SET MODEL INFO
-        user_model_info: Final = deployment.get("model_info") or {}
+        raw_user_model_info: Final = deployment.get("model_info") or {}
+        user_model_info: Final = (
+            raw_user_model_info.model_dump(exclude_none=True)
+            if isinstance(raw_user_model_info, BaseModel)
+            else {key: value for key, value in raw_user_model_info.items() if value is not None}
+        )
 
-        if model_info is not None:
-            model_info.update(cast(ModelInfo, user_model_info))
+        if model_info is None:
+            return model_info
 
-        return model_info
+        # get_model_info() hands back an lru_cache'd dict; merging into a copy keeps
+        # deployment overrides out of the shared entry
+        return cast(ModelMapInfo, {**model_info, **user_model_info})
 
     def get_model_info(self, id: str) -> dict | None:
         """
