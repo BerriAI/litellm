@@ -1576,6 +1576,7 @@ def completion_cost(
                         litellm_model_name=model,
                         data_residency=data_residency,
                         litellm_logging_obj=litellm_logging_obj,
+                        custom_pricing_model=selected_model if custom_pricing else None,
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -2464,6 +2465,7 @@ def handle_realtime_stream_cost_calculation(
     litellm_model_name: str,
     data_residency: str | None = None,
     litellm_logging_obj: LitellmLoggingObject | None = None,
+    custom_pricing_model: str | None = None,
 ) -> float:
     """
     Handles the cost calculation for realtime stream responses.
@@ -2472,9 +2474,11 @@ def handle_realtime_stream_cost_calculation(
 
     Args:
         results: A list of OpenAIRealtimeStreamBaseObject objects
+        custom_pricing_model: deployment-scoped pricing key, tried ahead of the
+            model the session reported so a config override is not ignored
     """
     received_model = None
-    potential_model_names: Final = []
+    potential_model_names: Final = [custom_pricing_model]
     for result in results:
         if result["type"] == "session.created":
             received_model = cast(OpenAIRealtimeStreamSessionEvents, result)["session"].get("model", None)
@@ -2492,6 +2496,7 @@ def handle_realtime_stream_cost_calculation(
             results=results,
             custom_llm_provider=custom_llm_provider,
             litellm_model_name=litellm_model_name,
+            custom_pricing_model=custom_pricing_model,
         )
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
@@ -2515,6 +2520,7 @@ def handle_realtime_transcription_cost_calculation(
     results: OpenAIRealtimeStreamList,
     custom_llm_provider: str,
     litellm_model_name: str,
+    custom_pricing_model: str | None = None,
 ) -> float:
     """
     Cost for realtime transcription sessions (e.g. gpt-realtime-whisper).
@@ -2532,15 +2538,15 @@ def handle_realtime_transcription_cost_calculation(
         return 0.0
 
     model_name: Final = _get_transcription_model_name_from_results(results) or litellm_model_name
-    try:
-        model_info = litellm.get_model_info(model=model_name, custom_llm_provider=custom_llm_provider)
-    except Exception:
-        model_info = None
+    model_info: Final = _get_model_info_or_none(model_name, custom_llm_provider)
+    override_info: Final = (
+        _get_model_info_or_none(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
+    )
 
     total_cost = 0.0
     for event in completed_events:
         usage = event.get("usage") or {}
-        total_cost += _transcription_usage_cost(usage, model_info)
+        total_cost += _transcription_usage_cost(usage, model_info, override_info)
     return total_cost
 
 
@@ -2565,23 +2571,60 @@ def _get_transcription_model_name_from_results(
     return None
 
 
-def _transcription_usage_cost(usage: dict, model_info: ModelInfo | None) -> float:
-    if model_info is None:
+def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo | None:
+    """``get_model_info`` for a key that may not be in the cost map."""
+    try:
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return None
+
+
+def _transcription_rate(keys: tuple[str, ...], override: ModelInfo | None, base: ModelInfo | None) -> float:
+    """First rate set for any of ``keys``, resolving within one entry before the next.
+
+    The deployment override is consulted as a whole entry first, so an override that
+    prices only tokens applies its token rate to audio rather than reaching past itself
+    for the public audio rate. Rates the override leaves unset fall through to ``base``,
+    because replacing it outright would bill those at nothing.
+
+    Presence is tested with ``is not None`` rather than truthiness, so a deliberate zero
+    wins instead of falling through to a public rate.
+    """
+    for info in (override, base):
+        if info is None:
+            continue
+        for key in keys:
+            value = info.get(key)
+            if value is not None:
+                return float(value)
+    return 0.0
+
+
+def _transcription_usage_cost(
+    usage: dict,
+    model_info: ModelInfo | None,
+    override_info: ModelInfo | None = None,
+) -> float:
+    if model_info is None and override_info is None:
         return 0.0
+
     usage_type: Final = usage.get("type")
     if usage_type == "duration":
         seconds: Final = usage.get("seconds") or 0.0
-        per_second: Final = model_info.get("input_cost_per_second") or 0.0
-        return float(seconds) * float(per_second)
+        return float(seconds) * _transcription_rate(("input_cost_per_second",), override_info, model_info)
     if usage_type == "tokens":
         input_token_details: Final = usage.get("input_token_details") or {}
         audio_tokens: Final = input_token_details.get("audio_tokens") or 0
         text_tokens: Final = input_token_details.get("text_tokens") or 0
         output_tokens: Final = usage.get("output_tokens") or 0
-        audio_cost: Final = float(audio_tokens) * float(
-            model_info.get("input_cost_per_audio_token") or model_info.get("input_cost_per_token") or 0.0
+        audio_cost: Final = float(audio_tokens) * _transcription_rate(
+            ("input_cost_per_audio_token", "input_cost_per_token"), override_info, model_info
         )
-        text_cost: Final = float(text_tokens) * float(model_info.get("input_cost_per_token") or 0.0)
-        output_cost: Final = float(output_tokens) * float(model_info.get("output_cost_per_token") or 0.0)
+        text_cost: Final = float(text_tokens) * _transcription_rate(
+            ("input_cost_per_token",), override_info, model_info
+        )
+        output_cost: Final = float(output_tokens) * _transcription_rate(
+            ("output_cost_per_token",), override_info, model_info
+        )
         return audio_cost + text_cost + output_cost
     return 0.0

@@ -791,6 +791,150 @@ def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
     assert abs(cost - 120.0 * (0.017 / 60)) < 1e-9
 
 
+def test_realtime_transcription_honors_deployment_pricing_override(monkeypatch):
+    """A deployment's pricing override must reach transcription events too.
+
+    Transcription is billed separately from response usage inside the same realtime
+    session, so a deployment registered at zero rates has to zero both. Resolving
+    transcription against the public ASR model instead billed a zero-rated
+    deployment for every .completed event.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    deployment_id = "deployment-hash-zero-rated-asr"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "realtime",
+                "input_cost_per_second": 0.0,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "input_cost_per_audio_token": 0.0,
+            }
+        }
+    )
+
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "session.created",
+            "session": {
+                "type": "transcription",
+                "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
+            },
+        },
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "usage": {"type": "duration", "seconds": 120.0},
+        },
+    ]
+
+    public_rate_cost = 120.0 * (0.017 / 60)
+    assert public_rate_cost > 0, "the public ASR rate must be non-zero for this test to mean anything"
+
+    without_override = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-realtime-whisper",
+    )
+    assert abs(without_override - public_rate_cost) < 1e-9
+
+    with_override = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-realtime-whisper",
+        custom_pricing_model=deployment_id,
+    )
+    assert with_override == 0.0, "the zero-rated deployment must not be billed for transcription"
+
+
+def test_realtime_transcription_partial_override_keeps_unset_rates(monkeypatch):
+    """An override must not blank the rates it does not set.
+
+    A deployment that prices tokens but omits input_cost_per_second would otherwise
+    bill duration-based transcription at nothing, because the cost helpers read
+    `.get(key) or 0.0`. Only the fields the operator actually set may win.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    deployment_id = "deployment-hash-tokens-only"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "realtime",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        }
+    )
+
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "session.created",
+            "session": {
+                "type": "transcription",
+                "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
+            },
+        },
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "usage": {"type": "duration", "seconds": 120.0},
+        },
+    ]
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-realtime-whisper",
+        custom_pricing_model=deployment_id,
+    )
+
+    expected = 120.0 * (0.017 / 60)
+    assert cost == pytest.approx(expected, rel=1e-9), (
+        "duration must keep the ASR per-second rate the override left unset"
+    )
+
+
+@pytest.mark.parametrize(
+    "label,override,expected_audio_rate,expected_per_second",
+    [
+        # base is the public ASR entry: audio 6e-06, token 2.5e-06, per-second 0.017/60
+        ("tokens only", {"input_cost_per_token": 0.0}, 0.0, 0.017 / 60),
+        ("audio zeroed", {"input_cost_per_audio_token": 0.0}, 0.0, 0.017 / 60),
+        ("empty override", {}, 6e-06, 0.017 / 60),
+        ("no override", None, 6e-06, 0.017 / 60),
+    ],
+)
+def test_transcription_rate_precedence(label, override, expected_audio_rate, expected_per_second):
+    """Rates resolve within one entry before moving to the next, and zero is a real value.
+
+    An override that prices only tokens must apply its own token rate to audio rather
+    than reaching past itself for the public audio rate, and a deliberate zero must win
+    instead of being treated as unset.
+    """
+    from litellm.cost_calculator import _transcription_rate
+
+    base = {
+        "input_cost_per_audio_token": 6e-06,
+        "input_cost_per_token": 2.5e-06,
+        "input_cost_per_second": 0.017 / 60,
+    }
+
+    audio_rate = _transcription_rate(("input_cost_per_audio_token", "input_cost_per_token"), override, base)
+    assert audio_rate == pytest.approx(expected_audio_rate, rel=1e-9), f"{label}: audio rate"
+
+    per_second = _transcription_rate(("input_cost_per_second",), override, base)
+    assert per_second == pytest.approx(expected_per_second, rel=1e-9), (
+        f"{label}: an override must never blank a rate it does not set"
+    )
+
+
 def test_realtime_transcription_no_completed_events_is_zero(monkeypatch):
     """A realtime stream without transcription completed events adds no extra cost."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -4473,3 +4617,69 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     )
 
     assert selected == expected
+
+
+def test_realtime_honours_deployment_custom_pricing(monkeypatch):
+    """Regression: a deployment's pricing override never reached realtime costing.
+
+    `model_info` overrides are registered under the deployment's own model_id, and
+    only `_select_model_name_for_cost_calc` knows to look there. The realtime branch
+    discarded that result and priced by the model the session reported, so a config
+    that zeroes a realtime deployment was billed at the public rate anyway. Audio is
+    the bulk of a voice call, so the gap was most of the cost.
+    """
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    model = "gemini-3.1-flash-live-preview"
+    deployment_key = "deployment-id-for-a-zero-rated-realtime-group"
+    paid = litellm.model_cost[model]
+    monkeypatch.setitem(
+        litellm.model_cost,
+        deployment_key,
+        {
+            **paid,
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "input_cost_per_audio_token": 0.0,
+            "output_cost_per_audio_token": 0.0,
+            "cache_read_input_token_cost": 0.0,
+        },
+    )
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": model}},
+        {
+            "type": "response.done",
+            "response": {"usage": {"input_tokens": 10, "output_tokens": 200, "total_tokens": 210}},
+        },
+    ]
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=200,
+        total_tokens=210,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=10, cached_tokens=0),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=20, audio_tokens=180),
+    )
+
+    paid_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=usage,
+        custom_llm_provider="gemini",
+        litellm_model_name=model,
+    )
+    expected_paid = (
+        10 * paid["input_cost_per_token"]
+        + 20 * paid["output_cost_per_token"]
+        + 180 * paid["output_cost_per_audio_token"]
+    )
+    assert paid_cost == pytest.approx(expected_paid, rel=1e-9)
+    assert paid_cost > 0
+
+    zero_rated_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=usage,
+        custom_llm_provider="gemini",
+        litellm_model_name=model,
+        custom_pricing_model=deployment_key,
+    )
+    assert zero_rated_cost == 0.0
