@@ -447,6 +447,8 @@ def get_llm_provider(
         # bytez models
         elif model.startswith("bytez/"):
             custom_llm_provider = "bytez"
+        elif model.startswith("byteplus/"):
+            custom_llm_provider = "byteplus"  # rebind-ok: same pattern as all other providers in this if/elif chain
         elif model.startswith("gdc/"):
             custom_llm_provider = "gdc"
         elif model.startswith("lemonade/"):
@@ -618,6 +620,16 @@ def _get_openai_compatible_provider_info(
         # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret("VOLCENGINE_API_BASE") or "https://ark.cn-beijing.volces.com/api/v3"
         dynamic_api_key = api_key or get_secret_str("VOLCENGINE_API_KEY")
+    elif custom_llm_provider == "byteplus":
+        api_base = (  # rebind-ok: provider-specific fallback chain, same pattern as volcengine/codestral
+            api_base
+            or get_secret("BYTEPLUS_API_BASE")
+            or get_secret("ARK_API_BASE")
+            or "https://ark.ap-southeast.bytepluses.com/api/v3"
+        )
+        dynamic_api_key = (  # rebind-ok: provider-specific fallback chain
+            api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
+        )
     elif custom_llm_provider == "codestral":
         # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
         api_base = api_base or get_secret("CODESTRAL_API_BASE") or "https://codestral.mistral.ai/v1"

@@ -246,7 +246,24 @@
         "interactions": true
       }
     },
-    "bedrock": {
+    "byteplus": {
+      "display_name": "BytePlus (`byteplus`)",
+      "url": "https://docs.litellm.ai/docs/providers/byteplus",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },"bedrock": {
       "display_name": "AWS - Bedrock (`bedrock`)",
       "url": "https://docs.litellm.ai/docs/providers/bedrock",
       "endpoints": {
@@ -3218,3 +3235,4 @@
     }
   }
 }
+

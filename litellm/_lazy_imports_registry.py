@@ -269,6 +269,12 @@ LLM_CONFIG_NAMES: Final = (
     "ZAIChatConfig",
     "AIMLChatConfig",
     "VolcEngineChatConfig",
+    "BytePlusChatConfig",
+    "BytePlusConfig",
+    "BytePlusEmbeddingConfig",
+    "BytePlusImageGenerationConfig",
+    "BytePlusTextToSpeechConfig",
+    "BytePlusResponsesAPIConfig",
     "CodestralTextCompletionConfig",
     "InceptionTextCompletionConfig",
     "AzureOpenAIAssistantsAPIConfig",
@@ -1048,6 +1054,30 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "VolcEngineChatConfig": (
         ".llms.volcengine.chat.transformation",
         "VolcEngineChatConfig",
+    ),
+    "BytePlusChatConfig": (
+        ".llms.byteplus.chat.transformation",
+        "BytePlusChatConfig",
+    ),
+    "BytePlusConfig": (
+        ".llms.byteplus.chat.transformation",
+        "BytePlusChatConfig",
+    ),
+    "BytePlusEmbeddingConfig": (
+        ".llms.byteplus.embedding.transformation",
+        "BytePlusEmbeddingConfig",
+    ),
+    "BytePlusImageGenerationConfig": (
+        ".llms.byteplus.image_generation.transformation",
+        "BytePlusImageGenerationConfig",
+    ),
+    "BytePlusTextToSpeechConfig": (
+        ".llms.byteplus.text_to_speech.transformation",
+        "BytePlusTextToSpeechConfig",
+    ),
+    "BytePlusResponsesAPIConfig": (
+        ".llms.byteplus.responses.transformation",
+        "BytePlusResponsesAPIConfig",
     ),
     "CodestralTextCompletionConfig": (
         ".llms.codestral.completion.transformation",
