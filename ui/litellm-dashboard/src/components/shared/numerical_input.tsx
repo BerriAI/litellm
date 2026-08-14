@@ -7,7 +7,7 @@ interface NumericalInputProps {
   placeholder?: string;
   min?: number;
   max?: number;
-  onChange?: any; // Using any to avoid type conflicts with callers that pass antd Form handlers
+  onChange?: any;
   [key: string]: any;
 }
 

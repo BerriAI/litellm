@@ -134,9 +134,6 @@ describe("RouterSettings", () => {
     );
   });
 
-  // handleSaveChanges reads each setting's value straight off the DOM via
-  // document.querySelector('input[name="..."]'), so the payload only stays correct
-  // while the rendered input keeps its name attribute and its live value.
   it("should send the edited input value, not the loaded one, on Save Changes", async () => {
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);

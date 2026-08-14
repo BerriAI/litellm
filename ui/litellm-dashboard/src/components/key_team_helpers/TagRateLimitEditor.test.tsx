@@ -4,8 +4,6 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { TagRateLimitEditor, TagRateLimitEntry, tagLimitsToRows, tagRowsToLimits } from "./TagRateLimitEditor";
 
-// The editor is controlled, so multi-character typing only behaves realistically
-// when the parent feeds each change back in.
 function Harness({ initial = [] as TagRateLimitEntry[], onValue }: { initial?: TagRateLimitEntry[]; onValue?: any }) {
   const [rows, setRows] = useState<TagRateLimitEntry[]>(initial);
   return (
@@ -47,8 +45,6 @@ describe("TagRateLimitEditor", () => {
     expect(screen.getByRole("textbox", { name: "Tag" })).toHaveValue("cell-2");
   });
 
-  // The RPM cell feeds tagRowsToLimits, which drops any entry whose limit is not
-  // typeof "number". A string would silently discard the user's limit.
   it("should record the typed RPM limit as a number, not a string", async () => {
     const user = userEvent.setup();
     const seen: TagRateLimitEntry[][] = [];
