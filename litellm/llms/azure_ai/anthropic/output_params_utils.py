@@ -5,6 +5,8 @@ Lives in its own module so both the chat-completion transformation
 (``messages_transformation.py``) can import it without forming a cycle.
 """
 
+from typing import Final
+
 
 def _model_accepts_output_config_effort(model: str) -> bool:
     """Whether ``model`` accepts ``output_config.effort`` on Azure AI Foundry.
@@ -16,10 +18,13 @@ def _model_accepts_output_config_effort(model: str) -> bool:
     """
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    return AnthropicConfig._model_supports_effort_param(model)
+    return AnthropicConfig._model_supports_effort_param(model, "azure_ai")
 
 
-def sanitize_azure_anthropic_output_params(data: dict, model: str) -> None:
+def sanitize_azure_anthropic_output_params(
+    data: dict,  # mutable-ok: request dict mutated in place, matches transform_request's contract
+    model: str,
+) -> None:
     """Strip Azure-unsupported keys from ``output_config`` in-place.
 
     Behavior:
@@ -30,15 +35,15 @@ def sanitize_azure_anthropic_output_params(data: dict, model: str) -> None:
       * Non-dict values for ``output_config`` are dropped to avoid sending
         malformed payloads downstream.
     """
-    output_config = data.get("output_config")
+    output_config: Final = data.get("output_config")
     if output_config is None:
         return
     if not isinstance(output_config, dict):
         data.pop("output_config", None)
         return
 
-    drop_keys: set = set()
-    if "effort" in output_config and not _model_accepts_output_config_effort(model):
+    drop_effort: Final = "effort" in output_config and not _model_accepts_output_config_effort(model)
+    if drop_effort:
         from litellm._logging import verbose_logger
 
         verbose_logger.debug(
@@ -46,10 +51,13 @@ def sanitize_azure_anthropic_output_params(data: dict, model: str) -> None:
             "(no supports_output_config in the model map)",
             model,
         )
-        drop_keys.add("effort")
 
-    sanitized = {k: v for k, v in output_config.items() if k not in drop_keys}
+    sanitized: Final = (
+        {k: v for k, v in output_config.items() if k != "effort"}  # mutable-ok: request dict mutated in place
+        if drop_effort
+        else output_config
+    )
     if sanitized:
-        data["output_config"] = sanitized
+        data["output_config"] = sanitized  # rebind-ok: out-param store like siblings
     else:
         data.pop("output_config", None)
