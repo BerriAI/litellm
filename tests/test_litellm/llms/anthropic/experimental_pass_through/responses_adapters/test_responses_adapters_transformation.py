@@ -605,11 +605,66 @@ class TestTranslateToolsToResponsesAPI:
             {
                 "type": "function",
                 "name": "get_weather",
+                "strict": False,
                 "description": "Get current weather for a city.",
                 "parameters": {
                     "type": "object",
                     "properties": {"city": {"type": "string"}},
                     "required": ["city"],
+                },
+            }
+        ]
+
+    def test_tool_with_optional_properties_stays_non_strict(self):
+        """Regression: an unset Anthropic `strict` must not become the Responses strict default,
+        which would rewrite `required` to include every optional property."""
+        tools = [
+            {
+                "name": "search",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "cursor": {"type": "string"},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+
+        result = _ADAPTER.translate_tools_to_responses_api(tools)  # type: ignore[arg-type]
+
+        assert result[0]["strict"] is False
+        assert result[0]["parameters"]["required"] == ["query"]
+
+    def test_tool_forwards_explicit_strict_true(self):
+        """An explicit Anthropic `strict: True` still reaches Responses as True."""
+        tools = [
+            {
+                "name": "search",
+                "strict": True,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+
+        result = _ADAPTER.translate_tools_to_responses_api(tools)  # type: ignore[arg-type]
+
+        assert result == [
+            {
+                "type": "function",
+                "name": "search",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
                 },
             }
         ]
