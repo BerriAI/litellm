@@ -24,13 +24,15 @@ from typing import (
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
+from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
+    ESTIMATED_OUTPUT_TOKENS_FIELD,
+    get_estimated_output_tokens,
     get_key_tag_rpm_limit,
     get_model_rate_limit_from_metadata,
 )
@@ -562,6 +564,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         data: dict,
         model: str | None = None,
         min_configured_tpm_limit: int | None = None,
+        configured_output_tokens: int | None = None,
     ) -> int:
         """
         Estimate total tokens this request will consume so we can reserve them
@@ -575,6 +578,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         provided, the no-``max_tokens`` output-budget floor is capped at a
         fraction of that limit so small TPM caps remain usable. Omit to
         preserve the unconstrained floor.
+
+        ``configured_output_tokens`` is the operator-declared estimate resolved
+        from key or team metadata. When provided it replaces the heuristic
+        floor entirely, so the reservation reflects what this tenant's model
+        actually emits rather than one constant shared by every tenant.
         """
         messages = data.get("messages")
         prompt: Final = data.get("prompt")
@@ -604,7 +612,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             case (_, embeddings_input) if embeddings_input:
                 # Embeddings have no output tokens
                 max_tokens_estimate = 0
-            case _ if total_chars == 0:
+            case _ if total_chars == 0 and configured_output_tokens is None:
                 # Fully contentless request (no messages, prompt, or input).
                 # Don't apply the conservative output-budget floor here — it
                 # would over-reserve and could push small TPM limits into a
@@ -619,7 +627,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # so a small per-tenant TPM cap can't be tripped by the floor
                 # alone.
                 output_floor: Final = self._no_max_tokens_output_floor(min_configured_tpm_limit)
-                max_tokens_estimate = max(estimated_input_tokens, output_floor)
+                max_tokens_estimate = (
+                    configured_output_tokens
+                    if configured_output_tokens is not None
+                    else max(estimated_input_tokens, output_floor)
+                )
 
         total_estimated: Final = estimated_input_tokens + max_tokens_estimate
 
@@ -2586,8 +2598,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     data.get("max_tokens") is not None or data.get("max_completion_tokens") is not None
                 )
                 is_embedding: Final = data.get("input") is not None
+                configured_output_tokens: Final = get_estimated_output_tokens(
+                    user_api_key_dict=user_api_key_dict,
+                    model_name=requested_model,
+                )
                 if capped_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
-                    data["max_tokens"] = capped_floor
+                    data["max_tokens"] = max(capped_floor, configured_output_tokens or 0)
 
                 # Floor at 1 token so contentless requests (/responses,
                 # tool-call continuations, empty messages) still flow
@@ -2601,9 +2617,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         data=data,
                         model=requested_model,
                         min_configured_tpm_limit=min_configured_tpm_limit,
+                        configured_output_tokens=configured_output_tokens,
                     ),
                     1,
                 )
+
+                if configured_output_tokens is not None and estimated_tokens > min_configured_tpm_limit:
+                    verbose_proxy_logger.debug(
+                        "Reserving %s tokens for model %s (declared %s=%s plus the input estimate) exceeds the "
+                        "smallest TPM limit this request is charged against (%s), so it cannot be admitted even "
+                        "against an empty window. Lower the declared estimate or raise the TPM limit.",
+                        estimated_tokens,
+                        requested_model,
+                        ESTIMATED_OUTPUT_TOKENS_FIELD,
+                        configured_output_tokens,
+                        min_configured_tpm_limit,
+                    )
 
                 tpm_response: Final = await self.reserve_tpm_tokens(
                     descriptors=descriptors,
@@ -2962,6 +2991,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rate_limit_type: Literal["output", "input", "total"],
     ) -> list[RedisPipelineIncrementOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""
+        from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -2969,6 +2999,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Get metadata from standard_logging_object - this correctly handles both
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
+        request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
+        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
+            # Internal sub-calls bill spend to the caller but are not the caller's
+            # traffic; charging them here would let background evals eat TPM headroom.
+            return []
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
 
         model_group: Final = get_model_group_from_litellm_kwargs(kwargs)

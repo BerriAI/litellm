@@ -3,7 +3,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Final, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -22,6 +22,15 @@ if TYPE_CHECKING:
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
+
+TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
+    "completed",
+    "complete",
+    "failed",
+    "expired",
+    "cancelled",
+    "stale_expired",
+)
 
 
 class CheckBatchCost:
@@ -43,11 +52,15 @@ class CheckBatchCost:
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
 
-    async def _get_user_info(self, batch_id, user_id) -> dict:
+    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> Dict[str, Any]:
         """
         Look up user email and key alias by user_id for enriching the S3 callback metadata.
         Returns a dict with user_api_key_user_email and user_api_key_alias (both may be None).
+        Returns an empty dict when user_id is None: batches created by a team or service
+        account key carry no user id, and find_unique(where={"user_id": None}) raises.
         """
+        if not user_id:
+            return {}
         try:
             user_row = await self.prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user_id}
@@ -62,17 +75,77 @@ class CheckBatchCost:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
 
+    async def _get_key_alias(self, batch_id: str, api_key: str | None) -> str | None:
+        """Resolve the creating virtual key's alias from its hashed token."""
+        if not api_key:
+            return None
+        try:
+            key_row = await self.prisma_client.db.litellm_verificationtoken.find_unique(
+                where={"token": api_key}
+            )
+            return getattr(key_row, "key_alias", None) if key_row is not None else None
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not look up key alias for batch {batch_id}: {e}")
+            return None
+
+    async def _get_team_alias(self, team_id: str | None) -> str | None:
+        """Resolve a team's alias from its id."""
+        if not team_id:
+            return None
+        try:
+            team_row = await self.prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
+            )
+            return getattr(team_row, "team_alias", None) if team_row is not None else None
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not look up team alias for team {team_id}: {e}")
+            return None
+
+    async def _build_creator_attribution_metadata(
+        self, job: "LiteLLM_ManagedObjectTable", batch_id: str
+    ) -> Dict[str, Any]:
+        """
+        Rebuild the spend-tracking metadata for the key, team, and tags that created the
+        batch so the batch-cost spend log is attributed the same way a non-batch request
+        is. Rows created before api_key and request_tags were persisted carry only
+        created_by and team_id, and fall back to those. A named creating key owns
+        user_api_key_alias; when it has no alias, or the key has since been rotated or
+        deleted, the field keeps the creating user's alias that _get_user_info filled in,
+        because a resolvable name is more useful on the spend row than a null.
+        """
+        api_key = getattr(job, "api_key", None)
+        team_id = getattr(job, "team_id", None)
+        request_tags = getattr(job, "request_tags", None)
+
+        metadata: Dict[str, Any] = {
+            "user_api_key_user_id": job.created_by,
+            "user_api_key": api_key,
+            "user_api_key_team_id": team_id,
+            **(await self._get_user_info(batch_id, job.created_by)),
+        }
+
+        key_alias = await self._get_key_alias(batch_id, api_key)
+        if key_alias is not None:
+            metadata["user_api_key_alias"] = key_alias
+        team_alias = await self._get_team_alias(team_id)
+        if team_alias is not None:
+            metadata["user_api_key_team_alias"] = team_alias
+        if isinstance(request_tags, list) and request_tags:
+            metadata["tags"] = [tag for tag in request_tags if isinstance(tag, str)]
+
+        return metadata
+
     async def _cleanup_stale_managed_objects(self) -> None:
         """
         Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
         in non-terminal states as 'stale_expired'. These will never complete and
         should not be polled.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
-        result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+        cutoff: Final = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+        result: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
             where={
                 "file_purpose": "batch",
-                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
+                "status": {"not_in": list(TERMINAL_MANAGED_OBJECT_STATUSES)},
                 "created_at": {"lt": cutoff},
             },
             data={"status": "stale_expired"},
@@ -81,6 +154,26 @@ class CheckBatchCost:
             verbose_proxy_logger.warning(
                 f"CheckBatchCost: marked {result} stale managed objects "
                 f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
+            )
+
+        if not self._has_batch_processed_column:
+            return
+
+        # A row already in a terminal status is never rewritten by the sweep above, so
+        # without this it keeps a poll-page slot forever and starves newer batches.
+        retired: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            where={
+                "file_purpose": "batch",
+                "batch_processed": False,
+                "status": {"in": ["complete", "completed"]},
+                "created_at": {"lt": cutoff},
+            },
+            data={"batch_processed": True},
+        )
+        if retired > 0:
+            verbose_proxy_logger.warning(
+                f"CheckBatchCost: gave up on {retired} completed managed objects older than "
+                f"{MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days that were never costed"
             )
 
     async def _fallback_find_jobs(self) -> list:
@@ -102,6 +195,68 @@ class CheckBatchCost:
             take=MAX_OBJECTS_PER_POLL_CYCLE,
             order={"created_at": "asc"},
         )
+
+    async def _retire_job(self, job: "LiteLLM_ManagedObjectTable", reason: str) -> None:
+        """
+        Take a row that can never be costed out of the poll page. Leaving it selectable
+        would burn one of the MAX_OBJECTS_PER_POLL_CYCLE slots on every future cycle, and
+        once enough such rows accumulate no newer batch is ever reached. Older schemas
+        without batch_processed can only be excluded through the status filter.
+        """
+        data: Final = (
+            {"batch_processed": True}
+            if self._has_batch_processed_column
+            else {"status": "stale_expired"}
+        )
+        try:
+            await self.prisma_client.db.litellm_managedobjecttable.update(
+                where={"id": job.id},
+                data=data,
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: failed to retire uncostable job {job.id} ({reason}): {db_err}"
+            )
+            return
+        verbose_proxy_logger.warning(
+            f"CheckBatchCost: job {job.id} can never be costed ({reason}), "
+            "so it will no longer be polled"
+        )
+
+    @staticmethod
+    def _has_unified_id_without_model(job: "LiteLLM_ManagedObjectTable") -> bool:
+        """A unified id that decodes but carries no model_id can never be routed."""
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            convert_b64_uid_to_unified_uid,
+            get_model_id_from_unified_batch_id,
+        )
+
+        decoded: Final = convert_b64_uid_to_unified_uid(job.unified_object_id)
+        return (
+            decoded != job.unified_object_id
+            and get_model_id_from_unified_batch_id(decoded) is None
+        )
+
+    @staticmethod
+    def _is_batch_gone_at_provider(error: Exception, batch_id: str) -> bool:
+        """
+        A 404 naming the batch means the provider dropped its record of it, so no later
+        retrieve can ever succeed. A 404 about anything else, a renamed Azure deployment
+        or a fallback deployment that never saw this batch, is still fixable in config, so
+        it keeps retrying.
+        """
+        import openai
+
+        from litellm.exceptions import NotFoundError
+
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and batch_id in str(error)
+
+    def _batch_deployment_exists(self, model_id: str) -> bool:
+        """A 404 only proves the batch is gone when it came from the batch's own
+        deployment. Once that deployment leaves the router, default fallbacks can
+        silently send the retrieve to a provider that never saw the batch, so its
+        404 must not retire the row; the staleness sweep bounds it instead."""
+        return self.llm_router.get_deployment(model_id=model_id) is not None
 
     @staticmethod
     def _record_error(
@@ -485,9 +640,6 @@ class CheckBatchCost:
             function_id=str(uuid.uuid4()),
         )
 
-        creator_user_id = job.created_by
-        user_info = await self._get_user_info(batch_id, job.created_by)
-
         logging_obj.update_environment_variables(
             litellm_params={
                 # set the user-agent header so that S3 callback consumers can easily identify CheckBatchCost callbacks
@@ -496,11 +648,7 @@ class CheckBatchCost:
                         "user-agent": CHECK_BATCH_COST_USER_AGENT,
                     }
                 },
-                "metadata": {
-                    "user_api_key_user_id": creator_user_id,
-                    "user_api_key_team_id": getattr(job, "team_id", None),
-                    **user_info,
-                },
+                "metadata": await self._build_creator_attribution_metadata(job, batch_id),
             },
             optional_params={},
         )
@@ -588,6 +736,8 @@ class CheckBatchCost:
         for job in jobs:
             routing = self._resolve_job_routing(job, prom_logger)
             if routing is None:
+                if self._has_unified_id_without_model(job):
+                    await self._retire_job(job, "unified object id has no model id")
                 continue
             model_id, batch_id = routing
 
@@ -610,6 +760,8 @@ class CheckBatchCost:
                 )
                 if prom_logger:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
+                if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
+                    await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE

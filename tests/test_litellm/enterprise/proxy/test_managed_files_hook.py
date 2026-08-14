@@ -510,6 +510,117 @@ def _make_real_managed_files_instance():
     )
 
 
+def _make_object_store_instance():
+    """A real store_unified_object_id over an AsyncMock prisma client, so both the
+    upsert and the update-only write path can be asserted."""
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.async_set_cache = AsyncMock()
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock()
+    mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock()
+
+    return (
+        _PROXY_LiteLLMManagedFiles(
+            internal_usage_cache=mock_cache,
+            prisma_client=mock_prisma,
+        ),
+        mock_prisma,
+    )
+
+
+@pytest.mark.asyncio
+async def test_poll_refreshes_batch_state_without_claiming_the_row():
+    """Regression (stale batch state): a poll observes a batch it did not create, so it
+    must still refresh status and file_object -- otherwise GET /v1/batches serves the
+    create-time snapshot forever -- while writing none of the attribution columns and
+    never creating a row it would then own."""
+    managed_files, mock_prisma = _make_object_store_instance()
+    poller = UserAPIKeyAuth(
+        api_key="sk-the-poller", user_id="bob", team_id="team-bravo", parent_otel_span=None
+    )
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="uoi-1",
+        file_object=_make_batch_response(status="completed"),
+        litellm_parent_otel_span=None,
+        model_object_id="batch-123",
+        file_purpose="batch",
+        user_api_key_dict=poller,
+        request_tags=("poller:tag",),
+        persist_attribution=False,
+        create_if_missing=False,
+    )
+
+    # the row is refreshed in place, and cannot be conjured by a poll
+    mock_prisma.db.litellm_managedobjecttable.upsert.assert_not_awaited()
+    update_many = mock_prisma.db.litellm_managedobjecttable.update_many
+    update_many.assert_awaited_once()
+    call = update_many.await_args
+    assert call.kwargs["where"] == {"unified_object_id": "uoi-1"}
+
+    written = call.kwargs["data"]
+    assert written["status"] == "completed"
+    assert json.loads(written["file_object"])["output_file_id"] == "file-output-abc"
+    # nothing the poller could be billed for
+    for owned in ("api_key", "request_tags", "created_by", "team_id"):
+        assert owned not in written
+
+
+@pytest.mark.asyncio
+async def test_create_still_upserts_and_claims_attribution():
+    """The create is the one caller that can speak for the batch, so it keeps the upsert
+    (creating the row when absent) and writes the attribution columns."""
+    managed_files, mock_prisma = _make_object_store_instance()
+    creator = UserAPIKeyAuth(
+        api_key="sk-the-creator", user_id="alice", team_id="team-alpha", parent_otel_span=None
+    )
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="uoi-2",
+        file_object=_make_batch_response(status="validating"),
+        litellm_parent_otel_span=None,
+        model_object_id="batch-456",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+        request_tags=("env:prod",),
+        persist_attribution=True,
+    )
+
+    mock_prisma.db.litellm_managedobjecttable.update_many.assert_not_awaited()
+    upsert = mock_prisma.db.litellm_managedobjecttable.upsert
+    upsert.assert_awaited_once()
+    created = upsert.await_args.kwargs["data"]["create"]
+    # UserAPIKeyAuth hashes an sk- token on construction; the hash is what is billed
+    assert created["api_key"] == creator.api_key
+    assert created["api_key"] != "sk-the-creator"
+    assert created["created_by"] == "alice"
+    assert created["team_id"] == "team-alpha"
+
+
+@pytest.mark.asyncio
+async def test_default_callers_still_create_their_rows():
+    """create_if_missing defaults to True, so the fine-tune, Responses and managed
+    /v1/batches callers, none of which passes it, keep upserting exactly as before."""
+    managed_files, mock_prisma = _make_object_store_instance()
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="uoi-3",
+        file_object=_make_batch_response(),
+        litellm_parent_otel_span=None,
+        model_object_id="ft-789",
+        file_purpose="fine-tune",
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    mock_prisma.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+    mock_prisma.db.litellm_managedobjecttable.update_many.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_store_unified_file_id_is_idempotent_via_upsert():
     """Regression test for the managed-batch retrieve 500 (UniqueViolationError on

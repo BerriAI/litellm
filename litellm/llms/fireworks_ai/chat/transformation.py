@@ -65,7 +65,7 @@ def _json_schema_response_format(schema: object, name: str) -> Mapping[str, obje
     return {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}  # mutable-ok: JSON request body
 
 
-_EFFORT_KWARG_KEYS: Final = frozenset({"enable_thinking", "thinking", "reasoning_budget", "low_effort"})
+EFFORT_KWARG_KEYS: Final = frozenset({"enable_thinking", "thinking", "reasoning_budget", "low_effort"})
 
 
 def _bool_from_kwargs(kwargs: Mapping[str, object], keys: tuple[str, ...]) -> bool | None:
@@ -76,7 +76,7 @@ def _bool_from_kwargs(kwargs: Mapping[str, object], keys: tuple[str, ...]) -> bo
     return None
 
 
-def _effort_from_chat_template_kwargs(kwargs: Mapping[str, object]) -> object:
+def effort_from_chat_template_kwargs(kwargs: Mapping[str, object]) -> object:
     enable_thinking: Final = _bool_from_kwargs(kwargs, ("enable_thinking", "thinking"))
     if enable_thinking is False:
         return "none"
@@ -89,7 +89,7 @@ def _effort_from_chat_template_kwargs(kwargs: Mapping[str, object]) -> object:
     return None
 
 
-_NIM_VLLM_STRIP_PARAMS: Final = frozenset(
+NIM_VLLM_STRIP_PARAMS: Final = frozenset(
     {
         "stop_token_ids",
         "include_stop_str_in_output",
@@ -112,7 +112,7 @@ _NIM_VLLM_STRIP_PARAMS: Final = frozenset(
 
 _EXTRA_BODY_CONSUMED_PARAMS: Final = (
     frozenset({"truncate_prompt_tokens", "chat_template_kwargs", "guided_json", "guided_grammar", "guided_choice"})
-    | _NIM_VLLM_STRIP_PARAMS
+    | NIM_VLLM_STRIP_PARAMS
 )
 
 
@@ -335,7 +335,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         if not isinstance(extra_body, dict):
             return dict(optional_params)  # mutable-ok: JSON request body
 
-        stripped: Final = tuple(sorted(k for k in extra_body if k in _NIM_VLLM_STRIP_PARAMS))
+        stripped: Final = tuple(sorted(k for k in extra_body if k in NIM_VLLM_STRIP_PARAMS))
         if stripped:
             verbose_logger.debug(
                 "fireworks_ai does not support NIM/vLLM params %s for model=%s; dropping them from the request.",
@@ -345,7 +345,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         promoted: Final = (
             *self._translate_truncate_prompt_tokens(extra_body, optional_params),
             *self._translate_chat_template_kwargs(extra_body, optional_params, model),
-            *self._translate_guided_params(extra_body, optional_params),
+            *self.translate_guided_params(extra_body, optional_params),
         )
         if "response_format" in extra_body and "response_format" in optional_params:
             verbose_logger.debug(
@@ -390,7 +390,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 type(chat_template_kwargs).__name__,
             )
             return ()
-        other_keys: Final = tuple(sorted(k for k in chat_template_kwargs if k not in _EFFORT_KWARG_KEYS))
+        other_keys: Final = tuple(sorted(k for k in chat_template_kwargs if k not in EFFORT_KWARG_KEYS))
         if other_keys:
             verbose_logger.debug(
                 "fireworks_ai does not support chat_template_kwargs keys %s for model=%s; dropping them.",
@@ -402,7 +402,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 "fireworks_ai ignoring chat_template_kwargs; explicit reasoning_effort/thinking takes precedence."
             )
             return ()
-        effort: Final = _effort_from_chat_template_kwargs(chat_template_kwargs)
+        effort: Final = effort_from_chat_template_kwargs(chat_template_kwargs)
         if effort is None:
             return ()
         if not supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
@@ -414,7 +414,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         return (("reasoning_effort", effort),)
 
     @staticmethod
-    def _translate_guided_params(
+    def translate_guided_params(
         extra_body: Mapping[str, object], optional_params: Mapping[str, object]
     ) -> tuple[tuple[str, object], ...]:
         has_guided: Final = any(
