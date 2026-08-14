@@ -384,3 +384,43 @@ def test_a_failing_block_fails_the_whole_run(tmp_path: Path, fail: str, message:
     proc = _run(repo, bin_dir, {"STUB_FAIL": fail})
     assert proc.returncode == 1
     assert message in proc.stdout + proc.stderr
+
+
+def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "check: summary" in proc.stdout
+    assert "ran:     Python lint (make lint)" in proc.stdout
+    assert "ran:     dashboard lint (prettier + eslint + lint budgets)" in proc.stdout
+    assert "ran:     dashboard API-type sync (npm run gen:api)" in proc.stdout
+    assert "skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)" in proc.stdout
+    assert "check: PASS" in proc.stdout
+    assert "check: FAIL" not in proc.stdout
+
+
+def test_staged_files_matching_no_check_print_an_explicit_noop_note_and_nonempty_log(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    tests_dir = repo / "tests" / "test_litellm"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_x.py").write_text("def test_x() -> None: ...\n")
+    subprocess.run(["git", "add", "tests"], cwd=repo, check=True)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "no gating lint check matches the files in scope, so nothing ran" in proc.stdout
+    assert "tests/test_litellm/test_x.py" in proc.stdout
+    assert "a no-op, not a lint verdict" in proc.stdout
+    assert "check: PASS" in proc.stdout
+    assert "linting Python" not in proc.stdout
+    log = (repo / ".git" / "pre_commit_lint.log").read_text()
+    assert "check: summary" in log
+    assert "skipped: Python lint (make lint) (no litellm/ Python files in scope)" in log
+
+
+def test_failing_run_ends_with_a_fail_verdict(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    proc = _run(repo, bin_dir, {"STUB_FAIL": "make-lint"})
+    assert proc.returncode == 1
+    assert "check: FAIL" in proc.stdout
+    assert "check: PASS" not in proc.stdout
