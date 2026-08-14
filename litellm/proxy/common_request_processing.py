@@ -930,26 +930,49 @@ def _override_openai_response_model(
 
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: LiteLLMLoggingObj | None,
-) -> tuple[float | None, float | None, float | None, float | None]:
-    """
-    Extract discount and margin information from logging object's cost breakdown.
-
-    Returns:
-        Tuple of (original_cost, discount_amount, margin_total_amount, margin_percent)
-    """
+) -> tuple[
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+]:
+    """Extract discount, margin, and per-component cost information from logging object's cost breakdown."""
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
-        return None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None
 
     cost_breakdown: Final = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
-        return None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None
 
     original_cost: Final = cost_breakdown.get("original_cost")
     discount_amount: Final = cost_breakdown.get("discount_amount")
     margin_total_amount: Final = cost_breakdown.get("margin_total_amount")
     margin_percent: Final = cost_breakdown.get("margin_percent")
+    input_cost: Final = cost_breakdown.get("input_cost")
+    output_cost: Final = cost_breakdown.get("output_cost")
+    cache_read_cost: Final = cost_breakdown.get("cache_read_cost")
+    cache_creation_cost: Final = cost_breakdown.get("cache_creation_cost")
+    reasoning_cost: Final = cost_breakdown.get("reasoning_cost")
+    tool_usage_cost: Final = cost_breakdown.get("tool_usage_cost")
 
-    return original_cost, discount_amount, margin_total_amount, margin_percent
+    return (
+        original_cost,
+        discount_amount,
+        margin_total_amount,
+        margin_percent,
+        input_cost,
+        output_cost,
+        cache_read_cost,
+        cache_creation_cost,
+        reasoning_cost,
+        tool_usage_cost,
+    )
 
 
 def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None) -> float | None:
@@ -1075,12 +1098,18 @@ class ProxyBaseLLMRequestProcessing:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
 
-        # Extract discount and margin info from cost_breakdown if available
+        # Extract discount, margin, and per-component cost info from cost_breakdown if available
         (
             original_cost,
             discount_amount,
             margin_total_amount,
             margin_percent,
+            input_cost,
+            output_cost,
+            cache_read_cost,
+            cache_creation_cost,
+            reasoning_cost,
+            tool_usage_cost,
         ) = _get_cost_breakdown_from_logging_obj(litellm_logging_obj=litellm_logging_obj)
 
         # Calculate updated spend for header (include current response_cost)
@@ -1116,6 +1145,14 @@ class ProxyBaseLLMRequestProcessing:
                 str(margin_total_amount) if margin_total_amount is not None else None
             ),
             "x-litellm-response-cost-margin-percent": (str(margin_percent) if margin_percent is not None else None),
+            "x-litellm-response-cost-input": (str(input_cost) if input_cost is not None else None),
+            "x-litellm-response-cost-output": (str(output_cost) if output_cost is not None else None),
+            "x-litellm-response-cost-cache-read": (str(cache_read_cost) if cache_read_cost is not None else None),
+            "x-litellm-response-cost-cache-creation": (
+                str(cache_creation_cost) if cache_creation_cost is not None else None
+            ),
+            "x-litellm-response-cost-reasoning": (str(reasoning_cost) if reasoning_cost is not None else None),
+            "x-litellm-response-cost-tool-usage": (str(tool_usage_cost) if tool_usage_cost is not None else None),
             "x-litellm-classifier-cost": (str(classifier_cost) if classifier_cost is not None else None),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
