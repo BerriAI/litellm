@@ -2940,22 +2940,12 @@
       "count": 1
     }
   },
-  "src/components/permissions/AgentPermissions.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/components/permissions/MCPServerPermissions.tsx": {
     "no-nested-ternary": {
       "count": 3
     },
     "no-restricted-imports": {
       "count": 2
-    }
-  },
-  "src/components/permissions/VectorStorePermissions.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/policies/PolicySelector.tsx": {
@@ -3242,9 +3232,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -3257,11 +3244,6 @@
   "src/components/team/useMyTeamMember.ts": {
     "no-restricted-syntax": {
       "count": 1
-    }
-  },
-  "src/components/templates/KeyInfoHeader.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/templates/key_edit_view.tsx": {
@@ -3292,9 +3274,6 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
