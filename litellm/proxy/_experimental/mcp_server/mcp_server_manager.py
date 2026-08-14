@@ -13,7 +13,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
 from urllib.parse import ParseResult, urlparse
@@ -46,6 +46,9 @@ from litellm.constants import (
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.integrations.custom_guardrail import (
+    _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage] - the same bridge @log_guardrail_information uses; reimplementing it here would fork the metadata-key logic
+)
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -162,6 +165,7 @@ if TYPE_CHECKING:
     from mcp.types import CreateMessageRequestParams
 
     from litellm.caching.caching import InMemoryCache
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
 try:
@@ -1231,6 +1235,35 @@ def _create_elicitation_callback():
         )
 
     return _elicitation_callback
+
+
+def _record_mcp_guardrail_evaluations(
+    synthetic_llm_data: dict[str, Any],  # mutable-ok: `_sync_guardrail_info_to_logging_obj` takes a concrete dict
+    litellm_logging_obj: "LiteLLMLoggingObj | None",
+) -> None:
+    """Bridge guardrail decision records off an MCP synthetic request onto the request's logger.
+
+    MCP guardrails run against a throwaway LLM-shaped dict from
+    ``ProxyLogging._convert_mcp_to_llm_format``, so ``@log_guardrail_information``
+    files ``standard_logging_guardrail_information`` in that dict's metadata bucket,
+    which ``get_standard_logging_object_payload`` never reads. Native (non-unified)
+    guardrails receive no ``logging_obj`` kwarg, so the decorator cannot bridge on
+    their behalf; this calls the same helper it would have.
+
+    Only the decision records move. The synthetic request's messages and tool
+    arguments stay behind: they can carry end-user data, and the monitor needs none
+    of it.
+    """
+    if litellm_logging_obj is None:
+        return
+
+    try:
+        _sync_guardrail_info_to_logging_obj(synthetic_llm_data, litellm_logging_obj)
+    except Exception as e:  # noqa: BLE001  # callers run this from a `finally` on the block path
+        # The breadth is the point. Narrowing to the knowable AttributeError/TypeError
+        # would let an unexpected type escape that ``finally`` and replace the guardrail's
+        # block with a bookkeeping error.
+        verbose_logger.warning("Failed to record MCP guardrail evaluation for logging: %s", e)
 
 
 class MCPServerManager:
@@ -4543,6 +4576,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging | None,
         server: MCPServer,
         raw_headers: dict[str, str] | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -4551,6 +4585,10 @@ class MCPServerManager:
         dispatched through ``proxy_logging_obj``, depend on a logger being
         present. An absent logger must never be able to turn an authorization
         decision into a no-op.
+
+        ``litellm_logging_obj`` is the request's logger, and it is what lands a
+        ``pre_mcp_call`` evaluation (or a block) on the spend-log row the Guardrails
+        Monitor counts. It stays optional so callers that do no logging are unchanged.
 
         Returns a dict that may contain:
         - "arguments": hook-modified tool arguments (only if changed)
@@ -4610,8 +4648,13 @@ class MCPServerManager:
         # Create MCP request object for processing
         mcp_request_obj: Final = proxy_logging_obj._create_mcp_request_object_from_kwargs(pre_hook_kwargs)
 
-        # Convert to LLM format for existing guardrail compatibility
+        # Convert to LLM format for existing guardrail compatibility.
+        # Unified guardrails read the seeded logger off the request dict and pass it
+        # into ``apply_guardrail``, so ``@log_guardrail_information`` bridges their
+        # evaluations itself; the ``finally`` below covers native guardrails, which
+        # never receive it. Same seeding the pass-through routes do.
         synthetic_llm_data: Final = proxy_logging_obj._convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
+        synthetic_llm_data["litellm_logging_obj"] = litellm_logging_obj
 
         try:
             # Use standard pre_call_hook
@@ -4636,6 +4679,12 @@ class MCPServerManager:
             # Re-raise guardrail exceptions to properly fail the MCP call
             verbose_logger.error("Guardrail blocked MCP tool call pre call: %s", e)
             raise e
+        finally:
+            # ``finally`` rather than after the ``try``: a block raises straight out of
+            # here, and the failure spend-log row that "Total Blocked" counts is built
+            # from this logger further up the stack, so the record has to be attached
+            # before the exception leaves this frame.
+            _record_mcp_guardrail_evaluations(synthetic_llm_data, litellm_logging_obj)
 
         return hook_result
 
@@ -4647,8 +4696,14 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None,
         proxy_logging_obj: ProxyLogging,
         start_time: datetime.datetime,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ):
-        """Create and return a during hook task for MCP tool calls."""
+        """Create and return a during hook task for MCP tool calls.
+
+        ``litellm_logging_obj`` is the request's logger; see ``pre_call_tool_check``.
+        The task is awaited before the tool call's success logging runs, so a
+        ``during_mcp_call`` evaluation recorded on it is serialized with that call.
+        """
         from litellm.types.llms.base import HiddenParams
         from litellm.types.mcp import MCPDuringCallRequestObject
 
@@ -4667,15 +4722,23 @@ class MCPServerManager:
             "user_api_key_auth": user_api_key_auth,
         }
 
+        # Seeded for the same reason as in ``pre_call_tool_check``.
         synthetic_llm_data: Final = proxy_logging_obj._convert_mcp_to_llm_format(request_obj, during_hook_kwargs)
+        synthetic_llm_data["litellm_logging_obj"] = litellm_logging_obj
 
-        return asyncio.create_task(
-            proxy_logging_obj.during_call_hook(
-                user_api_key_dict=user_api_key_auth,
-                data=synthetic_llm_data,
-                call_type=CallTypes.call_mcp_tool.value,
-            )
-        )
+        # Wrapped so the bridge runs inside the task: the caller only holds the task and
+        # gathers it later, so there is no other point that still sees a block here.
+        async def _run_during_call_hook() -> Mapping[str, Any] | None:
+            try:
+                return await proxy_logging_obj.during_call_hook(
+                    user_api_key_dict=user_api_key_auth,
+                    data=synthetic_llm_data,
+                    call_type=CallTypes.call_mcp_tool.value,
+                )
+            finally:
+                _record_mcp_guardrail_evaluations(synthetic_llm_data, litellm_logging_obj)
+
+        return asyncio.create_task(_run_during_call_hook())
 
     def _get_call_semaphore(self, mcp_server: MCPServer) -> asyncio.Semaphore | None:
         limit: Final = mcp_server.max_concurrent_requests
@@ -5204,6 +5267,7 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         host_progress_callback: Callable | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -5216,6 +5280,9 @@ class MCPServerManager:
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
             proxy_logging_obj: Optional ProxyLogging object for hook integration
+            litellm_logging_obj: Optional request logger the guardrail hooks record
+                their evaluations onto, so MCP guardrail activity reaches the
+                Guardrails Monitor. See ``pre_call_tool_check``
 
 
         Returns:
@@ -5246,6 +5313,7 @@ class MCPServerManager:
             proxy_logging_obj=proxy_logging_obj,
             server=mcp_server,
             raw_headers=raw_headers,
+            litellm_logging_obj=litellm_logging_obj,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -5260,6 +5328,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
+                litellm_logging_obj=litellm_logging_obj,
             )
             tasks.append(during_hook_task)
 
