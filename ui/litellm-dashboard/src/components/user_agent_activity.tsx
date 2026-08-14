@@ -17,7 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { BarChart } from "@/components/shared/charts";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import PerUserUsage from "./per_user_usage";
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { ChartLoader } from "./shared/chart_loader";
 
 // New interfaces for the updated API response
