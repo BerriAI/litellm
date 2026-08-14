@@ -2229,9 +2229,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -2918,14 +2915,8 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "local/no-complex-jsx-arrow": {
-      "count": 4
-    },
     "no-nested-ternary": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 3
     },
     "prefer-const": {
       "count": 4
