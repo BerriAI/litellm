@@ -16,10 +16,11 @@ import litellm
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
     index_create,
+    index_list,
 )
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_model_routing_hint,
@@ -37,7 +38,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
     is_allowed_to_call_vector_store_files_endpoint,
 )
-from litellm.types.vector_stores import IndexCreateRequest
+from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.types.utils import LlmProviders
 
 
@@ -1314,6 +1315,93 @@ class TestIndexCreate:
 
         assert result["index_name"] == "test-index"
         mock_prisma.db.litellm_managedvectorstoreindextable.create.assert_awaited_once()
+
+
+class TestIndexList:
+    def _admin(self) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            token="sk-test",
+            key_name="sk-...test",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin-user",
+        )
+
+    def _index_row(self, index_id: str, index_name: str) -> dict:
+        return {
+            "id": index_id,
+            "index_name": index_name,
+            "litellm_params": {
+                "vector_store_index": f"real-{index_name}",
+                "vector_store_name": "azure-ai-search",
+            },
+            "index_info": None,
+            "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+            "created_by": "admin-user",
+            "updated_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+            "updated_by": "admin-user",
+        }
+
+    @pytest.mark.asyncio
+    async def test_index_list_requires_admin(self):
+        """Index topology must never reach non-admins, not even via a DB read."""
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_many = AsyncMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            with pytest.raises(HTTPException) as exc_info:
+                await index_list(
+                    user_api_key_dict=UserAPIKeyAuth(
+                        token="sk-test",
+                        key_name="sk-...test",
+                        user_role=LitellmUserRoles.INTERNAL_USER,
+                    )
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can list" in exc_info.value.detail
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_many.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_index_list_requires_db_connection(self):
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            with pytest.raises(HTTPException) as exc_info:
+                await index_list(user_api_key_dict=self._admin())
+
+        assert exc_info.value.status_code == 500
+        assert CommonProxyErrors.db_not_connected_error.value in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_index_list_returns_db_rows_newest_first(self):
+        """Rows round-trip into typed models and DB ordering (created_at desc) is requested."""
+        rows = [
+            self._index_row("idx-2", "index-b"),
+            self._index_row("idx-1", "index-a"),
+        ]
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_many = AsyncMock(return_value=rows)
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            result = await index_list(user_api_key_dict=self._admin())
+
+        assert isinstance(result, IndexListResponse)
+        assert result.object == "list"
+        assert [index.index_name for index in result.data] == ["index-b", "index-a"]
+        assert result.data[0].litellm_params.vector_store_index == "real-index-b"
+        assert result.data[0].litellm_params.vector_store_name == "azure-ai-search"
+        assert result.data[1].litellm_params.vector_store_index == "real-index-a"
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_many.assert_awaited_once_with(
+            order={"created_at": "desc"}
+        )
+
+    def test_get_v1_indexes_route_registered(self):
+        from litellm.proxy.vector_store_endpoints.endpoints import router
+
+        routes = [
+            (method, getattr(route, "path", None))
+            for route in router.routes
+            for method in (getattr(route, "methods", None) or ())
+        ]
+        assert ("GET", "/v1/indexes") in routes
 
 
 class TestIsAllowedToCallVectorStoreFilesEndpoint:

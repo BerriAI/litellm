@@ -115,8 +115,11 @@ def get_litellm_params(
     litellm_request_debug: bool | None = None,
     **kwargs,
 ) -> dict:
+    _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
+    resolved_metadata: Final = _litellm_metadata_dict.copy() if not metadata and _litellm_metadata_dict else metadata
+
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
-    _meta: Final = metadata or {}
+    _meta: Final = resolved_metadata or {}
     if litellm_session_id is None:
         litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
     if litellm_trace_id is None:
@@ -139,7 +142,7 @@ def get_litellm_params(
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
         "aembedding": aembedding,
-        "metadata": metadata,
+        "metadata": resolved_metadata,
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,

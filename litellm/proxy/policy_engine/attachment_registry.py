@@ -6,7 +6,7 @@ This allows the same policy to be attached to multiple scopes.
 """
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.table_repositories import PolicyAttachmentRepository
@@ -18,7 +18,16 @@ from litellm.types.proxy.policy_engine import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from prisma.models import LiteLLM_PolicyAttachmentTable
+
     from litellm.proxy.utils import PrismaClient
+
+
+class PolicyAttachmentMatch(TypedDict):
+    policy_name: str
+    matched_via: str
 
 
 class AttachmentRegistry:
@@ -40,7 +49,7 @@ class AttachmentRegistry:
     ```
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._attachments: list[PolicyAttachment] = []
         self._config_attachments: tuple[PolicyAttachment, ...] = ()
         self._initialized: bool = False
@@ -98,7 +107,7 @@ class AttachmentRegistry:
         """
         return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context)]
 
-    def get_attached_policies_with_reasons(self, context: PolicyMatchContext) -> list[dict[str, Any]]:
+    def get_attached_policies_with_reasons(self, context: PolicyMatchContext) -> list[PolicyAttachmentMatch]:
         """
         Get list of policy names and match reasons for the given context.
 
@@ -107,8 +116,8 @@ class AttachmentRegistry:
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
-        results: Final[list[dict[str, Any]]] = []
-        seen_policies: Final[set] = set()
+        results: Final[list[PolicyAttachmentMatch]] = []
+        seen_policies: Final[set[str]] = set()
 
         for attachment in self._attachments:
             scope = attachment.to_policy_scope()
@@ -280,7 +289,9 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse with the created attachment
         """
         try:
-            created_attachment: Final = await PolicyAttachmentRepository(prisma_client).table.create(
+            created_attachment: Final[LiteLLM_PolicyAttachmentTable] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.create(
                 data={
                     "policy_name": attachment_request.policy_name,
                     "scope": attachment_request.scope,
@@ -340,9 +351,9 @@ class AttachmentRegistry:
         """
         try:
             # Get attachment before deleting
-            attachment: Final = await PolicyAttachmentRepository(prisma_client).table.find_unique(
-                where={"attachment_id": attachment_id}
-            )
+            attachment: Final[LiteLLM_PolicyAttachmentTable | None] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_unique(where={"attachment_id": attachment_id})
 
             if attachment is None:
                 raise Exception(f"Attachment with ID {attachment_id} not found")
@@ -375,9 +386,9 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse if found, None otherwise
         """
         try:
-            attachment: Final = await PolicyAttachmentRepository(prisma_client).table.find_unique(
-                where={"attachment_id": attachment_id}
-            )
+            attachment: Final[LiteLLM_PolicyAttachmentTable | None] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_unique(where={"attachment_id": attachment_id})
 
             if attachment is None:
                 return None
@@ -413,7 +424,9 @@ class AttachmentRegistry:
             List of PolicyAttachmentDBResponse objects
         """
         try:
-            attachments: Final = await PolicyAttachmentRepository(prisma_client).table.find_many(
+            attachments: Final[Sequence[LiteLLM_PolicyAttachmentTable]] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_many(
                 order={"created_at": "desc"},
             )
 

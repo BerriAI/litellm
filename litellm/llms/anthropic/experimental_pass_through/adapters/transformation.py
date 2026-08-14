@@ -74,12 +74,12 @@ from litellm.llms.anthropic.experimental_pass_through.context_management import 
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
-    AnthopicMessagesAssistantMessageParam,
     AnthropicFinishReason,
     AnthropicMessagesRequest,
+    AnthropicMessagesSystemMessageParam,
     AnthropicMessagesToolChoice,
-    AnthropicMessagesUserMessageParam,
     AnthropicResponseContentBlockRedactedThinking,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
@@ -343,7 +343,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def translate_anthropic_messages_to_openai(
         self,
-        messages: list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam],
+        messages: list[AllAnthropicPassThroughMessageValues],
         model: str | None = None,
     ) -> list:
         new_messages: Final[list[AllMessageValues]] = []
@@ -351,6 +351,11 @@ class LiteLLMAnthropicMessagesAdapter:
             user_message: ChatCompletionUserMessage | None = None
             tool_message_list: list[ChatCompletionToolMessage] = []
             new_user_content_list: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
+            if m["role"] == "system":
+                system_message = self._translate_midturn_system_message_to_openai(m, model)
+                if system_message is not None:
+                    new_messages.append(system_message)
+                continue
             ## USER MESSAGE ##
             if m["role"] == "user":
                 ## translate user message
@@ -848,6 +853,29 @@ class LiteLLMAnthropicMessagesAdapter:
                 for def_schema in schema[key].values():
                     LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(def_schema)
 
+    def _translate_midturn_system_message_to_openai(
+        self,
+        message: AnthropicMessagesSystemMessageParam,
+        model: str | None,
+    ) -> ChatCompletionSystemMessage | None:
+        """Translate an in-sequence system entry without changing its role or position."""
+        content: Final = message.get("content")
+        if isinstance(content, str):
+            return ChatCompletionSystemMessage(role="system", content=content) if content else None
+        if not isinstance(content, list):
+            return None
+        text_parts: Final[list[ChatCompletionTextObject]] = []  # mutable-ok: API message payload
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
+                continue
+            text = block.get("text")
+            if not text:
+                continue
+            text_obj = ChatCompletionTextObject(type="text", text=text)
+            self._add_cache_control_if_applicable(block, text_obj, model)
+            text_parts.append(text_obj)
+        return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
+
     def _add_system_message_to_messages(
         self,
         new_messages: list[AllMessageValues],
@@ -976,6 +1004,17 @@ class LiteLLMAnthropicMessagesAdapter:
         model: Final = new_kwargs.get("model", "")
         if self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model):
             new_kwargs["thinking"] = thinking
+            # Adaptive thinking without its effort tier makes Bedrock Converse
+            # return zero reasoning blocks, so forward output_config (minus
+            # `format`, already translated to response_format) for Bedrock
+            # targets only: other bridged providers reject the raw param, and
+            # get_llm_provider strips the `bedrock/` prefix before this runs.
+            if model.startswith(("bedrock/", "converse/", "invoke/")) or self.is_bedrock_arn_model(model):
+                claude_output_config: Final = anthropic_message_request.get("output_config")
+                if isinstance(claude_output_config, dict):
+                    effort_config: Final = {k: v for k, v in claude_output_config.items() if k != "format"}
+                    if effort_config:
+                        new_kwargs["output_config"] = effort_config  # rebind-ok: out-param store like thinking above
             return
 
         reasoning_effort = self.translate_anthropic_thinking_to_reasoning_effort(cast(dict[str, Any], thinking))
@@ -1049,8 +1088,8 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping: dict[str, str] = {}
 
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI
-        messages_list: Final[list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]] = cast(
-            list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam],
+        messages_list: Final[list[AllAnthropicPassThroughMessageValues]] = cast(
+            list[AllAnthropicPassThroughMessageValues],
             anthropic_message_request["messages"],
         )
         new_messages = self.translate_anthropic_messages_to_openai(

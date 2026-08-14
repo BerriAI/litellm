@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
+import { deleteMcpServerByName } from "../../helpers/mcp";
 
 // Coverage scope: only the happy-path Streamable HTTP + None auth create flow.
 // See E2E_COVERAGE.md (#29 row) for the full list of uncovered MCP surfaces
@@ -10,6 +11,15 @@ import { Page } from "../../fixtures/pages";
 // or mocked MCP server in the e2e fixture stack), and access-group permissions.
 test.describe("MCP Servers", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
+
+  let createdServerName = "";
+
+  // The server this test creates is unreachable, and the MCP page contacts
+  // every server it lists, so leaving it behind slows down every later MCP
+  // test. See deleteMcpServerByName for what that actually cost.
+  test.afterEach(async ({ page }) => {
+    if (createdServerName) await deleteMcpServerByName(page, createdServerName);
+  });
 
   test("Add a custom MCP server via the discovery → custom form", async ({ page }) => {
     await navigateToPage(page, Page.McpServers);
@@ -25,6 +35,7 @@ test.describe("MCP Servers", () => {
 
     // Name — no spaces or hyphens per validateMCPServerName
     const uniqueName = `e2e_mcp_${Date.now()}`;
+    createdServerName = uniqueName;
     await formModal.locator('input[id="server_name"]').fill(uniqueName);
 
     // Transport: Streamable HTTP — the only value the proxy actually accepts is "http"
@@ -47,8 +58,6 @@ test.describe("MCP Servers", () => {
 
     // Submit
     await formModal.getByRole("button", { name: /^Add MCP Server$/ }).click();
-
-    // No teardown needed — the e2e runner spins up a fresh DB per invocation.
 
     // Success toast and the new card in the server grid. Scope the lookup to
     // the MCP servers grid so the form modal's `server_name` input — which

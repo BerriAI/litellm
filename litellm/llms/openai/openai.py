@@ -1,6 +1,6 @@
 import time
 import types
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 from urllib.parse import urlparse
 
@@ -61,16 +61,17 @@ class MistralEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
+        config_attrs: Final[Mapping[str, object]] = cls.__dict__
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in config_attrs.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -153,7 +154,7 @@ class OpenAIConfig(BaseConfig):
         top_p: int | None = None,
         response_format: dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -261,7 +262,7 @@ class OpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -299,7 +300,7 @@ class OpenAIConfig(BaseConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "OpenAIChatCompletionResponseIterator":
         return OpenAIChatCompletionResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -478,14 +479,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     async def _call_agentic_completion_hooks_openai(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool,
         litellm_params: dict,
-    ) -> Any | None:
+    ) -> object | None:
         """
         Call agentic completion hooks for all custom loggers (OpenAI Chat Completions API).
 
@@ -536,7 +537,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
 
                         # For OpenAI Chat Completions, use the chat completion agentic loop method
-                        agentic_response = await callback.async_run_chat_completion_agentic_loop(
+                        agentic_response: object = await callback.async_run_chat_completion_agentic_loop(
                             tools=tool_calls,
                             model=model,
                             messages=messages,
@@ -580,7 +581,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: float | httpx.Timeout,
         optional_params: dict,
         litellm_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
         messages: list | None = None,
         print_verbose: Callable | None = None,
@@ -1590,7 +1591,7 @@ class OpenAIFilesAPI(BaseLLM):
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
     ) -> OpenAI | AsyncOpenAI | None:
-        received_args: Final = locals()
+        received_args: Final[Mapping[str, object]] = locals()
         openai_client: OpenAI | AsyncOpenAI | None = None
         if client is None:
             data: Final = {}
@@ -1628,7 +1629,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
-    ) -> OpenAIFileObject | Coroutine[Any, Any, OpenAIFileObject]:
+    ) -> OpenAIFileObject | Coroutine[None, None, OpenAIFileObject]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1670,7 +1671,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[None, None, HttpxBinaryResponseContent]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1948,7 +1949,7 @@ class OpenAIBatchesAPI(BaseLLM):
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
     ) -> OpenAI | AsyncOpenAI | None:
-        received_args: Final = locals()
+        received_args: Final[Mapping[str, object]] = locals()
         openai_client: OpenAI | AsyncOpenAI | None = None
         if client is None:
             data: Final = {}
@@ -1986,7 +1987,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
-    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+    ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -2160,7 +2161,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | None = None,
     ) -> OpenAI:
-        received_args: Final = locals()
+        received_args: Final[Mapping[str, object]] = locals()
         if client is None:
             data: Final = {}
             for k, v in received_args.items():
@@ -2185,7 +2186,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None = None,
     ) -> AsyncOpenAI:
-        received_args: Final = locals()
+        received_args: Final[Mapping[str, object]] = locals()
         if client is None:
             data: Final = {}
             for k, v in received_args.items():
@@ -2848,7 +2849,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -2912,23 +2913,32 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data: Final[dict[str, Any]] = {
-            "thread_id": thread_id,
-            "assistant_id": assistant_id,
-            "additional_instructions": additional_instructions,
-            "instructions": instructions,
-            "metadata": metadata,
-            "model": model,
-            "tools": tools,
-        }
+        runs_stream: Final = client.beta.threads.runs.stream
         if event_handler is not None:
-            data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)
+            return runs_stream(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                additional_instructions=additional_instructions,
+                instructions=instructions,
+                metadata=metadata,
+                model=model,
+                tools=tools,
+                event_handler=event_handler,
+            )
+        return runs_stream(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
+        )
 
     # fmt: off
 
@@ -2984,7 +2994,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
