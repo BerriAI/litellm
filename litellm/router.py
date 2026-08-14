@@ -161,6 +161,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_successes_for_current_minute,
 )
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.openai import (
     AllMessageValues,
     FileTypes,
@@ -362,6 +363,17 @@ def _replay_live_router_model_cost() -> None:
 set_live_deployment_replay(_replay_live_router_model_cost)
 
 
+def _resolve_cache_type(requested_type: object) -> LiteLLMCacheType:
+    """Resolve the `type` entry of `cache_kwargs` when no redis connection params are given."""
+    if requested_type is None:
+        return LiteLLMCacheType.LOCAL
+    if isinstance(requested_type, LiteLLMCacheType):
+        return requested_type
+    if isinstance(requested_type, str):
+        return LiteLLMCacheType(requested_type)
+    raise ValueError(f"cache_kwargs['type'] must be a string cache type, got {type(requested_type).__name__}")
+
+
 # Kwargs that log_retry must not copy into a retry breadcrumb. The breadcrumbs reach spend
 # logs and logging callbacks, and these carry either the request payload or router-internal
 # walk state rather than anything that identifies the failed attempt.
@@ -544,14 +556,15 @@ class Router:
         self.deployment_names: list = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
+        uses_redis: Final[bool] = redis_url is not None or (redis_host is not None and redis_port is not None)
+        cache_type: Final[LiteLLMCacheType] = (
+            LiteLLMCacheType.REDIS if uses_redis else _resolve_cache_type(cache_kwargs.get("type"))
+        )
         redis_cache = None
         cache_config: Final[dict[str, Any]] = {}
 
         self.client_ttl = client_ttl
-        if redis_url is not None or (redis_host is not None and redis_port is not None):
-            cache_type = "redis"
-
+        if uses_redis:
             if redis_url is not None:
                 cache_config["url"] = redis_url
 
@@ -570,8 +583,9 @@ class Router:
                 )
                 cache_config["db"] = str(redis_db)
 
-            # Add additional key-value pairs from cache_kwargs
-            cache_config.update(cache_kwargs)
+        cache_config.update({key: value for key, value in cache_kwargs.items() if key != "type"})
+
+        if uses_redis:
             redis_cache = self._create_redis_cache(cache_config)
 
         if cache_responses:

@@ -16,6 +16,8 @@ sys.path.insert(
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router import _resolve_cache_type
+from litellm.types.caching import LiteLLMCacheType
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -7954,3 +7956,80 @@ def test_ensure_deployment_affinity_callback_is_idempotent():
     finally:
         for cb in router.optional_callbacks or []:
             litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+@pytest.fixture
+def reset_litellm_cache():
+    previous = litellm.cache
+    litellm.cache = None
+    try:
+        yield
+    finally:
+        litellm.cache = previous
+
+
+def test_router_cache_kwargs_applied_without_redis(reset_litellm_cache):
+    litellm.Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}],
+        cache_responses=True,
+        cache_kwargs={"ttl": 60, "namespace": "router-ns"},
+    )
+
+    assert litellm.cache is not None
+    assert litellm.cache.ttl == 60
+    assert litellm.cache.namespace == "router-ns"
+
+
+def test_router_cache_kwargs_type_selects_backend_without_redis(tmp_path, reset_litellm_cache):
+    pytest.importorskip("diskcache")
+    from litellm.caching.disk_cache import DiskCache
+
+    litellm.Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}],
+        cache_responses=True,
+        cache_kwargs={"type": "disk", "disk_cache_dir": str(tmp_path), "ttl": 60},
+    )
+
+    assert litellm.cache is not None
+    assert isinstance(litellm.cache.cache, DiskCache)
+    assert litellm.cache.ttl == 60
+
+
+def test_router_cache_kwargs_type_ignored_when_redis_params_given(reset_litellm_cache):
+    created_caches = []
+
+    class _FakeRedisCache:
+        def __init__(self, **kwargs):
+            created_caches.append(kwargs)
+
+    with patch("litellm.router.RedisCache", _FakeRedisCache):
+        litellm.Router(
+            model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}],
+            redis_host="localhost",
+            redis_port=6379,
+            cache_kwargs={"type": "disk", "socket_timeout": 5},
+        )
+
+    assert created_caches == [{"host": "localhost", "port": "6379", "socket_timeout": 5}]
+
+
+@pytest.mark.parametrize(
+    "requested_type, expected",
+    [(None, LiteLLMCacheType.LOCAL), ("disk", LiteLLMCacheType.DISK), (LiteLLMCacheType.S3, LiteLLMCacheType.S3)],
+)
+def test_resolve_cache_type(requested_type, expected):
+    assert _resolve_cache_type(requested_type) == expected
+
+
+@pytest.mark.parametrize("requested_type", ["not-a-cache", 5])
+def test_resolve_cache_type_rejects_invalid(requested_type):
+    with pytest.raises(ValueError):
+        _resolve_cache_type(requested_type)
+
+
+def test_router_invalid_cache_kwargs_type_raises(reset_litellm_cache):
+    with pytest.raises(ValueError):
+        litellm.Router(
+            model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}],
+            cache_responses=True,
+            cache_kwargs={"type": "not-a-cache"},
+        )
