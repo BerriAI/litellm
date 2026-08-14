@@ -55,11 +55,13 @@ else
     merge_base=$(git merge-base origin/litellm_internal_staging HEAD 2>/dev/null) || {
         echo "check: cannot resolve the merge base with origin/litellm_internal_staging." >&2
         echo "  Fix: git fetch origin litellm_internal_staging" >&2
+        echo "check: FAIL"
         exit 1
     }
     scope=$(printf '%s\n' "$(git diff --name-only --diff-filter=ACMRD "$merge_base")" "$untracked" | sed '/^$/d' | sort -u)
     if [ -z "$scope" ]; then
         echo "check: nothing to check (no staged files, no working-tree changes, no branch changes vs origin/litellm_internal_staging)"
+        echo "check: PASS"
         exit 0
     fi
     echo "check: nothing staged; scoping to the working tree's diff against the merge base with origin/litellm_internal_staging:"

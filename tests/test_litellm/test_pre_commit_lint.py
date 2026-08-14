@@ -224,6 +224,7 @@ def test_nothing_staged_and_no_changes_is_an_explicit_no_op(tmp_path: Path) -> N
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "nothing to check" in proc.stdout
+    assert "check: PASS" in proc.stdout
     assert "linting Python" not in proc.stdout
 
 
@@ -234,6 +235,7 @@ def test_nothing_staged_without_a_base_ref_fails_with_a_fetch_hint(tmp_path: Pat
     assert proc.returncode == 1
     assert "cannot resolve the merge base" in proc.stdout
     assert "git fetch origin litellm_internal_staging" in proc.stdout
+    assert "check: FAIL" in proc.stdout
 
 
 def test_partial_staging_warns_which_checks_were_skipped(tmp_path: Path) -> None:
