@@ -469,7 +469,7 @@ async def http_request(
         try:
             validated_url, host_header = validate_url(url)
             headers = {**(headers or {}), "Host": host_header}
-        except SSRFError as e:
+        except (SSRFError, ValueError) as e:
             verbose_proxy_logger.warning("Custom code http_request SSRF blocked: %s", e)
             return _http_error_response(f"Blocked: {e}")
 

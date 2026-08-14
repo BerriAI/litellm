@@ -1,3 +1,4 @@
+import inspect
 import socket
 
 import httpx
@@ -226,6 +227,12 @@ def test_missing_apply_guardrail_raises():
 
 
 class _FakeAsyncClient:
+    """Mimics the REAL AsyncHTTPHandler method signatures.
+
+    If the primitives pass a kwarg the production handler does not accept,
+    these fakes raise TypeError exactly like production would.
+    """
+
     def __init__(self, response=None):
         self.response = response
         self.calls = []
@@ -236,20 +243,123 @@ class _FakeAsyncClient:
             raise self.response
         return self.response
 
-    async def get(self, **kwargs):
-        return await self._record(**kwargs)
+    async def get(
+        self,
+        url,
+        params=None,
+        headers=None,
+        follow_redirects=None,
+        timeout=None,
+    ):
+        return await self._record(
+            url=url,
+            params=params,
+            headers=headers,
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+        )
 
-    async def post(self, **kwargs):
-        return await self._record(**kwargs)
+    async def post(
+        self,
+        url,
+        data=None,
+        json=None,
+        params=None,
+        headers=None,
+        timeout=None,
+        stream=False,
+        logging_obj=None,
+        files=None,
+        content=None,
+        follow_redirects=None,
+    ):
+        return await self._record(
+            url=url,
+            data=data,
+            json=json,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+        )
 
-    async def put(self, **kwargs):
-        return await self._record(**kwargs)
+    async def put(
+        self,
+        url,
+        data=None,
+        json=None,
+        params=None,
+        headers=None,
+        timeout=None,
+        stream=False,
+        content=None,
+        follow_redirects=None,
+    ):
+        return await self._record(
+            url=url,
+            data=data,
+            json=json,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+        )
 
-    async def delete(self, **kwargs):
-        return await self._record(**kwargs)
+    async def patch(
+        self,
+        url,
+        data=None,
+        json=None,
+        params=None,
+        headers=None,
+        timeout=None,
+        stream=False,
+        content=None,
+        follow_redirects=None,
+    ):
+        return await self._record(
+            url=url,
+            data=data,
+            json=json,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+        )
 
-    async def patch(self, **kwargs):
-        return await self._record(**kwargs)
+    async def delete(
+        self,
+        url,
+        data=None,
+        json=None,
+        params=None,
+        headers=None,
+        timeout=None,
+        stream=False,
+        content=None,
+        follow_redirects=None,
+    ):
+        return await self._record(
+            url=url,
+            data=data,
+            json=json,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+        )
+
+
+@pytest.mark.parametrize("method", ["get", "post", "put", "patch", "delete"])
+def test_async_http_handler_accepts_follow_redirects(method):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    params = inspect.signature(getattr(AsyncHTTPHandler, method)).parameters
+    assert "follow_redirects" in params, (
+        f"AsyncHTTPHandler.{method} must accept follow_redirects or the "
+        "guardrail HTTP primitives cannot disable redirects"
+    )
+    assert params["follow_redirects"].default is None
 
 
 def _ok_response(status_code=200):
@@ -276,6 +386,11 @@ def _public_dns(monkeypatch):
         "http://192.168.1.1/",
         "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
         "http://[::1]/",
+        # Malformed port: is_valid_url accepts it (scheme + netloc), but
+        # urlparse raises ValueError when validate_url reads parsed.port.
+        # Must surface as a structured error, not an escaped exception.
+        "http://example.com:99999/",
+        "http://example.com:notaport/",
     ],
 )
 async def test_http_primitives_block_internal_targets(url, monkeypatch):
