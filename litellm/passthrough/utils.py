@@ -18,11 +18,25 @@ _PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset] = frozenset(
         "x-goog-api-key",
         "host",
         "content-length",
+        "accept-encoding",
     }
 )
 
 # Header name prefix used to block AWS SigV4 signing headers from being overridden.
 _PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple] = ("x-amz-",)
+
+# Client headers that must never reach the upstream provider. `accept-encoding` is
+# dropped so httpx negotiates a content coding it actually has a decoder for: an
+# encoding it cannot decode (e.g. brotli, absent the optional `brotli` package)
+# leaves the body compressed while get_response_headers strips Content-Encoding,
+# handing the client bytes it has no way to read.
+_NON_FORWARDED_REQUEST_HEADERS: Final[frozenset[str]] = frozenset(
+    {
+        "content-length",
+        "host",
+        "accept-encoding",
+    }
+)
 
 
 class BasePassthroughUtils:
@@ -66,17 +80,14 @@ class BasePassthroughUtils:
         e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
         """
         if forward_headers is True:
-            # Header We Should NOT forward
-            request_headers.pop("content-length", None)
-            request_headers.pop("host", None)
-
             custom_header_names: Final = {header_name.lower() for header_name in headers}
-            for header_name in list(request_headers.keys()):
-                if header_name.lower() in custom_header_names:
-                    request_headers.pop(header_name, None)
-
-            # Combine request headers with custom headers
-            headers = {**request_headers, **headers}
+            forwardable_headers: Final = {
+                header_name: header_value
+                for header_name, header_value in request_headers.items()
+                if header_name.lower() not in _NON_FORWARDED_REQUEST_HEADERS
+                and header_name.lower() not in custom_header_names
+            }
+            headers = {**forwardable_headers, **headers}
 
         # Process x-pass- prefixed headers (strip prefix and forward)
         # Credential and protocol-level headers are excluded from this mechanism.
