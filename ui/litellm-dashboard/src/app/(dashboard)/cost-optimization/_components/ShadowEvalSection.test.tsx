@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -72,12 +72,12 @@ import {
 const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   job_id: "job-1",
   status: "running",
-  router_name: "claude-auto",
   direction: "forward",
+  router_name: "claude-auto",
   baseline_model: null,
   judge_model: "anthropic/claude-sonnet-5",
   shadow_percentage: 10,
-  max_turns: 200,
+  keys: [{ api_key_id: "hashed-key-abc", max_turns: 200, stopped_at: null }],
   judged_count: 42,
   error_count: 1,
   judge_spend: 3.21,
@@ -110,13 +110,21 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         avg_judge_confidence: 0.8,
       },
     ],
+    by_key: [
+      {
+        group: "hashed-key-abc",
+        turn_count: 42,
+        real_win_rate_pct: 30.0,
+        shadow_win_rate_pct: 45.0,
+        tie_rate_pct: 25.0,
+        avg_judge_confidence: 0.8,
+      },
+    ],
     overall_shadow_win_rate_pct: 48.0,
     overall_tie_rate_pct: 22.0,
   },
   created_at: "2026-08-07T00:00:00Z",
   ends_at: "2026-09-07T00:00:00Z",
-  stopped_at: null,
-  api_key_id: "hashed-key-abc",
   last_error: null,
   ...overrides,
 });
@@ -197,8 +205,8 @@ describe("ShadowEvalSection", () => {
   it("gives every active job its own card with a stop button, with the form still offered", () => {
     mockHooks({
       jobs: [
-        job({ job_id: "job-a", status: "running", api_key_id: "key-a" }),
-        job({ job_id: "job-b", status: "running", api_key_id: "key-b" }),
+        job({ job_id: "job-a", status: "running", keys: [{ api_key_id: "key-a", max_turns: 200, stopped_at: null }] }),
+        job({ job_id: "job-b", status: "running", keys: [{ api_key_id: "key-b", max_turns: 200, stopped_at: null }] }),
       ],
     });
     render(<ShadowEvalSection />);
@@ -219,7 +227,7 @@ describe("ShadowEvalSection", () => {
     render(<ShadowEvalSection />);
     expect(screen.queryByText("Start a shadow eval")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
-    expect(screen.getByText("running")).toBeInTheDocument();
+    expect(screen.getAllByText("running").filter((badge) => badge.closest("td") === null)).toHaveLength(1);
   });
 
   it("never labels a collapsed previous eval as empty from a countless list row", () => {
@@ -334,21 +342,91 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("Start a shadow eval")).toBeInTheDocument();
   });
 
+  it("breaks results down per key, so one key exhausting its own budget is visible while a sibling runs on", () => {
+    mockHooks({
+      jobs: [
+        job({
+          judged_count: 205,
+          keys: [
+            { api_key_id: "hash-spent", max_turns: 200, stopped_at: "2026-08-08T00:00:00Z" },
+            { api_key_id: "hash-hungry", max_turns: 500, stopped_at: null },
+          ],
+          results: {
+            by_tier: [],
+            by_current_model: [],
+            by_key: [
+              {
+                group: "hash-spent",
+                turn_count: 200,
+                real_win_rate_pct: 20.0,
+                shadow_win_rate_pct: 60.0,
+                tie_rate_pct: 20.0,
+                avg_judge_confidence: 0.9,
+              },
+            ],
+            overall_shadow_win_rate_pct: 60.0,
+            overall_tie_rate_pct: 20.0,
+          },
+        }),
+      ],
+    });
+    render(<ShadowEvalSection />);
+
+    const spent = screen.getByText("hash-spent").closest("tr");
+    const hungry = screen.getByText("hash-hungry").closest("tr");
+    if (!spent || !hungry) throw new Error("expected a table row per scoped key");
+
+    expect(within(spent).getByText("stopped")).toBeInTheDocument();
+    expect(within(spent).getByText("200 / 200")).toBeInTheDocument();
+    expect(within(spent).getByText("60.0%")).toBeInTheDocument();
+
+    expect(within(hungry).getByText("running")).toBeInTheDocument();
+    expect(within(hungry).getByText("0 / 500")).toBeInTheDocument();
+    expect(within(hungry).getByText("No verdicts yet")).toBeInTheDocument();
+
+    expect(screen.getByText(/205 of 700 turns judged/)).toBeInTheDocument();
+  });
+
+  it("reads every key as completed once the job's window closes, whatever its own stop state", () => {
+    mockHooks({
+      jobs: [
+        job({
+          status: "completed",
+          keys: [
+            { api_key_id: "hash-spent", max_turns: 200, stopped_at: "2026-08-08T00:00:00Z" },
+            { api_key_id: "hash-hungry", max_turns: 500, stopped_at: null },
+          ],
+        }),
+      ],
+    });
+    render(<ShadowEvalSection />);
+
+    const hungry = screen.getByText("hash-hungry").closest("tr");
+    if (!hungry) throw new Error("expected a table row per scoped key");
+    expect(within(hungry).getByText("completed")).toBeInTheDocument();
+    expect(within(hungry).queryByText("running")).not.toBeInTheDocument();
+  });
+
   it("renders nothing for non-admins when the proxy answers 403", () => {
     mockHooks({ error: new ApiError("forbidden", 403, {}) });
     const { container } = render(<ShadowEvalSection />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("keeps the start button disabled until key, router, and judge model are picked, then submits them", async () => {
+  it("keeps the start button disabled until key, router, and judge model are picked, then submits every picked key", async () => {
     const user = userEvent.setup();
     const { start } = mockHooks({});
     render(<ShadowEvalSection />);
 
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
 
-    await user.click(screen.getByPlaceholderText("Search keys by alias"));
-    await user.click(await screen.findByText("prod-alpha"));
+    const keyInput = screen.getByPlaceholderText("Search keys by alias");
+    await user.click(keyInput);
+    const keyList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(keyList).getByText("prod-alpha"));
+    await user.click(keyInput);
+    await user.click(within(keyList).getByText("staging-beta"));
+
     await user.click(screen.getByPlaceholderText("Select an auto-router"));
     await user.click(await screen.findByText("gpt-auto"));
 
@@ -359,7 +437,7 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
-      api_key_id: "hash-alpha",
+      api_key_ids: ["hash-alpha", "hash-beta"],
       router_name: "gpt-auto",
       direction: "forward",
       shadow_percentage: 10,
@@ -394,7 +472,7 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
-      api_key_id: "hash-alpha",
+      api_key_ids: ["hash-alpha"],
       router_name: "gpt-auto",
       direction: "reverse",
       baseline_model: "prod-claude",
@@ -416,7 +494,7 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("52.0%")).toBeInTheDocument();
     expect(screen.getByText(/Router won 30.0%/)).toBeInTheDocument();
     expect(screen.getByText(/Baseline won 48.0%/)).toBeInTheDocument();
-    expect(screen.getAllByText("Baseline wins")).toHaveLength(2);
+    expect(screen.getAllByText("Baseline wins")).toHaveLength(3);
     expect(screen.getByText("Router pick")).toBeInTheDocument();
     expect(screen.queryByText(/Current model/)).not.toBeInTheDocument();
     expect(screen.queryByText("Compared against")).not.toBeInTheDocument();
@@ -444,5 +522,6 @@ describe("ShadowEvalSection", () => {
 
     expect(await screen.findByText("SIMPLE")).toBeInTheDocument();
     expect(screen.getByText("REASONING")).toBeInTheDocument();
+    expect(screen.getByText("42 / 200")).toBeInTheDocument();
   });
 });

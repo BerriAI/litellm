@@ -230,6 +230,7 @@ class TestMigrationSQLIdempotency:
         "20250918083359_drop_spec_version_column_from_mcp_table",
         "20260213170952_access_group_change_to_model_name",
         "20260224203854_add_agent_object_permissions_table",
+        "20260814000000_shadow_eval_multi_key",
     }
 
     def test_no_drop_column_statements(self, all_migrations):
