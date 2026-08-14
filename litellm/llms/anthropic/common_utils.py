@@ -30,6 +30,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMcpServerTool,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.proxy.model_listing import ModelInfoResponse
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
@@ -1225,28 +1226,37 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     return additional_headers
 
 
-def create_anthropic_model_list_response(model_ids: Sequence[str]) -> Mapping[str, object]:
+def _anthropic_model_entry(model: ModelInfoResponse, created_at: str) -> Mapping[str, object]:
+    token_limits: Final = (
+        ("max_input_tokens", model.get("max_input_tokens")),
+        ("max_tokens", model.get("max_output_tokens")),
+    )
+    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
+        "type": "model",
+        "id": model["id"],
+        "display_name": model["id"],
+        "created_at": created_at,
+        **{name: limit for name, limit in token_limits if limit is not None},  # mutable-ok: merged into the body above
+    }
+
+
+def create_anthropic_model_list_response(models: Sequence[ModelInfoResponse]) -> Mapping[str, object]:
     """Build the Anthropic-native /v1/models envelope.
 
     Clients that send an anthropic-version header parse the Anthropic Models API
     shape (type/display_name/created_at plus has_more/first_id/last_id) and filter
-    the list themselves, so every model id is returned here
+    the list themselves, so every model is returned here. The token limits carry
+    over from the OpenAI-shaped listing, named as the Messages API names them
     """
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
     data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
-        {  # mutable-ok: JSON response body, serialized by the route and never mutated
-            "type": "model",
-            "id": model_id,
-            "display_name": model_id,
-            "created_at": created_at,
-        }
-        for model_id in model_ids
+        _anthropic_model_entry(model, created_at) for model in models
     ]
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "data": data,
         "has_more": False,
-        "first_id": model_ids[0] if model_ids else None,
-        "last_id": model_ids[-1] if model_ids else None,
+        "first_id": models[0]["id"] if models else None,
+        "last_id": models[-1]["id"] if models else None,
     }

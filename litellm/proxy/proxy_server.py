@@ -9105,11 +9105,6 @@ async def model_list(
         if hidden_names:
             all_models = [m for m in all_models if m not in hidden_names]
 
-        if wants_anthropic_format:
-            return create_anthropic_model_list_response(
-                TeamModelNameTranslator.translate_listing(all_models, llm_router, settings)
-            )
-
         # Surface the public team name by default; legacy internal keys via flag.
         # The internal routing key drives the metadata/fallback lookup, while the
         # public name is what the client sees as the model id.
@@ -9124,6 +9119,9 @@ async def model_list(
             )
             model_info["id"] = response_id
             model_data.append(model_info)
+
+        if wants_anthropic_format:
+            return create_anthropic_model_list_response(model_data)
 
         return dict(
             data=model_data,
@@ -9150,11 +9148,6 @@ async def model_list(
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 
-    if wants_anthropic_format:
-        return create_anthropic_model_list_response(
-            TeamModelNameTranslator.translate_listing(all_models, llm_router, settings)
-        )
-
     # Surface the public team name by default; legacy internal keys via flag.
     # The internal routing key drives the metadata/fallback lookup, while the
     # public name is what the client sees as the model id.
@@ -9169,6 +9162,9 @@ async def model_list(
         )
         model_info["id"] = response_id
         model_data.append(model_info)
+
+    if wants_anthropic_format:
+        return create_anthropic_model_list_response(model_data)
 
     return dict(
         data=model_data,

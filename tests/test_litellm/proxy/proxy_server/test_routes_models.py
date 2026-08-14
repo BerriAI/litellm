@@ -122,6 +122,40 @@ def test_get_models_anthropic_format_when_header_present(
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_anthropic_format_exposes_token_limits(
+    client, auth_as, patched_models, monkeypatch, path
+):
+    """Claude Code sizes requests off the listing, so the Anthropic-native entries
+    carry the same token limits the OpenAI listing resolves, with the output budget
+    named max_tokens as the Messages API names it."""
+    from litellm.proxy import utils as proxy_utils
+
+    def _create_model_info_response(model_id, provider="openai", **kwargs):
+        if model_id != "claude-sonnet":
+            return _stub_model_info_response(model_id=model_id, provider=provider)
+        return {
+            **_stub_model_info_response(model_id=model_id, provider=provider),
+            "max_input_tokens": 200000,
+            "max_output_tokens": 64000,
+        }
+
+    monkeypatch.setattr(
+        proxy_utils, "create_model_info_response", _create_model_info_response
+    )
+
+    with auth_as():
+        response = client.get(path, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    gpt_4, claude = response.json()["data"]
+    assert claude["max_input_tokens"] == 200000
+    assert claude["max_tokens"] == 64000
+    assert "max_output_tokens" not in claude
+    assert "max_input_tokens" not in gpt_4
+    assert "max_tokens" not in gpt_4
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
 def test_get_models_invalid_scope_returns_400(client, auth_as, patched_models, path):
     """Pins: ``GET /v1/models``, ``GET /models`` (error path: invalid scope)."""
     with auth_as():
