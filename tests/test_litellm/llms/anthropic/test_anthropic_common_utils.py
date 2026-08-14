@@ -2028,3 +2028,82 @@ class TestCapabilityProbeUsesCallerProvider:
             AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic")
             is True
         )
+def test_create_anthropic_model_list_response_shape():
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {"id": "claude-opus-4-6", "object": "model", "created": 0, "owned_by": "openai"},
+            {"id": "gpt-4o", "object": "model", "created": 0, "owned_by": "openai"},
+            {"id": "claude-haiku-4-5", "object": "model", "created": 0, "owned_by": "openai"},
+        ]
+    )
+
+    assert "object" not in response
+    assert response["has_more"] is False
+    assert response["first_id"] == "claude-opus-4-6"
+    assert response["last_id"] == "claude-haiku-4-5"
+    assert [m["id"] for m in response["data"]] == [
+        "claude-opus-4-6",
+        "gpt-4o",
+        "claude-haiku-4-5",
+    ]
+    for entry in response["data"]:
+        assert entry["type"] == "model"
+        assert entry["display_name"] == entry["id"]
+        # ISO 8601 with a Z suffix, as the Anthropic Models API returns.
+        assert entry["created_at"].endswith("Z")
+        assert "+00:00" not in entry["created_at"]
+        assert "max_input_tokens" not in entry
+        assert "max_tokens" not in entry
+
+
+def test_create_anthropic_model_list_response_carries_token_limits():
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {
+                "id": "claude-opus-4-6",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+                "max_input_tokens": 200000,
+                "max_output_tokens": 64000,
+            },
+            {
+                "id": "input-only",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+                "max_input_tokens": 8192,
+            },
+            {"id": "unknown-limits", "object": "model", "created": 0, "owned_by": "openai"},
+        ]
+    )
+
+    opus, input_only, unknown = response["data"]
+    assert opus["max_input_tokens"] == 200000
+    assert opus["max_tokens"] == 64000
+    assert "max_output_tokens" not in opus
+    assert input_only["max_input_tokens"] == 8192
+    assert "max_tokens" not in input_only
+    assert "max_input_tokens" not in unknown
+    assert "max_tokens" not in unknown
+
+
+def test_create_anthropic_model_list_response_empty():
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response([])
+
+    assert response["data"] == []
+    assert response["has_more"] is False
+    assert response["first_id"] is None
+    assert response["last_id"] is None

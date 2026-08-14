@@ -22,13 +22,15 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   accessToken: string,
   contextWindowSize: number,
   tierLabels?: Record<string, string>,
+  classificationRubric?: string,
 ): Promise<string> => {
   /**
    * Get the built-in system prompt an auto-router's LLM classifier uses when none is configured,
    * so the prompt editor prefills what the proxy actually sends rather than a frontend copy.
    *
    * tierLabels names the rubric's tier bullets, so a router that renamed its tiers prefills the
-   * rubric it sends rather than one using the canonical names.
+   * rubric it sends rather than one using the canonical names. rubric selects which calibration
+   * examples it carries, for the same reason.
    */
   try {
     const response = await apiClient.get<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
@@ -36,6 +38,7 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
       query: {
         context_window_size: contextWindowSize,
         ...(tierLabels && Object.keys(tierLabels).length > 0 ? { tier_labels: JSON.stringify(tierLabels) } : {}),
+        ...(classificationRubric ? { classification_rubric: classificationRubric } : {}),
       },
     });
     return response.system_prompt;

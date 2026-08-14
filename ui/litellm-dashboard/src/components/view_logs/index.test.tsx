@@ -183,14 +183,14 @@ describe("SpendLogsTable", () => {
       useAuthorizedMock.mockReturnValue({ userRole: "Admin" });
       renderWithProviders(<SpendLogsTable {...defaultProps} accessToken={null} />);
 
-      expect(document.querySelector(".ant-spin")).toBeInTheDocument();
+      expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument();
       expect(screen.queryByRole("tab", { name: "Request Logs" })).not.toBeInTheDocument();
     });
 
     it("renders the tabs (no spinner) once all credentials are present", () => {
       renderAs("Admin");
 
-      expect(document.querySelector(".ant-spin")).not.toBeInTheDocument();
+      expect(document.querySelector('[aria-busy="true"]')).not.toBeInTheDocument();
       expect(screen.getByRole("tab", { name: "Request Logs" })).toBeInTheDocument();
     });
   });

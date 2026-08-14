@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/http/client";
 
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
+vi.mock("./ShadowEvalSection", () => ({ default: () => <div data-testid="shadow-eval-section" /> }));
 
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
 
@@ -272,6 +273,33 @@ describe("AutoRouterBenchmarksTab", () => {
     fireEvent.click(screen.getByRole("tab", { name: "24h" }));
     expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "24h");
     expect(screen.getByText("Last 24 hours")).toBeInTheDocument();
+  });
+
+  it("shows usage by default and mounts shadow evals only when its sub-tab is selected", () => {
+    mockHook({ data: response([group()]) });
+    renderTab();
+
+    expect(screen.getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.queryByTestId("shadow-eval-section")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Shadow Evals" }));
+    expect(screen.getByRole("tab", { name: "Shadow Evals" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
+  });
+
+  it("keeps the shadow evals sub-tab reachable while the usage body is in its error state", () => {
+    mockHook({ error: new ApiError("boom", 500, {}) });
+    renderTab();
+
+    expect(screen.getByText("Auto-router usage is unavailable right now")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Shadow Evals" }));
+    expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
   });
 
   it("keeps the window picker reachable while a window has no sessions", () => {

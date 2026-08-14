@@ -34,12 +34,16 @@ class ExceptionCheckers:
     """
 
     @staticmethod
-    def is_error_str_rate_limit(error_str: str) -> bool:
+    def is_error_str_rate_limit(error_str: str, status_code: int | None = None) -> bool:
         """
         Check if an error string indicates a rate limit error.
 
         Args:
             error_str: The error string to check
+            status_code: The HTTP status the provider returned, when known. Gates only the
+                bare-number branch: providers echo the request back in validation errors and
+                429 is an ordinary token id, so an echoed prompt can put a standalone 429 in
+                the body of a 400. The phrase branches stay ungated (#11455).
 
         Returns:
             True if the error indicates a rate limit, False otherwise
@@ -47,8 +51,9 @@ class ExceptionCheckers:
         if not isinstance(error_str, str):
             return False
 
-        # Only treat 429 as a rate limit signal when it appears as a standalone token
-        if re.search(r"\b429\b", error_str):
+        # A standalone 429 counts unless the provider's own status says otherwise. The
+        # status is read off an arbitrary exception, so a non-integer means "unknown".
+        if re.search(r"\b429\b", error_str) and (not isinstance(status_code, int) or status_code == 429):
             return True
 
         _error_str_lower: Final = error_str.lower()
@@ -280,7 +285,9 @@ def _map_openai_exception(
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-    if ExceptionCheckers.is_error_str_rate_limit(error_str):
+    if ExceptionCheckers.is_error_str_rate_limit(
+        error_str, status_code=getattr(original_exception, "status_code", None)
+    ):
         raise RateLimitError(
             message=f"RateLimitError: {exception_provider} - {message}",
             model=model,

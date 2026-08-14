@@ -118,6 +118,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     is_short_mcp_tool_prefix_enabled,
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
+    logging_safe_mcp_headers,
     match_known_server_prefix,
     match_known_tool_name,
     merge_mcp_headers,
@@ -4603,6 +4604,7 @@ class MCPServerManager:
             ),
             "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
             "incoming_bearer_token": incoming_bearer_token,
+            "headers": logging_safe_mcp_headers(raw_headers),
         }
 
         # Create MCP request object for processing

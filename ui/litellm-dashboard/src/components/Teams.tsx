@@ -9,7 +9,7 @@ import { Accordion, AccordionBody, AccordionHeader, TextInput } from "@tremor/re
 import { Button, Form, Input, Layout, Modal, Select, Switch, Tabs, theme, Tooltip, Typography } from "antd";
 import { Plus, Users } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -29,7 +29,11 @@ import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
 import { extractProxyErrorMessage } from "@/lib/http/client";
-import { Organization, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
+import BudgetDurationDropdown, {
+  getBudgetDurationLabel,
+  NEVER_RESETS_BUDGET_DURATION,
+} from "./common_components/budget_duration_dropdown";
+import { Organization, getDefaultTeamSettings, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./search_tools/SearchToolSelector";
@@ -115,6 +119,18 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
+
+  const { data: defaultTeamSettings } = useQuery({
+    queryKey: ["defaultTeamSettings"],
+    queryFn: () => getDefaultTeamSettings(accessToken as string),
+    enabled: isTeamModalVisible && accessToken != null,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const defaultBudgetDuration: string | undefined = defaultTeamSettings?.values?.budget_duration ?? undefined;
+  const budgetDurationPlaceholder = defaultBudgetDuration
+    ? `Default: ${getBudgetDurationLabel(defaultBudgetDuration)} (${defaultBudgetDuration})`
+    : "n/a";
 
   useEffect(() => {
     form.setFieldValue("models", []);
@@ -247,6 +263,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           formValues.organization_id = null;
         } else {
           formValues.organization_id = organizationId.trim();
+        }
+
+        if (formValues.budget_duration === NEVER_RESETS_BUDGET_DURATION) {
+          formValues.budget_duration = null;
         }
 
         NotificationsManager.info("Creating Team");
@@ -645,11 +665,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 <NumericalInput step={0.01} precision={2} width={200} />
               </Form.Item>
               <Form.Item className="mt-8" label="Reset Budget" name="budget_duration">
-                <Select defaultValue={null} placeholder="n/a">
-                  <Select.Option value="24h">daily</Select.Option>
-                  <Select.Option value="7d">weekly</Select.Option>
-                  <Select.Option value="30d">monthly</Select.Option>
-                </Select>
+                <BudgetDurationDropdown showNeverResets placeholder={budgetDurationPlaceholder} />
               </Form.Item>
               <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
                 <NumericalInput step={1} width={400} />
