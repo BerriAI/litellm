@@ -33,10 +33,11 @@ import argparse
 import json
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from types import MappingProxyType
 from typing import NamedTuple
+
+import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASE = "origin/litellm_internal_staging"

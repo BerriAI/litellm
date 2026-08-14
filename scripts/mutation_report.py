@@ -18,11 +18,12 @@ import json
 import re
 import subprocess
 import sys
-import tomllib
 from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
 from textwrap import dedent
+
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 MUTMUT_INVOCATION = ["uv", "run", "--no-sync", "--with", "mutmut==3.5.0", "mutmut"]

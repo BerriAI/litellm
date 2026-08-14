@@ -43,7 +43,7 @@ class Decision:
 
 
 class TealEngine:
-    def __init__(self, policies: list[dict], mode: PolicyMode = PolicyMode.ENFORCE):
+    def __init__(self, policies: list[dict], mode: PolicyMode = PolicyMode.ENFORCE) -> None:
         self.policies = policies
         self.mode = mode
         self.patterns = default_patterns()

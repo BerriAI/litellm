@@ -18,13 +18,12 @@ from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 
 DatabaseURLSettings.from_env().apply_to_env()
 
-from litellm.proxy.proxy_server import app
-
 from backend.routes.allowlist import (
     BACKEND_EXACT_PATHS,
     BACKEND_MOUNT_PATHS,
     BACKEND_PATH_PREFIXES,
 )
+from litellm.proxy.proxy_server import app
 
 
 def _is_backend_route(route) -> bool:

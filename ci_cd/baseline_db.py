@@ -1,6 +1,6 @@
 import subprocess
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 
 def create_baseline():

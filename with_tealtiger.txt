@@ -1,0 +1,12 @@
+ImportError while loading conftest 'C:\Users\pauls\Documents\litellm\tests\guardrails_tests\conftest.py'.
+tests\guardrails_tests\conftest.py:17: in <module>
+    import litellm
+litellm\__init__.py:44: in <module>
+    from litellm.types.integrations.datadog import DatadogInitParams
+litellm\types\integrations\datadog.py:6: in <module>
+    from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
+litellm\types\integrations\custom_logger.py:26: in <module>
+    class StandardCustomLoggerInitParams(BaseModel):
+litellm\types\integrations\custom_logger.py:31: in StandardCustomLoggerInitParams
+    turn_off_message_logging: bool | None = False
+E   TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'

@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Optional
 
 from litellm_proxy_extras._logging import logger
-from litellm_proxy_extras.replica_identity import (
-    REPLICA_IDENTITY_FULL_ENV_VAR,
-    apply_replica_identity_full,
-)
 from litellm_proxy_extras.prisma_toolchain import (
     ensure_prisma_toolchain,
     prisma_command_timeout,
+)
+from litellm_proxy_extras.replica_identity import (
+    REPLICA_IDENTITY_FULL_ENV_VAR,
+    apply_replica_identity_full,
 )
 
 
@@ -414,7 +414,7 @@ class ProxyExtrasDBManager:
     def _strip_prisma_query_params(url: str) -> str:
         """Remove Prisma-specific query params (connection_limit, pool_timeout,
         schema, etc.) from DATABASE_URL so psycopg can parse it."""
-        from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+        from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
         parsed = urlparse(url)
         if not parsed.query:

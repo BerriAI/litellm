@@ -35,8 +35,8 @@ class TealTigerGuardrail(CustomGuardrail):
         self,
         policies: list | None = None,
         policy_mode: str = "ENFORCE",
-        **kwargs,
-    ):
+        **kwargs: object,
+    ) -> None:
         self.engine: Final = TealEngine(
             policies=policies or DEFAULT_POLICIES,
             mode=PolicyMode(policy_mode),

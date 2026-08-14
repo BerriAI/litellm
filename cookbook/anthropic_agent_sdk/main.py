@@ -7,14 +7,15 @@ through the Claude Agent SDK by pointing it to the LiteLLM gateway.
 """
 
 import asyncio
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 from common import (
     Config,
     fetch_available_models,
-    setup_litellm_env,
-    print_header,
     handle_model_list,
     handle_model_switch,
+    print_header,
+    setup_litellm_env,
     stream_response,
 )
 

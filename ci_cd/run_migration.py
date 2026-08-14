@@ -9,7 +9,6 @@ from pathlib import Path
 
 import testing.postgresql
 
-
 DESTRUCTIVE_PATTERN = re.compile(r"\bDROP\s+(COLUMN|TABLE|INDEX)\b", re.IGNORECASE)
 DEFAULT_BASE_BRANCH = "litellm_internal_staging"
 

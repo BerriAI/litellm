@@ -23,9 +23,10 @@ Env vars:
 import os
 import sys
 
-from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.utils import ProxyExtrasDBManager, str_to_bool
+
+from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 
 
 def main() -> int:
