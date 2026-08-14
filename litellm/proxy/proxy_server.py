@@ -9493,6 +9493,7 @@ class ProxyStartupEvent:
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
 async def model_list(
+    request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None default only serves direct in-process callers
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     return_wildcard_routes: bool | None = False,
     team_id: str | None = None,
@@ -9529,12 +9530,21 @@ async def model_list(
 
     settings: Final = cast(dict[str, object], general_settings)  # any-ok: legacy settings
 
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
     from litellm.proxy.management_endpoints.common_utils import (
         _user_has_admin_privileges,
     )
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
+    )
+    from litellm.types.proxy.model_listing import ModelInfoResponse
+
+    http_request: Final = cast(Request | None, request)  # cast-ok: in-process callers pass no request
+    wants_anthropic_format: Final = (
+        http_request is not None and http_request.headers.get("anthropic-version") is not None
     )
 
     # Validate scope parameter if provided
@@ -9619,6 +9629,10 @@ async def model_list(
             model_info["id"] = response_id
             model_data.append(model_info)
 
+        if wants_anthropic_format:
+            admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+            return create_anthropic_model_list_response(admin_listing)
+
         return dict(
             data=model_data,
             object="list",
@@ -9658,6 +9672,10 @@ async def model_list(
         )
         model_info["id"] = response_id
         model_data.append(model_info)
+
+    if wants_anthropic_format:
+        listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+        return create_anthropic_model_list_response(listing)
 
     return dict(
         data=model_data,
