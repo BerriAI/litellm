@@ -17,6 +17,14 @@ export interface EntitySpendData {
   };
 }
 
+export interface FilterSearch {
+  onSearchChange: (query: string) => void;
+  onLoadMore: () => void;
+  hasNextPage: boolean;
+  isLoading: boolean;
+  isFetchingNextPage: boolean;
+}
+
 export interface EntityUsageExportModalProps {
   isOpen: boolean;
   onClose: () => void;
