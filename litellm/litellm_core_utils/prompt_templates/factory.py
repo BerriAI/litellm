@@ -2422,17 +2422,21 @@ def anthropic_messages_pt(
                                 image_url_value.get("url") if isinstance(image_url_value, dict) else image_url_value
                             )
                             if isinstance(url_str, str) and _is_anthropic_document_data_uri(url_str):
-                                synth_file_message: ChatCompletionFileObject = {
-                                    "type": "file",
-                                    "file": {"file_data": url_str},
-                                }
-                                _document_content_element = anthropic_process_openai_file_message(synth_file_message)
-                                _document_content_element = add_cache_control_to_content(
-                                    anthropic_content_element=cast(
-                                        AnthropicMessagesDocumentParam,
-                                        _document_content_element,
+                                image_chunk: Final = convert_to_anthropic_image_obj(
+                                    openai_image_url=url_str,
+                                    format=None,
+                                )
+                                _document_content_element: Final = AnthropicMessagesDocumentParam(
+                                    type="document",
+                                    source=AnthropicContentParamSource(
+                                        type="base64",
+                                        media_type=image_chunk["media_type"],
+                                        data=image_chunk["data"],
                                     ),
-                                    original_content_element=dict(m),
+                                )
+                                add_cache_control_to_content(
+                                    anthropic_content_element=_document_content_element,
+                                    original_content_element=m,
                                 )
                                 user_content.append(cast(AnthropicMessagesDocumentParam, _document_content_element))
                                 continue
