@@ -1,11 +1,13 @@
 """Regression coverage for the proxy_server global isolation hooks in conftest.py."""
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Final
 
-import pytest
-
-pytest_plugins: Final = ("pytester",)
+_PROXY_TESTS_DIR: Final = Path(__file__).parent
+_REPO_ROOT: Final = _PROXY_TESTS_DIR.parents[2]
 
 _PARENT_CONFTEST_SHAPE: Final = '''
 
@@ -15,8 +17,6 @@ def _early_monkeypatch_user(monkeypatch):
     before anything else, so monkeypatch undo lands after every other finalizer."""
     yield
 '''
-
-_CONFTEST_SOURCE: Final = (Path(__file__).parent / "conftest.py").read_text() + _PARENT_CONFTEST_SHAPE
 
 _LEAKY_MODULE: Final = '''
 from unittest.mock import MagicMock, patch
@@ -42,8 +42,30 @@ def test_the_real_global_is_back():
 '''
 
 
-def test_a_monkeypatched_prisma_client_cannot_outlive_its_test(pytester: pytest.Pytester) -> None:
-    pytester.makeconftest(_CONFTEST_SOURCE)
-    pytester.makepyfile(test_a_leaks=_LEAKY_MODULE, test_b_witness=_WITNESS_MODULE)
+def test_a_monkeypatched_prisma_client_cannot_outlive_its_test(tmp_path: Path) -> None:
+    (tmp_path / "conftest.py").write_text((_PROXY_TESTS_DIR / "conftest.py").read_text() + _PARENT_CONFTEST_SHAPE)
+    (tmp_path / "test_a_leaks.py").write_text(_LEAKY_MODULE)
+    (tmp_path / "test_b_witness.py").write_text(_WITNESS_MODULE)
 
-    pytester.runpytest("-p", "no:randomly").assert_outcomes(passed=2)
+    completed: Final = subprocess.run(
+        (
+            sys.executable,
+            "-m",
+            "pytest",
+            "test_a_leaks.py",
+            "test_b_witness.py",
+            "-q",
+            "-o",
+            "addopts=",
+            "-p",
+            "no:randomly",
+            "-p",
+            "no:cacheprovider",
+        ),
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTEST_ADDOPTS": "", "PYTHONPATH": str(_REPO_ROOT)},
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
