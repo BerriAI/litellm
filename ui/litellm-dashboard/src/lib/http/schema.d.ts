@@ -23676,6 +23676,26 @@ export interface components {
              */
             maximum_autorouter_session_retention_period?: string | null;
             /**
+             * Maximum Spend Logs Cleanup Batch Size
+             * @description Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.
+             */
+            maximum_spend_logs_cleanup_batch_size?: number | null;
+            /**
+             * Maximum Spend Logs Cleanup Batch Timeout
+             * @description Postgres statement_timeout and lock_timeout applied to each spend log cleanup delete batch (e.g. '30s'), so cleanup cannot hold row locks or a connection indefinitely. Defaults to '30s'.
+             */
+            maximum_spend_logs_cleanup_batch_timeout?: string | null;
+            /**
+             * Maximum Spend Logs Cleanup Max Batches
+             * @description Maximum DELETE statements the spend log cleanup job issues per table per run. Defaults to 500.
+             */
+            maximum_spend_logs_cleanup_max_batches?: number | null;
+            /**
+             * Maximum Spend Logs Cleanup Run Budget
+             * @description Wall-clock budget for one spend log cleanup run (e.g. '5m'), shared across every table it prunes. A run that hits the budget stops and the next run resumes from where it left off. Defaults to '5m'.
+             */
+            maximum_spend_logs_cleanup_run_budget?: string | null;
+            /**
              * Maximum Spend Logs Retention Period
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
              */
