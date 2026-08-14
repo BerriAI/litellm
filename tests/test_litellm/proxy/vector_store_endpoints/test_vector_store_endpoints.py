@@ -2946,9 +2946,6 @@ class TestAzureAIDocumentWritePassthroughPermission:
 
     INDEX = "my-index"
 
-    # Every non-lifecycle read Azure exposes for an index. The GET forms are all
-    # covered by the ("GET", "/indexes/") entry; the POST query endpoints each
-    # need their own, since the write entry also matches on POST.
     READ_ROUTES = [
         ("GET", f"/azure_ai/indexes/{INDEX}/stats"),
         ("GET", f"/azure_ai/indexes/{INDEX}/docs"),
