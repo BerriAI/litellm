@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -63,13 +64,11 @@ describe("MCPToolPermissions", () => {
       expect(screen.getByText("read_wiki_structure")).toBeInTheDocument();
     });
 
-    // Switch to Flat List view for predictable checkbox ordering
-    const flatListOption = screen.getByText("Flat List");
-    await userEvent.click(flatListOption);
+    await userEvent.click(screen.getByText("Flat List"));
+    expect(screen.getByRole("radio", { name: "Flat List" })).toBeChecked();
+    expect(await screen.findByText("- Get documentation topics")).toBeInTheDocument();
 
-    // Click the first checkbox to deselect read_wiki_structure
-    const checkboxes = screen.getAllByRole("checkbox");
-    await userEvent.click(checkboxes[0]);
+    await userEvent.click(screen.getByRole("checkbox", { name: "read_wiki_structure" }));
 
     // Verify onChange was called with read_wiki_structure removed
     expect(mockOnChange).toHaveBeenCalledWith({
@@ -182,6 +181,118 @@ describe("MCPToolPermissions", () => {
     // Verify onChange was called with no tools selected
     expect(mockOnChange).toHaveBeenCalledWith({
       [mockServerId]: [],
+    });
+  });
+
+  describe("risk-group (CRUD) view", () => {
+    const crudTools = [
+      { name: "list_documents", description: "List every document" },
+      { name: "get_document", description: "Fetch one document" },
+      { name: "delete_document", description: "Destroy a document" },
+    ];
+    const allCrudToolNames = crudTools.map((t) => t.name);
+
+    const renderCrudView = (toolPermissions: Record<string, string[]>, onChange: () => void) => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+        { server_id: mockServerId, server_name: mockServerName, alias: mockServerName },
+      ]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: crudTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[mockServerId]}
+          toolPermissions={toolPermissions}
+          onChange={onChange}
+        />,
+      );
+    };
+
+    it("removes a whole risk group from the saved payload when its group toggle is cleared", async () => {
+      const mockOnChange = vi.fn();
+      renderCrudView({ [mockServerId]: allCrudToolNames }, mockOnChange);
+
+      const readGroupToggle = await screen.findByRole("checkbox", { name: "Allow all Read tools" });
+      expect(readGroupToggle).toBeChecked();
+
+      await userEvent.click(readGroupToggle);
+
+      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["delete_document"] });
+    });
+
+    it("adds the rest of a partially-allowed risk group when its mixed toggle is clicked", async () => {
+      const mockOnChange = vi.fn();
+      renderCrudView({ [mockServerId]: ["list_documents"] }, mockOnChange);
+
+      const readGroupToggle = await screen.findByRole("checkbox", { name: "Allow all Read tools" });
+      expect(readGroupToggle).toBePartiallyChecked();
+
+      await userEvent.click(readGroupToggle);
+
+      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
+    });
+
+    it("toggles a single tool exactly once when its checkbox is clicked inside the clickable row", async () => {
+      const mockOnChange = vi.fn();
+      renderCrudView({ [mockServerId]: allCrudToolNames }, mockOnChange);
+
+      await userEvent.click(await screen.findByRole("checkbox", { name: "delete_document" }));
+
+      expect(mockOnChange).toHaveBeenCalledTimes(1);
+      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
+    });
+
+    it("toggles a single tool when the row around its checkbox is clicked", async () => {
+      const mockOnChange = vi.fn();
+      renderCrudView({ [mockServerId]: allCrudToolNames }, mockOnChange);
+
+      await userEvent.click(await screen.findByText("Destroy a document"));
+
+      expect(mockOnChange).toHaveBeenCalledTimes(1);
+      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
+    });
+
+    it("re-renders each checkbox from the permissions it emitted", async () => {
+      const Harness = () => {
+        const [permissions, setPermissions] = useState<Record<string, string[]>>({
+          [mockServerId]: allCrudToolNames,
+        });
+        return (
+          <>
+            <MCPToolPermissions
+              accessToken={mockAccessToken}
+              selectedServers={[mockServerId]}
+              toolPermissions={permissions}
+              onChange={setPermissions}
+            />
+            <output>{(permissions[mockServerId] ?? []).join(",")}</output>
+          </>
+        );
+      };
+
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+        { server_id: mockServerId, server_name: mockServerName, alias: mockServerName },
+      ]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: crudTools, error: false });
+      renderWithProviders(<Harness />);
+
+      const deleteTool = await screen.findByRole("checkbox", { name: "delete_document" });
+      const readGroupToggle = screen.getByRole("checkbox", { name: "Allow all Read tools" });
+      expect(deleteTool).toBeChecked();
+      expect(readGroupToggle).toBeChecked();
+
+      await userEvent.click(deleteTool);
+      expect(deleteTool).not.toBeChecked();
+      expect(screen.getByRole("status")).toHaveTextContent("list_documents,get_document");
+
+      await userEvent.click(screen.getByRole("checkbox", { name: "get_document" }));
+      expect(readGroupToggle).toBePartiallyChecked();
+      expect(screen.getByRole("status")).toHaveTextContent("list_documents");
+
+      await userEvent.click(readGroupToggle);
+      expect(readGroupToggle).toBeChecked();
+      expect(screen.getByRole("status")).toHaveTextContent("list_documents,get_document");
+      expect(screen.getByRole("checkbox", { name: "delete_document" })).not.toBeChecked();
     });
   });
 });

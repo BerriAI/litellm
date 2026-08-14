@@ -22,7 +22,7 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from fastapi import (
     APIRouter,
@@ -50,6 +50,7 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
+    McpServerPayloadLike,
     build_env_var_setup_url,
     collect_env_var_references,
     get_server_prefix,
@@ -91,6 +92,9 @@ def does_mcp_server_exist(mcp_server_records: Iterable[Any], mcp_server_id: str)
 
 DEFAULT_MCP_REGISTRY_VERSION: Final = "1.0.0"
 
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
 try:
     importlib.import_module("mcp")
 except ImportError as e:
@@ -114,11 +118,13 @@ if MCP_AVAILABLE:
 
     from litellm.proxy._experimental.mcp_server.db import (
         approve_mcp_server,
+        create_draft_mcp_server,
         create_mcp_server,
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
         get_all_mcp_servers_for_user,
+        get_draft_mcp_server,
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
@@ -196,7 +202,7 @@ if MCP_AVAILABLE:
         server: MCPServer
         expires_at: datetime
 
-    def _validate_mcp_server_name_fields(payload: Any) -> None:
+    def _validate_mcp_server_name_fields(payload: McpServerPayloadLike) -> None:
         candidates: Final[list[tuple[str, str | None]]] = []
 
         server_name: Final = getattr(payload, "server_name", None)
@@ -223,7 +229,7 @@ if MCP_AVAILABLE:
                 detail={"error": error_messages_text},
             )
 
-    def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
+    def validate_and_normalize_mcp_server_payload(payload: McpServerPayloadLike) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
 
@@ -466,19 +472,68 @@ if MCP_AVAILABLE:
             verbose_proxy_logger.debug("Invalid temporary MCP server payload in Redis cache: %s", e)
             return None
 
+    def _get_prisma_client_or_none() -> "PrismaClient | None":
+        """Non-throwing counterpart to ``get_prisma_client_or_throw`` for paths that degrade
+        gracefully: a proxy configured without a database keeps the in-memory OAuth session."""
+        from litellm.proxy.proxy_server import prisma_client
+
+        return prisma_client
+
+    async def _persist_draft_mcp_server(
+        payload: NewMCPServerRequest,
+        server_id: str,
+        created_by: str,
+    ) -> None:
+        """Write the draft row that makes the OAuth session resolvable from any worker.
+
+        A failure here is raised, not swallowed: without the shared row the flow degrades to
+        the per-process cache and fails intermittently, which is the defect being fixed.
+        """
+        prisma_client: Final = _get_prisma_client_or_none()
+        if prisma_client is None:
+            return
+        await create_draft_mcp_server(
+            prisma_client,
+            payload,
+            created_by,
+            ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
+            server_id=server_id,
+        )
+
+    async def _get_draft_mcp_server_as_mcp_server(server_id: str) -> MCPServer | None:
+        """Resolve a database-backed draft, which is the only lookup that works across workers."""
+        prisma_client: Final = _get_prisma_client_or_none()
+        if prisma_client is None:
+            return None
+        draft: Final = await get_draft_mcp_server(
+            prisma_client, server_id, ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS
+        )
+        if draft is None:
+            return None
+        return await global_mcp_server_manager.build_mcp_server_from_table(draft)
+
     async def get_cached_temporary_mcp_server(
         server_id: str,
     ) -> MCPServer | None:
         _prune_expired_temporary_mcp_servers()
         entry: Final = _temporary_mcp_servers.get(server_id)
-        if entry is None:
-            redis_server: Final = await _get_temporary_mcp_server_from_redis(server_id)
-            if redis_server is None:
-                return None
-            # Intentionally avoid repopulating local cache from Redis to prevent
-            # extending effective lifetime beyond the remaining Redis TTL.
-            return redis_server
-        return entry.server
+        if entry is not None:
+            return entry.server
+
+        # A miss here means either an expired session or, on a multi-worker or multi-replica
+        # proxy, that a different process served /session. The draft row is shared, so it
+        # resolves the second case; the in-memory hit above still serves single-process
+        # deployments with no database configured.
+        draft_server: Final = await _get_draft_mcp_server_as_mcp_server(server_id)
+        if draft_server is not None:
+            return draft_server
+
+        redis_server: Final = await _get_temporary_mcp_server_from_redis(server_id)
+        if redis_server is None:
+            return None
+        # Intentionally avoid repopulating local cache from Redis to prevent
+        # extending effective lifetime beyond the remaining Redis TTL.
+        return redis_server
 
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
@@ -708,12 +763,36 @@ if MCP_AVAILABLE:
         payload_dict["credentials"] = inherited_credentials
         return NewMCPServerRequest.model_validate(payload_dict)
 
+    async def _resolve_session_server_id(payload: NewMCPServerRequest) -> str:
+        """Decide the id an OAuth session runs under.
+
+        A caller-supplied id is honoured only when it names a server that really exists, which is
+        the edit form re-authorizing a saved server against its own id. Anything else gets a fresh
+        id, so two concurrent sessions can never land on one id and silently adopt each other's
+        URL or client credentials. Without a database there is nothing shared to collide over, so
+        the supplied id is kept and behaviour is unchanged.
+        """
+        supplied: Final = payload.server_id
+        if not supplied:
+            return str(uuid.uuid4())
+        if global_mcp_server_manager.get_mcp_server_by_id(supplied) is not None:
+            return supplied
+        prisma_client: Final = _get_prisma_client_or_none()
+        if prisma_client is None:
+            return supplied
+        # A draft is another session's row, not a saved server, so re-supplying an id this
+        # endpoint previously handed back must not let a later session adopt its configuration.
+        existing: Final = await get_mcp_server(prisma_client, supplied)
+        if existing is None or existing.approval_status == MCPApprovalStatus.draft:
+            return str(uuid.uuid4())
+        return supplied
+
     def _build_temporary_mcp_server_record(
         payload: NewMCPServerRequest,
         created_by: str | None,
+        server_id: str,
     ) -> LiteLLM_MCPServerTable:
         now: Final = datetime.utcnow()
-        server_id: Final = payload.server_id or str(uuid.uuid4())
         server_name: Final = payload.server_name or payload.alias or server_id
         return LiteLLM_MCPServerTable(
             server_id=server_id,
@@ -1543,6 +1622,7 @@ if MCP_AVAILABLE:
         temp_record: Final = _build_temporary_mcp_server_record(
             payload_with_credentials,
             created_by,
+            await _resolve_session_server_id(payload_with_credentials),
         )
 
         try:
@@ -1553,6 +1633,11 @@ if MCP_AVAILABLE:
             _cache_temporary_mcp_server(
                 temporary_server,
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
+            )
+            await _persist_draft_mcp_server(
+                payload_with_credentials,
+                temp_record.server_id,
+                created_by,
             )
             await _cache_temporary_mcp_server_in_redis(
                 temporary_server,

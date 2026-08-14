@@ -1,11 +1,10 @@
 import React, { useState } from "react";
-import { Card, Text } from "@tremor/react";
-import { Select } from "antd";
 import { PlusIcon, TrashIcon, GripVerticalIcon } from "lucide-react";
 import VariableTextArea from "../variable_textarea";
 import { Message } from "./types";
-
-const { Option } = Select;
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface PromptMessagesCardProps {
   messages: Message[];
@@ -51,11 +50,10 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
   return (
     <Card className="p-3">
       <div className="mb-2">
-        <Text className="text-sm font-medium">Prompt messages</Text>
-        <Text className="text-gray-500 text-xs mt-1">
-          Use <code className="bg-gray-100 px-1 rounded-sm text-xs">{"{{variable}}"}</code> syntax for template
-          variables
-        </Text>
+        <p className="text-sm font-medium">Prompt messages</p>
+        <p className="text-muted-foreground text-xs mt-1">
+          Use <code className="bg-muted px-1 rounded-sm text-xs">{"{{variable}}"}</code> syntax for template variables
+        </p>
       </div>
       <div className="space-y-2">
         {messages.map((message, index) => (
@@ -66,29 +64,40 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
             onDragOver={(e) => handleDragOver(e, index)}
             onDrop={(e) => handleDrop(e, index)}
             onDragEnd={handleDragEnd}
-            className={`border border-gray-300 rounded overflow-hidden bg-white transition-all ${
+            className={`border border-border rounded overflow-hidden bg-background transition-all ${
               draggedIndex === index ? "opacity-50" : ""
-            } ${dragOverIndex === index && draggedIndex !== index ? "border-blue-500 border-2" : ""}`}
+            } ${dragOverIndex === index && draggedIndex !== index ? "border-primary border-2" : ""}`}
           >
-            <div className="bg-gray-50 px-2 py-1.5 border-b border-gray-300 flex items-center justify-between">
-              <Select
+            <div className="bg-muted px-2 py-1.5 border-b border-border flex items-center justify-between">
+              <ShadcnSelect
                 value={message.role}
-                onChange={(value) => onUpdateMessage(index, "role", value)}
-                style={{ width: 100 }}
-                size="small"
-                bordered={false}
+                onValueChange={(value) => onUpdateMessage(index, "role", String(value))}
               >
-                <Option value="user">User</Option>
-                <Option value="assistant">Assistant</Option>
-                <Option value="system">System</Option>
-              </Select>
+                <SelectTrigger
+                  size="sm"
+                  className="w-[110px] border-0 shadow-none"
+                  aria-label={`Message ${index + 1} role`}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="user">User</SelectItem>
+                  <SelectItem value="assistant">Assistant</SelectItem>
+                  <SelectItem value="system">System</SelectItem>
+                </SelectContent>
+              </ShadcnSelect>
               <div className="flex items-center gap-1">
                 {messages.length > 1 && (
-                  <button onClick={() => onRemoveMessage(index)} className="text-gray-400 hover:text-red-500">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Remove message ${index + 1}`}
+                    onClick={() => onRemoveMessage(index)}
+                  >
                     <TrashIcon size={14} />
-                  </button>
+                  </Button>
                 )}
-                <div className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600">
+                <div className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground">
                   <GripVerticalIcon size={16} />
                 </div>
               </div>
@@ -104,10 +113,10 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
           </div>
         ))}
       </div>
-      <button onClick={onAddMessage} className="mt-2 text-xs text-blue-600 hover:text-blue-700 flex items-center">
+      <Button variant="ghost" size="sm" onClick={onAddMessage} className="mt-2">
         <PlusIcon size={14} className="mr-1" />
         Add message
-      </button>
+      </Button>
     </Card>
   );
 };

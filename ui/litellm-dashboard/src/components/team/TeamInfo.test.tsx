@@ -311,6 +311,8 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByText("Budget Status")).toBeInTheDocument();
       });
+      expect(screen.getByText("$250.50")).toBeInTheDocument();
+      expect(screen.getByText(/of \$1,000\.00/)).toBeInTheDocument();
     });
 
     it("should display guardrails in overview when present", async () => {
@@ -363,6 +365,7 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByText("Budget Status")).toBeInTheDocument();
       });
+      expect(screen.getByText("Team Member Budget: $500.00")).toBeInTheDocument();
     });
 
     it("should display virtual keys information", async () => {
@@ -956,6 +959,82 @@ describe("TeamInfoView", () => {
         );
       });
     });
+
+    const openSettingsEditorForTeam = async (
+      user: ReturnType<typeof userEvent.setup>,
+      teamOverrides: Record<string, unknown>,
+    ) => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData(teamOverrides));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      await waitFor(() => {
+        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+      });
+
+      return screen.getByText("Reset Budget").closest(".ant-form-item") as HTMLElement;
+    };
+
+    it("should send an explicit null budget_duration when a stored Reset Budget is cleared", async () => {
+      const user = userEvent.setup({ delay: null });
+      const resetBudgetItem = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
+
+      await user.click(within(resetBudgetItem).getByRole("combobox"));
+      await user.click(await screen.findByText("Never resets"));
+
+      await waitFor(() => {
+        expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(updateArg.budget_duration).toBeNull();
+      expect(JSON.stringify(updateArg)).toContain('"budget_duration":null');
+    });
+
+    it("should keep a stored Reset Budget when the form is saved untouched", async () => {
+      const user = userEvent.setup({ delay: null });
+      await openSettingsEditorForTeam(user, { budget_duration: "30d" });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].budget_duration).toBe("30d");
+    });
+
+    it("should send the newly picked budget_duration when one is selected", async () => {
+      const user = userEvent.setup({ delay: null });
+      const resetBudgetItem = await openSettingsEditorForTeam(user, { budget_duration: null });
+
+      await user.click(within(resetBudgetItem).getByRole("combobox"));
+      await user.click(await screen.findByText("weekly"));
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].budget_duration).toBe("7d");
+    });
   });
 
   describe("metadata key-value editing", () => {
@@ -1474,13 +1553,14 @@ describe("TeamInfoView", () => {
 
       await user.click(within(routesFormItem).getByRole("combobox"));
 
-      const option = await screen.findByTitle("POST /bedrock-passthrough");
+      const option = await screen.findByText("POST /bedrock-passthrough");
       await user.click(option);
 
       await waitFor(() => {
         expect(within(routesFormItem).getByText(/\/bedrock-passthrough/)).toBeInTheDocument();
       });
 
+      await user.keyboard("{Escape}");
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

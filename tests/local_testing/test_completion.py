@@ -271,7 +271,7 @@ def test_completion_claude_3():
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic/claude-sonnet-4-5-20250929", "anthropic.claude-3-sonnet-20240229-v1:0"],
+    ["anthropic/claude-sonnet-4-5-20250929", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"],
 )
 def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
@@ -357,7 +357,7 @@ def test_completion_claude_3_function_call(model):
     [
         ("gpt-3.5-turbo", None, None),
         ("claude-sonnet-4-5-20250929", None, None),
-        ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", None, None),
         # (
         #     "azure_ai/command-r-plus",
         #     os.getenv("AZURE_COHERE_API_KEY"),
@@ -1550,7 +1550,7 @@ def test_completion_openai():
     [
         # ("gpt-4o-2024-08-06", None),
         # ("azure/gpt-4.1-mini", None),
-        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
+        ("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", None),
         # ("azure/gpt-4o-new-test", "2024-08-01-preview"),
     ],
 )
@@ -2887,7 +2887,7 @@ def response_format_tests(response: litellm.ModelResponse):
     [
         "bedrock/mistral.mistral-large-2407-v1:0",
         "bedrock/cohere.command-r-plus-v1:0",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mistral-7b-instruct-v0:2",
         "meta.llama3-8b-instruct-v1:0",
     ],
@@ -3098,29 +3098,6 @@ def test_completion_anyscale_api():
         response = completion(
             model="anyscale/meta-llama/Llama-2-7b-chat-hf",
             messages=messages,
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_completion_anyscale_2():
-    try:
-        # litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="anyscale/meta-llama/Llama-2-7b-chat-hf", messages=messages
         )
         print(response)
     except Exception as e:

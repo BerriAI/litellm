@@ -1,4 +1,5 @@
 import { renderWithProviders, screen, within } from "@/../tests/test-utils";
+import { waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AccessGroupsPage } from "./AccessGroupsPage";
@@ -215,7 +216,9 @@ describe("AccessGroupsPage", () => {
     await user.click(await openRowMenu(user, "ag-1"));
     const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog", { name: "Delete Access Group" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Delete Access Group" })).not.toBeInTheDocument();
+    });
     expect(mockMutate).not.toHaveBeenCalled();
   });
 
