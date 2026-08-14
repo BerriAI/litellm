@@ -34,14 +34,23 @@ vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
 
 const MCP_CATALOG = [
   { server_id: "srv-1", server_name: "deploy_tracker", alias: "deploy" },
-  { server_id: "srv-2", server_name: "incident_log", alias: "incidents" },
+  { server_id: "srv-2", server_name: "incident_log", alias: "incidents", mcp_access_groups: ["ops_readonly"] },
+];
+
+const MCP_TOOLSETS = [
+  { toolset_id: "ts-1", toolset_name: "incidents", tools: [{ server_id: "srv-2", tool_name: "write" }] },
 ];
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
   useMCPServers: vi.fn(() => ({ data: MCP_CATALOG })),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
+  useMCPToolsets: vi.fn(() => ({ data: MCP_TOOLSETS })),
+}));
+
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 
 vi.mock("../networking", () => ({
   keyDeleteCall: vi.fn().mockResolvedValue({}),
@@ -928,6 +937,7 @@ describe("KeyInfoView", () => {
       vi.mocked(keyUpdateCall).mockClear();
       vi.mocked(keyUpdateCall).mockResolvedValue({});
       vi.mocked(useMCPServers).mockReturnValue({ data: MCP_CATALOG } as unknown as ReturnType<typeof useMCPServers>);
+      vi.mocked(useMCPToolsets).mockReturnValue({ data: MCP_TOOLSETS } as unknown as ReturnType<typeof useMCPToolsets>);
     });
 
     it("drops the allowlist of every deselected server instead of leaving it entitled", async () => {
@@ -964,6 +974,43 @@ describe("KeyInfoView", () => {
       });
 
       expect(submittedToolPermissions()).toEqual({ "srv-2": ["write"] });
+    });
+
+    it("drops an allowlist the retained access group does not reach", async () => {
+      await enterEditMode(KEY_WITH_TOOL_PERMISSIONS);
+      await editViewMocks.onSubmit!({
+        key: KEY_WITH_TOOL_PERMISSIONS.token,
+        token: KEY_WITH_TOOL_PERMISSIONS.token,
+        mcp_servers_and_groups: { servers: [], accessGroups: ["ops_readonly"], toolsets: [] },
+        mcp_tool_permissions: { "srv-1": ["read"], "srv-2": ["write"] },
+      });
+
+      expect(submittedToolPermissions()).toEqual({ "srv-2": ["write"] });
+    });
+
+    it("drops an allowlist the retained toolset does not cover", async () => {
+      await enterEditMode(KEY_WITH_TOOL_PERMISSIONS);
+      await editViewMocks.onSubmit!({
+        key: KEY_WITH_TOOL_PERMISSIONS.token,
+        token: KEY_WITH_TOOL_PERMISSIONS.token,
+        mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: ["ts-1"] },
+        mcp_tool_permissions: { "srv-1": ["read"], "srv-2": ["write"] },
+      });
+
+      expect(submittedToolPermissions()).toEqual({ "srv-2": ["write"] });
+    });
+
+    it("refuses to save a permission change while a selected toolset is unresolvable", async () => {
+      vi.mocked(useMCPToolsets).mockReturnValue({ data: undefined } as unknown as ReturnType<typeof useMCPToolsets>);
+      await enterEditMode(KEY_WITH_TOOL_PERMISSIONS);
+      await editViewMocks.onSubmit!({
+        key: KEY_WITH_TOOL_PERMISSIONS.token,
+        token: KEY_WITH_TOOL_PERMISSIONS.token,
+        mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: ["ts-1"] },
+        mcp_tool_permissions: { "srv-1": ["read"], "srv-2": ["write"] },
+      });
+
+      expect(keyUpdateCall).not.toHaveBeenCalled();
     });
 
     it("resolves a name-keyed allowlist against the server catalog", async () => {

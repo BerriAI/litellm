@@ -25,6 +25,7 @@ import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlo
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
@@ -77,6 +78,7 @@ export default function KeyInfoView({
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const { data: allMcpServers } = useMCPServers();
+  const { data: allMcpToolsets } = useMCPToolsets();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -204,12 +206,19 @@ export default function KeyInfoView({
         delete formValues.vector_stores;
       }
 
-      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers ?? []);
+      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers ?? [], allMcpToolsets ?? []);
       if (mcpEntitlement) {
-        // Without the catalog every allowlist key is unresolvable, so nothing is pruned and a
-        // revocation would save as a no-op while reporting success. Refuse rather than mislead.
-        if (allMcpServers === undefined && Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0) {
-          NotificationManager.error("MCP server list is unavailable, so MCP permissions cannot be saved yet. Retry.");
+        // Without a catalog the grants an allowlist key still has are unresolvable, so nothing is
+        // pruned and a revocation would save as a no-op while reporting success. Refuse instead.
+        const unresolvableSelection =
+          allMcpServers === undefined ||
+          mcpEntitlement.mcp_toolsets.some(
+            (toolsetId) => !(allMcpToolsets ?? []).some((toolset) => toolset.toolset_id === toolsetId),
+          );
+        if (unresolvableSelection && Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0) {
+          NotificationManager.error(
+            "MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.",
+          );
           return;
         }
         formValues.object_permission = {

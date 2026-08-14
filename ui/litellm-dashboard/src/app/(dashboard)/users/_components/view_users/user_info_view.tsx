@@ -43,6 +43,7 @@ import { getBudgetDurationLabel } from "@/components/common_components/budget_du
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import MCPServerPermissions from "@/components/permissions/MCPServerPermissions";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 
 interface UserInfoViewProps {
@@ -95,6 +96,7 @@ export default function UserInfoView({
   const [selectedRole, setSelectedRole] = useState<string>("user");
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const { data: allMcpServers = [] } = useMCPServers();
+  const { data: allMcpToolsets = [] } = useMCPToolsets();
 
   React.useEffect(() => {
     setBaseUrl(getProxyBaseUrl());
@@ -296,7 +298,7 @@ export default function UserInfoView({
     try {
       if (!accessToken || !userData) return;
 
-      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers);
+      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers, allMcpToolsets);
       const userFields = Object.fromEntries(
         Object.entries(formValues).filter(
           ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions",

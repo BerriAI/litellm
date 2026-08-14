@@ -1,5 +1,5 @@
 import { ALL_PROXY_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
-import { MCPServer } from "@/components/mcp_tools/types";
+import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 
 export interface McpEntitlementUpdate {
   mcp_servers: string[];
@@ -25,9 +25,15 @@ const mcpServerMatchesIdentifier = (server: MCPServer, identifier: string): bool
  * The `object_permission` a save sends, derived from what the editor currently shows.
  *
  * A tool allowlist is what narrows a grant and an absent one reads as no restriction, so dropping
- * an entry is the direction that widens. An entry is kept when an access group, a toolset, or the
- * all-proxy grant the admin retained could still supply its server, and dropped once nothing
- * indirect survives, which is what makes removing a grant actually remove it.
+ * an entry is the direction that widens. An entry is kept while its own server is still reachable,
+ * directly or through a retained access group or toolset, and dropped once nothing reaches it, which
+ * is what makes removing a grant actually remove it. Reachability is resolved per server rather than
+ * per selection: the gateway treats every allowlist key as an independent server grant, so keeping
+ * every key because some unrelated group survived would leave a deselected server callable.
+ *
+ * The catalog carries `mcp_access_groups` on each server and `tools[].server_id` on each toolset,
+ * which is the same membership the gateway resolves against. A selected toolset missing from the
+ * catalog is unresolvable, so nothing is pruned in that save.
  *
  * A tool-permission key may be a server id, a name or an alias: the gateway normalizes all three
  * before looking up the allowlist, so an entry written by the API or by config can use any of them.
@@ -42,6 +48,7 @@ const mcpServerMatchesIdentifier = (server: MCPServer, identifier: string): bool
 export const extractMcpEntitlement = (
   formValues: Record<string, unknown>,
   allServers: MCPServer[],
+  allToolsets: MCPToolset[] = [],
 ): McpEntitlementUpdate | null => {
   const selection = formValues.mcp_servers_and_groups;
   if (selection === null || typeof selection !== "object") return null;
@@ -50,13 +57,25 @@ export const extractMcpEntitlement = (
   const mcpServers = asStringArray(servers);
   const mcpAccessGroups = asStringArray(accessGroups);
   const mcpToolsets = asStringArray(toolsets);
-  const retainsIndirectGrant =
-    mcpAccessGroups.length > 0 || mcpToolsets.length > 0 || mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
+  const grantsEveryServer =
+    mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL) ||
+    mcpToolsets.some((toolsetId) => !allToolsets.some((toolset) => toolset.toolset_id === toolsetId));
+
+  const toolsetServerIds = new Set(
+    allToolsets
+      .filter((toolset) => mcpToolsets.includes(toolset.toolset_id))
+      .flatMap((toolset) => toolset.tools.map((tool) => tool.server_id)),
+  );
+
+  const grants = (server: MCPServer): boolean =>
+    mcpServers.some((identifier) => mcpServerMatchesIdentifier(server, identifier)) ||
+    (server.mcp_access_groups ?? []).some((group) => mcpAccessGroups.includes(group)) ||
+    toolsetServerIds.has(server.server_id);
 
   const grantsServerNamedBy = (permissionKey: string): boolean => {
     const named = allServers.filter((candidate) => mcpServerMatchesIdentifier(candidate, permissionKey));
     if (named.length === 0) return true;
-    return named.some((server) => mcpServers.some((identifier) => mcpServerMatchesIdentifier(server, identifier)));
+    return named.some(grants);
   };
 
   return {
@@ -65,7 +84,7 @@ export const extractMcpEntitlement = (
     mcp_toolsets: mcpToolsets,
     mcp_tool_permissions: Object.fromEntries(
       Object.entries(asToolPermissions(formValues.mcp_tool_permissions)).filter(
-        ([permissionKey]) => retainsIndirectGrant || grantsServerNamedBy(permissionKey),
+        ([permissionKey]) => grantsEveryServer || grantsServerNamedBy(permissionKey),
       ),
     ),
   };
