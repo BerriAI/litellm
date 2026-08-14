@@ -1190,7 +1190,7 @@ class MCPRequestHandler:
 
         DEPRECATED: This method is deprecated in favor of server-specific auth headers using the format x-mcp-{{server_alias}}-{{header_name}} instead.
         """
-        mcp_client_side_auth_header_name: Final[str] = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+        mcp_client_side_auth_header_name: Final[str] = MCPRequestHandler.get_mcp_client_side_auth_header_name()
         auth_header: Final = headers.get(mcp_client_side_auth_header_name)
         if auth_header:
             verbose_logger.warning(
@@ -1265,7 +1265,7 @@ class MCPRequestHandler:
         return oauth2_headers
 
     @staticmethod
-    def _get_mcp_client_side_auth_header_name() -> str:
+    def get_mcp_client_side_auth_header_name() -> str:
         """
         Get the header name used to pass the MCP auth header to the MCP server
 

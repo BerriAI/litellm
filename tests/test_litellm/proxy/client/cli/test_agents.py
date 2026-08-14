@@ -1,3 +1,4 @@
+import inspect
 import os
 import sys
 from unittest.mock import patch
@@ -14,6 +15,9 @@ sys.path.insert(
 
 from litellm.proxy.client.cli.commands.agents import (
     AgentRunError,
+    _hand_off,
+    _replace_process,
+    _spawn_and_wait,
     agent_commands,
     agent_launch_args,
     agent_profile,
@@ -29,9 +33,23 @@ def _agent_command(name):
     return next(c for c in agent_commands() if c.name == name)
 
 
+def _default_of(func, param):
+    return inspect.signature(func).parameters[param].default
+
+
 class _FakeResponse:
     def __init__(self, status_code):
         self.status_code = status_code
+
+
+class _Recorder:
+    def __init__(self, returns=None):
+        self.returns = returns
+        self.calls = []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        return self.returns
 
 
 class TestAgentProfile:
@@ -314,6 +332,267 @@ class TestRunAgent:
         assert order == ["launch"]
 
 
+_WINDOWS_CLAUDE_EXE = "C:\\Program Files\\Claude\\claude.exe"
+_WINDOWS_CLAUDE_CMD = "C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.cmd"
+_AGENT_ENV = {"ANTHROPIC_BASE_URL": "http://localhost:4000"}
+_CMD_PREFIX = "cmd.exe /d /e:on /v:off /s /c "
+
+
+def _shim_command_line(*args):
+    spawn = _Recorder(returns=0)
+    with pytest.raises(SystemExit):
+        _hand_off(
+            _WINDOWS_CLAUDE_CMD,
+            ["claude", *args],
+            _AGENT_ENV,
+            platform="win32",
+            replace=_Recorder(),
+            spawn=spawn,
+        )
+    return spawn.calls[0][0]
+
+
+class TestHandOff:
+    def test_windows_spawns_child_instead_of_exec(self):
+        replace = _Recorder()
+        spawn = _Recorder(returns=0)
+
+        with pytest.raises(SystemExit) as excinfo:
+            _hand_off(
+                _WINDOWS_CLAUDE_EXE,
+                ["claude", "--resume"],
+                _AGENT_ENV,
+                platform="win32",
+                replace=replace,
+                spawn=spawn,
+            )
+
+        assert excinfo.value.code == 0
+        assert replace.calls == []
+        assert spawn.calls == [
+            ((_WINDOWS_CLAUDE_EXE, "--resume"), _AGENT_ENV),
+        ]
+
+    @pytest.mark.parametrize("code", [1, 42, 130])
+    def test_windows_propagates_child_exit_code(self, code):
+        with pytest.raises(SystemExit) as excinfo:
+            _hand_off(
+                _WINDOWS_CLAUDE_EXE,
+                ["claude"],
+                _AGENT_ENV,
+                platform="win32",
+                replace=_Recorder(),
+                spawn=_Recorder(returns=code),
+            )
+        assert excinfo.value.code == code
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            _WINDOWS_CLAUDE_CMD,
+            "C:\\shims\\claude.CMD",
+            "C:\\shims\\claude.bat",
+        ],
+    )
+    def test_windows_batch_shim_goes_through_cmd_exe(self, path):
+        spawn = _Recorder(returns=0)
+
+        with pytest.raises(SystemExit):
+            _hand_off(
+                path,
+                ["claude", "--resume"],
+                _AGENT_ENV,
+                platform="win32",
+                replace=_Recorder(),
+                spawn=spawn,
+            )
+
+        assert spawn.calls[0][0] == f'{_CMD_PREFIX}""{path}" "--resume""'
+
+    def test_windows_shim_quotes_a_path_containing_spaces(self):
+        spawn = _Recorder(returns=0)
+        path = "C:\\Program Files\\npm\\claude.cmd"
+
+        with pytest.raises(SystemExit):
+            _hand_off(
+                path,
+                ["claude", "-p", "hello world"],
+                _AGENT_ENV,
+                platform="win32",
+                replace=_Recorder(),
+                spawn=spawn,
+            )
+
+        expected = f'{_CMD_PREFIX}""C:\\Program Files\\npm\\claude.cmd" "-p" "hello world""'
+        assert spawn.calls[0][0] == expected
+
+    @pytest.mark.parametrize("payload", ["a&calc", "a|calc", "a>out", "a^b", "a&&calc"])
+    def test_windows_shim_never_leaves_a_metacharacter_unquoted(self, payload):
+        expected = f'{_CMD_PREFIX}""{_WINDOWS_CLAUDE_CMD}" "-p" "{payload}""'
+        assert _shim_command_line("-p", payload) == expected
+
+    def test_windows_shim_doubles_an_embedded_quote(self):
+        assert _shim_command_line("-p", 'say "hi"').endswith('"-p" "say ""hi""""')
+
+    @pytest.mark.parametrize(
+        "payload, quoted",
+        [
+            ("%PATH%", "%%cd:~,%PATH%%cd:~,%"),
+            ("100%", "100%%cd:~,%"),
+            ("%OS%%CD%", "%%cd:~,%OS%%cd:~,%%%cd:~,%CD%%cd:~,%"),
+        ],
+    )
+    def test_windows_shim_stops_cmd_expanding_a_percent_variable(self, payload, quoted):
+        assert _shim_command_line("-p", payload).endswith(f'"-p" "{quoted}""')
+
+    def test_windows_shim_guards_a_percent_in_the_shim_path(self):
+        spawn = _Recorder(returns=0)
+        path = "C:\\dev%HOME%\\claude.cmd"
+
+        with pytest.raises(SystemExit):
+            _hand_off(
+                path,
+                ["claude"],
+                _AGENT_ENV,
+                platform="win32",
+                replace=_Recorder(),
+                spawn=spawn,
+            )
+
+        assert spawn.calls[0][0] == f'{_CMD_PREFIX}""C:\\dev%%cd:~,%HOME%%cd:~,%\\claude.cmd""'
+
+    @pytest.mark.parametrize(
+        "payload, quoted",
+        [
+            ("C:\\dir\\", "C:\\dir\\\\"),
+            ('say \\"hi', 'say \\\\""hi'),
+            ('a\\\\"b', 'a\\\\\\\\""b'),
+        ],
+    )
+    def test_windows_shim_doubles_backslashes_that_precede_a_quote(self, payload, quoted):
+        assert _shim_command_line("-p", payload).endswith(f'"-p" "{quoted}""')
+
+    @pytest.mark.parametrize("payload", ["one\ntwo", "one\r\ntwo", "trailing\r"])
+    def test_windows_shim_refuses_an_argument_holding_a_line_break(self, payload):
+        with pytest.raises(AgentRunError, match="line break"):
+            _hand_off(
+                _WINDOWS_CLAUDE_CMD,
+                ["claude", "-p", payload],
+                _AGENT_ENV,
+                platform="win32",
+                replace=_Recorder(),
+                spawn=_Recorder(returns=0),
+            )
+
+    def test_windows_shim_keeps_the_switches_the_quoting_depends_on(self):
+        command = _shim_command_line("-p", "hi")
+        assert command.startswith("cmd.exe ")
+        switches = command.split(" /c ")[0].split()[1:]
+        assert switches == ["/d", "/e:on", "/v:off", "/s"]
+
+    def test_windows_exe_is_not_wrapped_in_cmd_exe(self):
+        spawn = _Recorder(returns=0)
+        with pytest.raises(SystemExit):
+            _hand_off(
+                _WINDOWS_CLAUDE_EXE,
+                ["claude"],
+                _AGENT_ENV,
+                platform="win32",
+                replace=_Recorder(),
+                spawn=spawn,
+            )
+        assert spawn.calls[0][0] == (_WINDOWS_CLAUDE_EXE,)
+
+    @pytest.mark.parametrize("platform", ["darwin", "linux", "freebsd8"])
+    def test_posix_still_replaces_the_process(self, platform):
+        replace = _Recorder()
+        spawn = _Recorder(returns=0)
+
+        _hand_off(
+            "/usr/local/bin/claude",
+            ["claude", "--resume"],
+            _AGENT_ENV,
+            platform=platform,
+            replace=replace,
+            spawn=spawn,
+        )
+
+        assert spawn.calls == []
+        assert replace.calls == [
+            ("/usr/local/bin/claude", ["claude", "--resume"], _AGENT_ENV),
+        ]
+        path, args, env = replace.calls[0]
+        assert isinstance(args, list)
+        assert isinstance(env, dict)
+
+    def test_replace_process_calls_execvpe_with_argv_and_env(self):
+        execvpe = _Recorder()
+
+        _replace_process(
+            "/usr/local/bin/claude",
+            ("claude", "--resume"),
+            _AGENT_ENV,
+            execvpe=execvpe,
+        )
+
+        assert execvpe.calls == [
+            ("/usr/local/bin/claude", ["claude", "--resume"], _AGENT_ENV),
+        ]
+        _path, argv, env = execvpe.calls[0]
+        assert isinstance(argv, list)
+        assert isinstance(env, dict)
+
+    def test_posix_default_replacement_is_execvpe(self):
+        assert _default_of(run_agent, "launcher") is _hand_off
+        assert _default_of(_hand_off, "replace") is _replace_process
+        assert _default_of(_replace_process, "execvpe") is os.execvpe
+        assert _default_of(_hand_off, "spawn") is _spawn_and_wait
+        assert _default_of(_hand_off, "platform") == sys.platform
+
+    def test_spawn_and_wait_blocks_until_the_child_is_done(self, tmp_path):
+        marker = tmp_path / "child-finished"
+        script = (
+            "import os, pathlib, time; time.sleep(0.5); "
+            "pathlib.Path(os.environ['MARKER']).write_text('done'); "
+            "raise SystemExit(int(os.environ['RC']))"
+        )
+
+        code = _spawn_and_wait(
+            [sys.executable, "-c", script],
+            {"RC": "7", "MARKER": str(marker), "PATH": os.environ.get("PATH", "")},
+        )
+
+        assert marker.read_text() == "done"
+        assert code == 7
+
+    def test_windows_run_agent_spawns_resolved_binary_with_proxy_args(self):
+        spawn = _Recorder(returns=3)
+        replace = _Recorder()
+
+        def launcher(path, args, env):
+            _hand_off(path, args, env, platform="win32", replace=replace, spawn=spawn)
+
+        with pytest.raises(SystemExit) as excinfo:
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["codex", "exec", "do a thing"],
+                skip_verify=True,
+                base_env={},
+                which=lambda name: _WINDOWS_CLAUDE_CMD.replace("claude", "codex"),
+                launcher=launcher,
+            )
+
+        assert excinfo.value.code == 3
+        assert replace.calls == []
+        command, env = spawn.calls[0]
+        shim = _WINDOWS_CLAUDE_CMD.replace("claude", "codex")
+        assert command.startswith(f'{_CMD_PREFIX}""{shim}" ')
+        assert command.endswith('"exec" "do a thing""')
+        assert '"model_provider=""litellm"""' in command
+        assert env["OPENAI_API_KEY"] == "sk-key"
+
+
 class TestAgentCommands:
     def setup_method(self):
         self.runner = CliRunner()
@@ -422,6 +701,15 @@ class TestAgentCommands:
         assert result.exit_code == 0, result.output
         assert captured["api_key"] == "sk-after-login"
         mock_get.assert_called_once_with(expected_base_url="http://localhost:4000")
+
+    def test_child_exit_code_reaches_the_shell(self):
+        with patch(f"{AGENTS_MODULE}.run_agent", side_effect=SystemExit(42)):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
+            )
+        assert result.exit_code == 42
 
     def test_agent_run_error_becomes_click_error(self):
         with patch(

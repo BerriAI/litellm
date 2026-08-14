@@ -16,9 +16,25 @@ import {
  * Drop an empty system_prompt so the payload carries an override only when there is one. The
  * backend rejects a blank string rather than reading it as "use the default", and sending `""`
  * would turn an untouched editor into a validation error.
+ *
+ * A custom prompt is the classifier's whole system role, so the backend also rejects a rubric preset
+ * sent alongside one. Each branch rebuilds the object rather than spreading it, so a preset left on
+ * the form state from before the prompt was written cannot reach the wire and fail the save.
+ *
+ * An untouched picker sends no rubric at all rather than a copy of the default it displays. The
+ * backend reads absence as "use the default preset", so omitting it keeps a router the operator never
+ * configured on whatever that default becomes, and keeps routers built here behaving the same as ones
+ * written by hand in config.
  */
-export const normalizeClassifierLlmConfig = (config: ClassifierLLMConfig): ClassifierLLMConfig =>
-  config.system_prompt?.trim() ? config : { model: config.model, timeout_ms: config.timeout_ms };
+export const normalizeClassifierLlmConfig = ({
+  model,
+  timeout_ms,
+  classification_rubric,
+  system_prompt,
+}: ClassifierLLMConfig): ClassifierLLMConfig =>
+  system_prompt?.trim()
+    ? { model, timeout_ms, system_prompt }
+    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;

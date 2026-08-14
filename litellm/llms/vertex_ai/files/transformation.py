@@ -5,12 +5,13 @@ import json
 import os
 import re
 import time
-from collections.abc import Callable, Iterable, Iterator
-from typing import Any, Final
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from typing import Any, Final, TypedDict
 
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._uuid import uuid
@@ -50,6 +51,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
+    OpenAIFilesPurpose,
     PathLike,
 )
 from litellm.types.llms.vertex_ai import GcsBucketResponse
@@ -60,6 +62,46 @@ from ..vertex_llm_base import VertexBase
 
 _GCP_LABEL_VALUE_MAX_LEN: Final = 63
 _CUSTOM_ID_RAW_LABEL_PREFIX: Final = "b32_"
+
+
+class _GcsObjectMetadataJson(TypedDict, total=False):
+    purpose: ReadOnly[OpenAIFilesPurpose]
+
+
+class _GcsObjectJson(TypedDict, total=False):
+    id: ReadOnly[str]
+    name: ReadOnly[str]
+    size: ReadOnly[str]
+    timeCreated: ReadOnly[str]
+    metadata: ReadOnly[_GcsObjectMetadataJson]
+
+
+class _VertexBatchRowRequest(TypedDict, total=False):
+    labels: ReadOnly[Mapping[str, object]]
+
+
+class _VertexBatchRow(TypedDict, total=False):
+    request: ReadOnly[_VertexBatchRowRequest]
+    status: ReadOnly[str]
+    processed_time: ReadOnly[str]
+
+
+class _OpenAIBatchOutputError(TypedDict):
+    code: ReadOnly[str]
+    message: ReadOnly[str]
+
+
+class _OpenAIBatchOutputResponse(TypedDict):
+    status_code: ReadOnly[int]
+    request_id: ReadOnly[str]
+    body: ReadOnly[Mapping[str, object]]
+
+
+class _OpenAIBatchOutputRow(TypedDict):
+    id: ReadOnly[str]
+    custom_id: ReadOnly[str]
+    response: ReadOnly[_OpenAIBatchOutputResponse | None]
+    error: ReadOnly[_OpenAIBatchOutputError | None]
 
 
 def _sanitize_gcp_label_value(value: str) -> str:
@@ -106,7 +148,7 @@ def _decode_gcp_label_value_chunks(values: list[str]) -> str | None:
         return None
 
 
-def _set_litellm_batch_custom_id_labels(labels: dict[str, str], custom_id: Any) -> None:
+def _set_litellm_batch_custom_id_labels(labels: dict[str, str], custom_id: object) -> None:
     """
     Store OpenAI batch custom_id for Vertex batch correlation.
 
@@ -122,7 +164,7 @@ def _set_litellm_batch_custom_id_labels(labels: dict[str, str], custom_id: Any) 
         labels[f"litellm_custom_id_raw_{index}"] = raw_label_chunk
 
 
-def _get_litellm_batch_custom_id_from_labels(labels: dict[str, Any]) -> str:
+def _get_litellm_batch_custom_id_from_labels(labels: Mapping[str, object]) -> str:
     """Prefer encoded custom_id when present (see _set_litellm_batch_custom_id_labels)."""
     raw: Final = labels.get("litellm_custom_id_raw")
     if raw:
@@ -186,7 +228,7 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
     ``str.splitlines()`` + ``line.strip()`` for ``\\n`` / ``\\r\\n`` delimited
     JSONL.
     """
-    content: Any = openai_file_content
+    content: FileTypes | str = openai_file_content
     if isinstance(content, tuple):
         content = content[1]
 
@@ -244,6 +286,11 @@ def _iter_openai_jsonl_entries(
 ) -> Iterator[dict[str, Any]]:
     for line in _iter_openai_jsonl_lines(openai_file_content):
         yield json.loads(line)
+
+
+def _parse_vertex_batch_output_row(line: str) -> _VertexBatchRow:
+    row: Final[_VertexBatchRow] = json.loads(line)
+    return row
 
 
 class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
@@ -463,7 +510,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Transform VertexAI File upload response into OpenAI-style FileObject
         """
-        response_json: Final = raw_response.json()
+        response_json: Final[GcsBucketResponse] = raw_response.json()
 
         try:
             response_object: Final = GcsBucketResponse(**response_json)
@@ -523,7 +570,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> OpenAIFileObject:
-        response_json: Final = raw_response.json()
+        response_json: Final[_GcsObjectJson] = raw_response.json()
         gcs_id = response_json.get("id", "")
         gcs_id = "/".join(gcs_id.split("/")[:-1]) if gcs_id else ""
         return OpenAIFileObject(
@@ -682,7 +729,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # discriminating fields. Anything else (e.g. a binary file whose
             # first line is not valid UTF-8/JSON) raises and falls through to the
             # passthrough below, leaving the content untouched.
-            first_row: Final = json.loads(first_line)
+            first_row: Final = _parse_vertex_batch_output_row(first_line)
             is_vertex_batch_output: Final = (
                 "request" in first_row
                 and "response" in first_row
@@ -723,7 +770,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             for line in itertools.chain([first_line], lines):
                 try:
                     openai_output = self._transform_single_vertex_batch_output_to_openai(
-                        vertex_output=json.loads(line),
+                        vertex_output=_parse_vertex_batch_output_row(line),
                         vertex_gemini_config=vertex_gemini_config,
                         logging_obj=batch_transform_logging_obj,
                         mock_httpx_response=mock_httpx_response,
@@ -742,18 +789,18 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _transform_single_vertex_batch_output_to_openai(
         self,
-        vertex_output: dict[str, Any],
+        vertex_output: _VertexBatchRow,
         vertex_gemini_config: VertexGeminiConfig,
         logging_obj: Logging,
         mock_httpx_response: httpx.Response,
-    ) -> dict[str, Any]:
+    ) -> _OpenAIBatchOutputRow:
         """
         Transform a single Vertex AI batch output line to OpenAI format.
         Uses the existing VertexGeminiConfig transformation for the response.
         """
         # Extract custom_id from request labels (prefer raw for OpenAI round-trip)
         request_data: Final = vertex_output.get("request", {})
-        labels: Final = request_data.get("labels", {}) or {}
+        labels: Final[Mapping[str, object]] = request_data.get("labels", {}) or {}
         custom_id: Final = _get_litellm_batch_custom_id_from_labels(labels)
 
         # Check if there's an error
