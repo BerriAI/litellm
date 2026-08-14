@@ -260,6 +260,10 @@ vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
   useMCPServers: vi.fn().mockReturnValue({ data: [] }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
+  useMCPToolsets: vi.fn().mockReturnValue({ data: [] }),
+}));
+
 // Mock useResetKeySpend hook (requires QueryClientProvider which is not available in this test)
 vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   useResetKeySpend: vi.fn().mockReturnValue({
