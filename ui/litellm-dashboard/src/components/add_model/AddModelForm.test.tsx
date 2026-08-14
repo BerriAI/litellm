@@ -2,7 +2,8 @@ import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests
 import userEvent from "@testing-library/user-event";
 import { Form } from "antd";
 import type { UploadProps } from "antd/es/upload";
-import { describe, expect, it, vi } from "vitest";
+import { useState } from "react";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
 import type { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
@@ -65,25 +66,28 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
 }));
 
+const mockUseInfiniteTeams = vi.hoisted(() => vi.fn());
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
-  useInfiniteTeams: () => ({
-    data: {
-      pages: [
-        {
-          teams: [{ team_id: "team-1", team_alias: "Test Team", organization_id: "org-1" }],
-          total: 1,
-          page: 1,
-          page_size: 20,
-          total_pages: 1,
-        },
-      ],
-    },
-    fetchNextPage: vi.fn(),
-    hasNextPage: false,
-    isFetchingNextPage: false,
-    isLoading: false,
-  }),
+  useInfiniteTeams: mockUseInfiniteTeams,
 }));
+
+const buildInfiniteTeamsResult = (teams: Array<Record<string, unknown>>) => ({
+  data: {
+    pages: [
+      {
+        teams,
+        total: teams.length,
+        page: 1,
+        page_size: 20,
+        total_pages: 1,
+      },
+    ],
+  },
+  fetchNextPage: vi.fn(),
+  hasNextPage: false,
+  isFetchingNextPage: false,
+  isLoading: false,
+});
 
 vi.mock("@/app/(dashboard)/hooks/guardrails/useGuardrails", () => ({
   useGuardrails: vi.fn().mockReturnValue({
@@ -176,6 +180,19 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
 };
 
 describe("AddModelForm", () => {
+  beforeEach(() => {
+    mockUseInfiniteTeams.mockReturnValue(
+      buildInfiniteTeamsResult([
+        {
+          team_id: "team-1",
+          team_alias: "Test Team",
+          organization_id: "org-1",
+          members_with_roles: [{ user_id: "user-1", role: "admin" }],
+        },
+      ]),
+    );
+  });
+
   it("should render", async () => {
     const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
     mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
@@ -277,6 +294,83 @@ describe("AddModelForm", () => {
     });
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("should only list teams the team admin administers, not every team they belong to", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("team_member", "user-1", true));
+    mockUseInfiniteTeams.mockReturnValue(
+      buildInfiniteTeamsResult([
+        {
+          team_id: "team-1",
+          team_alias: "Admin Team",
+          organization_id: "org-1",
+          members_with_roles: [{ user_id: "user-1", role: "admin" }],
+        },
+        {
+          team_id: "team-2",
+          team_alias: "Member-Only Team",
+          organization_id: "org-1",
+          members_with_roles: [{ user_id: "user-1", role: "user" }],
+        },
+      ]),
+    );
+
+    const props = createTestProps("team_member", "user-1", true);
+
+    renderWithProviders(<AddModelForm {...props} />);
+
+    const teamSelect = await screen.findByRole("combobox");
+    await userEvent.click(teamSelect);
+
+    expect(await screen.findByText("Admin Team")).toBeInTheDocument();
+    expect(screen.queryByText("Member-Only Team")).not.toBeInTheDocument();
+  });
+
+  // Regression: the filter runs client-side over whatever page already loaded. A first page of
+  // entirely non-admin teams used to render an empty, unscrollable "No teams found" popup with no
+  // way to reach the next page, hiding an admin team that existed one page later.
+  it("should page past a leading page of non-admin teams to reach the admin team", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("team_member", "user-1", true));
+
+    const PAGE_ONE = buildInfiniteTeamsResult([
+      {
+        team_id: "team-2",
+        team_alias: "Member-Only Team",
+        organization_id: "org-1",
+        members_with_roles: [{ user_id: "user-1", role: "user" }],
+      },
+    ]).data.pages[0];
+    const PAGE_TWO = buildInfiniteTeamsResult([
+      {
+        team_id: "team-1",
+        team_alias: "Admin Team",
+        organization_id: "org-1",
+        members_with_roles: [{ user_id: "user-1", role: "admin" }],
+      },
+    ]).data.pages[0];
+
+    mockUseInfiniteTeams.mockImplementation(() => {
+      const [pages, setPages] = useState([PAGE_ONE]);
+      return {
+        data: { pages },
+        fetchNextPage: () => setPages((prev) => (prev.length < 2 ? [...prev, PAGE_TWO] : prev)),
+        hasNextPage: pages.length < 2,
+        isFetchingNextPage: false,
+        isLoading: false,
+      };
+    });
+
+    const props = createTestProps("team_member", "user-1", true);
+
+    renderWithProviders(<AddModelForm {...props} />);
+
+    const teamSelect = await screen.findByRole("combobox");
+    await userEvent.click(teamSelect);
+
+    expect(await screen.findByText("Admin Team")).toBeInTheDocument();
+    expect(screen.queryByText("Member-Only Team")).not.toBeInTheDocument();
   });
 
   it("should handle non-admin, non-team-admin users - should not see team selection or switch", async () => {

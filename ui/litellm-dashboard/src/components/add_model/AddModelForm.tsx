@@ -134,6 +134,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   tooltip="Select the team for which you want to add this model"
                 >
                   <TeamDropdown
+                    adminOnly
                     onChange={(value) => {
                       setTeamAdminSelectedTeam(value);
                     }}

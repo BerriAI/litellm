@@ -1,9 +1,11 @@
-import React, { useMemo, useState, type UIEvent } from "react";
+import React, { useEffect, useMemo, useState, type UIEvent } from "react";
 import { Select, Typography } from "antd";
 import { LoadingOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { Team } from "../key_team_helpers/key_list";
 
 const { Text } = Typography;
@@ -17,6 +19,8 @@ interface TeamDropdownProps {
   /** Filter teams by organization. */
   organizationId?: string | null;
   pageSize?: number;
+  /** Only list teams the current user administers, e.g. for team-scoped model creation. */
+  adminOnly?: boolean;
 }
 
 const SCROLL_THRESHOLD = 0.8;
@@ -28,7 +32,9 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   disabled,
   organizationId,
   pageSize = 20,
+  adminOnly = false,
 }) => {
+  const { userId } = useAuthorized();
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
     wait: DEBOUNCE_WAIT_MS,
@@ -47,12 +53,24 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     for (const page of data.pages) {
       for (const team of page.teams) {
         if (seen.has(team.team_id)) continue;
+        if (adminOnly && !isUserTeamAdminForSingleTeam(team.members_with_roles, userId ?? "")) continue;
         seen.add(team.team_id);
         result.push(team);
       }
     }
     return result;
-  }, [data]);
+  }, [data, adminOnly, userId]);
+
+  // adminOnly filters client-side, so a page of entirely non-admin teams renders an empty,
+  // unscrollable popup that can never reach the next page through onPopupScroll. Keep paging
+  // automatically until a match turns up or there is nothing left to fetch.
+  useEffect(() => {
+    const foundNothingYet = teams.length === 0 && hasNextPage;
+    const idle = !isFetchingNextPage && !isLoading;
+    if (adminOnly && foundNothingYet && idle) {
+      fetchNextPage();
+    }
+  }, [adminOnly, teams.length, hasNextPage, isFetchingNextPage, isLoading, fetchNextPage]);
 
   const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
@@ -75,6 +93,11 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     }
   };
 
+  // True while a match could still turn up on a later page, so "No teams found" is deferred
+  // until every page has actually been checked instead of flashing between page fetches.
+  const foundNothingYet = teams.length === 0 && hasNextPage;
+  const stillSearchingForMatch = foundNothingYet && (isFetchingNextPage || adminOnly);
+
   return (
     <Select
       showSearch
@@ -88,7 +111,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
       searchValue={searchInput}
       onPopupScroll={handlePopupScroll}
       loading={isLoading}
-      notFoundContent={isLoading ? <LoadingOutlined spin /> : "No teams found"}
+      notFoundContent={isLoading || stillSearchingForMatch ? <LoadingOutlined spin /> : "No teams found"}
       data-testid="team-dropdown"
       popupRender={(menu) => (
         <>
