@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bot, Check, ChevronLeft, ChevronRight, Copy, Sparkles, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LogEntry } from "../columns";
 import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
@@ -310,6 +310,9 @@ export function LogDetailsDrawer({
         className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none"
         style={{ width: DRAWER_WIDTH }}
       >
+        <SheetTitle className="sr-only">
+          {logEntry?.request_id ? `Request ${logEntry.request_id} details` : "Request details"}
+        </SheetTitle>
         <div style={{ height: "100%" }} className="flex relative">
           {!isSidebarCollapsed ? (
             <Button

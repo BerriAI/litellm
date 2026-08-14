@@ -318,8 +318,6 @@ describe("LogDetailContent", () => {
     render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True" })} />);
 
     expect(screen.getByText("Response Cache")).toBeInTheDocument();
-    // Response Cache is the only metric with an info tooltip in this fixture, so an
-    // unscoped lookup still pins the docs link to that label.
     const infoIcons = screen.getAllByRole("img", { name: /info/i });
     expect(infoIcons).toHaveLength(1);
     await user.hover(infoIcons[0]);
@@ -345,7 +343,6 @@ describe("LogDetailContent", () => {
     );
 
     expect(screen.getByText("Prompt Cache Read Tokens")).toBeInTheDocument();
-    // Prompt Cache Read Tokens is the only metric with an info tooltip in this fixture.
     const infoIcons = screen.getAllByRole("img", { name: /info/i });
     expect(infoIcons).toHaveLength(1);
     await user.hover(infoIcons[0]);
