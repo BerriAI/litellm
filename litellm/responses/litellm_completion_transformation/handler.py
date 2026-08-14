@@ -2,8 +2,9 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final
+from collections.abc import Coroutine, Mapping
+from types import MappingProxyType
+from typing import Any, Final, get_type_hints
 
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -18,7 +19,26 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, all_litellm_params
+
+
+def _drop_untranslated_responses_params(kwargs: Mapping[str, object], model: str) -> Mapping[str, object]:
+    """Drop the Responses params this bridge has no chat-completion translation for.
+
+    Every Responses param reaches the bridge twice, once filtered into
+    ``responses_api_request`` and once raw in ``**kwargs``. Forwarding the raw copy sends
+    params the bridge never translated on to the provider, which either rejects them or
+    fails validation before the request is made.
+
+    Subtracting from the Responses TypedDict keeps this a filter rather than an allowlist,
+    so LiteLLM plumbing, credentials and provider-specific params still pass through.
+    """
+    untranslated: Final = (
+        frozenset(get_type_hints(ResponsesAPIOptionalRequestParams))
+        - frozenset(LiteLLMCompletionResponsesConfig.get_supported_openai_params(model))
+        - frozenset(all_litellm_params)
+    )
+    return MappingProxyType({key: value for key, value in kwargs.items() if key not in untranslated})
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -58,7 +78,7 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         completion_args: Final = {}
-        completion_args.update(kwargs)
+        completion_args.update(_drop_untranslated_responses_params(kwargs, model))
         completion_args.update(litellm_completion_request)
         completion_args["_skip_responses_api_bridge"] = True
 
@@ -103,7 +123,9 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         acompletion_args: Final = {}
-        acompletion_args.update(kwargs)
+        acompletion_args.update(
+            _drop_untranslated_responses_params(kwargs, litellm_completion_request.get("model") or "")
+        )
         acompletion_args.update(litellm_completion_request)
         acompletion_args["_skip_responses_api_bridge"] = True
 
