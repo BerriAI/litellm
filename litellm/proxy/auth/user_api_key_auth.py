@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
+    TeamNotFoundError,
     _cache_key_object,
     _can_object_call_model,
     _check_end_user_budget,
@@ -85,6 +86,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import (
     PrismaClient,
@@ -1058,6 +1060,31 @@ async def _read_request_body_deferring_parse_failure(
     except ProxyException as parse_exception:
         return {}, parse_exception  # mutable-ok: request_data is a plain dict across the whole auth path
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
+
+
+async def _record_unparsable_body_failure(
+    user_api_key_dict: UserAPIKeyAuth,
+    body_parse_exception: ProxyException,
+    route: str,
+) -> None:
+    """Record the 400 an unparsable body earns as a failed request log.
+
+    The endpoint never runs for these, so no downstream failure hook writes the
+    spend log row the Admin UI reads. Logging must not change what the caller
+    sees, so a failure here is swallowed and the 400 is raised either way.
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    try:
+        await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
+            request_data={},  # mutable-ok: the failure hook seeds the call id and metadata onto this dict
+            original_exception=body_parse_exception,
+            user_api_key_dict=user_api_key_dict,
+            error_type=ProxyErrorTypes.bad_request_error,
+            route=route,
+        )
+    except Exception as e:  # noqa: BLE001  # any logging failure must leave the caller's 400 untouched
+        verbose_proxy_logger.exception("Failed to log the request rejected for an unparsable body: %s", e)
 
 
 async def _user_api_key_auth_builder(
@@ -2136,6 +2163,28 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     )
 
 
+def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseException) -> bool:
+    """Whether the token's own team fields may stand in for a team that failed to
+    resolve, without widening access.
+
+    A team that is provably gone is a definitive answer, not a degraded read, so
+    nothing may stand in for it and no setting may override that.
+
+    Otherwise the team's grant is merely unknown. A token carrying one may vouch,
+    since replaying a recorded grant cannot widen it and denying every team key
+    while the row is briefly unreadable would trade the widening for an outage. A
+    token carrying none may not: ``team_models=[]`` reads as every model and
+    ``team_blocked=False`` as unblocked. ``allow_requests_on_db_unavailable`` opts
+    back out, and is only consulted here because the failure is known by this
+    point to be a degraded read.
+    """
+    if isinstance(lookup_error, TeamNotFoundError):
+        return False
+    if valid_token.team_models:
+        return True
+    return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+
+
 @tracer.wrap()
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -2339,7 +2388,12 @@ async def _run_centralized_common_checks(
     if isinstance(team_result, BaseException):
         # Token-derived fallback only valid when a team_id is set;
         # _team_obj_from_token asserts that precondition.
-        team_object = _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id is not None else None
+        if user_api_key_auth_obj.team_id is None:
+            team_object = None
+        elif _token_can_vouch_for_team(user_api_key_auth_obj, team_result):
+            team_object = _team_obj_from_token(user_api_key_auth_obj)
+        else:
+            raise team_result
     else:
         team_object = team_result
 
@@ -2673,6 +2727,11 @@ async def user_api_key_auth(
     user_api_key_auth_obj.request_route = normalize_request_route(route)
 
     if body_parse_exception is not None:
+        await _record_unparsable_body_failure(
+            user_api_key_dict=user_api_key_auth_obj,
+            body_parse_exception=body_parse_exception,
+            route=route,
+        )
         raise body_parse_exception
 
     # Resolve caller identity once, here at the seam, into a single per-request

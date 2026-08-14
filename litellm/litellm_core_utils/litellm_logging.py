@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
@@ -176,6 +176,9 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
+    from mcp.types import EmbeddedResource, ImageContent, TextContent
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
@@ -211,14 +214,30 @@ except Exception as e:
     PagerDutyAlerting = CustomLogger
     EnterpriseCallbackControls = None
     EnterpriseStandardLoggingPayloadSetupVAR = None
-_in_memory_loggers: Final[list[Any]] = []
+if TYPE_CHECKING:
+    from litellm.integrations.generic_api.generic_api_callback import (
+        GenericAPILogger as _GenericAPILoggerCls,
+    )
 
-_STANDARD_LOGGING_METADATA_KEYS: Final[frozenset] = frozenset(StandardLoggingMetadata.__annotations__.keys())
+    _GENERIC_API_LOGGER_CLS: Final = _GenericAPILoggerCls
+    _RESEND_EMAIL_LOGGER_FACTORY: Final = CustomLogger
+    _SENDGRID_EMAIL_LOGGER_FACTORY: Final = CustomLogger
+    _SMTP_EMAIL_LOGGER_FACTORY: Final = CustomLogger
+    _PAGERDUTY_ALERTING_FACTORY: Final = CustomLogger
+else:
+    _GENERIC_API_LOGGER_CLS: Final = GenericAPILogger
+    _RESEND_EMAIL_LOGGER_FACTORY: Final = ResendEmailLogger
+    _SENDGRID_EMAIL_LOGGER_FACTORY: Final = SendGridEmailLogger
+    _SMTP_EMAIL_LOGGER_FACTORY: Final = SMTPEmailLogger
+    _PAGERDUTY_ALERTING_FACTORY: Final = PagerDutyAlerting
+_in_memory_loggers: Final[list[CustomLogger]] = []
+
+_STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = frozenset(StandardLoggingMetadata.__annotations__.keys())
 
 ### GLOBAL VARIABLES ###
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
-_CUSTOM_PRICING_KEYS: Final[frozenset] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 
 sentry_sdk_instance = None
 capture_exception = None
@@ -1285,7 +1304,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
         return response_obj
 
-    def _parse_post_mcp_call_hook_response(self, response: MCPPostCallResponseObject | None) -> Any:
+    def _parse_post_mcp_call_hook_response(
+        self, response: MCPPostCallResponseObject | None
+    ) -> "Sequence[TextContent | ImageContent | EmbeddedResource] | None":
         """
         Parse the response from the post_mcp_tool_call_hook
 
@@ -1729,7 +1750,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = self.completion_start_time
 
-    def normalize_logging_result(self, result: Any) -> Any:
+    def normalize_logging_result(self, result: Any) -> object:
         """
         Some endpoints return a different type of result than what is expected by the logging system.
         This function is used to normalize the result to the expected type.
@@ -1765,7 +1786,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
         return logging_result
 
-    def _merge_hidden_params_from_response_into_metadata(self, logging_result: Any) -> None:
+    def _merge_hidden_params_from_response_into_metadata(self, logging_result: object) -> None:
         """
         Copy response._hidden_params into litellm_params.metadata['hidden_params'].
 
@@ -1826,7 +1847,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
             emit_standard_logging_payload(standard_logging_payload)
 
-    def _build_standard_logging_payload(self, init_response_obj: Any, start_time: Any, end_time: Any) -> Any:
+    def _build_standard_logging_payload(
+        self, init_response_obj: object, start_time: Any, end_time: Any
+    ) -> StandardLoggingPayload | None:
         """Build StandardLoggingPayload and accumulate its construction time."""
         _start: Final = time.time()
         payload: Final = get_standard_logging_object_payload(
@@ -1947,7 +1970,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _is_recognized_call_type_for_logging(
         self,
-        logging_result: Any,
+        logging_result: object,
     ):
         """
         Returns True if the call type is recognized for logging (eg. ModelResponse, ModelResponseStream, etc.)
@@ -3439,7 +3462,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=self.model,
                 messages=[],
                 logging_obj=self,
-                optional_params={},
+                optional_params=self.optional_params or {},
                 api_key="",
                 request_data={},
                 encoding=litellm.encoding,
@@ -3460,6 +3483,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
                 model_response=litellm.ModelResponse(),
                 json_mode=None,
+                speed=self.optional_params.get("speed") if self.optional_params else None,
             )
         return result
 
@@ -4216,7 +4240,7 @@ def _init_custom_logger_compatible_class(
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
                     return callback
-            pagerduty_logger: Final = PagerDutyAlerting(**custom_logger_init_args)
+            pagerduty_logger: Final = _PAGERDUTY_ALERTING_FACTORY(**custom_logger_init_args)
             _in_memory_loggers.append(pagerduty_logger)
             return pagerduty_logger
         elif logging_integration == "anthropic_cache_control_hook":
@@ -4246,7 +4270,7 @@ def _init_custom_logger_compatible_class(
             return _gcs_pubsub_logger
         elif logging_integration == "generic_api":
             for callback in _in_memory_loggers:
-                if isinstance(callback, GenericAPILogger):
+                if isinstance(callback, _GENERIC_API_LOGGER_CLS):
                     return callback
             generic_api_logger: Final = GenericAPILogger()
             _in_memory_loggers.append(generic_api_logger)
@@ -4255,21 +4279,21 @@ def _init_custom_logger_compatible_class(
             for callback in _in_memory_loggers:
                 if isinstance(callback, ResendEmailLogger):
                     return callback
-            resend_email_logger: Final = ResendEmailLogger()
+            resend_email_logger: Final = _RESEND_EMAIL_LOGGER_FACTORY()
             _in_memory_loggers.append(resend_email_logger)
             return resend_email_logger
         elif logging_integration == "sendgrid_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SendGridEmailLogger):
                     return callback
-            sendgrid_email_logger: Final = SendGridEmailLogger()
+            sendgrid_email_logger: Final = _SENDGRID_EMAIL_LOGGER_FACTORY()
             _in_memory_loggers.append(sendgrid_email_logger)
             return sendgrid_email_logger
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SMTPEmailLogger):
                     return callback
-            smtp_email_logger: Final = SMTPEmailLogger()
+            smtp_email_logger: Final = _SMTP_EMAIL_LOGGER_FACTORY()
             _in_memory_loggers.append(smtp_email_logger)
             return smtp_email_logger
         elif logging_integration == "humanloop":
@@ -4336,7 +4360,7 @@ def _init_custom_logger_compatible_class(
     return None
 
 
-def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Any | None:
+def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[CustomLogger]) -> "OpenTelemetryV2 | None":
     """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
     instance configured via the preset for ``callback_name``.
 
@@ -4367,7 +4391,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> An
     return v2_logger
 
 
-def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:
+def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list[CustomLogger]) -> None:
     """
     Auto-initialize ArizePhoenixLogger when Phoenix env vars are detected.
 
@@ -4594,7 +4618,7 @@ def get_custom_logger_compatible_class(
                     return callback
         elif logging_integration == "generic_api":
             for callback in _in_memory_loggers:
-                if isinstance(callback, GenericAPILogger):
+                if isinstance(callback, _GENERIC_API_LOGGER_CLS):
                     return callback
         elif logging_integration == "resend_email":
             for callback in _in_memory_loggers:

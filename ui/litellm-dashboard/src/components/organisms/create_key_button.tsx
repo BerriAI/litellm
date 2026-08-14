@@ -18,7 +18,7 @@ import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import ModelAliasManager from "../common_components/ModelAliasManager";
@@ -540,6 +540,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       if (Object.keys(budgetFallbacks).length > 0) {
         formValues.budget_fallbacks = budgetFallbacks;
+      }
+
+      if (formValues.budget_duration === NEVER_RESETS_BUDGET_DURATION) {
+        formValues.budget_duration = null;
       }
 
       let response;
@@ -1064,6 +1068,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                   >
                     <BudgetDurationDropdown
+                      showNeverResets
                       placeholder="Never resets"
                       onChange={(value) => form.setFieldValue("budget_duration", value)}
                     />
@@ -1187,6 +1192,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       </span>
                     }
                     name="throttle_on_budget_exceeded"
+                    valuePropName="checked"
+                  >
+                    <Switch checkedChildren="Yes" unCheckedChildren="No" />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Enable Prompt Caching{" "}
+                        <Tooltip title="Automatically add prompt caching breakpoints (cache_control markers) to requests made with this key, cutting input cost on repeated prompts. Applies to Anthropic and Bedrock Claude models; requests that already set their own cache_control markers are left untouched.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="enable_prompt_caching"
                     valuePropName="checked"
                   >
                     <Switch checkedChildren="Yes" unCheckedChildren="No" />

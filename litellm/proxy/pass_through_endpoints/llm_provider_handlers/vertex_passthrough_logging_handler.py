@@ -1,6 +1,5 @@
 import asyncio
 import re
-from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
@@ -9,6 +8,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
@@ -18,6 +18,12 @@ from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
 )
 from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    is_collection_route,
+    log_batch_registration_result,
+    optional_str,
+    request_tags_from_metadata,
+)
 from litellm.types.utils import (
     Choices,
     EmbeddingResponse,
@@ -39,32 +45,6 @@ else:
 
 # Define EndpointType locally to avoid import issues
 EndpointType = Any
-
-
-def _optional_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _optional_str_tuple(value: object) -> tuple[str, ...] | None:
-    if not isinstance(value, list):
-        return None
-    items: Final = cast(list[object], value)  # cast-ok: isinstance-narrowed; element type unknown
-    return tuple(tag for tag in items if isinstance(tag, str))
-
-
-def _request_tags(request_metadata: Mapping[str, object]) -> tuple[str, ...] | None:
-    """Tags for the batch-cost spend row: the request's own tags when it sent any,
-    otherwise the key's tags, which auth exposes as user_api_key_auth_metadata (a
-    tagged key does not put its tags in the top-level metadata "tags" on the
-    passthrough path)
-    """
-    tags: Final = _optional_str_tuple(request_metadata.get("tags"))
-    if tags:
-        return tags
-    key_auth_metadata: Final = request_metadata.get("user_api_key_auth_metadata")
-    if isinstance(key_auth_metadata, dict):
-        return _optional_str_tuple(key_auth_metadata.get("tags"))
-    return None
 
 
 class VertexPassthroughLoggingHandler:
@@ -133,7 +113,7 @@ class VertexPassthroughLoggingHandler:
                 litellm_params={},
                 api_key="",
                 request_data={},
-                encoding=litellm.encoding,
+                encoding=getattr(litellm, "encoding", None),
             )
             kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
                 litellm_model_response=litellm_model_response,
@@ -685,7 +665,7 @@ class VertexPassthroughLoggingHandler:
 
                 # Store the managed object for cost tracking
                 # This will be picked up by check_batch_cost polling mechanism
-                is_batch_create: Final = url_route.split("?")[0].rstrip("/").endswith("batchPredictionJobs")
+                is_batch_create: Final = is_collection_route(url_route, VERTEX_BATCH_PREDICTION_JOBS_ROUTE)
                 VertexPassthroughLoggingHandler._store_batch_managed_object(
                     unified_object_id=unified_object_id,
                     batch_object=litellm_batch_response,
@@ -810,29 +790,6 @@ class VertexPassthroughLoggingHandler:
             }
 
     @staticmethod
-    def _log_batch_registration_result(
-        finished: asyncio.Task, unified_object_id: str, model_object_id: str, is_batch_create: bool
-    ) -> None:
-        error: Final = finished.exception() if not finished.cancelled() else None
-        if finished.cancelled() or error is not None:
-            consequence: Final = (
-                "its cost will not be tracked" if is_batch_create else "its status and output file may be stale"
-            )
-            verbose_proxy_logger.error(
-                "Failed to store batch managed object with unified_object_id=%s, batch_id=%s; %s: %s",
-                unified_object_id,
-                model_object_id,
-                consequence,
-                error,
-            )
-            return
-        verbose_proxy_logger.info(
-            "Stored batch managed object with unified_object_id=%s, batch_id=%s",
-            unified_object_id,
-            model_object_id,
-        )
-
-    @staticmethod
     def _store_batch_managed_object(
         unified_object_id: str,
         batch_object: LiteLLMBatch,
@@ -863,7 +820,7 @@ class VertexPassthroughLoggingHandler:
 
                 user_api_key_dict: Final = UserAPIKeyAuth(
                     user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
-                    api_key=_optional_str(_request_metadata.get("user_api_key")),
+                    api_key=optional_str(_request_metadata.get("user_api_key")),
                     team_id=_request_metadata.get("user_api_key_team_id"),
                     team_alias=None,
                     user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
@@ -893,14 +850,14 @@ class VertexPassthroughLoggingHandler:
                         model_object_id=model_object_id,
                         file_purpose="batch",
                         user_api_key_dict=user_api_key_dict,
-                        request_tags=_request_tags(_request_metadata),
+                        request_tags=request_tags_from_metadata(_request_metadata),
                         persist_attribution=is_batch_create,
                         create_if_missing=is_batch_create,
                     )
                 )
                 task.add_done_callback(
-                    lambda finished: VertexPassthroughLoggingHandler._log_batch_registration_result(
-                        finished, unified_object_id, model_object_id, is_batch_create
+                    lambda finished: log_batch_registration_result(
+                        finished, "Vertex AI", unified_object_id, model_object_id, is_batch_create
                     )
                 )
             else:

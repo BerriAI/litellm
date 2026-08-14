@@ -279,3 +279,10 @@ def test_every_drain_trigger_reads_the_one_queue_census_owner():
         assert queue in owner_source, queue
     for site in (proxy_utils.update_spend, proxy_utils.update_spend_logs_job, proxy_utils._monitor_spend_logs_queue):
         assert "_total_queued_spend_transactions" in inspect.getsource(site), site.__name__
+
+
+def test_internal_call_origin_never_reaches_the_rollup():
+    """A shadow eval's duplicate carries a real routing_decision, so the decision-presence
+    gate alone would count it; the internal_call_origin stamp must exclude it."""
+    assert _build(metadata=_metadata(internal_call_origin="shadow_eval_router")) is None
+    assert _build() is not None

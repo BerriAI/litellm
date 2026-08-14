@@ -452,6 +452,7 @@ model LiteLLM_VerificationToken {
     created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     updated_by String?
+    settings_updated_at DateTime?             @map("settings_updated_at")
     last_active     DateTime?  // When this key was last used
     rotation_count   Int?       @default(0) // Number of times key has been rotated
     auto_rotate      Boolean?   @default(false) // Whether this key should be auto-rotated
@@ -548,6 +549,7 @@ model LiteLLM_DeletedVerificationToken {
     created_by              String?   // Original creator
     updated_at              DateTime? // Last update timestamp before deletion
     updated_by              String?   // Last user who updated before deletion
+    settings_updated_at       DateTime? // Last configuration change before deletion
     last_active             DateTime? // When this key was last used before deletion
     rotation_count          Int?      @default(0)
     auto_rotate             Boolean?  @default(false)
@@ -1446,6 +1448,44 @@ model LiteLLM_AutoRouterSession {
 
   @@id([api_key, session_id, router_name])
   @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
+}
+
+// Shadow eval: pre-adoption evaluation of an auto-router against a key's live traffic.
+// A sampled slice of requests is duplicated through the router in a detached task and an
+// LLM judge compares real vs shadow responses blind. The job row is immutable config plus
+// stopped_at; every count, status, and spend figure is derived from the append-only
+// attempt rows, so nothing can disagree across pods or stop races.
+model LiteLLM_ShadowEvalJob {
+  id                String   @id @default(cuid())
+  api_key_id        String   // hashed virtual key whose traffic is shadowed
+  router_name       String
+  judge_model       String
+  shadow_percentage Float
+  max_turns         Int      // sample budget: judge at most this many turns
+  created_at        DateTime @default(now())
+  created_by        String?
+  ends_at           DateTime
+  stopped_at        DateTime?
+
+  @@index([api_key_id])
+  @@index([created_at])
+}
+
+// One row per sampled pipeline: a blind verdict (real | shadow | tie) or an error.
+model LiteLLM_ShadowEvalAttempt {
+  id           String   @id @default(cuid())
+  job_id       String
+  request_id   String   // the judged real request
+  outcome      String   // real | shadow | tie | error
+  tier         String?  // router's tier for the prompt, when classified
+  real_model   String?
+  shadow_model String?
+  confidence   Float?
+  judge_cost   Float    @default(0)
+  error        String?
+  created_at   DateTime @default(now())
+
+  @@index([job_id])
 }
 
 // ---------------------------------------------------------------------------

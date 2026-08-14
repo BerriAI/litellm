@@ -2,11 +2,13 @@
 
 import React, { useState } from "react";
 
+import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
+import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -29,6 +31,8 @@ import {
   type BucketRow,
 } from "./autoRouterBenchmarks";
 import { usd } from "./costOptimizationUtils";
+import ShadowEvalSection from "./ShadowEvalSection";
+import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -51,7 +55,7 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const cheaper = stats.saved_spend >= 0;
   return (
     <Card className="overflow-hidden py-0">
-      <div className="grid md:grid-cols-[4fr_3fr_5fr]">
+      <div className="grid md:grid-cols-[1fr_1fr]">
         <div className="flex flex-col justify-center gap-3 p-6">
           <p className="text-sm text-muted-foreground">Total estimated savings</p>
           <div className="flex flex-wrap items-center gap-3">
@@ -64,38 +68,22 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
               {Math.abs(stats.saved_pct).toFixed(0)}%
             </Badge>
           </div>
-        </div>
-
-        <div className="flex flex-col justify-center px-6 pb-6 md:py-6">
           <dl className="divide-y text-sm">
             <div className="flex items-baseline justify-between gap-6 py-3">
               <dt className="text-muted-foreground">Actual auto-router spend</dt>
               <dd className="font-medium tabular-nums text-foreground">{usd(stats.spend)}</dd>
             </div>
             <div className="flex items-baseline justify-between gap-6 py-3">
-              <dt className="text-muted-foreground">Estimated spend at highest-cost model</dt>
+              <dt className="text-muted-foreground">Estimated spend at highest-tier model</dt>
               <dd className="font-medium tabular-nums text-foreground">{usd(stats.baseline_spend)}</dd>
             </div>
           </dl>
         </div>
 
-        <div className="flex flex-col border-t md:border-t-0 md:border-l">
-          <div className="grid flex-1 grid-cols-2 divide-x">
-            <div className="flex flex-col justify-center gap-1 px-6 py-4">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total sessions</p>
-              <p className="text-3xl font-semibold text-foreground">{stats.sessions.toLocaleString()}</p>
-            </div>
-            <div className="flex flex-col justify-center gap-1 px-6 py-4">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total turns</p>
-              <p className="text-3xl font-semibold text-foreground">{stats.turns.toLocaleString()}</p>
-            </div>
-          </div>
-          <dl className="flex flex-col divide-y border-t text-sm">
-            <div className="flex items-center justify-between gap-2 px-6 py-3">
-              <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Avg saved per session</dt>
-              <dd className="text-lg font-semibold tabular-nums text-foreground">{usd(stats.saved_per_session)}</dd>
-            </div>
-          </dl>
+        <div className="flex flex-col items-center justify-center gap-2 border-t p-6 md:border-t-0 md:border-l">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Avg saved per session</p>
+          <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_per_session)}</p>
+          <p className="text-sm text-muted-foreground">across {stats.sessions.toLocaleString()} sessions</p>
         </div>
       </div>
     </Card>
@@ -233,9 +221,10 @@ interface BenchmarksBodyProps {
   error: unknown;
   data: AutoRouterBenchmarksResponse | undefined;
   selectedKey: string;
+  autoRouters: readonly AutoRouterDeployment[];
 }
 
-const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data, selectedKey }) => {
+const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data, selectedKey, autoRouters }) => {
   if (isPending) return <Message>Loading auto-router usage...</Message>;
   if (error instanceof ApiError && error.status === 403) {
     return <Message>Auto-router usage is visible to proxy admin roles only</Message>;
@@ -248,6 +237,8 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
   return (
     <>
       <HeroCard view={view} />
+
+      <TierTurnsChart view={view} autoRouters={autoRouters} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Metric label="Avg turns per session" value={stats.avg_turns_per_session.toFixed(1)} />
@@ -278,10 +269,11 @@ interface AutoRouterBenchmarksTabProps {
   accessToken: string | null;
 }
 
-const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
+const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
   const [range, setRange] = useState<BenchmarkWindow>("30d");
   const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, range);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
+  const { data: autoRouters } = useAutoRouters();
 
   const groups = data?.groups ?? [];
   const selectedLabel = data ? viewFor(data, selectedKey).label : "All auto-routers";
@@ -319,8 +311,46 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
         </div>
       </div>
 
-      <BenchmarksBody isPending={isPending} error={error} data={data} selectedKey={selectedKey} />
+      <BenchmarksBody
+        isPending={isPending}
+        error={error}
+        data={data}
+        selectedKey={selectedKey}
+        autoRouters={autoRouters ?? []}
+      />
     </div>
+  );
+};
+
+const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
+  const [visitedTabs, setVisitedTabs] = useState<readonly string[]>(["usage"]);
+
+  const handleTabChange = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+
+    setVisitedTabs((currentTabs) => (currentTabs.includes(value) ? currentTabs : [...currentTabs, value]));
+  };
+
+  return (
+    <Tabs defaultValue="usage" onValueChange={handleTabChange} className="w-full gap-4">
+      <TabsList>
+        <TabsTrigger value="usage" className="px-3">
+          Usage
+        </TabsTrigger>
+        <TabsTrigger value="shadow-evals" className="px-3">
+          Shadow Evals
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
+        <UsageView accessToken={accessToken} />
+      </TabsContent>
+      <TabsContent value="shadow-evals" keepMounted={visitedTabs.includes("shadow-evals")}>
+        <ShadowEvalSection />
+      </TabsContent>
+    </Tabs>
   );
 };
 

@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
-vi.mock("../utils/roles", () => {
+vi.mock("../utils/roles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils/roles")>();
   return {
+    ...actual,
     all_admin_roles: ["admin", "admin_viewer"],
+    old_admin_roles: ["admin", "admin_viewer"],
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
     rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
@@ -91,6 +94,11 @@ describe("Sidebar (leftnav)", () => {
     collapsed: false,
   };
 
+  afterEach(() => {
+    mockUseAuthorized.mockReset();
+    mockUseOrganizations.mockReset();
+  });
+
   it("should link the logo to the UI home route rather than the proxy origin", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
@@ -174,19 +182,19 @@ describe("Sidebar (leftnav)", () => {
     };
 
     it("hides Playground from Admin Viewer (cost-incurring action)", () => {
-      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.queryByText("Playground")).not.toBeInTheDocument();
     });
 
     it("shows Models + Endpoints to Admin Viewer (read-only)", () => {
-      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
     });
 
     it("shows Agents (under Agentic) to Admin Viewer (read-only)", async () => {
-      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       // Agents is now nested under the "Agentic" submenu — expand parent
       // first to render the children, then assert Agents is visible.
@@ -199,7 +207,7 @@ describe("Sidebar (leftnav)", () => {
     });
 
     it("shows Logs to Admin Viewer", () => {
-      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.getByText("Logs")).toBeInTheDocument();
     });
@@ -266,13 +274,128 @@ describe("Sidebar (leftnav)", () => {
       });
       expect(screen.queryByText("Prompts")).not.toBeInTheDocument();
     });
+
+    it("should hide Old Usage from internal users while keeping other Experimental children", async () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Experimental"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("API Playground")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Old Usage")).not.toBeInTheDocument();
+    });
+
+    it("should show Old Usage to admins", async () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Experimental"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Old Usage")).toBeInTheDocument();
+      });
+    });
+  });
+
+  // Workflow Runs, Memory and Guardrails Monitor render a shell and then 401
+  // for every non-proxy-admin role, because their page-load routes sit outside
+  // internal_user_routes / self_managed_routes. Cost Optimization does not:
+  // its primary call is /user/daily/activity, which every role may make, so
+  // the entry stays and only its proxy-wide tabs are gated inside the page.
+  describe("capability-gated pages whose data is proxy-admin-only", () => {
+    const authFor = (userRole: string) => ({
+      userId: "some-user-id",
+      accessToken: "test-access-token",
+      userRole,
+      isViewOnly: false,
+      token: "test-token",
+      userEmail: "someone@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    afterEach(() => {
+      mockUseAuthorized.mockReset();
+    });
+
+    it("hides Workflow Runs and Memory from an internal user under Agentic", async () => {
+      mockUseAuthorized.mockReturnValue(authFor("internal"));
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Agentic"));
+      });
+      // Liveness gate: the sibling Agents child stays visible to this role, so
+      // the absences below mean the gate fired, not that the group never opened.
+      await waitFor(() => {
+        expect(screen.getByText("Agents")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Workflow Runs")).not.toBeInTheDocument();
+      expect(screen.queryByText("Memory")).not.toBeInTheDocument();
+    });
+
+    // An org admin's session role is "Org Admin", which no capability list
+    // carries, and the proxy denies these routes to org admins too because
+    // `_user_is_org_admin` needs an organization_id the page-load GET never sends.
+    // Agents is already out of reach for this role, so gating the other two
+    // empties the Agentic group entirely and the parent must go with it rather
+    // than degrade into a leaf link to the non-route `?page=agentic`.
+    it("drops the whole Agentic group for an org admin once its last child is gated", () => {
+      mockUseAuthorized.mockReturnValue(authFor("org_admin"));
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      // Liveness gate: Logs carries no role list, so it proves the sidebar rendered.
+      expect(screen.getByText("Logs")).toBeInTheDocument();
+      expect(screen.queryByText("Agentic")).not.toBeInTheDocument();
+      expect(screen.queryByText("Workflow Runs")).not.toBeInTheDocument();
+      expect(screen.queryByText("Memory")).not.toBeInTheDocument();
+    });
+
+    it("keeps the Agentic group for an internal user, who can still see Agents", () => {
+      mockUseAuthorized.mockReturnValue(authFor("internal"));
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      expect(screen.getByText("Agentic")).toBeInTheDocument();
+    });
+
+    it("shows Workflow Runs and Memory to admins", async () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Agentic"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Workflow Runs")).toBeInTheDocument();
+      });
+      expect(screen.getByText("Memory")).toBeInTheDocument();
+    });
+
+    it("hides Guardrails Monitor from an internal user while keeping Usage and Cost Optimization", () => {
+      mockUseAuthorized.mockReturnValue(authFor("internal"));
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      expect(screen.queryByText("Guardrails Monitor")).not.toBeInTheDocument();
+      expect(screen.getByText("Usage")).toBeInTheDocument();
+      expect(screen.getByText("Cost Optimization")).toBeInTheDocument();
+    });
+
+    it("shows Guardrails Monitor to admins", () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      expect(screen.getByText("Guardrails Monitor")).toBeInTheDocument();
+    });
   });
 
   it("should show Organizations tab for organization admins", () => {
-    mockUseAuthorized.mockReturnValueOnce({
+    mockUseAuthorized.mockReturnValue({
       userId: "org-admin-user-id",
       accessToken: "test-access-token",
       userRole: "viewer",
+      isViewOnly: false,
       token: "test-token",
       userEmail: "orgadmin@example.com",
       premiumUser: false,
@@ -280,7 +403,7 @@ describe("Sidebar (leftnav)", () => {
       showSSOBanner: false,
     });
 
-    mockUseOrganizations.mockReturnValueOnce({
+    mockUseOrganizations.mockReturnValue({
       data: [
         {
           organization_id: "org-1",

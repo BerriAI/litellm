@@ -152,6 +152,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: bool | None
     supports_reasoning: bool | None
     supports_adaptive_thinking: bool | None
+    supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
     supports_none_reasoning_effort: bool | None
@@ -2781,11 +2782,13 @@ RoutingDecisionCause = Literal[
 ]
 
 
-InternalCallOrigin = Literal["autorouter_classifier"]
+InternalCallOrigin = Literal["autorouter_classifier", "shadow_eval_router", "shadow_eval_judge"]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
 
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
+SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
+SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
@@ -3385,6 +3388,8 @@ agentic_loop_internal_litellm_params: Final = [
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
+    "_websearch_interception_emit_native_blocks",
+    "_websearch_interception_converted_stream",
 ]
 
 # Proxy-owned callback credentials, stamped from admin-configured team/key callback
@@ -3399,6 +3404,8 @@ all_litellm_params = (
     + [
         "metadata",
         "litellm_metadata",
+        "keepalive_seconds",
+        "allow_client_keepalive_override",
         "litellm_trace_id",
         "litellm_request_debug",
         "guardrails",
@@ -3463,6 +3470,7 @@ all_litellm_params = (
         "caching_groups",
         "ttl",
         "cache",
+        "enable_prompt_caching",
         "no-log",
         "base_model",
         "stream_timeout",
