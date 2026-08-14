@@ -2125,13 +2125,14 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
     ]
 
 
-def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claude(local_model_cost_map):
-    """Regression test for Claude Code 400s on pre-Opus-4.8 Bedrock models:
-    Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet 4.6,
-    Haiku 4.5, etc. ("role 'system' is not supported on this model"), so on
-    models without ``supports_mid_conversation_system`` every system entry must
-    be hoisted into the top-level ``system`` field, mid-conversation ones
-    included."""
+def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
+    """Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet
+    4.6, Haiku 4.5, etc. ("role 'system' is not supported on this model"), but
+    hoisting a mid-conversation reminder into the top-level ``system`` field
+    mutates the cached prefix and reprocesses the whole history. On models
+    without ``supports_mid_conversation_system`` the reminder is converted to a
+    user turn in place instead: the request stays valid and a cache breakpoint
+    before the reminder still hits."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2156,19 +2157,30 @@ def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claud
 
     assert result["messages"] == [
         {"role": "user", "content": "read the file"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+            ],
+        },
         {"role": "assistant", "content": "reading"},
         {"role": "user", "content": "continue"},
     ]
-    assert result["system"] == [
-        {"type": "text", "text": "Base."},
-        {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
-    ]
+    assert result["system"] == [{"type": "text", "text": "Base."}]
 
 
-def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_model_cost_map):
+def test_bedrock_invoke_transform_converts_system_for_unmapped_model(local_model_cost_map):
     """A model with no cost-map entry and no fallback-generalization rule gets
-    the hoist-everything behavior: the safe default is a mutated cache prefix,
-    never a provider 400 from forwarding a role the model may not accept."""
+    the unsupported-model treatment: the safe default converts the reminder to
+    a user turn in place, never a provider 400 from forwarding a role the model
+    may not accept, and never a mutated cache prefix."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2189,10 +2201,23 @@ def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_mod
 
     assert result["messages"] == [
         {"role": "user", "content": "hi"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "mid-conversation reminder"},
+            ],
+        },
         {"role": "assistant", "content": "hello"},
         {"role": "user", "content": "continue"},
     ]
-    assert result["system"] == [{"type": "text", "text": "mid-conversation reminder"}]
+    assert "system" not in result
 
 
 def test_bedrock_invoke_transform_keeps_system_in_place_for_unmapped_future_claude(local_model_cost_map):

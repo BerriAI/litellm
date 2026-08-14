@@ -6,7 +6,7 @@ and the 5 family) must keep a mid-conversation system reminder in place inside
 ``messages`` so the top-level ``system`` prefix stays byte-identical and the
 prompt cache written on turn one is read back in full on turn two. Models
 without the flag (Claude 4.7 and older) reject the role inside ``messages``
-outright, so the proxy must hoist the reminder into the top-level ``system``
+outright, so the proxy must convert the reminder to a user turn in place
 field and the call must still return a completion instead of a provider 400.
 
 The conversation shape mirrors what Claude Code sends mid-session: a cached
@@ -201,7 +201,7 @@ class TestBedrockInvokeMidConversationSystem:
         "llm.messages.bedrock_invoke.mid_conversation_system.nonstream.works",
         exercised_on=[],
     )
-    def test_unflagged_model_hoists_system_reminder_and_succeeds(
+    def test_unflagged_model_converts_system_reminder_and_succeeds(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
         model = _register_invoke_deployment(
@@ -227,5 +227,5 @@ class TestBedrockInvokeMidConversationSystem:
         assert completion.text.strip(), (
             f"{model}: conversation with a mid-conversation system reminder "
             f"returned no text; the reminder was forwarded in place to a model "
-            f"that rejects role 'system' inside messages instead of being hoisted"
+            f"that rejects role 'system' inside messages instead of being converted to a user turn"
         )
