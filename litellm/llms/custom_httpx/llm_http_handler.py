@@ -252,6 +252,30 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
     return False
 
 
+def _collect_ws_project_quota_callbacks() -> list:
+    """Duck-type discover proxy hooks exposing per-frame project ITPM/OTPM
+    enforcement, so the Responses WebSocket loop can charge every
+    ``response.create`` frame, not just the connection's first one.
+
+    Uses duck-typing on ``litellm.callbacks`` (rather than importing the
+    proxy hook directly) to avoid a layering violation (SDK importing from
+    the proxy layer).
+    """
+    try:
+        import litellm as _litellm
+
+        return [
+            cb for cb in _litellm.callbacks if callable(getattr(cb, "enforce_project_io_token_quota_for_frame", None))
+        ]
+    except Exception as exc:  # noqa: BLE001 - discovery must not block the connection
+        verbose_logger.warning(
+            "Responses WebSocket: failed to collect project quota callbacks — "
+            "per-frame ITPM/OTPM enforcement will be skipped. Error: %s",
+            exc,
+        )
+        return []
+
+
 class BaseLLMHTTPHandler:
     async def _make_common_async_call(
         self,
@@ -6168,6 +6192,8 @@ class BaseLLMHTTPHandler:
         - Uses ManagedResponsesWebSocketHandler which makes HTTP streaming calls
         - Forwards events over the websocket connection
         """
+        _ws_quota_callbacks: Final = _collect_ws_project_quota_callbacks()
+
         if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
             from litellm.responses.streaming_iterator import (
                 ManagedResponsesWebSocketHandler,
@@ -6184,6 +6210,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
+                quota_callbacks=_ws_quota_callbacks,
                 **kwargs,
             )
             await handler.run()
@@ -6304,6 +6331,7 @@ class BaseLLMHTTPHandler:
                     first_message=first_message,
                     guardrail_callbacks=_ws_guardrail_callbacks,
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
+                    quota_callbacks=_ws_quota_callbacks,
                     authorized_model=model,
                 )
                 await streaming.bidirectional_forward()

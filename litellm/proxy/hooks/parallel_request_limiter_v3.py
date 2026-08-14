@@ -680,7 +680,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
         config = data.get("config") if "config" in data else data.get("generationConfig")
-        translated_request = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        return GoogleGenAIAdapter().translate_generate_content_to_completion(
             model=data.get("model") if isinstance(data.get("model"), str) else "",
             contents=contents,
             config=config if isinstance(config, dict) else None,
@@ -690,7 +690,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             toolConfig=data.get("toolConfig"),
             tool_config=data.get("tool_config"),
         )
-        return translated_request
 
     @staticmethod
     def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
@@ -2170,6 +2169,41 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         assert itpm_response is not None
         return itpm_response, itpm_reserved, 0
+
+    async def enforce_project_io_token_quota_for_frame(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+    ) -> None:
+        """Reserve one WebSocket ``response.create`` frame's tokens against
+        the caller's project ITPM/OTPM quota.
+
+        The Responses WebSocket connection-level pre-call hook only runs once
+        per connection, but a connection accepts many ``response.create``
+        frames over its lifetime. Without this, a project caller could send
+        unlimited high-token generations after a single minimal reservation.
+        There is no per-frame post-call hook to reconcile against, so --
+        like the batch rate limiter -- this charges the estimate immediately
+        and never refunds it.
+        """
+        descriptors: Final[list[RateLimitDescriptor]] = []
+        self._add_project_io_token_rate_limit_descriptors_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
+        if not descriptors:
+            return
+        response, _itpm_reserved, _otpm_reserved = await self.reserve_io_tokens(
+            descriptors=descriptors,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        if response["overall_code"] == "OVER_LIMIT":
+            self._handle_rate_limit_error(response, descriptors, requested_model)
 
     def create_organization_rate_limit_descriptor(
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None = None
@@ -3858,7 +3892,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         ],
                     )
                     continue
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the plain increment fallback, never a 500
                     verbose_proxy_logger.warning(
                         "Window-guarded token adjustment failed for %s: %s",
                         operation["key"],
