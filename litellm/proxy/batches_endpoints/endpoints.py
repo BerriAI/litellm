@@ -498,10 +498,11 @@ async def retrieve_batch(
             )
 
         if unified_batch_id and batch_cost_poller_is_active():
-            data["litellm_metadata"] = {
-                **(data.get("litellm_metadata") or {}),
-                "batch_ignore_default_logging": True,
-            }
+            litellm_metadata = data.get("litellm_metadata")
+            if not isinstance(litellm_metadata, dict):
+                litellm_metadata = {}  # mutable-ok: the suppression flag must live inside litellm_metadata for the success handler to read it, and this request carried no mapping to extend
+                data["litellm_metadata"] = litellm_metadata
+            litellm_metadata["batch_ignore_default_logging"] = True
 
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info

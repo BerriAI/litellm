@@ -1233,11 +1233,16 @@ async def get_batch_from_database(
 
 def batch_cost_poller_is_active() -> bool:
     """
-    Whether the CheckBatchCost poller is running and will therefore account for a
-    managed batch's cost itself.
+    Whether the CheckBatchCost poller will account for a managed batch's cost itself.
 
-    False whenever the poller cannot be relied on: polling disabled by config, or the
-    job absent from the scheduler because the enterprise import failed.
+    False whenever the poller cannot be relied on: polling disabled by config, the job
+    absent from the scheduler because the enterprise import failed, or the poller not
+    yet having confirmed that the batch_processed column exists. That last condition
+    matters because the poller needs the column both to find outstanding batches and to
+    mark them accounted; without it the poller falls back to a query that excludes
+    terminal statuses, so a batch the retrieve path has already marked complete becomes
+    invisible to it. Defaulting to False until the poller confirms support keeps the
+    retrieve path accounting in exactly the cases the poller would drop the batch.
     """
     from litellm.constants import PROXY_BATCH_POLLING_ENABLED
 
@@ -1249,7 +1254,11 @@ def batch_cost_poller_is_active() -> bool:
         scheduler = getattr(proxy_server_module, "scheduler", None)
         if scheduler is None:
             return False
-        return scheduler.get_job("check_batch_cost_job") is not None
+        job = scheduler.get_job("check_batch_cost_job")
+        if job is None:
+            return False
+        poller = getattr(getattr(job, "func", None), "__self__", None)
+        return getattr(poller, "batch_processed_support_confirmed", False) is True
     except Exception:  # noqa: BLE001  # scheduler backends raise varied types from get_job; an unreadable scheduler means the poller cannot be relied on
         return False
 

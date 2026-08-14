@@ -106,19 +106,44 @@ class _FakeScheduler:
         return self._job
 
 
+class _FakePoller:
+    def __init__(self, confirmed):
+        self.batch_processed_support_confirmed = confirmed
+
+    def check_batch_cost(self):
+        return None
+
+
+def _job_for(poller):
+    if poller is None:
+        return None
+    job = MagicMock()
+    job.func = poller.check_batch_cost
+    return job
+
+
 @pytest.mark.parametrize(
     "polling_enabled, job, expected",
     [
-        (True, object(), True),
+        (True, _job_for(_FakePoller(confirmed=True)), True),
+        (True, _job_for(_FakePoller(confirmed=False)), False),
         (True, None, False),
-        (False, object(), False),
+        (False, _job_for(_FakePoller(confirmed=True)), False),
     ],
-    ids=["poller-running", "job-absent-enterprise-import-failed", "polling-disabled-by-config"],
+    ids=[
+        "poller-running-and-column-confirmed",
+        "poller-running-but-column-unconfirmed",
+        "job-absent-enterprise-import-failed",
+        "polling-disabled-by-config",
+    ],
 )
 def test_batch_cost_poller_is_active(monkeypatch, polling_enabled, job, expected):
     """The predicate must only claim the poller when it can actually be relied on, so a
-    proxy with polling switched off or without the enterprise job keeps accounting for
-    batch cost on the retrieve path."""
+    proxy with polling switched off, without the enterprise job, or whose poller has not
+    confirmed batch_processed support keeps accounting for batch cost on the retrieve
+    path. The unconfirmed case is the one that matters for legacy schemas: without the
+    column the poller falls back to a query excluding terminal statuses, so a batch the
+    retrieve path already marked complete would never be accounted by anyone."""
     import litellm.constants
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -206,3 +231,98 @@ async def test_retrieving_a_completed_batch_still_marks_processed_without_a_cost
 
     assert data["batch_processed"] is True
     assert data["status"] == "complete"
+
+
+def test_batch_cost_poller_is_active_is_false_when_the_job_has_no_bound_poller(monkeypatch):
+    """A scheduler that hands back a plain function rather than a bound method leaves no
+    poller to interrogate, so the predicate stays conservative instead of assuming the
+    column is supported."""
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    def unbound_check_batch_cost():
+        return None
+
+    job = MagicMock()
+    job.func = unbound_check_batch_cost
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", True, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", _FakeScheduler(job), raising=False)
+
+    assert batch_cost_poller_is_active() is False
+
+
+def test_batch_cost_poller_is_active_is_false_when_get_job_raises(monkeypatch):
+    """Scheduler backends raise varied types; an unreadable scheduler must not be read as
+    a working poller."""
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    class _ExplodingScheduler:
+        def get_job(self, job_id):
+            raise RuntimeError("scheduler not started")
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", True, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", _ExplodingScheduler(), raising=False)
+
+    assert batch_cost_poller_is_active() is False
+
+
+
+@pytest.mark.asyncio
+async def test_retrieving_a_batch_whose_status_is_unchanged_writes_nothing(monkeypatch):
+    """A caller polling an already-complete batch must not write at all, so repeated polls
+    cannot flip batch_processed or disturb whichever component owns accounting."""
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: False)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+
+    db_batch_object = MagicMock()
+    db_batch_object.status = "completed"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+    )
+
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_batch_in_database_is_a_noop_for_unmanaged_batches(monkeypatch):
+    """Batches with no managed object row have neither the flag nor a poller queue entry, so
+    this path must leave them alone entirely."""
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+
+    await cu.update_batch_in_database(
+        batch_id="batch-raw-xyz",
+        unified_batch_id=False,
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        operation="retrieve",
+    )
+
+    update_mock.assert_not_awaited()

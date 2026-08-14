@@ -143,6 +143,11 @@ class TestCheckBatchCost:
         assert "complete" not in not_in
         assert "completed" not in not_in
         assert find_call[1]["where"]["batch_processed"] is False
+        # A successful filtered query is the only proof the column exists. The retrieve
+        # path reads this to decide whether handing accounting to the poller is safe:
+        # without the column the poller's fallback query excludes complete/completed, so
+        # a batch already marked complete would never be accounted by anyone.
+        assert check_batch_cost_instance.batch_processed_support_confirmed is True
 
     @pytest.mark.asyncio
     async def test_fallback_query_used_when_batch_processed_missing(
@@ -171,6 +176,7 @@ class TestCheckBatchCost:
         assert calls[1][1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
         # Column absence is now cached — next call should go straight to fallback
         assert check_batch_cost_instance._has_batch_processed_column is False
+        assert check_batch_cost_instance.batch_processed_support_confirmed is False
 
     @pytest.mark.asyncio
     async def test_column_absence_cached_across_cycles(
