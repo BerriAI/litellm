@@ -328,9 +328,7 @@ class AWSEventStreamDecoder:
         # Bedrock can stream multiple content blocks concurrently. Keep the
         # state keyed by contentBlockIndex so a later block start cannot change
         # how an earlier block's delta is interpreted.
-        self._content_blocks_by_content_block_index: dict[
-            int, list[ContentBlockDeltaEvent]
-        ] = {}
+        self._content_blocks_by_content_block_index: dict[int, list[ContentBlockDeltaEvent]] = {}
         self._tool_names_by_content_block_index: dict[int, str] = {}
         self.tool_calls_index: int | None = None
         self.response_id: str | None = None
@@ -422,9 +420,7 @@ class AWSEventStreamDecoder:
                 ## check tool name was formatted by litellm
                 _response_tool_name: Final = start_obj["toolUse"]["name"]
                 response_tool_name: Final = get_bedrock_tool_name(response_tool_name=_response_tool_name)
-                self._tool_names_by_content_block_index[content_block_index] = (
-                    response_tool_name
-                )
+                self._tool_names_by_content_block_index[content_block_index] = response_tool_name
 
                 # response_format is represented by an internal tool call.
                 if self.json_mode is True and response_tool_name == RESPONSE_FORMAT_TOOL_NAME:
