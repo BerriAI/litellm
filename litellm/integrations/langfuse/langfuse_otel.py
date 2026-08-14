@@ -206,6 +206,17 @@ class LangfuseOtelLogger(OpenTelemetry):
                             "arguments": arguments_obj,
                         }
                         output_items_data.append(langfuse_tool_call)
+                    elif item_type == "custom_tool_call":
+                        # Custom (freeform) tools carry a raw string `input` instead of JSON `arguments`
+                        output_items_data.append(
+                            {
+                                "id": getattr(item, "id", ""),
+                                "name": getattr(item, "name", ""),
+                                "call_id": getattr(item, "call_id", ""),
+                                "type": "custom_tool_call",
+                                "input": getattr(item, "input", ""),
+                            }
+                        )
             if output_items_data:
                 safe_set_attribute(
                     span,
