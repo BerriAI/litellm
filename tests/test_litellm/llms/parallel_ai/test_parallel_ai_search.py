@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm
 
@@ -33,10 +34,10 @@ MOCK_V1_RESPONSE = {
 }
 
 
-def _mock_response():
+def _mock_response(payload=None):
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_V1_RESPONSE
+    mock_response.json.return_value = payload if payload is not None else MOCK_V1_RESPONSE
     return mock_response
 
 
@@ -392,3 +393,59 @@ class TestParallelAISearch:
 
             first = response.results[0].model_dump()
             assert first["excerpts"] == ["First excerpt.", "Second excerpt."]
+
+    @pytest.mark.parametrize(
+        "mode,usage,max_results,expected_cost",
+        [
+            ("turbo", [{"name": "sku_search", "count": 1}], None, 0.001),
+            ("basic", [{"name": "sku_search", "count": 1}], None, 0.005),
+            ("advanced", [{"name": "sku_search", "count": 1}], None, 0.005),
+            (
+                "basic",
+                [
+                    {"name": "sku_search", "count": 1},
+                    {"name": "sku_search_additional_results", "count": 2},
+                ],
+                20,
+                0.007,
+            ),
+            ("basic", None, 20, 0.015),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_search_cost_uses_mode_and_provider_usage(self, mode, usage, max_results, expected_cost):
+        response_payload = {**MOCK_V1_RESPONSE, "usage": usage}
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response(response_payload)
+
+            response = await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+                mode=mode,
+                max_results=max_results,
+            )
+
+            assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+    @pytest.mark.asyncio
+    async def test_search_cost_treats_keyword_queries_as_one_request(self):
+        response_payload = {
+            **MOCK_V1_RESPONSE,
+            "usage": [{"name": "sku_search", "count": 1}],
+        }
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response(response_payload)
+
+            response = await litellm.asearch(
+                query=["AI developments", "machine learning trends"],
+                search_provider="parallel_ai",
+                mode="basic",
+            )
+
+            assert response._hidden_params["response_cost"] == pytest.approx(0.005)

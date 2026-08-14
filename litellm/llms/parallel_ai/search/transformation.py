@@ -6,7 +6,7 @@ Parallel AI API Reference: https://docs.parallel.ai/api-reference/search/search
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, TypedDict
+from typing import Final, TypedDict, cast
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -18,6 +18,7 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResponse,
     SearchResult,
 )
+from litellm.llms.parallel_ai.search.cost_calculator import PARALLEL_AI_USAGE_PARAM
 from litellm.secret_managers.main import get_secret_str
 
 
@@ -235,6 +236,13 @@ class ParallelAISearchConfig(BaseSearchConfig):
           reserved for LiteLLM's token-usage object)
         """
         parsed: Final = _ParallelAIV1SearchResponse.model_validate(raw_response.json())
+
+        if parsed.usage is not None:
+            cost_optional_params: Final = cast(dict[str, object], logging_obj.optional_params)
+            logging_obj.optional_params = {
+                **cost_optional_params,
+                PARALLEL_AI_USAGE_PARAM: parsed.usage,
+            }
 
         results: Final = [
             SearchResult.model_validate(
