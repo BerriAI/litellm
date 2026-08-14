@@ -14,7 +14,7 @@ import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { ChevronDown, ChevronRight, ExternalLink, Info, Loader2 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
