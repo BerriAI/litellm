@@ -626,3 +626,35 @@ def test_existing_reasoning_block_is_not_duplicated():
 
     assert "thinking_blocks" not in result
     assert [b for b in result["content"] if b.get("type") == "reasoning"] == [already_converted]
+
+
+def test_reasoning_block_is_not_emitted_as_the_only_content_block():
+    """Databricks rejects a reasoning block as the final block of an assistant message. That
+    is exactly a thinking-plus-tool-call turn, where the call moves to message-level
+    tool_calls and leaves nothing after the reasoning block, so the block is dropped."""
+    result = DatabricksConfig()._move_reasoning_into_content_block(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "bash", "arguments": "{}"}}],
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig-abc"}],
+        }
+    )
+
+    assert "thinking_blocks" not in result
+    assert not any(isinstance(b, dict) and b.get("type") == "reasoning" for b in result.get("content") or [])
+    assert result["tool_calls"][0]["id"] == "call_1"
+
+
+def test_reasoning_block_still_emitted_when_text_follows():
+    """The normal case must keep working: text after the reasoning block is valid."""
+    result = DatabricksConfig()._move_reasoning_into_content_block(
+        {
+            "role": "assistant",
+            "content": "391",
+            "thinking_blocks": [{"type": "thinking", "thinking": "t", "signature": "sig-abc"}],
+        }
+    )
+
+    assert result["content"][0]["type"] == "reasoning"
+    assert result["content"][1] == {"type": "text", "text": "391"}

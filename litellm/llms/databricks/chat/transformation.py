@@ -481,10 +481,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         Databricks rejects both message-level keys outright, and constrains the replacement to
         exactly one reasoning block holding exactly one summary entry, whose signature is
-        required. Blocks without a signature cannot be replayed, and a message already carrying
-        a reasoning block must not gain a second one, so in both cases the keys are dropped
-        rather than sent in a form the API refuses. reasoning_content is a plain-text mirror of
-        the same thinking, so it carries nothing the signed summary does not.
+        required. It also rejects a reasoning block as the final block of an assistant message,
+        which happens when the turn was thinking plus a tool call: the call moves to
+        message-level tool_calls and leaves nothing behind it. So the block is only injected
+        when other content follows it, and a message already carrying a reasoning block never
+        gains a second one. Otherwise the keys are dropped rather than sent in a form the API
+        refuses. reasoning_content is a plain-text mirror of the same thinking, so it carries
+        nothing the signed summary does not.
         """
         dropped: Final = ("thinking_blocks", "reasoning_content")
         stripped: Final = {k: v for k, v in message.items() if k not in dropped}  # mutable-ok: outbound provider JSON
@@ -497,7 +500,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             None,
         )
         holds_reasoning: Final = any(isinstance(b, dict) and b.get("type") == "reasoning" for b in existing)
-        replace: Final = signed is not None and not holds_reasoning
+        replace: Final = signed is not None and not holds_reasoning and bool(existing)
         text: Final = (signed.get("thinking") or "") if signed is not None else ""
         signature: Final = signed["signature"] if signed is not None else ""
         entry: Final = {"type": "summary_text", "text": text, "signature": signature}  # mutable-ok: provider JSON
