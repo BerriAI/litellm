@@ -12,12 +12,17 @@ from litellm.secret_managers.main import str_to_bool
 try:
     import prisma  # optional dependency, only installed when the proxy is generated against a DATABASE_URL
 
-    PRISMA_AVAILABLE = True
+    _prisma_available = True
 except ImportError:
     # Master-key-only deployments run without a DATABASE_URL and never install
     # prisma. The classifiers below must not crash the auth-failure path in that
     # mode, so they short-circuit to False when prisma is unavailable.
-    PRISMA_AVAILABLE = False
+    _prisma_available = False
+
+# Assigned once so the ALL_CAPS name is not redefined across the try/except
+# branches; the module-level ``import prisma`` above is what the classifiers
+# below dereference (``prisma.errors.*``) when this flag is True.
+PRISMA_AVAILABLE = _prisma_available
 
 # Bounds the __cause__/__context__ walk in is_database_service_unavailable_error_in_chain.
 # Real exception chains are a few links deep; the cap also makes the walk cycle-safe.
