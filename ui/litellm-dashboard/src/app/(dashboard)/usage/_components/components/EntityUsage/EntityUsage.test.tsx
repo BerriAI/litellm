@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
@@ -500,18 +500,33 @@ describe("EntityUsage", () => {
     expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
   });
 
-  const selectedPanels = (container: HTMLElement) =>
-    Array.from(container.querySelectorAll("div.tremor-TabPanel-root")).filter(
-      (panel) => panel.getAttribute("aria-selected") === "true",
-    );
+  // An inactive tab panel is marked aria-selected="false" by one tab library and hidden by the
+  // other, so treat either as "not on screen" and the assertion holds whichever one is rendering.
+  const isShowing = (element: HTMLElement): boolean => {
+    for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden")) return false;
+      if (node.getAttribute("aria-selected") === "false") return false;
+    }
+    return true;
+  };
 
-  it.each([
+  const showingCount = (marker: string): number => screen.queryAllByText(marker).filter(isShowing).length;
+
+  const showingText = (text: string): HTMLElement => {
+    const [element] = screen.getAllByText(text).filter(isShowing);
+    expect(element).toBeDefined();
+    return element;
+  };
+
+  const NON_TEAM_PANELS: [string, string][] = [
     ["Cost", "Tag Spend Overview"],
     ["Model Activity", "metrics-source:model_groups"],
     ["Key Activity", "metrics-source:api_keys"],
     ["Endpoint Activity", "Endpoint Usage Panel"],
-  ])("shows only the %s panel for a non-team entity type", async (tabLabel, marker) => {
-    const { container } = render(<EntityUsage {...defaultProps} />);
+  ];
+
+  it.each(NON_TEAM_PANELS)("shows only the %s panel for a non-team entity type", async (tabLabel, marker) => {
+    render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
@@ -521,19 +536,23 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText(tabLabel));
     });
 
-    const selected = selectedPanels(container);
-    expect(selected).toHaveLength(1);
-    expect(selected[0].textContent).toContain(marker);
+    expect(showingCount(marker)).toBeGreaterThan(0);
+    for (const [otherLabel, otherMarker] of NON_TEAM_PANELS) {
+      if (otherLabel === tabLabel) continue;
+      expect(showingCount(otherMarker)).toBe(0);
+    }
   });
 
-  it.each([
+  const TEAM_PANELS: [string, string][] = [
     ["Cost", "Team Spend Overview"],
     ["Model Activity", "metrics-source:model_groups"],
     ["Agent Activity", "metrics-source:entities"],
     ["Key Activity", "metrics-source:api_keys"],
     ["Endpoint Activity", "Endpoint Usage Panel"],
-  ])("shows only the %s panel for the team entity type", async (tabLabel, marker) => {
-    const { container } = render(<EntityUsage {...defaultProps} entityType="team" />);
+  ];
+
+  it.each(TEAM_PANELS)("shows only the %s panel for the team entity type", async (tabLabel, marker) => {
+    render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
       expect(mockTeamDailyActivityCall).toHaveBeenCalled();
@@ -543,9 +562,11 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText(tabLabel));
     });
 
-    const selected = selectedPanels(container);
-    expect(selected).toHaveLength(1);
-    expect(selected[0].textContent).toContain(marker);
+    expect(showingCount(marker)).toBeGreaterThan(0);
+    for (const [otherLabel, otherMarker] of TEAM_PANELS) {
+      if (otherLabel === tabLabel) continue;
+      expect(showingCount(otherMarker)).toBe(0);
+    }
   });
 
   it("should handle empty data gracefully", async () => {
@@ -615,20 +636,19 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText("Model Activity"));
     });
 
-    const modelActivityPanel = () => selectedPanels(container)[0] as HTMLElement;
-    expect(modelActivityPanel().textContent).toContain("metrics-source:model_groups");
+    expect(showingCount("metrics-source:model_groups")).toBeGreaterThan(0);
 
     act(() => {
-      fireEvent.click(within(modelActivityPanel()).getByText("Litellm Model Name"));
+      fireEvent.click(showingText("Litellm Model Name"));
     });
 
-    expect(modelActivityPanel().textContent).toContain("metrics-source:models");
+    expect(showingCount("metrics-source:models")).toBeGreaterThan(0);
 
     act(() => {
-      fireEvent.click(within(modelActivityPanel()).getByText("Public Model Name"));
+      fireEvent.click(showingText("Public Model Name"));
     });
 
-    expect(modelActivityPanel().textContent).toContain("metrics-source:model_groups");
+    expect(showingCount("metrics-source:model_groups")).toBeGreaterThan(0);
   });
 
   it("should display Top Agents title for agent entity type", async () => {
