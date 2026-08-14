@@ -21,6 +21,7 @@ from copy import deepcopy
 from html import escape
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -185,6 +187,7 @@ class _PrismaTableActions(Protocol[_DbRecordT]):
     async def find_many(
         self,
         where: Mapping[str, object] | None = None,
+        include: Mapping[str, bool] | None = None,
     ) -> Sequence[_DbRecordT]: ...
 
     async def update(
@@ -239,6 +242,45 @@ class _HasTeamDetailTable(Protocol):
 
 def _team_detail_db(repo: "_HasTeamDetailTable") -> "_PrismaTableActions[_TeamDetailRow]":
     return repo.table
+
+
+_MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
+
+
+def _decode_model_aliases(value: object) -> object:
+    """``/team/new`` stores team model aliases as a JSON-encoded string in the Json column."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return _MODEL_ALIASES_ADAPTER.validate_json(value)
+    except ValidationError:
+        return None
+
+
+class _TeamModelAliasTable(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_aliases: Annotated[Mapping[str, str] | None, BeforeValidator(_decode_model_aliases)] = None
+
+
+class _TeamRowGrants(BaseModel):
+    team_id: str
+    team_alias: str | None = None
+    models: tuple[str, ...] = ()
+    litellm_model_table: _TeamModelAliasTable | None = None
+
+
+class _CliSsoTeamDetail(BaseModel):
+    """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
+
+    team_id: str | None = None
+    team_alias: str | None = None
+    team_models: tuple[str, ...]
+    team_model_aliases: Mapping[str, str] | None = None
+
+
+_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[_CliSsoTeamDetail, ...])
+_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = _CliSsoTeamDetail(team_models=())
 
 
 class _CustomSsoCall(Protocol):
@@ -2147,27 +2189,55 @@ async def _build_cli_sso_user_defined_values(
     )
 
 
+def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
+    team: Final = _TeamRowGrants.model_validate(team_row)
+    alias_table: Final = team.litellm_model_table
+    return _CliSsoTeamDetail(
+        team_id=team.team_id,
+        team_alias=team.team_alias,
+        team_models=team.models,
+        team_model_aliases=alias_table.model_aliases if alias_table is not None else None,
+    )
+
+
 async def _fetch_cli_sso_team_details(
     prisma_client: PrismaClient,
     teams: Sequence[str],
-) -> list[dict[str, object]]:
-    team_details: Final[list[dict[str, object]]] = []
+) -> tuple[_CliSsoTeamDetail, ...] | None:
+    """``None`` means the lookup itself failed, which is not the same as the user having no teams."""
+    if not teams:
+        return ()
     try:
-        if teams:
-            prisma_teams: Final = await _team_detail_db(TeamRepository(prisma_client)).find_many(
-                where={"team_id": {"in": teams}}
-            )
-            for team_row in prisma_teams:
-                team_dict = team_row.model_dump()
-                team_details.append(
-                    {
-                        "team_id": team_dict.get("team_id"),
-                        "team_alias": team_dict.get("team_alias"),
-                    }
-                )
+        prisma_teams: Final = await _team_detail_db(TeamRepository(prisma_client)).find_many(
+            where={"team_id": {"in": teams}},
+            include={"litellm_model_table": True},
+        )
     except Exception as e:
         verbose_proxy_logger.error("Error fetching team details for CLI SSO session: %s", e)
-    return team_details
+        return None
+    return tuple(_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
+
+
+def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[str]:
+    """The teams a login may bind to: only those whose row still exists.
+
+    A team deleted out from under a membership, which is what deleting an organization
+    leaves behind, can never resolve its grants, so offering it would refuse every
+    future login for that user with nothing they could do to recover.
+    """
+    return [detail.team_id for detail in team_details if detail.team_id is not None]
+
+
+def _selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> _CliSsoTeamDetail | None:
+    """``None`` means the team's grants are unknown. An empty grant is a real value meaning unrestricted,
+    so an unknown one must not be minted as empty."""
+    if team_id is None:
+        return _TEAMLESS_CLI_SSO_TEAM_DETAIL
+    try:
+        details: Final = _CLI_SSO_TEAM_DETAILS_ADAPTER.validate_python(team_details)
+    except ValidationError:
+        return None
+    return next((detail for detail in details if detail.team_id == team_id), None)
 
 
 async def _complete_cli_sso_callback_session(
@@ -2210,6 +2280,12 @@ async def _complete_cli_sso_callback_session(
         teams = user_info.teams if isinstance(user_info.teams, list) else []
 
     team_details: Final = await _fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
+    if team_details is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not resolve team model grants for this login. Please try again",
+        )
+    resolved_teams: Final = _cli_sso_session_teams(team_details)
     attribution_metadata: Final = build_cli_sso_attribution_metadata(result=result)
     if attribution_metadata:
         await _persist_cli_sso_user_metadata(
@@ -2223,8 +2299,8 @@ async def _complete_cli_sso_callback_session(
         "user_role": user_info.user_role,
         "models": user_info.models if hasattr(user_info, "models") else [],
         "user_email": user_email,
-        "teams": teams,
-        "team_details": team_details,
+        "teams": resolved_teams,
+        "team_details": [detail.model_dump() for detail in team_details],
         "attribution_metadata": attribution_metadata,
     }
     flow["sso_complete"] = True
@@ -2233,7 +2309,10 @@ async def _complete_cli_sso_callback_session(
     _set_cli_sso_flow(login_id=key, cache=cli_sso_session_cache, flow=flow)
 
     verbose_proxy_logger.info(
-        "Stored CLI SSO session for user: %s, teams: %s, num_teams: %s", user_info.user_id, teams, len(teams)
+        "Stored CLI SSO session for user: %s, teams: %s, num_teams: %s",
+        user_info.user_id,
+        resolved_teams,
+        len(resolved_teams),
     )
     verify_url: Final = get_custom_url(
         request_base_url=str(request.base_url),
@@ -2401,11 +2480,14 @@ async def cli_poll_key(
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
-            team_alias = None
-            if team_id and isinstance(user_team_details, list):
-                team_alias = next(
-                    (team.get("team_alias") for team in user_team_details if team.get("team_id") == team_id),
-                    None,
+            selected_team: Final = _selected_cli_sso_team_detail(
+                team_details=user_team_details,
+                team_id=team_id,
+            )
+            if selected_team is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Could not resolve the model grants for team: {team_id}. Please run `lite login` again",
                 )
 
             user_info: Final = LiteLLM_UserTable(
@@ -2417,7 +2499,9 @@ async def cli_poll_key(
             jwt_token: Final = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
                 user_info=user_info,
                 team_id=team_id,
-                team_alias=team_alias,
+                team_alias=selected_team.team_alias,
+                team_models=selected_team.team_models,
+                team_model_aliases=selected_team.team_model_aliases,
                 max_budget=None,
             )
 

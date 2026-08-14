@@ -1,11 +1,12 @@
-import { DownloadOutlined, RiseOutlined, SafetyOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef, OnChangeFn, SortingState } from "@tanstack/react-table";
-import { Button, Col, Row, Spin, Typography } from "antd";
+import { Download, Settings, Shield, TrendingUp, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { getGuardrailsUsageOverview } from "@/components/networking";
 import { type PerformanceRow } from "@/components/GuardrailsMonitor/mockData";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
 import { ScoreChart } from "./ScoreChart";
@@ -197,51 +198,42 @@ export function GuardrailsOverview({
       <div className="flex items-start justify-between mb-5">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <SafetyOutlined className="text-lg text-indigo-500" />
+            <Shield className="size-5 text-indigo-500" />
             <h1 className="text-xl font-semibold text-gray-900">Guardrails Monitor</h1>
           </div>
           <p className="text-sm text-gray-500">Monitor guardrail performance across all requests</p>
         </div>
         <div className="flex items-center gap-3">
-          <Button type="default" icon={<DownloadOutlined />} title="Coming soon">
+          <Button variant="outline" title="Coming soon">
+            <Download className="size-4" />
             Export Data
           </Button>
         </div>
       </div>
 
-      <Row gutter={[16, 16]} className="mb-6">
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard
-            label="Blocked Requests"
-            value={metrics.totalBlocked.toLocaleString()}
-            valueColor="text-red-600"
-            icon={<WarningOutlined className="text-red-400" />}
-          />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard
-            label="Pass Rate"
-            value={`${metrics.passRate}%`}
-            valueColor="text-green-600"
-            icon={<RiseOutlined className="text-green-400" />}
-          />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard
-            label="Avg. latency added"
-            value={`${metrics.avgLatency}ms`}
-            valueColor={
-              metrics.avgLatency > 150 ? "text-red-600" : metrics.avgLatency > 50 ? "text-amber-600" : "text-green-600"
-            }
-          />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard label="Active Guardrails" value={metrics.count} />
-        </Col>
-      </Row>
+      <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
+        <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
+        <MetricCard
+          label="Blocked Requests"
+          value={metrics.totalBlocked.toLocaleString()}
+          valueColor="text-red-600"
+          icon={<TriangleAlert className="size-4 text-red-400" />}
+        />
+        <MetricCard
+          label="Pass Rate"
+          value={`${metrics.passRate}%`}
+          valueColor="text-green-600"
+          icon={<TrendingUp className="size-4 text-green-400" />}
+        />
+        <MetricCard
+          label="Avg. latency added"
+          value={`${metrics.avgLatency}ms`}
+          valueColor={
+            metrics.avgLatency > 150 ? "text-red-600" : metrics.avgLatency > 50 ? "text-amber-600" : "text-green-600"
+          }
+        />
+        <MetricCard label="Active Guardrails" value={metrics.count} />
+      </div>
 
       <div className="mb-6">
         <ScoreChart data={chartData} />
@@ -250,7 +242,11 @@ export function GuardrailsOverview({
       <div>
         {(isLoading || error) && (
           <div className="mb-2 flex items-center gap-2">
-            {isLoading && <Spin size="small" />}
+            {isLoading && (
+              <span role="status" aria-busy="true" aria-label="Loading" className="inline-flex">
+                <UiLoadingSpinner className="size-4 text-primary" />
+              </span>
+            )}
             {error && <span className="text-sm text-red-600">Failed to load data. Try again.</span>}
           </div>
         )}
@@ -270,20 +266,20 @@ export function GuardrailsOverview({
           toolbar={() => (
             <div className="flex items-start justify-between gap-4">
               <div>
-                <Typography.Title level={5} className="mb-0! text-gray-900">
-                  Guardrail Performance
-                </Typography.Title>
+                <h5 className="mb-0 text-base font-semibold text-gray-900">Guardrail Performance</h5>
                 <p className="text-xs text-gray-500 mt-0.5">
                   Click a guardrail to view details, logs, and configuration
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <Button
-                  type="default"
-                  icon={<SettingOutlined />}
+                  variant="outline"
+                  size="icon"
                   onClick={() => setEvaluationModalOpen(true)}
                   title="Evaluation settings"
-                />
+                >
+                  <Settings className="size-4" />
+                </Button>
               </div>
             </div>
           )}

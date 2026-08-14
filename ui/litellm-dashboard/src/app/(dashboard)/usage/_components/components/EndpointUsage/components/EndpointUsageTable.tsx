@@ -1,6 +1,6 @@
 import React from "react";
-import { Progress } from "antd";
 import type { ColumnDef } from "@tanstack/react-table";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { MetricWithMetadata } from "@/components/UsagePage/types";
@@ -53,19 +53,14 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
         const failurePercentage = record.api_requests > 0 ? (record.failed_requests / record.api_requests) * 100 : 0;
         const totalPercentage = successPercentage + failurePercentage;
 
-        const strokeColorConfig: Record<string, string> = {
-          "0%": "#22c55e",
-        };
-        if (successPercentage > 0 && successPercentage < 100) {
-          strokeColorConfig[`${successPercentage}%`] = "#22c55e";
-          strokeColorConfig[`${successPercentage + 0.01}%`] = "#ef4444";
-        }
-        strokeColorConfig["100%"] = failurePercentage > 0 ? "#ef4444" : "#22c55e";
-
         return (
           <div className="flex items-center space-x-3">
             <div className="flex-1 relative">
-              <Progress percent={totalPercentage} size="small" strokeColor={strokeColorConfig} showInfo={false} />
+              <Meter value={successPercentage} max={totalPercentage || 100} aria-label="Successful requests">
+                <MeterTrack className={failurePercentage > 0 ? "bg-red-500" : undefined}>
+                  <MeterIndicator className="bg-green-500" />
+                </MeterTrack>
+              </Meter>
             </div>
             <div className="flex items-center space-x-2 text-sm min-w-[100px]">
               <span className="text-green-600 font-medium">{record.successful_requests.toLocaleString()}</span>

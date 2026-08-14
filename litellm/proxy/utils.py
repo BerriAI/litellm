@@ -106,6 +106,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_c
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
     create_missing_views,
+    create_view_tolerating_race,
     should_create_missing_views,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
@@ -678,6 +679,7 @@ class ProxyLogging:
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
+            "metadata": {"headers": kwargs.get("headers") or {}},
         }
 
         return synthetic_data
@@ -3273,7 +3275,10 @@ class PrismaClient:
                 ## check if required view exists ##
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
-                    await self.db.execute_raw("""
+                    await create_view_tolerating_race(
+                        self.db,
+                        "LiteLLM_VerificationTokenView",
+                        """
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
                             SELECT
                             v.*,
@@ -3283,9 +3288,8 @@ class PrismaClient:
                             t.rpm_limit AS team_rpm_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                        """)
-
-                    verbose_proxy_logger.info("LiteLLM_VerificationTokenView Created in DB!")
+                        """,
+                    )
                 else:
                     should_create_views: Final = await should_create_missing_views(db=self.db)
                     if should_create_views:

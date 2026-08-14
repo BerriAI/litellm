@@ -155,6 +155,55 @@ def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_value
     assert token_data["team_alias"] == "test-team"
 
 
+def test_get_cli_jwt_auth_token_carries_team_grants_not_user_allowlist(
+    valid_sso_user_defined_values,
+):
+    """A team-bound `lite login` session token must snapshot the team's grants.
+
+    Without team_models the /v1/models bail-out (`not key_models and not team_models`)
+    treats the session as unrestricted and lists the whole proxy; without
+    team_model_aliases a team alias never resolves on /chat/completions. The user's
+    personal allowlist must stay out of the key `models` slot, since a team-bound
+    credential is governed by the team grant, not by a per-user list.
+    """
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values,
+        team_id="team-123",
+        team_alias="test-team",
+        team_models=("claude-sonnet-4-5", "gpt-4.1"),
+        team_model_aliases={"team-fast": "gpt-4.1-mini"},
+    )
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["team_id"] == "team-123"
+    assert token_data["team_models"] == ["claude-sonnet-4-5", "gpt-4.1"]
+    assert token_data["team_model_aliases"] == {"team-fast": "gpt-4.1-mini"}
+    assert valid_sso_user_defined_values.models == ["gpt-3.5-turbo"]
+    assert token_data["models"] == []
+
+
+def test_get_cli_jwt_auth_token_keeps_user_allowlist_when_no_team(
+    valid_sso_user_defined_values,
+):
+    """A session token with no team bound still carries the user's own allowlist."""
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data.get("team_id") is None
+    assert token_data["models"] == ["gpt-3.5-turbo"]
+    assert token_data["team_models"] == []
+
+
 def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
     valid_sso_user_defined_values,
 ):
@@ -2071,6 +2120,53 @@ async def test_get_team_object_raises_404_when_not_found():
 
     assert exc_info.value.status_code == 404
     assert "Team doesn't exist in db" in str(exc_info.value.detail)
+
+
+def _mock_prisma_for_team_lookup(find_unique):
+    from unittest.mock import MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = find_unique
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
+    """A deleted team and a database that would not answer both surface as a 404,
+    which leaves callers unable to tell a definitive answer from a degraded read.
+    Only the row being positively absent raises the subclass; anything else keeps
+    the plain 404 so every existing caller is unaffected."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_team_object
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    # The database answered, and the row is not there.
+    with pytest.raises(TeamNotFoundError) as absent_info:
+        await get_team_object(
+            team_id="absent-team-lit5522",
+            prisma_client=_mock_prisma_for_team_lookup(AsyncMock(return_value=None)),
+            user_api_key_cache=mock_cache,
+            check_db_only=True,
+        )
+    assert absent_info.value.status_code == 404
+    assert "Team doesn't exist in db" in str(absent_info.value.detail)
+
+    # The database did not answer. Same status and detail, but not the subclass,
+    # so a caller keying on it does not read this as proof the team is gone.
+    with pytest.raises(HTTPException) as unreadable_info:
+        await get_team_object(
+            team_id="unreadable-team-lit5522",
+            prisma_client=_mock_prisma_for_team_lookup(AsyncMock(side_effect=ConnectionError("db unreachable"))),
+            user_api_key_cache=mock_cache,
+            check_db_only=True,
+        )
+    assert unreadable_info.value.status_code == 404
+    assert not isinstance(unreadable_info.value, TeamNotFoundError)
 
 
 # Reject Client-Side Metadata Tags Tests
