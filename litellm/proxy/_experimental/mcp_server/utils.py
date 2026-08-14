@@ -910,23 +910,43 @@ def _mcp_client_side_auth_header_name() -> str:
         return MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME
 
 
+def _identity_header_names() -> frozenset[str]:
+    """Lowercased header names the deployment reads the caller's identity out of. A name here
+    is a claim about who the caller is rather than a secret, and ``get_user_from_headers``
+    resolves it off the request this module reconstructs, so dropping one would lose end user
+    attribution on the MCP paths that leave ``end_user_id`` unset at connect time."""
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except ImportError:
+        return frozenset()
+    if not general_settings:
+        return frozenset()
+    user_header: Final = general_settings.get("user_header_name")
+    mappings: Final = general_settings.get("user_header_mappings") or ()
+    mapped: Final = (mapping.get("header_name") for mapping in mappings if isinstance(mapping, Mapping))
+    return frozenset(name.lower() for name in (user_header, *mapped) if isinstance(name, str) and name)
+
+
 def _forwarded_upstream_header_names() -> frozenset[str]:
     """Lowercased header names that a configured MCP server forwards upstream through its
     ``extra_headers`` allowlist. The names are chosen by the admin, so no prefix rule can
     recognize them, and a caller supplied value under one of them is an upstream credential.
 
-    ``authorization`` is left out because ``clean_headers`` already strips it, and adding it
+    ``authorization`` is left out because ``clean_headers`` already strips it, and claiming it
     here would change which header ``authenticated_with_header`` resolves to on the oauth
-    passthrough config, which lists it in ``extra_headers`` by design."""
+    passthrough config, which lists it in ``extra_headers`` by design. Identity headers are
+    left out for the same reason: naming one in ``extra_headers`` forwards the caller's
+    identity upstream, it does not turn that identity into a secret."""
     try:
         from .mcp_server_manager import global_mcp_server_manager
     except ImportError:
         return frozenset()
+    exempt: Final = _identity_header_names() | frozenset({"authorization"})
     return frozenset(
         name.lower()
         for server in global_mcp_server_manager.get_registry().values()
         for name in (server.extra_headers or ())
-        if isinstance(name, str) and name.lower() != "authorization"
+        if name.lower() not in exempt
     )
 
 
@@ -1019,7 +1039,8 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     too: these headers are read back out of the metadata to change proxy behaviour, so
     leaving one in place would let any MCP client turn off the redaction an admin
     configured. This path carries no key or team object to authorize an opt-out with, so
-    it always strips them."""
+    it always strips them. ``host`` goes too, so that a caller cannot name the deployment in
+    the guardrail payload and the spend row the way it could once name the request URL."""
     from starlette.datastructures import Headers
 
     from litellm.proxy.litellm_pre_call_utils import (
@@ -1031,6 +1052,7 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     excluded: Final = (
         _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
+        | frozenset({"host"})
     )
     cleaned: Final = clean_headers(
         Headers(raw_headers),

@@ -143,6 +143,26 @@ class TestLoggingSafeMcpHeaders:
 
         assert safe == {"x-nuid": "nuid-1"}
 
+    def test_strips_caller_asserted_host(self):
+        """This mapping reaches the guardrail payload and the list_tools spend row, so a caller
+        must not be able to name the deployment there either."""
+        safe = logging_safe_mcp_headers({"host": "evil.attacker.example", "x-nuid": "nuid-1"})
+
+        assert safe == {"x-nuid": "nuid-1"}
+
+    def test_keeps_identity_header_a_server_also_forwards(self):
+        """get_user_from_headers resolves end user attribution off this same request, so a header
+        the deployment reads identity from stays even when a server forwards it upstream."""
+        with patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"user_header_name": "x-user-email"},
+            clear=False,
+        ):
+            with _configured_servers(_server_forwarding("x-user-email", "x-github-token")):
+                safe = logging_safe_mcp_headers({"x-user-email": "alice@corp.example", "x-github-token": "ghp_secret"})
+
+        assert safe == {"x-user-email": "alice@corp.example"}
+
     def test_keeps_authorization_classification_for_oauth_passthrough(self):
         """clean_headers already strips authorization, and claiming it here would change which
         header authenticated_with_header resolves to on a config that lists it by design."""
@@ -211,3 +231,19 @@ class TestBuildSyntheticMcpRequest:
 
         assert "x-github-token" not in request.headers
         assert request.headers.get("x-nuid") == "nuid-1"
+
+    def test_keeps_identity_header_so_end_user_attribution_survives(self):
+        """add_litellm_data_to_request reads user_header_name off this request to fill
+        end_user_id, so forwarding that header upstream must not remove it here."""
+        with patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"user_header_name": "x-user-email"},
+            clear=False,
+        ):
+            with _configured_servers(_server_forwarding("x-user-email")):
+                request = build_synthetic_mcp_request(
+                    path="/mcp/tools/call",
+                    raw_headers={"x-user-email": "alice@corp.example"},
+                )
+
+        assert request.headers.get("x-user-email") == "alice@corp.example"
