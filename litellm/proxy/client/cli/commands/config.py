@@ -1,8 +1,9 @@
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlparse
 
@@ -11,7 +12,7 @@ from pydantic import TypeAdapter
 
 from .private_json import write_private_json
 
-ALLOWED_CONFIG_KEYS: Final[tuple[str, ...]] = ("base_url",)
+HIDDEN_COMMANDS_KEY: Final = "hidden_commands"
 
 _config_adapter: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
 
@@ -49,6 +50,48 @@ def get_config_value(key: str) -> str | None:
     return load_config().get(key)
 
 
+def parse_hidden_commands(raw: str | None) -> frozenset[str]:
+    """Split a stored `hidden_commands` value, e.g. "codex, opencode"."""
+    return frozenset(name.strip() for name in (raw or "").split(",") if name.strip())
+
+
+def hidden_command_names() -> frozenset[str]:
+    """Top-level commands the operator chose to keep out of `lite`'s listings."""
+    return parse_hidden_commands(get_config_value(HIDDEN_COMMANDS_KEY))
+
+
+def _normalize_base_url(value: str) -> str:
+    parsed: Final = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise click.UsageError("base_url must be a full http:// or https:// URL including a host")
+    if "?" in value or "#" in value:
+        raise click.UsageError("base_url must not include a query string or fragment")
+    return value.rstrip("/")
+
+
+def _normalize_hidden_commands(value: str) -> str:
+    names: Final = parse_hidden_commands(value)
+    if not names:
+        raise click.UsageError(
+            f"{HIDDEN_COMMANDS_KEY} must be a comma-separated list of command names, e.g. "
+            f"`lite config set {HIDDEN_COMMANDS_KEY} codex,opencode`. To list everything again, "
+            f"run `lite config unset {HIDDEN_COMMANDS_KEY}`"
+        )
+    if any(" " in name for name in names):
+        raise click.UsageError(f"{HIDDEN_COMMANDS_KEY} entries must be single command names, without spaces")
+    return ",".join(sorted(names))
+
+
+_NORMALIZERS: Final[Mapping[str, Callable[[str], str]]] = MappingProxyType(
+    {
+        "base_url": _normalize_base_url,
+        HIDDEN_COMMANDS_KEY: _normalize_hidden_commands,
+    }
+)
+
+ALLOWED_CONFIG_KEYS: Final[tuple[str, ...]] = tuple(_NORMALIZERS)
+
+
 @click.group(name="config")
 def config_commands() -> None:
     """Manage persistent CLI configuration (~/.litellm/config.json)"""
@@ -59,17 +102,11 @@ def config_commands() -> None:
 @click.argument("value")
 def set_config(key: str, value: str) -> None:
     """Set a config KEY to VALUE (e.g. `lite config set base_url https://your-proxy.example.com`)"""
-    if key not in ALLOWED_CONFIG_KEYS:
+    normalizer: Final = _NORMALIZERS.get(key)
+    if normalizer is None:
         raise click.UsageError(f"Unknown config key '{key}'. Allowed keys: {', '.join(ALLOWED_CONFIG_KEYS)}")
 
-    if key == "base_url":
-        parsed: Final = urlparse(value)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise click.UsageError("base_url must be a full http:// or https:// URL including a host")
-        if "?" in value or "#" in value:
-            raise click.UsageError("base_url must not include a query string or fragment")
-
-    normalized_value: Final = value.rstrip("/")
+    normalized_value: Final = normalizer(value)
     save_config({**load_config(), key: normalized_value})
     click.echo(f"Set {key} = {normalized_value} in {get_config_file_path()}")
 
