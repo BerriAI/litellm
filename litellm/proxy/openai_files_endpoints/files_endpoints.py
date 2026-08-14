@@ -7,7 +7,6 @@
 
 import asyncio
 import traceback
-from types import MappingProxyType
 from typing import Any, BinaryIO, Final, cast, get_args
 
 import httpx
@@ -44,6 +43,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    add_internal_model_credentials,
     apply_team_provider_credentials,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -707,18 +707,12 @@ async def get_file_content(
 
             model: Final = cast(str | None, data.get("model"))
             if model:
-                deployment_credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model)
-                trusted_model_credentials: Final = (
-                    {"_litellm_internal_model_credentials": MappingProxyType(dict(deployment_credentials))}
-                    if deployment_credentials is not None
-                    else {}
-                )
+                add_internal_model_credentials(data=data, llm_router=llm_router, model_id=model)
                 response = await llm_router.afile_content(
                     **{
                         "model": model,
                         "file_id": file_id,
                         **data,
-                        **trusted_model_credentials,
                     }
                 )
 
