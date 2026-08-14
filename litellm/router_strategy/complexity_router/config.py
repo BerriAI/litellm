@@ -22,6 +22,20 @@ class ComplexityTier(str, Enum):
     REASONING = "REASONING"
 
 
+class ClassificationRubric(str, Enum):
+    """Which calibration examples the built-in classifier rubric carries."""
+
+    LEGACY = "legacy"
+    AGENTIC = "agentic"
+    CHAT = "chat"
+
+
+# Unset means LEGACY, so upgrading never moves an existing router's tier decisions or its bill. A
+# router created through the dashboard is stamped with a preset at create time, which is how new
+# routers get the calibrated rubric without changing what is already running.
+DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubric.LEGACY
+
+
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
     ComplexityTier.MEDIUM,
@@ -273,6 +287,20 @@ class ClassifierLLMConfig(BaseModel):
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
     )
+    classification_rubric: ClassificationRubric | None = Field(
+        default=None,
+        description=(
+            "Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, "
+            "multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the "
+            "most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed "
+            "traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational "
+            "traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without "
+            "changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples "
+            "existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive "
+            "with system_prompt, which replaces the rubric this would select. Only applies when classifier_type "
+            "is 'llm'."
+        ),
+    )
     system_prompt: str | None = Field(
         default=None,
         description=(
@@ -297,6 +325,21 @@ class ClassifierLLMConfig(BaseModel):
         if value is not None and not value.strip():
             raise ValueError("classifier_llm_config.system_prompt must be non-empty; omit it to use the default rubric")
         return value
+
+    @model_validator(mode="after")
+    def _reject_rubric_with_system_prompt(self) -> "ClassifierLLMConfig":
+        # A custom prompt is the classifier's whole system role, so a preset set alongside it would never
+        # reach the wire. Rejecting it beats honoring one of two settings the operator asked for.
+        #
+        # None, not model_fields_set, is what marks the preset unchosen: this model is dumped and
+        # re-validated in place (see /auto_router/test_routing), and a dump re-states every field, so
+        # keying on fields_set would reject on the second pass what it accepted on the first.
+        if self.system_prompt is not None and self.classification_rubric is not None:
+            raise ValueError(
+                "classifier_llm_config.classification_rubric and system_prompt are mutually exclusive: system_prompt replaces "
+                "the built-in rubric the preset would select. Drop one."
+            )
+        return self
 
 
 class ComplexityRouterConfig(BaseModel):
@@ -508,13 +551,39 @@ class ComplexityRouterConfig(BaseModel):
             "session's first turn and reuse it for every later turn, skipping re-classification. "
             "Off by default so every turn is classified on its own merits and routed to the cheapest "
             "adequate tier. Set True to keep a multi-turn session on one model, which preserves "
-            "provider prompt caches and avoids cross-model conversation-history errors."
+            "provider prompt caches and avoids cross-model conversation-history errors. Always "
+            "implies the deployment pin regardless of deployment_affinity: the session sticks to "
+            "one deployment of the pinned model, since freezing the model while re-shuffling its "
+            "deployments would still go cache-cold."
+        ),
+    )
+    deployment_affinity: bool = Field(
+        default=True,
+        description=(
+            "When True and a session_id is resolvable on the request, pin the deployment chosen "
+            "inside each routed model group and reuse it whenever the session returns to that "
+            "group, without pinning which group the session routes to. Independent of "
+            "session_affinity, which pins the model group instead (and always carries this "
+            "deployment pin with it): with session_affinity off, "
+            "every turn is still classified on its own merits while a session that escalates to a "
+            "stronger tier and comes back still lands on the deployment it used before, which is "
+            "what keeps a provider prompt cache warm. Pins are held per model group, so switching "
+            "tiers does not disturb the pin left behind in the previous group. On by default "
+            "because re-shuffling a conversation across deployments of the same model discards "
+            "that cache for no benefit; set False to keep every turn load-balanced across the "
+            "group, which is what a deployment set with tight per-deployment rate limits wants. "
+            "Inert when no session_id is resolvable, since there is nothing to key a pin on, and "
+            "suppressed when plugins are configured, for the same reason session_affinity is."
         ),
     )
     session_affinity_ttl_seconds: int = Field(
         default=3600,
         gt=0,
-        description="TTL for the session affinity pin; refreshed on every cache hit",
+        description=(
+            "TTL for the session affinity pin; refreshed on every cache hit. Bounds both the "
+            "session_affinity model pin and the deployment_affinity deployment pin, so it measures "
+            "idle time for the session's routing decisions rather than total session length"
+        ),
     )
 
     plugins: list[RoutingPlugin] | None = Field(

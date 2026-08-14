@@ -3,11 +3,15 @@ import { Select } from "antd";
 
 const { Option } = Select;
 
+export const NEVER_RESETS_BUDGET_DURATION = "none";
+
 interface BudgetDurationDropdownProps {
   value?: string | null;
-  onChange?: (value: string) => void;
+  onChange?: (value: string | undefined) => void;
   className?: string;
   style?: React.CSSProperties;
+  placeholder?: string;
+  showNeverResets?: boolean;
 }
 
 const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
@@ -15,6 +19,8 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
   onChange,
   className = "",
   style = {},
+  placeholder = "n/a",
+  showNeverResets = false,
 }) => {
   return (
     <Select
@@ -22,9 +28,10 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
       value={value || undefined}
       onChange={onChange}
       className={className}
-      placeholder="n/a"
+      placeholder={placeholder}
       allowClear
     >
+      {showNeverResets ? <Option value={NEVER_RESETS_BUDGET_DURATION}>Never resets</Option> : null}
       <Option value="1h">hourly</Option>
       <Option value="24h">daily</Option>
       <Option value="7d">weekly</Option>

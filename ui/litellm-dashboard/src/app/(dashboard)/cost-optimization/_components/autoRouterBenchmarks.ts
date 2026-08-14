@@ -24,8 +24,11 @@ export const windowFor = (range: BenchmarkWindow, now: Date): { start_date: stri
 
 export interface BenchmarkView {
   label: string;
-  stats: AutoRouterBenchmarkTotals;
+  stats: AutoRouterBenchmarkTotals | AutoRouterBenchmarkGroup;
 }
+
+export const viewGroup = (view: BenchmarkView): AutoRouterBenchmarkGroup | null =>
+  "router_name" in view.stats ? view.stats : null;
 
 export const groupKey = (group: AutoRouterBenchmarkGroup): string => `${group.router_name} ${group.router_type}`;
 

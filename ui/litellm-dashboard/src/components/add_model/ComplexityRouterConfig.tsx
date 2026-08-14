@@ -15,6 +15,7 @@ export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
 export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
 export const DEFAULT_SESSION_AFFINITY = false;
+export const DEFAULT_DEPLOYMENT_AFFINITY = true;
 
 export interface ComplexityTiers {
   SIMPLE: string[];
@@ -23,9 +24,48 @@ export interface ComplexityTiers {
   REASONING: string[];
 }
 
+export type ClassificationRubric = "legacy" | "agentic" | "chat";
+
+/** What an unset preset means, matching the backend: the rubric as it shipped before calibration. */
+export const DEFAULT_CLASSIFICATION_RUBRIC: ClassificationRubric = "legacy";
+
+/**
+ * Stamped on a classifier being switched on for the first time. There is no prior tier behaviour to
+ * preserve at that moment, so a newly configured classifier gets the calibrated rubric while every
+ * router already running an LLM classifier keeps the one it has.
+ */
+export const NEW_CLASSIFIER_CLASSIFICATION_RUBRIC: ClassificationRubric = "agentic";
+
+export const CLASSIFICATION_RUBRIC_DESCRIPTIONS: Record<ClassificationRubric, { label: string; description: string }> =
+  {
+    legacy: {
+      label: "Legacy (uncalibrated)",
+      description:
+        "The rubric as it shipped before calibration examples, with no worked examples at all. Routers created " +
+        "before this setting existed use it, so their tier decisions and spend are unchanged. It over-routes " +
+        "ordinary engineering to the most expensive tier.",
+    },
+    agentic: {
+      label: "Agentic",
+      description:
+        "Anchors routine installs, builds, multi-file edits, and standard debugging at " +
+        "Medium, so ordinary engineering does not route to your most expensive tier. Suits agent, terminal, and " +
+        "coding-assistant traffic, and mixed traffic.",
+    },
+    chat: {
+      label: "Chat",
+      description:
+        "Drops the engineering examples, for a router serving only conversational traffic that never sees those " +
+        "requests.",
+    },
+  };
+
+export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESCRIPTIONS) as ClassificationRubric[];
+
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  classification_rubric?: ClassificationRubric;
   system_prompt?: string;
 }
 
@@ -56,6 +96,7 @@ export interface ComplexityRouterConfigValue {
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
   session_affinity?: boolean;
+  deployment_affinity?: boolean;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -277,14 +318,26 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
           },
           {
-            key: "session-affinity",
+            key: "affinity",
             label: (
               <Text strong style={{ color: "#374151" }}>
-                Advanced: Session Affinity
+                Advanced: Affinity
               </Text>
             ),
             children: (
               <>
+                <div className="flex items-center gap-2 mb-2">
+                  <Switch
+                    checked={value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY}
+                    onChange={(deploymentAffinity) => onChange({ ...value, deployment_affinity: deploymentAffinity })}
+                    aria-label="Pin a session to one deployment per model group"
+                  />
+                  <Text strong>Pin a session to one deployment per model group</Text>
+                </div>
+                <Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 12 }}>
+                  Keeps a session on the same deployment within a group, so provider prompt caches stay warm. Turn off
+                  to load-balance every turn.
+                </Text>
                 <div className="flex items-center gap-2 mb-2">
                   <Switch
                     checked={value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
@@ -294,10 +347,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <Text strong>Pin a session to its first model</Text>
                 </div>
                 <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
-                  Off by default: every turn is classified on its own merits and routed to the cheapest adequate tier.
-                  Turn this on to reuse the model chosen on a session&apos;s first turn for every later turn, which
-                  preserves provider prompt caches and avoids cross-model conversation-history errors, at the cost of
-                  keeping the whole session on the first turn&apos;s tier.
+                  Keeps a session on its first turn&apos;s model instead of re-classifying each turn. Also pins the
+                  deployment.
                 </Text>
               </>
             ),

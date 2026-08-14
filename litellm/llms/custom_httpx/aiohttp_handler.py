@@ -221,7 +221,7 @@ class BaseLLMAIOHTTPHandler:
                     timeout=timeout,
                     stream=stream,
                     files=files,
-                    content=content,
+                    content=content if content is not None else None,
                     params=params,
                 )
             except httpx.HTTPStatusError as e:
