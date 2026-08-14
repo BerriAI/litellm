@@ -167,10 +167,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return {
             **message,
             "role": "user",
-            "content": [
-                {"type": "text", "text": self._CONVERTED_SYSTEM_NOTE},
-                *self._as_system_content_blocks(message.get("content")),
-            ],
+            "content": self._as_system_content_blocks(self._CONVERTED_SYSTEM_NOTE)
+            + self._as_system_content_blocks(message.get("content")),
         }
 
     def _normalize_system_role_messages(self, anthropic_messages_request: dict, model: str) -> None:

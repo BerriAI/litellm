@@ -211,24 +211,36 @@ def _assert_unflagged_model_converts_and_succeeds(
 ) -> None:
     model = _register_deployment(client, resources, params)
     key = resources.key(models=[model])
+    system_block = _cacheable_system_block(unique_marker())
 
-    body = RichMessagesRequest(
+    primed = _prime_prompt_cache(client, key, model, system_block)
+
+    reminder_turn_body = RichMessagesRequest(
         model=model,
-        system=[TextBlock(text="You are terse.")],
+        system=[system_block],
         messages=[
-            _user_turn(f"Say hi. Run {unique_marker()}."),
+            _user_turn(primed.first_user_text, cached=True),
             _system_reminder_turn(),
-            RichMessage(role="assistant", content=[TextBlock(text="Hi.")]),
-            _user_turn("Say bye."),
+            RichMessage(role="assistant", content=[TextBlock(text="OK.")]),
+            _user_turn("Reply with one word again.", cached=True),
         ],
     )
-    completion = unwrap(_post_messages(client, key, body))
+    second = unwrap(_post_messages(client, key, reminder_turn_body))
 
-    assert completion.role == "assistant", f"{model}: unexpected role {completion.role!r}"
-    assert completion.text.strip(), (
+    assert second.role == "assistant", f"{model}: unexpected role {second.role!r}"
+    assert second.text.strip(), (
         f"{model}: conversation with a mid-conversation system reminder returned "
         f"no text; the reminder was forwarded in place to a model that rejects "
         f"role 'system' inside messages instead of being converted to a user turn"
+    )
+    assert second.usage.cache_read_input_tokens >= primed.full_prefix_tokens, (
+        f"{model}: reminder turn read {second.usage.cache_read_input_tokens} cached "
+        f"tokens, expected at least the {primed.full_prefix_tokens} cached on turn "
+        f"one ({primed.prefix_read_tokens} system prefix + "
+        f"{primed.first_turn_creation_tokens} first user turn); the reminder was "
+        f"hoisted into the top-level system field instead of being converted to a "
+        f"user turn in place, mutating the cached prefix and re-billing the "
+        f"conversation at cache-write pricing"
     )
 
 

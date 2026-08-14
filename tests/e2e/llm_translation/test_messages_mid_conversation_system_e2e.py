@@ -208,24 +208,36 @@ class TestBedrockInvokeMidConversationSystem:
             endpoints_client, resources, UNFLAGGED_INVOKE_MODEL
         )
         key = resources.key(models=[model])
+        system_block = _cacheable_system_block(unique_marker())
 
-        body = RichMessagesRequest(
+        primed = _prime_prompt_cache(endpoints_client, key, model, system_block)
+
+        reminder_turn_body = RichMessagesRequest(
             model=model,
-            system=[TextBlock(text="You are terse.")],
+            system=[system_block],
             messages=[
-                _user_turn(f"Say hi. Run {unique_marker()}."),
+                _user_turn(primed.first_user_text, cached=True),
                 _system_reminder_turn(),
-                RichMessage(role="assistant", content=[TextBlock(text="Hi.")]),
-                _user_turn("Say bye."),
+                RichMessage(role="assistant", content=[TextBlock(text="OK.")]),
+                _user_turn("Reply with one word again.", cached=True),
             ],
         )
-        completion = unwrap(_post_messages(endpoints_client, key, body))
+        second = unwrap(_post_messages(endpoints_client, key, reminder_turn_body))
 
-        assert completion.role == "assistant", (
-            f"{model}: unexpected role {completion.role!r}"
+        assert second.role == "assistant", (
+            f"{model}: unexpected role {second.role!r}"
         )
-        assert completion.text.strip(), (
+        assert second.text.strip(), (
             f"{model}: conversation with a mid-conversation system reminder "
             f"returned no text; the reminder was forwarded in place to a model "
             f"that rejects role 'system' inside messages instead of being converted to a user turn"
+        )
+        assert second.usage.cache_read_input_tokens >= primed.full_prefix_tokens, (
+            f"{model}: reminder turn read {second.usage.cache_read_input_tokens} "
+            f"cached tokens, expected at least the {primed.full_prefix_tokens} "
+            f"cached on turn one ({primed.prefix_read_tokens} system prefix + "
+            f"{primed.first_turn_creation_tokens} first user turn); the reminder "
+            f"was hoisted into the top-level system field instead of being "
+            f"converted to a user turn in place, mutating the cached prefix and "
+            f"re-billing the conversation at cache-write pricing"
         )
