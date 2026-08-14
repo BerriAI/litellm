@@ -3,10 +3,16 @@ import { Member } from "@/components/networking";
 import { StatusBadge } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { ColumnsType } from "antd/es/table";
 import { Crown, Info, User, UserPlus } from "lucide-react";
 import React from "react";
 import TableIconActionButton from "./IconActionButton/TableIconActionButtons/TableIconActionButton";
+
+export interface MemberTableColumn {
+  title: React.ReactNode;
+  key: React.Key;
+  dataIndex?: keyof Member;
+  render?: (value: Member[keyof Member], member: Member, index: number) => React.ReactNode;
+}
 
 export interface MemberTableProps {
   members: Member[];
@@ -16,22 +22,14 @@ export interface MemberTableProps {
   onAddMember?: () => void;
   roleColumnTitle?: string;
   roleTooltip?: string;
-  extraColumns?: ColumnsType<Member>;
+  extraColumns?: MemberTableColumn[];
   showDeleteForMember?: (member: Member) => boolean;
   emptyText?: string;
 }
 
-type ExtraColumn = ColumnsType<Member>[number];
-
-const extraColumnTitle = (column: ExtraColumn): React.ReactNode =>
-  typeof column.title === "function" ? null : column.title;
-
-const extraColumnCell = (column: ExtraColumn, member: Member, index: number): React.ReactNode => {
-  const dataIndex = "dataIndex" in column && typeof column.dataIndex === "string" ? column.dataIndex : undefined;
-  const value = dataIndex ? member[dataIndex as keyof Member] : undefined;
-  const rendered = column.render?.(value, member, index);
-  if (typeof rendered === "string" || typeof rendered === "number") return rendered;
-  return React.isValidElement(rendered) ? rendered : null;
+const extraColumnCell = (column: MemberTableColumn, member: Member, index: number): React.ReactNode => {
+  const value = column.dataIndex ? member[column.dataIndex] : undefined;
+  return column.render ? column.render(value, member, index) : value;
 };
 
 const STICKY_ACTIONS_CLASS = "sticky right-0 w-[120px] bg-background";
@@ -70,8 +68,8 @@ export default function MemberTable({
                 roleColumnTitle
               )}
             </TableHead>
-            {extraColumns.map((column, columnIndex) => (
-              <TableHead key={column.key ?? columnIndex}>{extraColumnTitle(column)}</TableHead>
+            {extraColumns.map((column) => (
+              <TableHead key={column.key}>{column.title}</TableHead>
             ))}
             <TableHead className={STICKY_ACTIONS_CLASS}>Actions</TableHead>
           </TableRow>
@@ -104,8 +102,8 @@ export default function MemberTable({
                     <span className="capitalize">{member.role || "-"}</span>
                   </span>
                 </TableCell>
-                {extraColumns.map((column, columnIndex) => (
-                  <TableCell key={column.key ?? columnIndex}>{extraColumnCell(column, member, memberIndex)}</TableCell>
+                {extraColumns.map((column) => (
+                  <TableCell key={column.key}>{extraColumnCell(column, member, memberIndex)}</TableCell>
                 ))}
                 <TableCell className={STICKY_ACTIONS_CLASS}>
                   {canEdit ? (

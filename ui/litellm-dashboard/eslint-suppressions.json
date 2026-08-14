@@ -2398,11 +2398,6 @@
       "count": 2
     }
   },
-  "src/components/common_components/MemberTable.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/common_components/MetadataKeyValueFields.test.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2888,9 +2883,6 @@
   },
   "src/components/organization/organization_view.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
