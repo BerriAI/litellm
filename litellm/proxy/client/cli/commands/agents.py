@@ -24,8 +24,6 @@ _KNOWN_AGENTS: Final[dict[str, tuple[str, frozenset[str]]]] = {
     "opencode": ("OpenCode", frozenset({PROFILE_OPENAI})),
 }
 
-_HIDDEN_AGENTS: Final[frozenset[str]] = frozenset({"codex", "opencode"})
-
 _INSTALL_DOCS: Final[dict[str, str]] = {
     "claude": "https://docs.claude.com/en/docs/claude-code/setup",
     "codex": "https://developers.openai.com/codex/cli",
@@ -258,12 +256,11 @@ def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify
         raise click.ClickException(str(e))
 
 
-def _make_agent_command(binary: str, display_name: str, *, hidden: bool) -> click.Command:
+def _make_agent_command(binary: str, display_name: str) -> click.Command:
     @click.command(
         name=binary,
         context_settings={"ignore_unknown_options": True},
         short_help=f"Run {display_name} through your LiteLLM proxy",
-        hidden=hidden,
     )
     @click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
     @click.argument("args", nargs=-1, type=click.UNPROCESSED)
@@ -281,15 +278,8 @@ def _make_agent_command(binary: str, display_name: str, *, hidden: bool) -> clic
 
 
 def agent_commands() -> tuple[click.Command, ...]:
-    """Build one top-level command per known agent, e.g. `lite claude`.
-
-    Agents in _HIDDEN_AGENTS stay invokable but are marked hidden so they drop
-    out of `lite --help` and the interactive shell's command listing.
-    """
-    return tuple(
-        _make_agent_command(binary, name, hidden=binary in _HIDDEN_AGENTS)
-        for binary, (name, _profiles) in _KNOWN_AGENTS.items()
-    )
+    """Build one top-level command per known agent, e.g. `lite claude`."""
+    return tuple(_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items())
 
 
 __all__ = [
