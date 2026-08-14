@@ -3845,9 +3845,9 @@ async def delete_team(
     )
 
     # Sweep again now the team is gone. A `/team/member_add` that landed between the first sweep
-    # and the delete would have re-appended the reference; once the row is gone no further add can
-    # get past member_add's own team lookup. Both passes are idempotent, and keeping the first one
-    # means a failure here still leaves a team the admin can retry deleting.
+    # and the delete would have re-appended the reference; an add still in flight sees the row
+    # missing under its own row lock and sweeps what it wrote. Both passes are idempotent, and
+    # keeping the first one means a failure here still leaves a team the admin can retry deleting.
     await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
 
     return deleted_teams
