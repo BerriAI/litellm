@@ -486,39 +486,24 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         rather than sent in a form the API refuses. reasoning_content is a plain-text mirror of
         the same thinking, so it carries nothing the signed summary does not.
         """
-        stripped: Final = cast(
-            dict[str, Any],
-            {key: value for key, value in message.items() if key not in ("thinking_blocks", "reasoning_content")},
-        )
+        dropped: Final = ("thinking_blocks", "reasoning_content")
+        stripped: Final = {k: v for k, v in message.items() if k not in dropped}  # mutable-ok: outbound provider JSON
         content: Final = stripped.get("content")
-        existing_blocks: Final = (
-            [{"type": "text", "text": content}] if isinstance(content, str) and content else list(content or [])
-        )
-        if any(isinstance(block, dict) and block.get("type") == "reasoning" for block in existing_blocks):
-            return cast(AllMessageValues, stripped)
-
-        signed_block: Final = next(
-            (
-                block
-                for block in message.get("thinking_blocks") or []
-                if isinstance(block, dict) and block.get("signature")
-            ),
+        as_text: Final = ({"type": "text", "text": content},)  # mutable-ok: outbound provider JSON
+        listed: Final = tuple(content) if isinstance(content, list) else ()
+        existing: Final = as_text if isinstance(content, str) and content else listed
+        signed: Final = next(
+            (b for b in message.get("thinking_blocks") or () if isinstance(b, dict) and b.get("signature")),
             None,
         )
-        if signed_block is None:
-            return cast(AllMessageValues, stripped)
-
-        reasoning_block: Final = {
-            "type": "reasoning",
-            "summary": [
-                {
-                    "type": "summary_text",
-                    "text": signed_block.get("thinking") or "",
-                    "signature": signed_block["signature"],
-                }
-            ],
-        }
-        return cast(AllMessageValues, {**stripped, "content": [reasoning_block, *existing_blocks]})
+        holds_reasoning: Final = any(isinstance(b, dict) and b.get("type") == "reasoning" for b in existing)
+        replace: Final = signed is not None and not holds_reasoning
+        text: Final = (signed.get("thinking") or "") if signed is not None else ""
+        signature: Final = signed["signature"] if signed is not None else ""
+        entry: Final = {"type": "summary_text", "text": text, "signature": signature}  # mutable-ok: provider JSON
+        block: Final = {"type": "reasoning", "summary": [entry]}  # mutable-ok: outbound provider JSON
+        rebuilt: Final = {**stripped, "content": [block, *existing]}  # mutable-ok: outbound provider JSON
+        return cast(AllMessageValues, rebuilt if replace else stripped)  # cast-ok: same TypedDict, shape unchanged
 
     @staticmethod
     def extract_content_str(
