@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import io
 import os
 import pathlib
@@ -904,3 +905,36 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
         litellm.in_memory_llm_clients_cache = LLMClientCache()
         client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
         assert client.timeout.read == 300.0
+
+
+class TestHandlerGCDoesNotCloseInUseClient:
+    """Regression for litellm#24929: a cached AsyncHTTPHandler/HTTPHandler that
+    falls out of the client cache on TTL eviction must not close its
+    underlying httpx client via __del__. LLMClientCache stops referencing an
+    evicted handler but a streaming response can still be reading through its
+    client; closing on GC severs that connection mid-stream.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_handler_gc_does_not_close_client(self):
+        handler = AsyncHTTPHandler()
+        client = handler.client
+        assert not client.is_closed
+
+        del handler
+        gc.collect()
+        await asyncio.sleep(0.05)
+
+        assert not client.is_closed, "handler GC closed a client that may still be streaming"
+        await client.aclose()
+
+    def test_sync_handler_gc_does_not_close_client(self):
+        handler = HTTPHandler()
+        client = handler.client
+        assert not client.is_closed
+
+        del handler
+        gc.collect()
+
+        assert not client.is_closed, "handler GC closed a client that may still be streaming"
+        client.close()
