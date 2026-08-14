@@ -37,6 +37,15 @@ else:
     GoogleCredentialsObject = Any
 
 
+def _import_token_state() -> "type[TokenState]":
+    try:
+        from google.auth.credentials import TokenState
+    except ImportError:
+        raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
+
+    return TokenState
+
+
 class VertexBase:
     def __init__(self) -> None:
         super().__init__()
@@ -397,7 +406,7 @@ class VertexBase:
         Look up cached credentials and return (token, project_id) if the token
         is FRESH. Returns None if not cached or not fresh.
         """
-        from google.auth.credentials import TokenState
+        TokenState: Final = _import_token_state()
 
         creds, cached_project_id = self._unpack_cached_credentials(credential_cache_key)
         if (
@@ -423,7 +432,7 @@ class VertexBase:
         credentials object so the caller can schedule a background refresh
         without holding the per-key async lock.
         """
-        from google.auth.credentials import TokenState
+        TokenState: Final = _import_token_state()
 
         creds, cached_project_id = self._unpack_cached_credentials(credential_cache_key)
         if creds is None:
@@ -457,7 +466,7 @@ class VertexBase:
         Falls back to expired/valid checks if token_state is unavailable
         (e.g. older google-auth versions or mock objects in tests).
         """
-        from google.auth.credentials import TokenState as _TokenState
+        _TokenState: Final = _import_token_state()
 
         token_state: Final = getattr(credentials, "token_state", None)
         if isinstance(token_state, _TokenState):
@@ -978,7 +987,7 @@ class VertexBase:
         only one coroutine refreshes while others wait on the lock. Uses native
         async refresh for service_account and authorized_user credentials.
         """
-        from google.auth.credentials import TokenState
+        TokenState: Final = _import_token_state()
 
         cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
         credential_cache_key: Final = (cache_credentials, project_id)
