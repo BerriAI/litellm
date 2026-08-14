@@ -18,11 +18,12 @@ Quick summary:
 """
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -75,6 +76,9 @@ else:
     ParallelRequestLimiter = Any
     RateLimitStatus = dict[str, Any]
     RateLimitDescriptor = dict[str, Any]
+
+
+_BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class BatchFileUsage(BaseModel):
@@ -214,7 +218,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             tpm_limit_type=None,
             model_has_failures=False,
         )
-        self.parallel_request_limiter._add_project_io_token_rate_limit_descriptors_from_metadata(
+        self.parallel_request_limiter.add_project_io_token_rate_limit_descriptors_from_metadata(
             user_api_key_dict=user_api_key_dict,
             requested_model=self._get_batch_routing_model(data),
             descriptors=descriptors,
@@ -314,7 +318,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
     def _estimate_entry_output_tokens(
         self,
-        entry: dict,
+        entry: Mapping[str, object],
         min_configured_otpm_limit: int | None,
     ) -> int:
         """Conservative per-row output-token estimate for the project OTPM reservation.
@@ -325,16 +329,21 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         that omits ``max_tokens`` can't be used to bypass OTPM the way an
         unbounded streaming request could.
         """
-        body: Final = entry.get("body", {}) or {}
+        raw_body: Final = entry.get("body")
+        body: Final[Mapping[str, object]] = (
+            MappingProxyType(_BATCH_BODY_ADAPTER.validate_python(raw_body))
+            if isinstance(raw_body, Mapping)
+            else MappingProxyType({})  # mutable-ok: immediately frozen empty fallback
+        )
         if body.get("input") is not None and body.get("messages") is None and body.get("prompt") is None:
             return 0  # embeddings: no output tokens
-        explicit_cap = body.get("max_tokens", body.get("max_completion_tokens"))
+        explicit_cap: Final = body.get("max_tokens", body.get("max_completion_tokens"))
         if explicit_cap is not None:
             try:
                 return max(0, int(explicit_cap))
             except (TypeError, ValueError):
                 pass
-        return self.parallel_request_limiter._no_max_tokens_output_floor(min_configured_otpm_limit)
+        return self.parallel_request_limiter.no_max_tokens_output_floor(min_configured_otpm_limit)
 
     @staticmethod
     def _has_applicable_batch_rate_limits(
@@ -446,7 +455,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 f"Limit resets at: {reset_time_formatted}"
             )
         else:  # tokens
-            batch_token_count = (
+            batch_token_count: Final = (
                 batch_usage.output_tokens
                 if descriptor.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
                 else batch_usage.total_tokens
@@ -496,8 +505,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 data=data,
             )
 
-        increments: Final[list[dict[Literal["requests", "tokens"], int]]] = [
-            {
+        increments: Final = [  # mutable-ok: atomic limiter API requires mutable increment records
+            {  # mutable-ok: atomic limiter API requires mutable increment records
                 "requests": batch_usage.request_count,
                 "tokens": batch_usage.output_tokens
                 if d.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
@@ -530,7 +539,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
         user_api_key_dict: UserAPIKeyAuth | None = None,
         data: dict | None = None,
-        descriptors: list["RateLimitDescriptor"] | None = None,
+        descriptors: Sequence["RateLimitDescriptor"] | None = None,
     ) -> BatchFileUsage:
         """
         Count number of requests and tokens in a batch input file.
@@ -545,13 +554,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         Returns:
             BatchFileUsage with total_tokens, output_tokens, and request_count
         """
-        otpm_limits: Final = [
+        otpm_limits: Final = tuple(
             int(v)
-            for d in (descriptors or [])
+            for d in (descriptors or ())
             if d.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
-            for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
+            for rate_limit in (d.get("rate_limit"),)
+            for v in (rate_limit.get("tokens_per_unit") if rate_limit is not None else None,)
             if v is not None
-        ]
+        )
         min_configured_otpm_limit: Final = min(otpm_limits) if otpm_limits else None
         try:
             # Check if this is a managed file (base64 encoded unified file ID)
@@ -605,7 +615,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # the counter can't measure is estimated, not hard-rejected.
             models: Final[set] = set()
             total_tokens = 0
-            output_tokens = 0
+            output_tokens = 0  # rebind-ok: accumulated per JSONL row in the loop below
             request_count = 0
             for raw_line in _iter_batch_input_lines(file_content_bytes):
                 request_count += 1
@@ -613,9 +623,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     entry = json.loads(raw_line)
                 except Exception:
                     total_tokens += _estimate_batch_entry_tokens(raw_line)
-                    output_tokens += self.parallel_request_limiter._no_max_tokens_output_floor(
-                        min_configured_otpm_limit
-                    )
+                    output_tokens += self.parallel_request_limiter.no_max_tokens_output_floor(min_configured_otpm_limit)
                     continue
                 if isinstance(entry, dict):
                     model = (entry.get("body") or {}).get("model")
@@ -623,9 +631,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         models.add(model)
                     output_tokens += self._estimate_entry_output_tokens(entry, min_configured_otpm_limit)
                 else:
-                    output_tokens += self.parallel_request_limiter._no_max_tokens_output_floor(
-                        min_configured_otpm_limit
-                    )
+                    output_tokens += self.parallel_request_limiter.no_max_tokens_output_floor(min_configured_otpm_limit)
                 try:
                     total_tokens += _count_entry_tokens(entry)
                 except Exception:

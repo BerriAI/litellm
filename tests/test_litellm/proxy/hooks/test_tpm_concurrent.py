@@ -3582,18 +3582,24 @@ async def test_streaming_combined_usage_reconciles_project_io_reservations(
     assert [operation["increment_value"] for operation in otpm_adjustments] == [-45]
 
 
-def test_aggregate_only_combined_usage_keeps_project_io_reservations(rate_limiter):
+def test_aggregate_only_combined_usage_reconciles_project_io_reservations(rate_limiter):
     handler, _cache = rate_limiter
     stash = get_or_create_request_stash()
     stash.itpm_reserved_tokens = 100
     stash.itpm_reserved_scopes = frozenset(
         {(PROJECT_ITPM_DESCRIPTOR_KEY, "project:model")}
     )
+    stash.otpm_reserved_tokens = 80
+    stash.otpm_reserved_scopes = frozenset(
+        {(PROJECT_OTPM_DESCRIPTOR_KEY, "project:model")}
+    )
     kwargs = {
         "combined_usage_object": Usage(total_tokens=55),
     }
 
-    assert handler._build_io_token_reservation_ops(kwargs, object()) == ()
+    operations = handler._build_io_token_reservation_ops(kwargs, object())
+
+    assert [operation["increment_value"] for operation in operations] == [-45, -25]
 
 
 def test_raw_split_usage_dict_reconciles_project_io_tokens(rate_limiter):
