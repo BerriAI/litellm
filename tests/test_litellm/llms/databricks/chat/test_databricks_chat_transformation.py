@@ -444,9 +444,6 @@ def _streaming_chunk(usage=None, choices=None):
     ids=["warm_cache_read", "cold_cache_write"],
 )
 def test_chunk_parser_surfaces_prompt_cache_usage(cache_read, cache_creation, expected_cached, expected_written):
-    """Databricks returns Anthropic prompt-cache counts in the streaming usage object,
-    but chunk_parser dropped usage entirely, so cache-aware pricing never reached the
-    cost calculator and every streamed request was billed at the full input rate."""
     iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
 
     result = iterator.chunk_parser(
