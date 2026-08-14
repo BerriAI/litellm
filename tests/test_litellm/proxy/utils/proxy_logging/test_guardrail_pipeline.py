@@ -351,6 +351,44 @@ async def test_maybe_execute_pipelines_skips_pipelines_with_other_mode(proxy_log
 
 
 @pytest.mark.asyncio
+async def test_maybe_execute_pipelines_reads_litellm_metadata_when_caller_sends_own_metadata(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """On /v1/messages the proxy stores policy state in ``litellm_metadata``, while the
+    caller's provider-facing ``metadata`` (Claude Code sends ``metadata.user_id``) stays
+    untouched. The pipeline must still run."""
+    pipeline = MagicMock()
+    pipeline.mode = "pre_call"
+    pipeline.steps = []
+    fake_result = MagicMock()
+    fake_result.terminal_action = "allow"
+    fake_result.modified_data = None
+    fake_result.step_results = []
+    data = {
+        "metadata": {"user_id": "user_abc"},
+        "litellm_metadata": {"_guardrail_pipelines": [("policy-1", pipeline)]},
+        "messages": [],
+        "model": "m",
+    }
+    executed = MagicMock(return_value=fake_result)
+
+    async def fake_execute_steps(**kwargs):
+        return executed(**kwargs)
+
+    monkeypatch.setattr(
+        "litellm.proxy.policy_engine.pipeline_executor.PipelineExecutor.execute_steps",
+        fake_execute_steps,
+    )
+    await proxy_logging._maybe_execute_pipelines(
+        data=data,
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="anthropic_messages",
+        event_hook="pre_call",
+    )
+    executed.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_maybe_execute_pipelines_blocks_on_block_terminal_action_raises(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
