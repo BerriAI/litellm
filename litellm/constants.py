@@ -1745,6 +1745,9 @@ PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
+# Deployments named in the lapsed-window alert before it is truncated, so a fleet-wide
+# expiry cannot produce an alert too large for the channel delivering it.
+PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
 # Slack allowed when deciding a sentinel row is stale. The row's updated_at and the
 # run's cutoff are stamped by different hosts, so clock skew between them must not let
 # one run delete a charge another just wrote. A stale row is hours old and a concurrent
