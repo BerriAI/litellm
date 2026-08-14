@@ -10,9 +10,10 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import Request, Response
+from fastapi.responses import StreamingResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -20,25 +21,30 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 from litellm.types.llms.openai import ResponsesAPIStatus
 
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
 
 async def background_streaming_task(
     polling_id: str,
-    data: dict,
+    data,
     polling_handler: ResponsePollingHandler,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    general_settings: dict,
-    llm_router,
-    proxy_config,
-    proxy_logging_obj,
+    general_settings,
+    llm_router: "Router | None",
+    proxy_config: "ProxyConfig",
+    proxy_logging_obj: "ProxyLogging",
     select_data_generator,
     user_model,
-    user_temperature,
-    user_request_timeout,
-    user_max_tokens,
-    user_api_base,
-    version,
+    user_temperature: float | None,
+    user_request_timeout: float | None,
+    user_max_tokens: int | None,
+    user_api_base: str | None,
+    version: str | None,
 ):
     """
     Background task to stream response and update cache
@@ -69,7 +75,7 @@ async def background_streaming_task(
         # Make streaming request.
         # Pre-call checks (rate limits, guardrails, budget) were already run
         # before polling ID creation, so skip them here to avoid double-counting.
-        response: Final = await processor.base_process_llm_request(
+        response: Final[StreamingResponse] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,

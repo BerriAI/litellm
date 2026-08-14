@@ -36,6 +36,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
@@ -526,7 +527,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         model_rpm_limit: modelRpmLimit,
         max_budget: values.max_budget,
         soft_budget: sanitizeNumeric(values.soft_budget),
-        budget_duration: values.budget_duration,
+        budget_duration: values.budget_duration ?? null,
         metadata: {
           ...parsedMetadata,
           ...passthroughRoutesMetadata,
@@ -1152,11 +1153,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Accordion>
 
                     <Form.Item label="Reset Budget" name="budget_duration">
-                      <Select placeholder="n/a">
-                        <Select.Option value="24h">daily</Select.Option>
-                        <Select.Option value="7d">weekly</Select.Option>
-                        <Select.Option value="30d">monthly</Select.Option>
-                      </Select>
+                      <BudgetDurationDropdown placeholder="Never resets" />
                     </Form.Item>
 
                     <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
