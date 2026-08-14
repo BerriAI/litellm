@@ -85,6 +85,13 @@ class TestLoggingSafeMcpHeaders:
 
         assert safe == {"x-nuid": "nuid-1"}
 
+    def test_strips_client_controlled_redaction_opt_out(self):
+        """litellm-disable-message-redaction is read back out of the logged metadata to turn off
+        redaction, so leaving it in place lets any MCP client undo what an admin configured."""
+        safe = logging_safe_mcp_headers({"litellm-disable-message-redaction": "true", "x-nuid": "nuid-1"})
+
+        assert safe == {"x-nuid": "nuid-1"}
+
     def test_strips_upstream_mcp_credentials(self):
         safe = logging_safe_mcp_headers(
             {

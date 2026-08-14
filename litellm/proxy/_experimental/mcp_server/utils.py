@@ -981,12 +981,25 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     """The MCP request's client headers, sanitized the way the chat completions path
     sanitizes them before they reach a logging callback or a guardrail: proxy key
     headers stripped, including the custom key header name the deployment configured,
-    upstream MCP credentials dropped, and credential-bearing values masked."""
+    upstream MCP credentials dropped, and credential-bearing values masked.
+
+    Client-controlled behaviour flags (``litellm-disable-message-redaction``) are dropped
+    too: these headers are read back out of the metadata to change proxy behaviour, so
+    leaving one in place would let any MCP client turn off the redaction an admin
+    configured. This path carries no key or team object to authorize an opt-out with, so
+    it always strips them."""
     from starlette.datastructures import Headers
 
-    from litellm.proxy.litellm_pre_call_utils import clean_headers, redact_credential_headers
+    from litellm.proxy.litellm_pre_call_utils import (
+        UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS,
+        clean_headers,
+        redact_credential_headers,
+    )
 
-    excluded: Final = _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+    excluded: Final = (
+        _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+        | UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
+    )
     cleaned: Final = clean_headers(
         Headers(raw_headers),
         litellm_key_header_name=_custom_litellm_key_header_name(),
