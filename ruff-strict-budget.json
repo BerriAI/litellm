@@ -24,7 +24,7 @@
     "limit": 133
   },
   "ANN401": {
-    "limit": 1342
+    "limit": 1341
   },
   "ASYNC230": {
     "limit": 11
@@ -57,7 +57,7 @@
     "limit": 3
   },
   "BLE001": {
-    "limit": 2924
+    "limit": 2923
   },
   "C401": {
     "limit": 8
@@ -147,7 +147,7 @@
     "limit": 3
   },
   "PLR1714": {
-    "limit": 257
+    "limit": 256
   },
   "PLW0127": {
     "limit": 57
@@ -249,7 +249,7 @@
     "limit": 113
   },
   "TRY300": {
-    "limit": 860
+    "limit": 859
   },
   "UP028": {
     "limit": 2
