@@ -237,6 +237,11 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.NVIDIA_RIVA)).toBe("nvidia_riva/nvidia/parakeet-ctc-1_1b-asr");
     });
 
+    it("should resolve enum keys from the provider dropdown, not just enum values", () => {
+      expect(getPlaceholder("NVIDIA_RIVA")).toBe("nvidia_riva/nvidia/parakeet-ctc-1_1b-asr");
+      expect(getPlaceholder("WATSONX")).toBe("watsonx/ibm/granite-3-3-8b-instruct");
+    });
+
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
       expect(getPlaceholder("UnknownProvider" as any)).toBe("gpt-3.5-turbo");
     });
