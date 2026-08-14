@@ -1214,7 +1214,7 @@ class ProxyBaseLLMRequestProcessing:
     async def common_processing_pre_call_logic(
         self,
         request: Request,
-        general_settings: dict,
+        general_settings: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         proxy_logging_obj: ProxyLogging,
         proxy_config: ProxyConfig,
@@ -1482,7 +1482,7 @@ class ProxyBaseLLMRequestProcessing:
     async def _pre_call_with_fallbacks(
         self,
         request: Request,
-        general_settings: dict,
+        general_settings: Mapping[str, object],
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
         version: str | None,
@@ -1758,9 +1758,9 @@ class ProxyBaseLLMRequestProcessing:
             "adelete_run",
         ],
         proxy_logging_obj: ProxyLogging,
-        general_settings: dict,
+        general_settings: Mapping[str, object],
         proxy_config: ProxyConfig,
-        select_data_generator: Callable | None = None,
+        select_data_generator: Callable[..., object] | None = None,
         llm_router: Router | None = None,
         model: str | None = None,
         user_model: str | None = None,
@@ -2297,9 +2297,9 @@ class ProxyBaseLLMRequestProcessing:
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
         proxy_logging_obj: ProxyLogging,
-        general_settings: dict,
+        general_settings: Mapping[str, object],
         proxy_config: ProxyConfig,
-        select_data_generator: Callable,
+        select_data_generator: Callable[..., object],
         llm_router: Router | None = None,
         model: str | None = None,
         user_model: str | None = None,
@@ -2308,7 +2308,7 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: int | None = None,
         user_api_base: str | None = None,
         version: str | None = None,
-    ):
+    ) -> Response | StreamingResponse:
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             HttpPassThroughEndpointHelpers,
         )

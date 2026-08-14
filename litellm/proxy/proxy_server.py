@@ -300,6 +300,7 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
+from litellm.proxy.chatgpt_endpoints.endpoints import router as chatgpt_router
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
@@ -17119,6 +17120,7 @@ async def get_routes():
 
 app.include_router(router)
 app.include_router(response_router)
+app.include_router(chatgpt_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
