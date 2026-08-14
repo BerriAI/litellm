@@ -58,9 +58,11 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
     MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
+    build_synthetic_mcp_request,
     extract_mcp_tool_result_error_message,
     get_server_prefix,
     iter_known_server_prefixes,
+    logging_safe_mcp_headers,
     match_known_tool_name,
 )
 from litellm.proxy._types import (
@@ -860,11 +862,11 @@ if MCP_AVAILABLE:
         name: str,
         arguments: dict[str, object],
         user_api_key_auth: UserAPIKeyAuth,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> LiteLLMLoggingObj | None:
         """Run the pre-call pipeline (guardrails + logging setup) for a virtual
         mcp_tool_call so the SSE path spend-logs like the REST path."""
-        from fastapi import Request
-
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
         )
@@ -874,13 +876,10 @@ if MCP_AVAILABLE:
             proxy_logging_obj,
         )
 
-        request: Final = Request(
-            scope={
-                "type": "http",
-                "method": "POST",
-                "path": "/mcp/tools/call",
-                "headers": [(b"content-type", b"application/json")],
-            }
+        request: Final = build_synthetic_mcp_request(
+            path="/mcp/tools/call",
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
         _, virtual_logging_obj = await ProxyBaseLLMRequestProcessing(
             data={"name": name, "arguments": arguments}
@@ -952,7 +951,11 @@ if MCP_AVAILABLE:
 
         assert user_api_key_auth is not None  # guaranteed by the flag check above
         virtual_logging_obj: Final = await _build_virtual_call_logging_obj(
-            name=name, arguments=args, user_api_key_auth=user_api_key_auth
+            name=name,
+            arguments=args,
+            user_api_key_auth=user_api_key_auth,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
         return await handle_mcp_tool_call(
             tool_name=args.get("tool_name", ""),
@@ -979,7 +982,6 @@ if MCP_AVAILABLE:
         Raises:
             HTTPException: If tool not found or arguments missing
         """
-        from fastapi import Request
         from mcp.server.lowlevel.server import request_ctx
         from mcp.types import CallToolResult
 
@@ -1041,13 +1043,10 @@ if MCP_AVAILABLE:
                     body_data["litellm_trace_id"] = chain_id
                     body_data["litellm_session_id"] = chain_id
 
-                request: Final = Request(
-                    scope={
-                        "type": "http",
-                        "method": "POST",
-                        "path": "/mcp/tools/call",
-                        "headers": [(b"content-type", b"application/json")],
-                    }
+                request: Final = build_synthetic_mcp_request(
+                    path="/mcp/tools/call",
+                    raw_headers=raw_headers,
+                    client_ip=_client_ip,
                 )
                 if user_api_key_auth is not None:
                     data = await add_litellm_data_to_request(
@@ -1905,6 +1904,7 @@ if MCP_AVAILABLE:
                 "litellm_trace_id": effective_litellm_trace_id,
                 "metadata": {
                     "spend_logs_metadata": spend_logs_metadata,
+                    "headers": logging_safe_mcp_headers(raw_headers),
                     **({"tags": request_tags} if request_tags else {}),
                 },
                 # Provide a small input payload for standard logging

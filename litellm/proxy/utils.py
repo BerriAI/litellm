@@ -679,6 +679,7 @@ class ProxyLogging:
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
+            "metadata": {"headers": kwargs.get("headers") or {}},
         }
 
         return synthetic_data
