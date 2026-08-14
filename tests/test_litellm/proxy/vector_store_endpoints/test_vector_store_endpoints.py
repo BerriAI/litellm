@@ -3057,3 +3057,58 @@ class TestAzureAIDocumentWritePassthroughPermission:
             )
         assert exc_info.value.status_code == 403
         assert f"Only proxy admins can {operation}" in exc_info.value.detail
+
+
+class TestAzureAIAnalyzeNamedIndexClassification:
+    """Regression tests for write-before-read endpoint classification.
+
+    The endpoint matcher is substring-based, so the batch-write path of an
+    index named ``analyze*`` contains the ``("POST", "/analyze")`` read
+    fragment. Reads-first classification labeled that write a read, letting a
+    read-only grant upload, merge, and delete documents (and refusing
+    legitimate write-only grants). Writes are classified first now, so an
+    ambiguous path demands the stronger grant.
+    """
+
+    def _request(self, method: str, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.url.path = path
+        return request
+
+    def _team_member(self, index: str, permissions: list) -> MagicMock:
+        user = MagicMock(spec=UserAPIKeyAuth)
+        user.user_role = None
+        user.metadata = {"allowed_vector_store_indexes": [{"index_name": index, "index_permissions": permissions}]}
+        user.team_metadata = None
+        return user
+
+    @pytest.mark.parametrize("index", ["analyze", "analyzer-reports"])
+    def test_read_only_grant_cannot_upload_to_analyze_named_index(self, index):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=index,
+                request=self._request("POST", f"/azure_ai/indexes/{index}/docs/index"),
+                user_api_key_dict=self._team_member(index, ["read"]),
+            )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.parametrize("index", ["analyze", "analyzer-reports"])
+    def test_write_grant_can_upload_to_analyze_named_index(self, index):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=index,
+            request=self._request("POST", f"/azure_ai/indexes/{index}/docs/index"),
+            user_api_key_dict=self._team_member(index, ["write"]),
+        )
+        assert result is True
+
+    def test_read_only_grant_can_still_analyze_on_analyze_named_index(self):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name="analyze",
+            request=self._request("POST", "/azure_ai/indexes/analyze/analyze"),
+            user_api_key_dict=self._team_member("analyze", ["read"]),
+        )
+        assert result is True

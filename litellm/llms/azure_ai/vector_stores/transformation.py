@@ -48,8 +48,11 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
 
         Patterns stay literal rather than ``{placeholder}`` templates because the
         matcher falls back to the substring before a ``{``, which here is always
-        ``/indexes/`` -- broad enough that a templated read, matched first, would
-        shadow the ``/docs/index`` write.
+        ``/indexes/``. The matcher is substring-based, so an index name may
+        itself contain a read fragment (an index named ``analyze*`` puts
+        ``/analyze`` inside the batch-write path); writes are classified before
+        reads, so such a path demands the write grant rather than being
+        shadowed into a read.
         """
         return {
             "read": [
