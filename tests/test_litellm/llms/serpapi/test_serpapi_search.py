@@ -24,7 +24,7 @@ async def test_serpapi_asearch_uses_get_handler(
     monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
     monkeypatch.setenv("SERPAPI_KEY", "test-api-key")
     local_model_cost = TypeAdapter(dict[str, object]).validate_json(
-        (Path(__file__).parents[2] / "model_prices_and_context_window.json").read_text()
+        (Path(__file__).parents[4] / "model_prices_and_context_window.json").read_text()
     )
     monkeypatch.setattr(litellm, "model_cost", local_model_cost)
     mock_response = httpx.Response(
@@ -393,7 +393,7 @@ def test_serpapi_unrecognized_response_shape_raises() -> None:
 
 def test_serpapi_search_cost_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     local_model_cost = TypeAdapter(dict[str, object]).validate_json(
-        (Path(__file__).parents[2] / "model_prices_and_context_window.json").read_text()
+        (Path(__file__).parents[4] / "model_prices_and_context_window.json").read_text()
     )
     monkeypatch.setattr(litellm, "model_cost", local_model_cost)
     model_info = get_model_info(
