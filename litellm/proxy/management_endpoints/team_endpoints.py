@@ -15,6 +15,7 @@ import math
 import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict, TypeVar, cast
 
 import fastapi
@@ -105,6 +106,12 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
+)
+from litellm.proxy.management_helpers.access_group_team_sync import (
+    AccessGroupSyncTx,
+    invalidate_access_group_caches,
+    reconcile_team_access_group_membership,
+    sync_team_access_group_membership,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -315,9 +322,16 @@ class _TeamIdInFilter(TypedDict, total=False):
     team_id: Mapping[str, Sequence[str]]
 
 
+class _TeamCreateTx(AccessGroupSyncTx, Protocol):
+    @property
+    def litellm_teamtable(self) -> "_PrismaTableActions[LiteLLM_TeamTable]": ...
+
+
 _STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
 UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
 """
+
+_INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
 
 
 def _team_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_TeamTable]":
@@ -1511,10 +1525,15 @@ async def new_team(
         complete_team_data_dict = prisma_client.jsonify_team_object(db_data=complete_team_data_dict)
         team_creation_data: Final[Mapping[str, object]] = complete_team_data_dict
 
-        team_row: Final[LiteLLM_TeamTable] = await _team_db(prisma_client).create(
-            data=team_creation_data,
-            include={"litellm_model_table": True},
-        )
+        tx: _TeamCreateTx
+        async with prisma_client.db.tx() as tx:
+            team_row: Final[LiteLLM_TeamTable] = await tx.litellm_teamtable.create(
+                data=team_creation_data,
+                include=_INCLUDE_MODEL_TABLE,
+            )
+            affected_access_groups: Final = await reconcile_team_access_group_membership(tx, team_row.team_id)
+
+        await invalidate_access_group_caches(affected_access_groups)
 
         ## ADD TEAM ID TO USER TABLE ##
         team_member_add_request: Final = TeamMemberAddRequest(
@@ -2217,6 +2236,7 @@ async def update_team(
             )
 
         verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
+        await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
         await _refresh_cached_team(
             team_row=team_row,
             user_api_key_cache=user_api_key_cache,
@@ -3849,6 +3869,9 @@ async def delete_team(
     # missing under its own row lock and sweeps what it wrote. Both passes are idempotent, and
     # keeping the first one means a failure here still leaves a team the admin can retry deleting.
     await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
+
+    for deleted_team in team_rows:
+        await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return deleted_teams
 
