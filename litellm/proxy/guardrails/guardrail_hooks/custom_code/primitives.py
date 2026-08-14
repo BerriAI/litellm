@@ -465,10 +465,11 @@ async def http_request(
     # be reached by adding them to `user_url_allowed_hosts` in general_settings.
     # `litellm.user_url_validation = False` disables this check entirely.
     validated_url = url
+    request_headers = headers
     if getattr(litellm, "user_url_validation", True):
         try:
             validated_url, host_header = validate_url(url)
-            headers = {**(headers or {}), "Host": host_header}
+            request_headers = {**(headers or {}), "Host": host_header}
         except (SSRFError, ValueError) as e:
             verbose_proxy_logger.warning("Custom code http_request SSRF blocked: %s", e)
             return _http_error_response(f"Blocked: {e}")
@@ -492,7 +493,7 @@ async def http_request(
     )
 
     try:
-        response: Final = await _execute_http_request(client, method, validated_url, headers, body, timeout)
+        response: Final = await _execute_http_request(client, method, validated_url, request_headers, body, timeout)
         return _http_success_response(response)
 
     except httpx.TimeoutException as e:
