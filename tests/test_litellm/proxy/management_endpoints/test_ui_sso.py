@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -35,6 +36,20 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftServicePrincipalTeam,
     TeamMappings,
 )
+
+
+def _wire_team_create_tx(prisma_client):
+    """`/team/new` inserts the team and mirrors it onto the access groups in one transaction,
+    so a mocked client has to hand its team table back out of `db.tx()`."""
+
+    @asynccontextmanager
+    async def _tx():
+        yield SimpleNamespace(
+            litellm_teamtable=prisma_client.db.litellm_teamtable,
+            query_raw=AsyncMock(return_value=[]),
+        )
+
+    prisma_client.db.tx = lambda *_args, **_kwargs: _tx()
 
 
 def test_microsoft_sso_handler_openid_from_response_user_principal_name():
@@ -577,6 +592,7 @@ async def test_default_team_params(team_params):
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
+    _wire_team_create_tx(mock_prisma)
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
@@ -624,6 +640,7 @@ async def test_default_team_params_organization_id_reaches_sso_created_team(team
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
+    _wire_team_create_tx(mock_prisma)
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
@@ -671,6 +688,7 @@ async def test_create_team_without_default_params():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
+    _wire_team_create_tx(mock_prisma)
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
