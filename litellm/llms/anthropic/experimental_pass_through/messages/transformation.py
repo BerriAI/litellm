@@ -159,8 +159,22 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def _is_system_role_message(message: Any) -> bool:
         return isinstance(message, dict) and message.get("role") == "system"
 
+    _CONVERTED_SYSTEM_NOTE: Final = (
+        "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
+    )
+
+    def _system_role_message_as_user(self, message: dict) -> dict:
+        return {
+            **message,
+            "role": "user",
+            "content": [
+                {"type": "text", "text": self._CONVERTED_SYSTEM_NOTE},
+                *self._as_system_content_blocks(message.get("content")),
+            ],
+        }
+
     def _normalize_system_role_messages(self, anthropic_messages_request: dict, model: str) -> None:
-        """Move ``role: "system"`` entries out of ``messages`` per the Anthropic
+        """Normalize ``role: "system"`` entries in ``messages`` per the Anthropic
         ``/v1/messages`` contract, which the first-party API, Bedrock Invoke,
         Vertex, and Azure Foundry all enforce identically.
 
@@ -173,9 +187,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         stay: hoisting one mutates the ``system`` prefix and invalidates the
         prompt cache for the whole message history. Older Claude models reject the
         role in every position ("role 'system' is not supported on this model"),
-        so without the flag every system entry is hoisted to keep the request from
-        400-ing. Billing-header system blocks are stripped from the top-level
-        ``system`` field regardless of whether anything was hoisted.
+        so without the flag a mid-conversation entry is converted to a user turn
+        in place (prefixed with an operator note) rather than hoisted: hoisting
+        would mutate the ``system`` prefix and likewise collapse the cache, while
+        the in-place conversion keeps everything before it byte-identical.
+        Billing-header system blocks are stripped from the top-level ``system``
+        field regardless of whether anything was hoisted.
 
         Subclasses whose upstream rejects the role opt in by calling this from
         their ``transform_anthropic_messages_request``; the first-party Anthropic
@@ -185,21 +202,24 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         messages: Final = anthropic_messages_request.get("messages")
         if not isinstance(messages, list):
             return
-        if _supports_factory(
-            model=model,
-            custom_llm_provider=self.custom_llm_provider,
-            key="supports_mid_conversation_system",
-        ):
-            leading_count: Final = next(
-                (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
-                len(messages),
+        leading_count: Final = next(
+            (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
+            len(messages),
+        )
+        hoisted: Final = messages[:leading_count]
+        remaining: Final = (
+            messages[leading_count:]
+            if _supports_factory(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+                key="supports_mid_conversation_system",
             )
-            hoisted = messages[:leading_count]
-            remaining = messages[leading_count:]
-        else:
-            hoisted = [m for m in messages if self._is_system_role_message(m)]
-            remaining = [m for m in messages if not self._is_system_role_message(m)]
-        if hoisted:
+            else [
+                self._system_role_message_as_user(m) if self._is_system_role_message(m) else m
+                for m in messages[leading_count:]
+            ]
+        )
+        if hoisted or remaining != messages:
             anthropic_messages_request["messages"] = remaining
         system_content: Final = [
             block
