@@ -391,10 +391,15 @@ def test_serpapi_unrecognized_response_shape_raises() -> None:
     assert exc_info.value.status_code == 200
 
 
-def test_serpapi_search_cost_metadata() -> None:
+def test_serpapi_search_cost_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    local_model_cost = TypeAdapter(dict[str, object]).validate_json(
+        (Path(__file__).parents[2] / "model_prices_and_context_window.json").read_text()
+    )
+    monkeypatch.setattr(litellm, "model_cost", local_model_cost)
     model_info = get_model_info(
         model="serpapi/search",
         custom_llm_provider="serpapi",
+        api_key="test-api-key",
     )
 
     assert model_info.get("input_cost_per_query") == 0.025
