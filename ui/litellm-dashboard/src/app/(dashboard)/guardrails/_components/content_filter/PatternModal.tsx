@@ -28,6 +28,11 @@ interface PatternGroup {
   items: PrebuiltPattern[];
 }
 
+const matchesPatternQuery = (pattern: PrebuiltPattern, query: string) => {
+  const needle = query.toLowerCase();
+  return pattern.display_name.toLowerCase().includes(needle) || pattern.name.toLowerCase().includes(needle);
+};
+
 interface PatternModalProps {
   visible: boolean;
   prebuiltPatterns: PrebuiltPattern[];
@@ -74,6 +79,7 @@ const PatternModal: React.FC<PatternModalProps> = ({
               value={selectedPattern}
               onValueChange={(pattern: PrebuiltPattern | null) => pattern && onPatternNameChange(pattern.name)}
               itemToStringLabel={(pattern: PrebuiltPattern) => pattern.display_name}
+              filter={matchesPatternQuery}
             >
               <ComboboxInput className="mt-2 w-full" placeholder="Choose pattern type" />
               <ComboboxContent>

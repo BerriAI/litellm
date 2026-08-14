@@ -84,6 +84,20 @@ describe("PatternModal", () => {
     expect(screen.queryByText("AWS access key")).not.toBeInTheDocument();
   });
 
+  it("should match the internal pattern name when it is absent from the display name", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    expect(await screen.findByText("Add prebuilt pattern")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.keyboard("ssn");
+
+    expect(await screen.findByText("US Social Security Number")).toBeInTheDocument();
+    expect(screen.queryByText("Email address")).not.toBeInTheDocument();
+    expect(screen.queryByText("Visa card")).not.toBeInTheDocument();
+  });
+
   it("should report the chosen action", async () => {
     const user = userEvent.setup();
     renderModal();
