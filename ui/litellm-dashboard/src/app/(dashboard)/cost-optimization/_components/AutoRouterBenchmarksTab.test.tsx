@@ -192,6 +192,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("97.7%")).toBeInTheDocument();
     expect(screen.getByText("24.3%")).toBeInTheDocument();
     expect(screen.getByText("81.6%")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Share of turns by bucket" })).not.toHaveClass("bg-muted");
   });
 
   it("summarizes the cache column from the bucketed turns, not the session turns", () => {
@@ -292,6 +293,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("0s")).toBeInTheDocument();
     expect(screen.getByText(/turns measured/)).toBeInTheDocument();
     expect(screen.getAllByText("0.0%").length).toBeGreaterThan(0);
+    expect(screen.getByRole("img", { name: "Share of turns by bucket" })).toHaveClass("bg-muted");
   });
 
   it("shows the savings delta as an unsigned zero when nothing was saved", () => {
