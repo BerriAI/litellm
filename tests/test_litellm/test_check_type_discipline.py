@@ -250,6 +250,17 @@ def test_typeddict_name_rebound_elsewhere_gets_no_exemption(tmp_path):
     assert "LIT002" in _codes(tmp_path, _TYPEDDICT_PREFIX + "def scope(Td):\n    return Td\nx: Td = {'a': 1}\n")
 
 
+def test_nested_typeddict_gets_no_exemption(tmp_path):
+    assert "LIT002" in _codes(
+        tmp_path,
+        "from typing import ReadOnly, TypedDict\n"
+        "def scope():\n"
+        "    class Td(TypedDict):\n"
+        "        a: ReadOnly[int]\n"
+        "x: Td = {'a': 1}\n",
+    )
+
+
 def test_qualified_annotation_gets_no_exemption(tmp_path):
     assert "LIT002" in _codes(tmp_path, _TYPEDDICT_PREFIX + "import elsewhere\nx: elsewhere.Td = {'a': 1}\n")
     assert "LIT002" in _codes(

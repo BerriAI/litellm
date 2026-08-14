@@ -36,8 +36,9 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         disqualifies every name, since what it binds is statically invisible),
         every field it declares or inherits in-module must be
         `ReadOnly[...]`, only the display itself is exempt (nested mutables still
-        count), a TypedDict imported from another module is out of reach, exactly
-        as in LIT012, and a dotted annotation (`x: mod.Td = {...}`) never
+        count), a TypedDict imported from another module or nested inside a def
+        or class is out of reach (only ones defined at the module's top level
+        resolve file-wide), and a dotted annotation (`x: mod.Td = {...}`) never
         matches, since it cannot name a local class. Suppress with
         `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
@@ -541,8 +542,11 @@ def _typeddict_assigned_value_ids(tree: ast.AST) -> frozenset[int]:
     `x: MyTd = {...}` is the literal spelling of the `MyTd(...)` call, which was
     never construction to begin with, so the display is a one-shot build -- provided
     the annotation provably names a frozen payload. Three conditions gate that:
-    MyTd is a class-form TypedDict in this module (imported ones are invisible,
-    exactly as in LIT012's base-class resolution); its name is bound exactly once
+    MyTd is a class-form TypedDict at the module's top level (imported ones are
+    invisible, exactly as in LIT012's base-class resolution, and one nested in a
+    def or class is skipped, since its name does not resolve outside the scope
+    that defines it, while a top-level one resolves everywhere); its name is
+    bound exactly once
     in the file (resolution here is scope-blind, so a name the file also binds in
     any other form, another def, an assignment or loop target, an import alias, a
     parameter, could resolve to something mutable at the annotation site, and a
@@ -553,7 +557,8 @@ def _typeddict_assigned_value_ids(tree: ast.AST) -> frozenset[int]:
     the display itself is exempt; anything mutable nested inside it still trips
     LIT002.
     """
-    classes = _typeddict_classes(tree)
+    top_level_ids = frozenset(id(stmt) for stmt in (tree.body if isinstance(tree, ast.Module) else ()))
+    classes = tuple(cls for cls in _typeddict_classes(tree) if id(cls) in top_level_ids)
     by_name = {cls.name: cls for cls in classes}
 
     def frozen_lineage(name: str, seen: frozenset[str]) -> bool:
