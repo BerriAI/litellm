@@ -1087,16 +1087,14 @@ class TestProxyBaseLLMRequestProcessing:
             discount_amount=0.000005,
         )
 
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(logging_obj)
-        assert original_cost == 0.0001
-        assert discount_amount == 0.000005
-        assert margin_total_amount is None
-        assert margin_percent is None
+        breakdown = _get_cost_breakdown_from_logging_obj(logging_obj)
+        assert breakdown.original_cost == 0.0001
+        assert breakdown.discount_amount == 0.000005
+        assert breakdown.margin_total_amount is None
+        assert breakdown.margin_percent is None
+        assert breakdown.input_cost == 0.00005
+        assert breakdown.output_cost == 0.00005
+        assert breakdown.tool_usage_cost == 0.0
 
         # Test with margin info
         logging_obj_with_margin = LiteLLMLoggingObj(
@@ -1118,16 +1116,11 @@ class TestProxyBaseLLMRequestProcessing:
             margin_total_amount=0.00001,
         )
 
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
-        assert original_cost == 0.0001
-        assert discount_amount is None
-        assert margin_total_amount == 0.00001
-        assert margin_percent == 0.10
+        breakdown_with_margin = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
+        assert breakdown_with_margin.original_cost == 0.0001
+        assert breakdown_with_margin.discount_amount is None
+        assert breakdown_with_margin.margin_total_amount == 0.00001
+        assert breakdown_with_margin.margin_percent == 0.10
 
         # Test with no discount or margin info
         logging_obj_no_discount = LiteLLMLoggingObj(
@@ -1146,28 +1139,17 @@ class TestProxyBaseLLMRequestProcessing:
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
 
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
-        assert original_cost is None
-        assert discount_amount is None
-        assert margin_total_amount is None
-        assert margin_percent is None
+        breakdown_no_discount = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
+        assert breakdown_no_discount.original_cost is None
+        assert breakdown_no_discount.discount_amount is None
+        assert breakdown_no_discount.margin_total_amount is None
+        assert breakdown_no_discount.margin_percent is None
+        assert breakdown_no_discount.input_cost == 0.00005
+        assert breakdown_no_discount.output_cost == 0.00005
 
         # Test with None logging object
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(None)
-        assert original_cost is None
-        assert discount_amount is None
-        assert margin_total_amount is None
-        assert margin_percent is None
+        breakdown_none = _get_cost_breakdown_from_logging_obj(None)
+        assert all(value is None for value in breakdown_none)
 
     def test_get_custom_headers_key_spend_includes_response_cost(self):
         """
