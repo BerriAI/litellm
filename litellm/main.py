@@ -1015,7 +1015,11 @@ def responses_api_bridge_check(
     try:
         model_info = cast(
             dict,
-            _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
+            _get_model_info_helper(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+            ),
         )
         if model_info.get("mode") is None and model.startswith("responses/"):
             model = model.replace("responses/", "")

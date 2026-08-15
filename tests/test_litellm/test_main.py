@@ -743,6 +743,30 @@ def test_responses_api_bridge_check_strips_responses_prefix():
         assert model_info["mode"] == "responses"
 
 
+def test_responses_api_bridge_check_forwards_api_base_to_model_info_helper():
+    """completion() api_base must reach Ollama /api/show, not localhost:11434.
+
+    Regression for https://github.com/BerriAI/litellm/issues/37041
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"mode": "chat"}
+        api_base = "http://my-host:30000"
+
+        responses_api_bridge_check(
+            model="my-custom-model",
+            custom_llm_provider="ollama",
+            api_base=api_base,
+        )
+
+        mock_get_model_info.assert_called_once_with(
+            model="my-custom-model",
+            custom_llm_provider="ollama",
+            api_base=api_base,
+        )
+
+
 def test_responses_api_bridge_check_gpt_5_4_pro():
     """Test that gpt-5.4-pro routes through responses API bridge, not chat completions.
 

@@ -231,6 +231,36 @@ class TestOllamaModelInfo:
 class TestOllamaGetModelInfo:
     """Tests for OllamaConfig.get_model_info() api_base threading and graceful fallback."""
 
+    def test_responses_api_bridge_check_uses_provided_api_base_for_ollama(
+        self, monkeypatch
+    ):
+        """Bridge lookup must hit the completion api_base, not localhost:11434.
+
+        Regression for https://github.com/BerriAI/litellm/issues/37041
+        """
+        from litellm.main import responses_api_bridge_check
+
+        captured_urls = []
+
+        def mock_post(url, json, headers=None):
+            captured_urls.append(url)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+
+        responses_api_bridge_check(
+            model="unknown-custom-model",
+            custom_llm_provider="ollama",
+            api_base="http://my-remote-server:30000",
+        )
+
+        assert captured_urls
+        assert all(
+            url.startswith("http://my-remote-server:30000") for url in captured_urls
+        )
+        assert not any("localhost:11434" in url for url in captured_urls)
+
     def test_get_model_info_uses_provided_api_base(self, monkeypatch):
         """When api_base is passed, get_model_info should use it instead of env var or default."""
         from litellm.llms.ollama.completion.transformation import OllamaConfig
