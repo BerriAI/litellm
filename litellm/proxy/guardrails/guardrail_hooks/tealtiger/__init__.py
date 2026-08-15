@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> TealTigerGuardrail:
     import litellm
 
     _tealtiger_callback: Final = TealTigerGuardrail(

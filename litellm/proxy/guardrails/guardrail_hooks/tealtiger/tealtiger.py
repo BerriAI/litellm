@@ -20,6 +20,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 from .engine import Action, PolicyMode, TealEngine
@@ -41,13 +42,23 @@ class TealTigerGuardrail(CustomGuardrail):
         self,
         policies: Sequence[Mapping[str, object]] | None = None,
         policy_mode: str = "ENFORCE",
-        **kwargs,  # kwargs-ok: forwards unknown/future CustomGuardrail.__init__ params (guardrail_name, event_hook, default_on, ...) to the base class
+        guardrail_name: str | None = None,
+        event_hook: GuardrailEventHooks  # mutable-ok: matches CustomGuardrail's actual signature
+        | list[GuardrailEventHooks]
+        | Mode
+        | None = None,
+        default_on: bool = False,
     ) -> None:
+        # Only these 3 base-class params are ever passed by this repo's own
+        # registry (see __init__.py's initialize_guardrail) — declared
+        # explicitly, rather than a **kwargs passthrough, so each argument's
+        # type is checkable at the call to super().__init__() below instead
+        # of erasing everything to object.
         self.engine: Final = TealEngine(
             policies=policies or DEFAULT_POLICIES,
             mode=PolicyMode(policy_mode),
         )
-        super().__init__(**kwargs)
+        super().__init__(guardrail_name=guardrail_name, event_hook=event_hook, default_on=default_on)
 
     @log_guardrail_information
     async def apply_guardrail(
