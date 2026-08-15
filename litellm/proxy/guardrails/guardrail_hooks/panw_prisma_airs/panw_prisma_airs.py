@@ -71,6 +71,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     _PROVIDER_NAME = "panw_prisma_airs"
 
+    #: AIRS fields withheld from the client-visible error detail.
+    #: ``response_masked_data`` is the model's own generation. The block branch that builds
+    #: this detail is only reached when ``mask_response_content`` is False, so echoing it
+    #: back would hand the caller exactly the text the operator declined to deliver.
+    #: ``prompt_masked_data`` is deliberately NOT withheld: it is the caller's own input,
+    #: and it is one of the fields the ticket asks for.
+    _CLIENT_HIDDEN_SCAN_FIELDS: Final = frozenset({"response_masked_data"})
+
     def __init__(
         self,
         guardrail_name: str,
@@ -632,12 +640,21 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         choice.message.function_call.arguments = masked_text
 
     def _build_error_detail(
-        self, scan_result: Mapping[str, object], is_response: bool = False
+        self,
+        scan_result: Mapping[str, object],
+        is_response: bool = False,
+        also_hide: str | None = None,
     ) -> Mapping[str, Mapping[str, object]]:
-        """Build enhanced error detail with scan information."""
+        """Build enhanced error detail with scan information.
+
+        ``also_hide`` names one more scan field to withhold, for the caller that knows
+        its AIRS verdict carries model-generated content under a key that is normally
+        caller input.
+        """
         action_type: Final = "Response" if is_response else "Prompt"
         code_suffix: Final = "_response_blocked" if is_response else "_blocked"
-        detection_key: Final = "response_detected" if is_response else "prompt_detected"
+
+        hidden_fields: Final = self._CLIENT_HIDDEN_SCAN_FIELDS.union(() if also_hide is None else (also_hide,))
 
         category: Final = scan_result.get("category", "unknown")
         default_msg: Final = f"{action_type} blocked by PANW Prisma AI Security policy (Category: {category})"
@@ -653,8 +670,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
-        error_detail: Final[dict[str, dict[str, object]]] = {
+        return {
             "error": {
+                **{
+                    key: value
+                    for key, value in scan_result.items()
+                    if not key.startswith("_") and key not in hidden_fields
+                },
                 "message": error_msg,
                 "type": "guardrail_violation",
                 "code": f"panw_prisma_airs{code_suffix}",
@@ -662,24 +684,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 "category": category,
             }
         }
-
-        # Add optional fields if present
-        optional_fields: Final = [
-            "scan_id",
-            "report_id",
-            "profile_name",
-            "profile_id",
-            "tr_id",
-        ]
-        for field in optional_fields:
-            if scan_result.get(field):
-                error_detail["error"][field] = scan_result[field]
-
-        # Add detection details
-        if scan_result.get(detection_key):
-            error_detail["error"][detection_key] = scan_result[detection_key]
-
-        return error_detail
 
     def _record_scan_id(self, request_data: dict[str, Any], scan_result: Mapping[str, object]) -> None:
         """Surface the AIRS scan id on the response, so allowed calls are auditable too."""
@@ -1481,7 +1485,17 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             ):
                 self._set_tool_call_arguments(tool_call, masked_text)
             else:
-                error_detail = self._build_error_detail(scan_result, is_response=is_response)
+                # tool_event scans are request-side in the AIRS schema, so AIRS returns
+                # the model's own tool arguments under prompt_masked_data. On a
+                # response-side block that is generated content, not caller input, and
+                # the class-level default only withholds response_masked_data — which is
+                # empty on this path. Withhold it explicitly so the 400 does not become
+                # the content channel this branch declined to deliver.
+                error_detail = self._build_error_detail(
+                    scan_result,
+                    is_response=is_response,
+                    also_hide="prompt_masked_data" if is_response else None,
+                )
                 raise HTTPException(status_code=400, detail=error_detail)
 
     @staticmethod
