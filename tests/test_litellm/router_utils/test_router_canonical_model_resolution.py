@@ -157,6 +157,47 @@ class TestBuildIndexAndLookup:
         assert lookup(index, DATED) is None
         assert lookup(index, UNDATED) is None
 
+    def test_custom_llm_provider_override_decides_provider(self):
+        """Regression (I2): a deployment's explicit custom_llm_provider wins over
+        whatever the model string implies. A first-party-looking id served via
+        OpenRouter/Bedrock/Vertex must not be indexed as Anthropic -- otherwise
+        an Anthropic-form request rides the rewrite onto that other provider's
+        credentials, quota, and bill, which is exactly the cross-provider hop
+        rule 2 forbids."""
+        index = build_canonical_index(
+            [
+                {
+                    "model_name": "haiku-via-openrouter",
+                    "litellm_params": {
+                        "model": "claude-haiku-4-5",
+                        "custom_llm_provider": "openrouter",
+                    },
+                },
+            ]
+        )
+        # Indexed under the real provider, not the one the string implies.
+        assert ("openrouter", UNDATED) in index
+        assert ("anthropic", UNDATED) not in index
+        # An Anthropic-form request must not reach the OpenRouter deployment.
+        assert lookup(index, DATED) is None
+        assert lookup(index, UNDATED) is None
+
+    def test_custom_llm_provider_override_still_resolves_within_provider(self):
+        """The override narrows the provider, it does not disable resolution:
+        a request that infers to the same overridden provider still resolves."""
+        index = build_canonical_index(
+            [
+                {
+                    "model_name": "haiku-via-bedrock",
+                    "litellm_params": {
+                        "model": "claude-haiku-4-5",
+                        "custom_llm_provider": "bedrock",
+                    },
+                },
+            ]
+        )
+        assert index[("bedrock", UNDATED)] == "haiku-via-bedrock"
+
     def test_team_owned_deployment_never_indexed(self):
         """Regression: a team-owned deployment (model_info.team_id set) must
         never enter the global canonical index. Without this, a no-team key
@@ -410,3 +451,115 @@ class TestAuthAndOnTarget:
             )
             is True
         )
+
+
+class TestCanonicalTargetReAuth:
+    """The rewrite's re-auth must use the *resolved-model* helper.
+
+    Regression: the hook originally called ``can_key_call_model``, which checks
+    only the key's own allowlist. Team, team-member, and project allowlists were
+    therefore never re-checked against the resolved target, so an unrestricted
+    key on a team whose allowlist held only a stale unserved name could ride the
+    rewrite onto a deployment that team was never granted.
+    ``can_key_call_resolved_model`` is the helper every other post-resolution
+    auth site uses (model_group_alias rewrites, realtime endpoints, auto-router).
+    """
+
+    @pytest.mark.asyncio
+    async def test_uses_resolved_model_helper_so_team_scope_is_rechecked(self, anthropic_router: Router):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.route_llm_request import _canonical_target_is_allowed
+
+        with patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_resolved_model",
+            new=AsyncMock(return_value=None),
+        ) as resolved_check:
+            allowed = await _canonical_target_is_allowed(
+                canonical_target=ANTHROPIC_GROUP,
+                llm_router=anthropic_router,
+                user_api_key_dict=UserAPIKeyAuth(token="t", team_id="team-A"),
+            )
+
+        assert allowed is True
+        resolved_check.assert_awaited_once()
+        assert resolved_check.await_args.kwargs["model"] == ANTHROPIC_GROUP
+
+    @pytest.mark.asyncio
+    async def test_denial_declines_rewrite_rather_than_raising(self, anthropic_router: Router):
+        """A denial must return False (request falls through to the usual 400),
+        never propagate an exception that would leak the target's existence."""
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        from litellm.proxy.route_llm_request import _canonical_target_is_allowed
+
+        with patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_resolved_model",
+            new=AsyncMock(side_effect=ProxyException(message="denied", type="auth_error", param=None, code=401)),
+        ):
+            allowed = await _canonical_target_is_allowed(
+                canonical_target=ANTHROPIC_GROUP,
+                llm_router=anthropic_router,
+                user_api_key_dict=UserAPIKeyAuth(token="t", team_id="team-A"),
+            )
+
+        assert allowed is False
+
+    @pytest.mark.asyncio
+    async def test_no_auth_context_is_allowed(self, anthropic_router: Router):
+        """No key context (non-proxy Router use) leaves the rewrite unguarded by
+        key auth, matching the surrounding call path."""
+        from litellm.proxy.route_llm_request import _canonical_target_is_allowed
+
+        assert (
+            await _canonical_target_is_allowed(
+                canonical_target=ANTHROPIC_GROUP,
+                llm_router=anthropic_router,
+                user_api_key_dict=None,
+            )
+            is True
+        )
+
+
+class TestProxyRouterGeneralSettings:
+    """Operators must be able to set model_name_resolution on the proxy.
+
+    Regression: the proxy passed a hardcoded RouterGeneralSettings(async_only_mode=True)
+    as an explicit keyword alongside **router_params, so setting
+    router_general_settings in config raised "got multiple values for keyword
+    argument" at startup -- leaving no way to select 'strict'.
+    """
+
+    def test_config_settings_preserved_and_async_only_forced(self):
+        from litellm.proxy.proxy_server import _proxy_router_general_settings
+
+        settings = _proxy_router_general_settings({"model_name_resolution": "strict"})
+        assert settings.model_name_resolution == "strict"
+        assert settings.async_only_mode is True
+
+    def test_async_only_mode_cannot_be_disabled_by_config(self):
+        from litellm.proxy.proxy_server import _proxy_router_general_settings
+
+        settings = _proxy_router_general_settings({"async_only_mode": False, "model_name_resolution": "strict"})
+        assert settings.async_only_mode is True
+        assert settings.model_name_resolution == "strict"
+
+    def test_none_yields_proxy_default(self):
+        from litellm.proxy.proxy_server import _proxy_router_general_settings
+
+        settings = _proxy_router_general_settings(None)
+        assert settings.async_only_mode is True
+        assert settings.model_name_resolution == "canonical"
+
+    def test_model_instance_is_not_mutated(self):
+        from litellm.proxy.proxy_server import _proxy_router_general_settings
+        from litellm.types.router import RouterGeneralSettings
+
+        original = RouterGeneralSettings(async_only_mode=False, model_name_resolution="strict")
+        settings = _proxy_router_general_settings(original)
+        assert settings.async_only_mode is True
+        # The caller's object must not be rewritten at a distance.
+        assert original.async_only_mode is False

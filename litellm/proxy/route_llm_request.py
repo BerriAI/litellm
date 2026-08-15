@@ -250,6 +250,15 @@ async def _canonical_target_is_allowed(
     ride the rewrite onto a deployment it was never granted. (Auth ran on the
     requested string before routing, when the target group was not yet known.)
 
+    Uses ``can_key_call_resolved_model`` -- the same helper every other
+    post-resolution auth site uses (model_group_alias rewrites, realtime
+    endpoints, auto-router) -- so the key, team, team-member, and project
+    allowlists are all re-checked against the target. Checking only the key
+    (``can_key_call_model``) would leave a team whose allowlist holds a stale
+    unserved name able to ride the rewrite onto a deployment it was never
+    granted, since an unrestricted *key* on that team passes the key-level
+    check on its own.
+
     A denial returns False rather than raising, so the request falls through to
     the same 400 an unresolvable model gets today and the response reveals
     nothing about the target's existence.
@@ -257,13 +266,13 @@ async def _canonical_target_is_allowed(
     if user_api_key_dict is None:
         return True
     from litellm.proxy.auth.auth_checks import (
-        can_key_call_model,  # pyright: ignore[reportUnknownVariableType] - auth_checks is partially typed
+        can_key_call_resolved_model,  # pyright: ignore[reportUnknownVariableType] - auth_checks is partially typed
     )
 
     try:
-        await can_key_call_model(
+        await can_key_call_resolved_model(
             model=canonical_target,
-            llm_model_list=llm_router.get_model_list(),
+            llm_model_list=llm_router.model_list,
             valid_token=user_api_key_dict,
             llm_router=llm_router,
         )

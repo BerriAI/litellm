@@ -96,7 +96,7 @@ def _infer_provider(model: str) -> str | None:
     return custom_llm_provider or None
 
 
-def canonicalize(model: str) -> tuple[str, str] | None:
+def canonicalize(model: str, custom_llm_provider: str | None = None) -> tuple[str, str] | None:
     """Reduce ``model`` to a ``(provider, canonical_name)`` identity.
 
     The canonical name is the model string with any LiteLLM provider-route
@@ -104,11 +104,19 @@ def canonicalize(model: str) -> tuple[str, str] | None:
     LiteLLM's own routing syntax rather than part of the model's identity. The
     provider is carried alongside so equality checks are always provider-scoped.
 
+    ``custom_llm_provider`` -- the deployment's explicit provider override --
+    wins over whatever the model string implies. A deployment can carry a
+    first-party-looking id (``claude-haiku-4-5``) while actually being served
+    through Bedrock, Vertex, or OpenRouter; inferring the provider from the
+    string alone would index it as Anthropic and let an Anthropic-form request
+    be rewritten onto that other provider's credentials, quota, and bill --
+    exactly the cross-provider hop rule 2 in the module docstring forbids.
+
     Returns None when the provider cannot be inferred.
     """
     if not model:
         return None
-    provider: Final = _infer_provider(model)
+    provider: Final = custom_llm_provider or _infer_provider(model)
     if provider is None:
         return None
     # get_llm_provider returns the model with its routing prefix stripped, which
@@ -183,7 +191,14 @@ def build_canonical_index(
             if not isinstance(model_group, str) or not isinstance(underlying, str):
                 continue
 
-            identity = canonicalize(underlying)
+            # An explicit provider override decides the provider; see canonicalize().
+            provider_override = (
+                litellm_params.get("custom_llm_provider") if isinstance(litellm_params, Mapping) else None
+            )  # rebind-ok: per-deployment loop variable
+            identity = canonicalize(
+                underlying,
+                custom_llm_provider=provider_override if isinstance(provider_override, str) else None,
+            )
             if model_group in group_identity and group_identity[model_group] != identity:
                 # Deployments in this group disagree about what they serve; the
                 # group cannot stand for a single canonical identity.
