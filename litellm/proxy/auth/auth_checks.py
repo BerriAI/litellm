@@ -3338,12 +3338,16 @@ def _can_object_call_model(
         )
         # Require a real model-group name; a non-string from a router stub must
         # never be treated as a grant.
-        if isinstance(canonical_target, str) and canonical_target and _check_model_access_helper(
-            model=canonical_target,
-            llm_router=llm_router,
-            models=models,
-            team_model_aliases=team_model_aliases,
-            team_id=team_id,
+        if (
+            isinstance(canonical_target, str)
+            and canonical_target
+            and _check_model_access_helper(
+                model=canonical_target,
+                llm_router=llm_router,
+                models=models,
+                team_model_aliases=team_model_aliases,
+                team_id=team_id,
+            )
         ):
             return True
 
