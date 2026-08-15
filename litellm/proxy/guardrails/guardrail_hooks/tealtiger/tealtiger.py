@@ -3,14 +3,18 @@ TealTigerGuardrail — self-contained PII / cost / tool-authorization guardrail.
 
 Implements apply_guardrail(), the current recommended pattern for guardrails
 that need to run uniformly across chat completions, /v1/messages, responses
-API, embeddings, etc. Verified against a live litellm proxy (v1.96.0) and
+API, embeddings, etc. Verified against a live litellm proxy (v1.97.0) and
 against litellm/proxy/guardrails/guardrail_hooks/onyx/onyx.py as a reference
 implementation of the same interface.
 
 No network calls, no LLM calls, no external API keys required.
 """
 
-from typing import TYPE_CHECKING, Final, Literal, Optional
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -23,19 +27,23 @@ from .engine import Action, PolicyMode, TealEngine
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-DEFAULT_POLICIES = [
-    {"type": "pii", "action": "REDACT", "patterns": "all"},
-    {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 50.0},
-    {"type": "tool_auth", "action": "ENFORCE", "allowlist": None},  # None = allow all
-]
+_EMPTY_MAPPING: Final = MappingProxyType({})
+
+DEFAULT_POLICIES: Final = (
+    MappingProxyType({"type": "pii", "action": "REDACT", "patterns": "all"}),
+    MappingProxyType({"type": "cost", "action": "ENFORCE", "daily_limit_usd": 50.0}),
+    MappingProxyType(
+        {"type": "tool_auth", "action": "ENFORCE", "allowlist": None}
+    ),  # None = allow all
+)
 
 
 class TealTigerGuardrail(CustomGuardrail):
     def __init__(
         self,
-        policies: list | None = None,
+        policies: Sequence[Mapping[str, object]] | None = None,
         policy_mode: str = "ENFORCE",
-        **kwargs: object,
+        **kwargs,  # kwargs-ok: forwards unknown/future CustomGuardrail.__init__ params (guardrail_name, event_hook, default_on, ...) to the base class
     ) -> None:
         self.engine: Final = TealEngine(
             policies=policies or DEFAULT_POLICIES,
@@ -47,9 +55,9 @@ class TealTigerGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         """
         Runs on both request (pre-call) and response (post-call) content,
@@ -57,28 +65,43 @@ class TealTigerGuardrail(CustomGuardrail):
 
         Tool-call authorization and budget checks only make sense on the
         request path, so they're gated on input_type == "request".
+
+        Returns a new mapping rather than mutating `inputs` in place, since
+        the caller's object should not be rewritten at a distance.
         """
         if input_type == "request":
-            for tool_call in inputs.get("tool_calls") or []:
-                tool_name = tool_call.get("name") or tool_call.get("function", {}).get("name")
-                if tool_name and not self.engine.check_tool(tool_name):
-                    raise ValueError(f"TealTiger: blocked — TOOL_NOT_ALLOWLISTED ({tool_name})")
+            self._check_tool_calls(inputs)
+            self._check_budget(request_data)
 
-            over_budget, spent, limit = self.engine.check_budget(session_id=request_data.get("user") or "default")
-            if over_budget:
-                raise ValueError(f"TealTiger: blocked — DAILY_BUDGET_EXCEEDED (${spent:.2f} / ${limit:.2f})")
+        checked_texts: Final = tuple(
+            self._check_text_or_raise(text) for text in inputs.get("texts") or ()
+        )
+        return {**inputs, "texts": list(checked_texts)}  # mutable-ok: dict interop
 
-        checked_texts: list[str] = []
-        for text in inputs.get("texts") or []:
-            decision = self.engine.evaluate_text(text)
+    def _check_tool_calls(self, inputs: GenericGuardrailAPIInputs) -> None:
+        for tool_call in inputs.get("tool_calls") or ():
+            tool_name = tool_call.get("name") or tool_call.get(
+                "function", _EMPTY_MAPPING
+            ).get("name")
+            if tool_name and not self.engine.check_tool(tool_name):
+                raise ValueError(
+                    f"TealTiger: blocked — TOOL_NOT_ALLOWLISTED ({tool_name})"
+                )
 
-            if decision.action == Action.BLOCK.value:
-                raise ValueError(f"TealTiger: blocked — {decision.reason_code}")
+    def _check_budget(self, request_data: Mapping[str, object]) -> None:
+        over_budget, spent, limit = self.engine.check_budget(
+            session_id=request_data.get("user") or "default"
+        )
+        if over_budget:
+            raise ValueError(
+                f"TealTiger: blocked — DAILY_BUDGET_EXCEEDED (${spent:.2f} / ${limit:.2f})"
+            )
 
-            checked_texts.append(decision.redacted_text or text)
-
-        inputs["texts"] = checked_texts
-        return inputs
+    def _check_text_or_raise(self, text: str) -> str:
+        decision: Final = self.engine.evaluate_text(text)
+        if decision.action == Action.BLOCK.value:
+            raise ValueError(f"TealTiger: blocked — {decision.reason_code}")
+        return decision.redacted_text or text
 
     # ---- cost tracking on successful response ----
     # NOTE for reviewers: apply_guardrail is only handed extracted `texts` /
