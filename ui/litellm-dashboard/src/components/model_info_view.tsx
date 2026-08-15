@@ -25,6 +25,7 @@ import {
   PTU_COUNT_FIELD,
   PTU_RATE_FIELD,
   ptuCountRules,
+  ptuNoUsageCostRule,
   ptuPairRule,
   ptuRateRules,
   ptuStartRequiredRule,
@@ -128,6 +129,12 @@ const PTU_EDIT_FIELDS: PtuEditField[] = [
   },
 ];
 
+/** Per-1M-token rate for the first rate that is set, so a deliberate 0 seeds the form as 0. */
+const perMillionTokens = (...rates: (number | null | undefined)[]): number | null => {
+  const rate = rates.find((candidate) => candidate != null);
+  return rate == null ? null : rate * 1_000_000;
+};
+
 const ptuFieldDependencies = ({ isStart, pairedWith, windowPeer }: PtuEditField): string[] | undefined => {
   const deps = [
     ...(isStart ? [PTU_COUNT_FIELD] : []),
@@ -227,6 +234,8 @@ export default function ModelInfoView({
   const { data: modelHubData } = useModelHub();
   const { data: teams } = useTeams();
   const ptuCostAttributionEnabled = usePtuCostAttributionEnabled();
+  const ptuCostRule = (field: string) =>
+    ptuCostAttributionEnabled ? [ptuNoUsageCostRule(PTU_COUNT_FIELD, field)] : [];
 
   // Transform the model data
   const getProviderFromModel = (model: string) => {
@@ -835,12 +844,14 @@ export default function ModelInfoView({
                     max_retries: localModelData.litellm_params.max_retries,
                     timeout: localModelData.litellm_params.timeout,
                     stream_timeout: localModelData.litellm_params.stream_timeout,
-                    input_cost: localModelData.litellm_params.input_cost_per_token
-                      ? localModelData.litellm_params.input_cost_per_token * 1_000_000
-                      : localModelData.model_info?.input_cost_per_token * 1_000_000 || null,
-                    output_cost: localModelData.litellm_params?.output_cost_per_token
-                      ? localModelData.litellm_params.output_cost_per_token * 1_000_000
-                      : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
+                    input_cost: perMillionTokens(
+                      localModelData.litellm_params.input_cost_per_token,
+                      localModelData.model_info?.input_cost_per_token,
+                    ),
+                    output_cost: perMillionTokens(
+                      localModelData.litellm_params?.output_cost_per_token,
+                      localModelData.model_info?.output_cost_per_token,
+                    ),
                     ptu_count: localModelData.model_info?.ptu_count ?? null,
                     cost_per_ptu_per_hour: localModelData.model_info?.cost_per_ptu_per_hour ?? null,
                     ptu_effective_from: utcIsoToPickerValue(localModelData.model_info?.ptu_effective_from),
@@ -917,14 +928,19 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Input Cost (per 1M tokens)</Text>
                         {isEditing ? (
-                          <Form.Item name="input_cost" className="mb-0">
+                          <Form.Item
+                            name="input_cost"
+                            className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("input_cost")}
+                          >
                             <NumericalInput placeholder="Enter input cost" />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
-                            {localModelData?.litellm_params?.input_cost_per_token
-                              ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.input_cost_per_token
+                            {localModelData?.litellm_params?.input_cost_per_token != null
+                              ? (localModelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.input_cost_per_token != null
                                 ? (localModelData.model_info.input_cost_per_token * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
@@ -934,14 +950,19 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Output Cost (per 1M tokens)</Text>
                         {isEditing ? (
-                          <Form.Item name="output_cost" className="mb-0">
+                          <Form.Item
+                            name="output_cost"
+                            className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("output_cost")}
+                          >
                             <NumericalInput placeholder="Enter output cost" />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
-                            {localModelData?.litellm_params?.output_cost_per_token
+                            {localModelData?.litellm_params?.output_cost_per_token != null
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.output_cost_per_token
+                              : localModelData?.model_info?.output_cost_per_token != null
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
@@ -995,6 +1016,8 @@ export default function ModelInfoView({
                           <Form.Item
                             name="cache_read_cost"
                             className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("cache_read_cost")}
                             tooltip="If left blank on save, defaults to Input Cost."
                           >
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />
@@ -1018,6 +1041,8 @@ export default function ModelInfoView({
                           <Form.Item
                             name="cache_write_cost"
                             className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("cache_write_cost")}
                             tooltip="If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token)."
                           >
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />

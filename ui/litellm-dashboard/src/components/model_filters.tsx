@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Card, Text } from "@tremor/react";
+import { Card } from "@/components/ui/card";
 
 interface ModelGroupInfo {
   model_group: string;
@@ -125,7 +125,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   const filtersContent = (
     <div className="flex flex-wrap gap-4 items-center">
       <div>
-        <Text className="text-sm font-medium mb-2">Search Models:</Text>
+        <p className="text-sm font-medium mb-2">Search Models:</p>
         <input
           type="text"
           placeholder="Search model names..."
@@ -135,7 +135,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         />
       </div>
       <div>
-        <Text className="text-sm font-medium mb-2">Provider:</Text>
+        <p className="text-sm font-medium mb-2">Provider:</p>
         <select
           value={selectedProvider}
           onChange={(e) => setSelectedProvider(e.target.value)}
@@ -153,7 +153,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         </select>
       </div>
       <div>
-        <Text className="text-sm font-medium mb-2">Mode:</Text>
+        <p className="text-sm font-medium mb-2">Mode:</p>
         <select
           value={selectedMode}
           onChange={(e) => setSelectedMode(e.target.value)}
@@ -171,7 +171,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         </select>
       </div>
       <div>
-        <Text className="text-sm font-medium mb-2">Features:</Text>
+        <p className="text-sm font-medium mb-2">Features:</p>
         <select
           value={selectedFeature}
           onChange={(e) => setSelectedFeature(e.target.value)}
@@ -204,7 +204,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   );
 
   if (showFiltersCard) {
-    return <Card className={`mb-6 ${className}`}>{filtersContent}</Card>;
+    return <Card className={`mb-6 px-6 ${className}`}>{filtersContent}</Card>;
   }
 
   return <div className={className}>{filtersContent}</div>;

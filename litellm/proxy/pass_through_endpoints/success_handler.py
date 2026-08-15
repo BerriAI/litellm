@@ -349,10 +349,14 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
-    def is_cohere_route(self, url_route: str):
+    def is_cohere_route(self, url_route: str) -> bool:
         for route in self.TRACKED_COHERE_ROUTES:
-            if route in url_route:
-                return True
+            if route not in url_route:
+                continue
+            if route == "/v1/embed" and "/v1/embeddings" in url_route:
+                continue
+            return True
+        return False
 
     def is_assemblyai_route(self, url_route: str):
         parsed_url: Final = urlparse(url_route)
@@ -429,6 +433,7 @@ class PassThroughEndpointLogging:
 
         return (
             OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)

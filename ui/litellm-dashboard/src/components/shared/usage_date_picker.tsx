@@ -1,5 +1,6 @@
 import React, { useCallback, useState, useRef } from "react";
-import { DateRangePicker, DateRangePickerValue, Text } from "@tremor/react";
+import { DateRangePicker, Text } from "@tremor/react";
+import type { DateRangePickerValue } from "./date_picker_types";
 
 interface UsageDatePickerProps {
   value: DateRangePickerValue;

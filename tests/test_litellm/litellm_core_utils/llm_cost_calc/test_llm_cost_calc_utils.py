@@ -485,6 +485,70 @@ def test_generic_cost_per_token_minimax_m3_above_512k_tokens():
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock_mantle/openai.gpt-5.6-sol",
+        "bedrock_mantle/openai.gpt-5.6-terra",
+        "bedrock_mantle/openai.gpt-5.6-luna",
+    ],
+)
+def test_generic_cost_per_token_bedrock_mantle_gpt56_long_context(model):
+    """Bedrock GPT-5.6 supports a 1M context window, billed at the long-context rates above 272K."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["max_input_tokens"] == 1000000
+
+    cached_tokens = 100000
+    completion_tokens = 1000
+
+    short_prompt_tokens = 272000
+    short_usage = Usage(
+        prompt_tokens=short_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=short_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    short_prompt_cost, short_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=short_usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert round(short_prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * (short_prompt_tokens - cached_tokens)
+        + model_cost_map["cache_read_input_token_cost"] * cached_tokens,
+        10,
+    )
+    assert round(short_completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * completion_tokens, 10
+    )
+
+    long_prompt_tokens = 900000
+    long_usage = Usage(
+        prompt_tokens=long_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=long_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    long_prompt_cost, long_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=long_usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert round(long_prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token_above_272k_tokens"]
+        * (long_prompt_tokens - cached_tokens)
+        + model_cost_map["cache_read_input_token_cost_above_272k_tokens"]
+        * cached_tokens,
+        10,
+    )
+    assert round(long_completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens, 10
+    )
+
+
 def test_generic_cost_per_token_honors_non_standard_above_threshold():
     """Regression for #30344: get_model_info must keep arbitrary
     input/output_cost_per_token_above_<N>_tokens thresholds, not only the hard-coded
@@ -2659,6 +2723,75 @@ def test_token_type_cost_breakdown_applies_regional_uplift():
     assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)
 
 
+def test_token_type_cost_breakdown_applies_anthropic_geo_multiplier(monkeypatch):
+    """
+    Anthropic's regional (geo) uplift lives in provider_specific_entry and is
+    applied to every token type in the totals, so the per-type breakdown must
+    scale its cache and reasoning line items by it too. Otherwise the logged
+    cache costs stay at the base rate and the cache uplift is misattributed to
+    plain input for exactly the cache-heavy regional traffic the uplift targets.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-geo-breakdown-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 25e-6,
+                "cache_creation_input_token_cost": 6.25e-6,
+                "cache_read_input_token_cost": 0.5e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"us": 1.1},
+            }
+        }
+    )
+
+    def make_usage() -> Usage:
+        return Usage(
+            prompt_tokens=10_000,
+            completion_tokens=500,
+            total_tokens=10_500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=2_000,
+                cache_creation_tokens=6_000,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=200, text_tokens=300
+            ),
+        )
+
+    base_usage = make_usage()
+    geo_usage = make_usage()
+    geo_usage.inference_geo = "us"
+
+    base = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider="anthropic", usage=base_usage
+    )
+    geo = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider="anthropic", usage=geo_usage
+    )
+
+    assert base.cache_read_cost == pytest.approx(2_000 * 0.5e-6)
+    assert base.cache_creation_cost == pytest.approx(6_000 * 6.25e-6)
+    assert geo.cache_read_cost == pytest.approx(base.cache_read_cost * 1.1)
+    assert geo.cache_creation_cost == pytest.approx(base.cache_creation_cost * 1.1)
+    assert geo.reasoning_cost == pytest.approx(base.reasoning_cost * 1.1)
+
+    # The uplifted breakdown must still reconcile with the uplifted totals.
+    prompt_cost, completion_cost = anthropic_cost_per_token(model=model, usage=geo_usage)
+    text_input_cost = 2_000 * 5e-6 * 1.1
+    text_output_cost = 300 * 25e-6 * 1.1
+    assert text_input_cost + geo.cache_read_cost + geo.cache_creation_cost == pytest.approx(prompt_cost)
+    assert text_output_cost + geo.reasoning_cost == pytest.approx(completion_cost)
+
+
 @pytest.mark.parametrize("details_as_dict", [True, False])
 def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict):
     """
@@ -3004,3 +3137,91 @@ def test_tier_request_without_tier_pricing_keeps_the_standard_reasoning_rate():
     )
 
     assert completion_cost == pytest.approx(400 * 4e-06 + 600 * 6e-06, rel=1e-9)
+
+
+GEMINI_37_FLASH_LAUNCH_PRICING = [
+    ("gemini-3.7-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("gemini/gemini-3.7-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("vertex_ai/gemini-3.7-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+]
+
+
+@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_37_FLASH_LAUNCH_PRICING)
+def test_gemini_37_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["input_cost_per_token"] == input_cost
+    assert model_cost_map["output_cost_per_token"] == output_cost
+    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
+    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
+    assert model_cost_map["mode"] == "chat"
+    assert model_cost_map["supports_reasoning"] is True
+    assert model_cost_map["supports_function_calling"] is True
+    assert model_cost_map["max_input_tokens"] == 1048576
+
+
+def test_generic_cost_per_token_gemini_37_flash(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=200,
+            text_tokens=300,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=1000),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gemini-3.7-flash",
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+    assert prompt_cost == pytest.approx(0.00075)
+    assert completion_cost == pytest.approx(0.001875)
+
+
+def test_grok_46_launch_pricing(_local_model_cost_map):
+    model_cost_map = litellm.model_cost["xai/grok-4.6"]
+    assert model_cost_map["input_cost_per_token"] == 2e-06
+    assert model_cost_map["output_cost_per_token"] == 6e-06
+    assert model_cost_map["cache_read_input_token_cost"] == 5e-07
+    assert model_cost_map["input_cost_per_token_above_200k_tokens"] == 4e-06
+    assert model_cost_map["output_cost_per_token_above_200k_tokens"] == 1.2e-05
+    assert model_cost_map["cache_read_input_token_cost_above_200k_tokens"] == 1e-06
+    assert model_cost_map["mode"] == "chat"
+    assert model_cost_map["supports_reasoning"] is True
+    assert model_cost_map["supports_function_calling"] is True
+    assert model_cost_map["max_input_tokens"] == 500000
+
+
+def test_generic_cost_per_token_grok_46(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=500,
+        total_tokens=1_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=1_000),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="grok-4.6",
+        usage=usage,
+        custom_llm_provider="xai",
+    )
+    assert prompt_cost == pytest.approx(1_000 * 2e-06)
+    assert completion_cost == pytest.approx(500 * 6e-06)
+
+
+def test_generic_cost_per_token_grok_46_long_context(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=50_000, text_tokens=200_000
+        ),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="grok-4.6",
+        usage=usage,
+        custom_llm_provider="xai",
+    )
+    assert prompt_cost == pytest.approx(200_000 * 4e-06 + 50_000 * 1e-06)
+    assert completion_cost == pytest.approx(1_000 * 1.2e-05)
