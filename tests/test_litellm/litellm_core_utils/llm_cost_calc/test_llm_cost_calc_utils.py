@@ -2558,6 +2558,75 @@ def test_token_type_cost_breakdown_applies_regional_uplift():
     assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)
 
 
+def test_token_type_cost_breakdown_applies_anthropic_geo_multiplier(monkeypatch):
+    """
+    Anthropic's regional (geo) uplift lives in provider_specific_entry and is
+    applied to every token type in the totals, so the per-type breakdown must
+    scale its cache and reasoning line items by it too. Otherwise the logged
+    cache costs stay at the base rate and the cache uplift is misattributed to
+    plain input for exactly the cache-heavy regional traffic the uplift targets.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-geo-breakdown-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 25e-6,
+                "cache_creation_input_token_cost": 6.25e-6,
+                "cache_read_input_token_cost": 0.5e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"us": 1.1},
+            }
+        }
+    )
+
+    def make_usage() -> Usage:
+        return Usage(
+            prompt_tokens=10_000,
+            completion_tokens=500,
+            total_tokens=10_500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=2_000,
+                cache_creation_tokens=6_000,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=200, text_tokens=300
+            ),
+        )
+
+    base_usage = make_usage()
+    geo_usage = make_usage()
+    geo_usage.inference_geo = "us"
+
+    base = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider="anthropic", usage=base_usage
+    )
+    geo = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider="anthropic", usage=geo_usage
+    )
+
+    assert base.cache_read_cost == pytest.approx(2_000 * 0.5e-6)
+    assert base.cache_creation_cost == pytest.approx(6_000 * 6.25e-6)
+    assert geo.cache_read_cost == pytest.approx(base.cache_read_cost * 1.1)
+    assert geo.cache_creation_cost == pytest.approx(base.cache_creation_cost * 1.1)
+    assert geo.reasoning_cost == pytest.approx(base.reasoning_cost * 1.1)
+
+    # The uplifted breakdown must still reconcile with the uplifted totals.
+    prompt_cost, completion_cost = anthropic_cost_per_token(model=model, usage=geo_usage)
+    text_input_cost = 2_000 * 5e-6 * 1.1
+    text_output_cost = 300 * 25e-6 * 1.1
+    assert text_input_cost + geo.cache_read_cost + geo.cache_creation_cost == pytest.approx(prompt_cost)
+    assert text_output_cost + geo.reasoning_cost == pytest.approx(completion_cost)
+
+
 @pytest.mark.parametrize("details_as_dict", [True, False])
 def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict):
     """
