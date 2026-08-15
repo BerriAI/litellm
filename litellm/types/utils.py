@@ -3260,6 +3260,7 @@ class MirroredPricingParams(BaseModel):
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
+    tiered_pricing: list[dict[str, Any]] | None = None
 
 
 class CustomPricingLiteLLMParams(MirroredPricingParams):
@@ -3327,7 +3328,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
     citation_cost_per_token: float | None = None
-    tiered_pricing: list[dict[str, Any]] | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
     input_cost_per_image_token: float | None = None
