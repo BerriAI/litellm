@@ -21,7 +21,11 @@ import litellm
 from litellm.llms.dashscope.cost_calculator import (
     cost_per_token as dashscope_cost_per_token,
 )
-from litellm.types.utils import Usage, PromptTokensDetailsWrapper
+from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 
 
 class TestDashscopeCostCalculator:
@@ -342,6 +346,61 @@ class TestDashscopeCostCalculator:
         )
 
         assert math.isclose(prompt_cost, 500 * 4e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 1.6e-06, rel_tol=1e-10)
+
+    def test_dashscope_tier_without_an_output_rate_bills_the_model_reasoning_rate(self):
+        """
+        Regression: a tier declaring only an input rate billed reasoning tokens at the model's
+        plain output rate, ignoring the model's dedicated reasoning rate.
+        """
+        litellm.model_cost["dashscope/qwen-input-only-reasoning-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "output_cost_per_token": 1.6e-06,
+            "output_cost_per_reasoning_token": 4e-06,
+            "tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 4e-07}],
+        }
+
+        usage = Usage(
+            prompt_tokens=500,
+            completion_tokens=200,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=150),
+        )
+        _, completion_cost = dashscope_cost_per_token(
+            model="qwen-input-only-reasoning-test", usage=usage
+        )
+
+        assert math.isclose(
+            completion_cost, (50 * 1.6e-06) + (150 * 4e-06), rel_tol=1e-10
+        )
+
+    def test_dashscope_tier_output_rate_wins_over_the_model_reasoning_rate(self):
+        """
+        A tier declaring its own output rate keeps reasoning tokens on that tier rather than
+        mixing in a model-level reasoning rate.
+        """
+        litellm.model_cost["dashscope/qwen-tier-output-reasoning-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "output_cost_per_reasoning_token": 4e-06,
+            "tiered_pricing": [
+                {
+                    "range": [0, 1000],
+                    "input_cost_per_token": 4e-07,
+                    "output_cost_per_token": 1.6e-06,
+                }
+            ],
+        }
+
+        usage = Usage(
+            prompt_tokens=500,
+            completion_tokens=200,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=150),
+        )
+        _, completion_cost = dashscope_cost_per_token(
+            model="qwen-tier-output-reasoning-test", usage=usage
+        )
+
         assert math.isclose(completion_cost, 200 * 1.6e-06, rel_tol=1e-10)
 
     def test_dashscope_tiered_pricing_zero_input_falls_back_to_flat_rates(self):

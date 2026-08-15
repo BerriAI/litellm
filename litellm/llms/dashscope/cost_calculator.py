@@ -88,19 +88,20 @@ def _calculate_completion_cost(
     model_info: ModelInfo,
     tier: dict | None,
 ) -> float:
-    # A tier declaring no output rate falls back to the model's own, since a table spelling out
-    # only input rates would otherwise serve every completion for free
+    # A tier that declares output rates keeps the request on them, all-or-nothing. A tier table
+    # spelling out only input rates would serve every completion for free, so there the model's
+    # own output rates stand in
+    tier_declares_output: Final = tier is not None and "output_cost_per_token" in tier
     output_cost: Final = (
         tier_rate(tier, "output_cost_per_token")
-        if tier is not None and "output_cost_per_token" in tier
+        if tier_declares_output
         else float(model_info.get("output_cost_per_token") or 0.0)
     )
-    if tier is not None:
-        return (breakdown.completion_tokens * output_cost) + (
-            breakdown.reasoning_tokens * (tier_rate(tier, "output_cost_per_reasoning_token") or output_cost)
-        )
-
-    reasoning_cost: Final = _flat_rate(model_info, "output_cost_per_reasoning_token", "output_cost_per_token")
+    tier_reasoning_cost: Final = tier_rate(tier, "output_cost_per_reasoning_token") if tier is not None else 0.0
+    model_reasoning_cost: Final = (
+        0.0 if tier_declares_output else float(model_info.get("output_cost_per_reasoning_token") or 0.0)
+    )
+    reasoning_cost: Final = tier_reasoning_cost or model_reasoning_cost or output_cost
 
     return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
