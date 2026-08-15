@@ -358,6 +358,7 @@ describe("ShadowEvalSection", () => {
     const expectedBody = {
       api_key_id: "hash-alpha",
       router_name: "gpt-auto",
+      direction: "forward",
       shadow_percentage: 10,
       duration_days: 7,
       max_turns: 200,
