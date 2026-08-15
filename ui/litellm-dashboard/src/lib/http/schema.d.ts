@@ -838,9 +838,15 @@ export interface paths {
         put?: never;
         /**
          * Start Shadow Eval
-         * @description Start a pre-adoption shadow eval: duplicate a sampled slice of a key's live traffic
-         *     through an auto-router, judge real vs. shadow responses blind, and stratify win rates
-         *     by the router's tier classification and by the incumbent model.
+         * @description Start a shadow eval: duplicate a sampled slice of a key's live traffic against a second
+         *     arm, judge the two responses blind, and stratify win rates by tier and by the model that
+         *     served the real arm.
+         *
+         *     A forward job answers whether the key should adopt router_name: it samples the requests
+         *     the router did not serve and duplicates them through it. A reverse job answers whether a
+         *     key already on the router still gains from it: it samples the requests the router did
+         *     serve and duplicates them against baseline_model. A key can hold one active job per
+         *     direction, so both questions can run at once.
          *
          *     Shadow responses are never served to users. The job samples until it has judged
          *     max_turns turns, reaches the end of its window, or is stopped; sampling changes
@@ -32737,11 +32743,19 @@ export interface components {
              * @description The hashed virtual key whose traffic this job evaluates, and only that key's
              */
             api_key_id: string;
+            /** Baseline Model */
+            baseline_model?: string | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Direction
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
             /**
              * Ends At
              * Format: date-time
@@ -32794,7 +32808,10 @@ export interface components {
          * @description Stratified results of a shadow-eval job's verdicts so far.
          */
         ShadowEvalResult: {
-            /** By Current Model */
+            /**
+             * By Current Model
+             * @description Sliced by the model that served the real arm: the key's incumbent models in forward mode, and in reverse the models the router itself picked
+             */
             by_current_model: components["schemas"]["ShadowEvalSlice"][];
             /** By Tier */
             by_tier: components["schemas"]["ShadowEvalSlice"][];
@@ -32806,7 +32823,7 @@ export interface components {
         /**
          * ShadowEvalSlice
          * @description Judge outcomes for one slice of a job's verdicts (a router tier, or one of the
-         *     models the shadowed key currently uses).
+         *     models that served the real arm).
          */
         ShadowEvalSlice: {
             /** Avg Judge Confidence */
@@ -32815,12 +32832,12 @@ export interface components {
             group: string;
             /**
              * Real Win Rate Pct
-             * @description Share of judged turns where the real (control) model won
+             * @description Share of judged turns the real arm won, meaning the response the caller actually received: the key's own model in forward mode, the router's pick in reverse
              */
             real_win_rate_pct: number;
             /**
              * Shadow Win Rate Pct
-             * @description Share of judged turns where the shadowed router's pick won
+             * @description Share of judged turns the shadow arm won, meaning the duplicated response nobody was served: the router's pick in forward mode, baseline_model in reverse
              */
             shadow_win_rate_pct: number;
             /** Tie Rate Pct */
@@ -33003,7 +33020,7 @@ export interface components {
         };
         /**
          * StartShadowEvalRequest
-         * @description Start shadowing a key's traffic through an auto-router for blind comparison.
+         * @description Start duplicating a key's traffic for blind comparison against an auto-router.
          */
         StartShadowEvalRequest: {
             /**
@@ -33011,6 +33028,18 @@ export interface components {
              * @description The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this key's traffic; requests made with any other key are not sampled.
              */
             api_key_id: string;
+            /**
+             * Baseline Model
+             * @description Required when direction is reverse and rejected otherwise: the fixed model the router's own responses are judged against. Must be a plain model rather than another auto-router
+             */
+            baseline_model?: string | null;
+            /**
+             * Direction
+             * @description forward answers 'should this key adopt router_name': it samples the requests the key did NOT route through the router and duplicates them through it. reverse answers 'is the router still worth it for a key already on it': it samples the requests the router did serve and duplicates them against baseline_model. The response the caller received is always the real arm
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
             /**
              * Duration Days
              * @description How many days the job samples traffic before completing on its own
@@ -33031,7 +33060,7 @@ export interface components {
             max_turns: number;
             /**
              * Router Name
-             * @description The auto-router config to shadow requests through
+             * @description The auto-router under evaluation, in either direction
              */
             router_name: string;
             /**
