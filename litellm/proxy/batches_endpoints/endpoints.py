@@ -23,9 +23,9 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    add_internal_model_credentials,
     apply_team_provider_credentials,
     decode_model_from_file_id,
-    add_internal_model_credentials,
     encode_batch_response_ids,
     encode_file_id_with_model,
     ensure_batch_response_managed_file_ids,
