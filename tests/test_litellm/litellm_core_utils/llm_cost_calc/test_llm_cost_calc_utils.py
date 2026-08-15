@@ -587,6 +587,246 @@ def test_generic_cost_per_token_honors_non_standard_above_threshold():
         litellm.model_cost.pop(model, None)
 
 
+def test_generic_cost_per_token_tiered_pricing_charges_cache_creation_at_tier_rate():
+    """Regression for LIT-4375: a tier's cache_creation_input_token_cost must be billed
+    on the generic (provider-agnostic) path, not silently dropped."""
+    model = "litellm-test-tiered-cache-creation"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "tiered_pricing": [
+                    {
+                        "range": [0, 256000],
+                        "input_cost_per_token": 3.25e-07,
+                        "output_cost_per_token": 1.95e-06,
+                        "cache_creation_input_token_cost": 4.063e-07,
+                        "cache_read_input_token_cost": 3.25e-08,
+                    },
+                    {
+                        "range": [256000, 1000000],
+                        "input_cost_per_token": 6.5e-07,
+                        "output_cost_per_token": 3.9e-06,
+                        "cache_creation_input_token_cost": 8.125e-07,
+                        "cache_read_input_token_cost": 6.5e-08,
+                    },
+                ],
+            }
+        }
+    )
+
+    try:
+        usage = Usage(
+            prompt_tokens=300000,  # 200k new + 60k cache creation + 40k cache read
+            completion_tokens=1000,
+            total_tokens=301000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=40000, cache_creation_tokens=60000
+            ),
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        expected_prompt = (
+            (200000 * 6.5e-07) + (60000 * 8.125e-07) + (40000 * 6.5e-08)
+        )
+        assert round(prompt_cost, 10) == round(expected_prompt, 10)
+        assert round(completion_cost, 10) == round(1000 * 3.9e-06, 10)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
+def test_generic_cost_per_token_tiered_pricing_is_all_or_nothing():
+    """Tiered pricing bills the whole request at the tier picked from its input tokens,
+    for any provider, and falls back to flat pricing when no tier matches."""
+    model = "litellm-test-tiered-all-or-nothing"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "tiered_pricing": [
+                    {
+                        "range": [0, 32000],
+                        "input_cost_per_token": 4.6e-07,
+                        "output_cost_per_token": 2.3e-06,
+                    },
+                    {
+                        "range": [32000, 128000],
+                        "input_cost_per_token": 7e-07,
+                        "output_cost_per_token": 3.5e-06,
+                    },
+                ],
+            }
+        }
+    )
+
+    try:
+        usage = Usage(prompt_tokens=40000, completion_tokens=1000, total_tokens=41000)
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert round(prompt_cost, 10) == round(40000 * 7e-07, 10)
+        assert round(completion_cost, 10) == round(1000 * 3.5e-06, 10)
+
+        boundary_usage = Usage(prompt_tokens=32000, completion_tokens=10, total_tokens=32010)
+        boundary_prompt_cost, _ = generic_cost_per_token(
+            model=model,
+            usage=boundary_usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert round(boundary_prompt_cost, 10) == round(32000 * 4.6e-07, 10)
+
+        empty_prompt_usage = Usage(prompt_tokens=0, completion_tokens=100, total_tokens=100)
+        empty_prompt_cost, empty_completion_cost = generic_cost_per_token(
+            model=model,
+            usage=empty_prompt_usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert empty_prompt_cost == 0.0
+        assert round(empty_completion_cost, 10) == round(100 * 2e-06, 10)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
+def test_generic_cost_per_token_tier_without_an_output_rate_bills_the_model_rate():
+    """Regression: a tier table that spells out only input rates served every completion for
+    free, since a tier's missing output rate has no tier-level fallback to stand in for it."""
+    model = "litellm-test-tiered-input-only"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "output_cost_per_token": 2e-06,
+                "output_cost_per_reasoning_token": 5e-06,
+                "tiered_pricing": [{"range": [0, 128000], "input_cost_per_token": 1e-03}],
+            }
+        }
+    )
+
+    try:
+        usage = Usage(
+            prompt_tokens=13,
+            completion_tokens=182,
+            total_tokens=195,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=100),
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert round(prompt_cost, 12) == round(13 * 1e-03, 12)
+        assert round(completion_cost, 12) == round((82 * 2e-06) + (100 * 5e-06), 12)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
+def test_router_deployment_with_input_only_tiers_bills_completions_at_the_backend_rate():
+    """Regression: the router registers a deployment's custom pricing as a standalone
+    model_cost entry holding only the supplied fields, so an input-only tier table left
+    the output-rate fallback nothing to read and billed every completion at 0."""
+    from litellm import Router
+
+    model_id = "litellm-test-router-tiered-input-only"
+    backend_model = "anthropic/claude-haiku-4-5"
+    backend_output_rate = litellm.get_model_info(backend_model)["output_cost_per_token"]
+    Router(
+        model_list=[
+            {
+                "model_name": "tiered-input-only",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_key": "sk-test",
+                    "tiered_pricing": [
+                        {"range": [0, 3000], "input_cost_per_token": 3.25e-07},
+                        {"range": [3000, 128000], "input_cost_per_token": 8.125e-07},
+                    ],
+                },
+                "model_info": {"id": model_id},
+            }
+        ]
+    )
+
+    try:
+        usage = Usage(prompt_tokens=21, completion_tokens=4, total_tokens=25)
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model_id,
+            usage=usage,
+            custom_llm_provider="anthropic",
+        )
+        assert round(prompt_cost, 12) == round(21 * 3.25e-07, 12)
+        assert round(completion_cost, 12) == round(4 * backend_output_rate, 12)
+        assert backend_output_rate > 0
+    finally:
+        litellm.model_cost.pop(model_id, None)
+
+
+def test_generic_cost_per_token_tiered_pricing_bills_reasoning_at_tier_rate():
+    """Regression: a tier's output_cost_per_reasoning_token must price reasoning tokens
+    on the generic path and in the logged breakdown, not the tier's plain output rate."""
+    model = "litellm-test-tiered-reasoning"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "tiered_pricing": [
+                    {
+                        "range": [0, 256000],
+                        "input_cost_per_token": 4e-07,
+                        "output_cost_per_token": 1.2e-06,
+                        "output_cost_per_reasoning_token": 4e-06,
+                    },
+                    {
+                        "range": [256000, 1000000],
+                        "input_cost_per_token": 1.2e-06,
+                        "output_cost_per_token": 3.6e-06,
+                        "output_cost_per_reasoning_token": 1.2e-05,
+                    },
+                ],
+            }
+        }
+    )
+
+    try:
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            total_tokens=1500,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=400),
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert round(prompt_cost, 12) == round(1000 * 4e-07, 12)
+        assert round(completion_cost, 12) == round((100 * 1.2e-06) + (400 * 4e-06), 12)
+
+        breakdown = get_token_type_cost_breakdown(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            usage=usage,
+        )
+        assert round(breakdown.reasoning_cost, 12) == round(400 * 4e-06, 12)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
 def test_generic_cost_per_token_gpt55():
     """gpt-5.5: base pricing — $5/1M input, $30/1M output, $0.50/1M cached input."""
     model = "gpt-5.5"
