@@ -1,5 +1,6 @@
 import datetime as real_datetime
 import os
+from typing import Any, NoReturn
 import smtplib
 import sys
 
@@ -22,13 +23,13 @@ from litellm.proxy.utils import get_custom_url, join_paths
 
 class _RecordingLoop:
     def __init__(self) -> None:
-        self.calls: list = []
+        self.calls: list[tuple[Any, int]] = []
 
-    def call_soon_threadsafe(self, fn, pid) -> None:
+    def call_soon_threadsafe(self, fn: Any, pid: int) -> None:
         self.calls.append((fn, pid))
 
 
-def _echild_raise(pid, options):
+def _echild_raise(pid: int, options: int) -> NoReturn:
     raise ChildProcessError()
 
 

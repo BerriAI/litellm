@@ -4222,7 +4222,7 @@ class PrismaClient:
         try:
             os.waitpid(pid, 0)
         except ChildProcessError:
-            if self._is_engine_alive():
+            if self._engine_pid > 0 and self._is_engine_alive():
                 return
         except OSError:
             pass
