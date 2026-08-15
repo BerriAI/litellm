@@ -420,5 +420,44 @@ class TestGeminiTTSSpeechConfigInRequestBody:
         assert "AUDIO" in generation_config["responseModalities"]
 
 
+class TestSpeechToCompletionBridgeMetadata:
+    """Regression for #37015: metadata must be forwarded into the inner completion call."""
+
+    def test_metadata_forwarded_to_bridge(self):
+        from unittest.mock import MagicMock, patch
+
+        from litellm.endpoints.speech.speech_to_completion_bridge.transformation import (
+            SpeechToCompletionBridgeTransformationHandler,
+        )
+        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+
+        metadata = {"user_api_key": "test_key_hash", "user_api_key_user_id": "user123"}
+        litellm_params_dict = get_litellm_params(metadata=metadata)
+
+        assert litellm_params_dict["metadata"] == metadata, (
+            "metadata must be present in litellm_params_dict; without this the inner "
+            "completion call overwrites it with None and spend tracking is lost"
+        )
+
+        handler = SpeechToCompletionBridgeTransformationHandler()
+        logging_obj = MagicMock()
+
+        request_kwargs = handler.transform_request(
+            model="gemini-2.5-flash-preview-tts",
+            input="hello",
+            voice="Kore",
+            optional_params={},
+            litellm_params=litellm_params_dict,
+            headers={},
+            litellm_logging_obj=logging_obj,
+            custom_llm_provider="gemini",
+        )
+
+        assert request_kwargs["metadata"] == metadata, (
+            "metadata must survive transform_request so the inner completion call "
+            "does not overwrite the logging object's metadata with None"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
