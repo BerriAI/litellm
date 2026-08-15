@@ -93,6 +93,7 @@ describe("SearchToolTester", () => {
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
     expect(networking.searchToolQueryCall).toHaveBeenCalledWith("test-token", "test-search-tool", "test query");
+    await waitFor(() => expect(searchButton).not.toBeDisabled());
   });
 
   it("should call searchToolQueryCall when Enter is pressed in input", async () => {
@@ -101,6 +102,7 @@ describe("SearchToolTester", () => {
     const input = screen.getByPlaceholderText("Enter your search query...");
     await user.type(input, "test query{Enter}");
     expect(networking.searchToolQueryCall).toHaveBeenCalledWith("test-token", "test-search-tool", "test query");
+    await waitFor(() => expect(input).not.toBeDisabled());
   });
 
   it("should not call searchToolQueryCall when Shift+Enter is pressed", async () => {
@@ -123,6 +125,7 @@ describe("SearchToolTester", () => {
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
     expect(screen.getByText("Searching...")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Searching...")).not.toBeInTheDocument());
   });
 
   it("should display search results after successful search", async () => {
@@ -407,6 +410,7 @@ describe("SearchToolTester", () => {
     await user.click(searchButton);
     expect(input).toBeDisabled();
     expect(searchButton).toBeDisabled();
+    await waitFor(() => expect(input).not.toBeDisabled());
   });
 
   it("should display result links that open in new tab", async () => {
