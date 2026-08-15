@@ -1078,6 +1078,7 @@ class ComplexityRouter(CustomLogger):
         classifier_model: str | None = None,
         classifier_cost: float | None = None,
         conversation_continuing: bool = True,
+        tier_litellm_params: dict[str, object] | None = None,  # mutable-ok: Routing metadata mapping
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -1127,6 +1128,8 @@ class ComplexityRouter(CustomLogger):
             decision["classifier_model"] = classifier_model
         if classifier_cost is not None:
             decision["classifier_cost"] = classifier_cost
+        if tier_litellm_params:
+            decision["tier_litellm_params"] = tier_litellm_params
         return decision
 
     async def aclassify(
@@ -1456,6 +1459,11 @@ class ComplexityRouter(CustomLogger):
             return self._pick_from_tier_value(self.config.tiers[medium_key], medium_key)
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
+
+    def _litellm_params_for_model(self, tier: ComplexityTier, model: str) -> dict[str, object]:  # mutable-ok: Request mapping
+        entries: Final = self.config.tier_model_configs.get(tier.value, ())
+        entry: Final = next((candidate for candidate in entries if candidate.model_name == model), None)
+        return dict(entry.litellm_params) if entry is not None else {}  # mutable-ok: Request mapping copy
 
     @staticmethod
     def _pick_from_tier_value(model: str | list[str], tier_key: str) -> str:
@@ -2118,11 +2126,15 @@ class ComplexityRouter(CustomLogger):
                     verbose_router_logger.info(
                         "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model
                     )
+                    session_tier_litellm_params: Final = self._litellm_params_for_model(
+                        self._tier_for_model(routed_model) or ComplexityTier.MEDIUM, routed_model
+                    )
                     has_original_messages: Final = messages is not None and len(messages) > 0
                     return self._with_session_deployment_affinity(
                         PreRoutingHookResponse(
                             model=routed_model,
                             messages=messages if has_original_messages else None,
+                            litellm_params=session_tier_litellm_params,
                             routing_decision=self._build_routing_decision(
                                 routed_model=routed_model,
                                 cause=cause,
@@ -2131,6 +2143,7 @@ class ComplexityRouter(CustomLogger):
                                 escalation_keyword=pin_escalation_keyword,
                                 escalated=escalated,
                                 conversation_continuing=conversation_continuing,
+                                tier_litellm_params=session_tier_litellm_params,
                             ),
                         )
                     )
@@ -2271,6 +2284,7 @@ class ComplexityRouter(CustomLogger):
             )
             keyword_plan_floored: Final = routed_tier != escalated_tier
             routed_model = await self._pick_model_for_tier(routed_tier, messages, resolved_messages, request_kwargs)
+            keyword_tier_litellm_params: Final = self._litellm_params_for_model(routed_tier, routed_model)
             keyword_cause: Final[RoutingDecisionCause] = (
                 "plan_mode"
                 if keyword_plan_floored
@@ -2286,6 +2300,7 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
+                litellm_params=keyword_tier_litellm_params,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     conversation_continuing=conversation_continuing,
@@ -2294,6 +2309,7 @@ class ComplexityRouter(CustomLogger):
                     matched_keyword=plan_mode_sentinel if keyword_plan_floored else override.matched_keyword,
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
+                    tier_litellm_params=keyword_tier_litellm_params,
                 ),
             )
 
@@ -2380,6 +2396,7 @@ class ComplexityRouter(CustomLogger):
                 routed_model,
             )
 
+        tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
         classifier_model: Final = (
             self.config.classifier_llm_config.model
             if outcome.cause == "llm_classifier" and self.config.classifier_llm_config is not None
@@ -2405,6 +2422,7 @@ class ComplexityRouter(CustomLogger):
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages if has_original_messages else None,
+            litellm_params=tier_litellm_params,
             routing_decision=self._build_routing_decision(
                 routed_model=routed_model,
                 conversation_continuing=conversation_continuing,
@@ -2417,5 +2435,6 @@ class ComplexityRouter(CustomLogger):
                 escalated=escalated,
                 classifier_model=classifier_model,
                 classifier_cost=outcome.classifier_cost,
+                tier_litellm_params=tier_litellm_params,
             ),
         )

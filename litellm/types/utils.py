@@ -2843,6 +2843,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     conversation_continuing: bool
     savings_baseline_model: str
     savings_baseline_deployment_id: str
+    tier_litellm_params: ReadOnly[dict[str, object]]  # mutable-ok: Routing metadata mapping
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2868,6 +2869,7 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "conversation_continuing",
         "savings_baseline_model",
         "savings_baseline_deployment_id",
+        "tier_litellm_params",
     }
 )
 

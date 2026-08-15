@@ -159,6 +159,34 @@ class ReminderMarkerPair(BaseModel):
         return self
 
 
+class ComplexityTierModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_name: str
+    litellm_params: dict[str, object] = Field(default_factory=dict)  # mutable-ok: Pydantic mapping field
+
+
+def _normalize_tier_entries(
+    raw_value: object,
+    tier: str,
+) -> tuple[str | list[str], tuple[ComplexityTierModel, ...]]:
+    raw_entries: Final = raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,)
+    if not raw_entries:
+        raise ValueError(f"tier pool for {tier} must not be empty")
+    entries: Final = tuple(
+        ComplexityTierModel(model_name=entry)
+        if isinstance(entry, str)
+        else ComplexityTierModel.model_validate(entry)
+        for entry in raw_entries
+    )
+    normalized: Final = (
+        entries[0].model_name
+        if not isinstance(raw_value, (list, tuple))
+        else [entry.model_name for entry in entries]  # mutable-ok: Pydantic normalization
+    )
+    return normalized, entries
+
+
 # ─── Default Keyword Lists ───
 # Note: Keywords should be full words/phrases to avoid substring false positives.
 # The matching logic uses word boundary detection for single-word keywords.
@@ -424,6 +452,9 @@ class ComplexityRouterConfig(BaseModel):
             "Mapping of complexity tiers to a model or model pool. "
             "A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True"
         ),
+    )
+    tier_model_configs: dict[str, tuple[ComplexityTierModel, ...]] = Field(  # mutable-ok: Pydantic mapping field
+        default_factory=dict,
     )
 
     tier_definitions: tuple[TierDefinition, ...] | None = Field(
@@ -777,6 +808,44 @@ class ComplexityRouterConfig(BaseModel):
                 coerced[key] = item
         return coerced
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_tier_model_configs(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        raw_tiers: Final = value.get("tiers")
+        if not isinstance(raw_tiers, dict):
+            return value
+        existing_configs: Final = value.get("tier_model_configs")
+        normalized_entries: Final = {  # mutable-ok: Pydantic normalization
+            tier: _normalize_tier_entries(raw_value, tier) for tier, raw_value in raw_tiers.items()
+        }
+        normalized_tiers: Final = {  # mutable-ok: Pydantic normalization
+            tier: normalized for tier, (normalized, _) in normalized_entries.items()
+        }
+        tier_model_configs: Final = {  # mutable-ok: Pydantic normalization
+            tier: entries for tier, (_, entries) in normalized_entries.items()
+        }
+        has_object_entry: Final = any(
+            not isinstance(entry, str)
+            for raw_value in raw_tiers.values()
+            for entry in (raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,))
+        )
+        preserved_configs: Final = {  # mutable-ok: Pydantic normalization
+            tier: tuple(ComplexityTierModel.model_validate(entry) for entry in entries)
+            for tier, entries in existing_configs.items()
+        } if isinstance(existing_configs, dict) else {}  # mutable-ok: Pydantic normalization
+        normalized_tier_model_configs: Final = (
+            tier_model_configs
+            if has_object_entry or not isinstance(existing_configs, dict)
+            else preserved_configs
+        )
+        return {  # mutable-ok: Pydantic normalization
+            **value,
+            "tiers": normalized_tiers,
+            "tier_model_configs": normalized_tier_model_configs,
+        }
+
     @field_validator("escalation_keywords")
     @classmethod
     def _normalize_escalation_keywords(cls, value: list[str] | None) -> list[str] | None:
@@ -997,15 +1066,12 @@ class ComplexityRouterConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_adaptive_pools(self) -> "ComplexityRouterConfig":
-        if not self.adaptive:
-            return self
         normalized = {tier: (models if isinstance(models, list) else [models]) for tier, models in self.tiers.items()}
-        if not any(normalized.values()):
-            raise ValueError("adaptive=True requires at least one non-empty tier pool")
         empty: Final = [tier for tier, models in normalized.items() if not models]
         if empty:
-            raise ValueError(f"adaptive=True tier pools must be non-empty; empty tiers: {empty}")
-        self.tiers = normalized
+            raise ValueError(f"tier pools must be non-empty; empty tiers: {empty}")
+        if self.adaptive:
+            self.tiers = normalized
         return self
 
     @model_validator(mode="after")
