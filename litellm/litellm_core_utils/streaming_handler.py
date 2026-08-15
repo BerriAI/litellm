@@ -53,6 +53,7 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 _SYNC_ITER_EXHAUSTED: Final = object()
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
+_TRUSTED_USAGE_COST_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
 def _next_sync_or_exhausted(it: Any) -> object:
@@ -1792,12 +1793,14 @@ class CustomStreamWrapper:
     @staticmethod
     def _propagate_usage_cost_to_hidden_params(
         response: "ModelResponse",
+        custom_llm_provider: str | None,
     ) -> None:
         """
-        If the assembled response carries a provider-reported cost on
-        usage.cost, copy it into _hidden_params so litellm's cost
-        calculator uses it instead of a token-based estimate.
+        Copy a trusted provider's USD usage.cost into the cost override header.
         """
+        if custom_llm_provider not in _TRUSTED_USAGE_COST_PROVIDERS:
+            return
+
         _usage: Final[Usage | None] = getattr(response, "usage", None)
         if _usage is not None and hasattr(_usage, "cost") and _usage.cost is not None:
             if "additional_headers" not in response._hidden_params:
@@ -1911,7 +1914,10 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
-                    self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+                    self._propagate_usage_cost_to_hidden_params(
+                        complete_streaming_response,
+                        self.custom_llm_provider,
+                    )
 
                     setattr(
                         response,
@@ -2161,7 +2167,10 @@ class CustomStreamWrapper:
 
             response: Final = self.model_response_creator()
             if complete_streaming_response is not None:
-                self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+                self._propagate_usage_cost_to_hidden_params(
+                    complete_streaming_response,
+                    self.custom_llm_provider,
+                )
 
                 setattr(
                     response,

@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
+    ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StandardLoggingPayload,
@@ -1657,7 +1658,9 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     assert complete_response.usage.cost == 0.00025
 
     # Use the real propagation method from CustomStreamWrapper
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(
+        complete_response, "openrouter"
+    )
 
     assert "additional_headers" in complete_response._hidden_params
     assert (
@@ -1674,6 +1677,50 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
         complete_response._hidden_params
     )
     assert provider_cost == 0.00025
+
+
+def test_openai_compatible_streaming_cost_is_not_trusted_as_usd():
+    model = "openai/test-provider-cost-unit"
+    litellm.register_model(
+        {
+            model: {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    complete_response = ModelResponse(
+        id="chatcmpl-openai-compatible",
+        model=model,
+        choices=[],
+        usage=Usage(
+            completion_tokens=5,
+            prompt_tokens=10,
+            total_tokens=15,
+            cost=3_144_000,
+        ),
+    )
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(
+        complete_response, "openai"
+    )
+
+    assert "llm_provider-x-litellm-response-cost" not in complete_response._hidden_params.get(
+        "additional_headers", {}
+    )
+
+    from litellm.cost_calculator import response_cost_calculator
+
+    response_cost = response_cost_calculator(
+        response_object=complete_response,
+        model=model,
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    )
+    assert response_cost == pytest.approx(2e-5)
 
 
 def test_handle_special_delta_attributes(
