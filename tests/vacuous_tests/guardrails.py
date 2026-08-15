@@ -51,7 +51,8 @@ def _test_names(source: str) -> FrozenSet[str]:
     return frozenset(
         node.name
         for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+        # `test*`, matching pytest's default python_functions and the inventory
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test")
     )
 
 

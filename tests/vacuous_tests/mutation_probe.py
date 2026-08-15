@@ -131,7 +131,8 @@ def run_test(test_id: str, timeout: int, overlay: Optional[str] = None) -> Tuple
     return completed.returncode, (completed.stdout + completed.stderr)[-4000:]
 
 
-def _coverage_of(test_id: str, timeout: int) -> Dict[str, Set[int]]:
+def _coverage_of(test_id: str, timeout: int) -> Optional[Dict[str, Set[int]]]:
+    """Lines of litellm the test executes, or None when the run never finishes."""
     import coverage
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -152,14 +153,17 @@ def _coverage_of(test_id: str, timeout: int) -> Dict[str, Set[int]]:
             "no:cacheprovider",
             f"--timeout={timeout}",
         )
-        subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            env=_pytest_env(),
-            capture_output=True,
-            text=True,
-            timeout=timeout + 120,
-        )
+        try:
+            subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                env=_pytest_env(),
+                capture_output=True,
+                text=True,
+                timeout=timeout + 120,
+            )
+        except subprocess.TimeoutExpired:
+            return None
         data = coverage.CoverageData(basename=data_file)
         data.read()
         result: Dict[str, Set[int]] = {}
@@ -173,18 +177,23 @@ def _coverage_of(test_id: str, timeout: int) -> Dict[str, Set[int]]:
         return result
 
 
-def covered_lines(test_id: str, timeout: int) -> Dict[str, List[int]]:
+def covered_lines(test_id: str, timeout: int) -> Optional[Dict[str, List[int]]]:
     """Lines the test itself exercises, with import-time coverage subtracted.
 
     Collecting any test in a directory imports litellm and that directory's
     conftest, which lights up thousands of module-level lines. Those lines are
     covered no matter what the test does, so mutating them measures the import,
     not the test. A no-op test in the same directory gives the floor to subtract.
+
+    None when a coverage run does not finish, which is not the same as a test
+    that covers nothing.
     """
     test_path = test_id.split("::", 1)[0]
     with _noop_test(os.path.dirname(os.path.join(REPO_ROOT, test_path))) as noop_id:
         floor = _coverage_of(noop_id, timeout)
     actual = _coverage_of(test_id, timeout)
+    if floor is None or actual is None:
+        return None
     result: Dict[str, List[int]] = {}
     for path, lines in actual.items():
         own = sorted(lines - floor.get(path, set()))
@@ -431,6 +440,8 @@ def probe(test_id: str, max_mutants: int, max_files: int, timeout: int) -> Probe
         return ProbeReport(test_id, "dead", "test is skipped in this environment, so it can never fail")
 
     coverage_map = covered_lines(test_id, timeout)
+    if coverage_map is None:
+        return ProbeReport(test_id, "inconclusive", "the coverage run did not finish, so nothing was mutated")
     behavioural = {
         path: lines
         for path, lines in ((path, behavioural_lines(path, own)) for path, own in coverage_map.items())

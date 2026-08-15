@@ -39,7 +39,7 @@ import warnings
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
+from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL_DIR = os.path.join(REPO_ROOT, "tests", "vacuous_tests")
@@ -76,6 +76,7 @@ ASSERT_CALL_PREFIXES = ("assert_", "assert", "check_", "verify_", "expect_")
 PYTEST_ASSERT_FUNCS = {"raises", "fail", "approx", "warns", "deprecated_call"}
 # Handler bodies made up only of these are swallowing the failure.
 SWALLOWING_CALLS = {"skip", "xfail", "print", "warn", "debug", "info", "warning"}
+ASSERTION_CATCHERS = frozenset({"AssertionError", "Exception", "BaseException"})
 # Attributes that only ever hold what the test itself configured or recorded on a mock.
 MOCK_CONFIG_ATTRS = ("return_value", "side_effect", "call_args", "await_args", "call_args_list")
 
@@ -276,21 +277,32 @@ def _swallowed_assertion(fn: TestFunction) -> Optional[str]:
         if not any(_is_assertive_node(sub) for stmt in node.body for sub in ast.walk(stmt)):
             continue
         for handler in node.handlers:
-            if handler.type is not None and "AssertionError" not in ast.unparse(handler.type):
-                # Only assertion-swallowing matters; `except KeyError: pass`
-                # around an assert is usually deliberate setup tolerance.
-                if not _catches_broad_exception(handler):
-                    continue
+            # `except KeyError: pass` around an assert is deliberate setup
+            # tolerance; only a handler that can eat the AssertionError counts.
+            if not _swallows_assertion_errors(handler):
+                continue
             if _handler_swallows(handler):
                 return f"assert inside try/{ast.unparse(handler.type) if handler.type else 'except'} whose handler swallows the failure (line {handler.lineno})"
     return None
 
 
-def _catches_broad_exception(handler: ast.ExceptHandler) -> bool:
+def _caught_names(handler: ast.ExceptHandler) -> FrozenSet[str]:
+    """The exception names a handler catches, unqualified and tuples flattened.
+
+    Matching the unparsed text instead reads `HTTPException` as broad.
+    """
     if handler.type is None:
-        return True
-    rendered = ast.unparse(handler.type)
-    return "Exception" in rendered or "BaseException" in rendered
+        return frozenset()
+    caught = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return frozenset(
+        node.attr if isinstance(node, ast.Attribute) else node.id
+        for node in caught
+        if isinstance(node, (ast.Attribute, ast.Name))
+    )
+
+
+def _swallows_assertion_errors(handler: ast.ExceptHandler) -> bool:
+    return handler.type is None or bool(_caught_names(handler) & ASSERTION_CATCHERS)
 
 
 def _trivial_assert(fn: TestFunction, constant_names: Set[str]) -> Optional[str]:

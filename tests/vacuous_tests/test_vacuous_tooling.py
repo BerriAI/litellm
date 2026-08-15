@@ -65,6 +65,39 @@ def test_flags_swallowed_assertion() -> None:
     assert bucket_of(source) == "swallowed_failure"
 
 
+def test_does_not_treat_a_named_exception_as_broad() -> None:
+    source = """
+    def test_thing():
+        try:
+            assert compute() == 3
+        except HTTPException:
+            pass
+    """
+    assert bucket_of(source) is None
+
+
+def test_flags_a_handler_that_catches_assertion_error_by_name() -> None:
+    source = """
+    def test_thing():
+        try:
+            assert compute() == 3
+        except AssertionError:
+            pass
+    """
+    assert bucket_of(source) == "swallowed_failure"
+
+
+def test_flags_a_swallowing_handler_that_catches_a_tuple_including_exception() -> None:
+    source = """
+    def test_thing():
+        try:
+            assert compute() == 3
+        except (KeyError, builtins.Exception):
+            pass
+    """
+    assert bucket_of(source) == "swallowed_failure"
+
+
 def test_flags_unconditional_skip() -> None:
     source = """
     @pytest.mark.skip(reason="broken")
@@ -358,6 +391,14 @@ def test_already_reraising_handlers_produce_no_mutant(tmp_path, monkeypatch) -> 
     assert not [m for m in mutation_probe.generate_mutants("litellm/hooks.py", range(1, 6)) if m.swallow]
 
 
+def test_a_coverage_run_that_never_finishes_is_not_read_as_covering_nothing(tmp_path, monkeypatch) -> None:
+    (tmp_path / "tests").mkdir()
+    monkeypatch.setattr(mutation_probe, "REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(mutation_probe, "_coverage_of", lambda test_id, timeout: None)
+
+    assert mutation_probe.covered_lines("tests/test_sample.py::test_thing", 10) is None
+
+
 def test_area_rotation_moves_on_each_day_and_is_stable_within_one(monkeypatch) -> None:
     monkeypatch.setattr(inventory, "cleared_ids", lambda: frozenset())
     candidates = [
@@ -428,6 +469,11 @@ def test_flake_gate_does_not_excuse_sleep_in_a_patched_test(monkeypatch, tmp_pat
     assert findings_for(source, monkeypatch, tmp_path) == [
         "uses `time.sleep`: wall-clock sleep: slow and racy under load"
     ]
+
+
+def test_guardrails_count_every_name_pytest_collects() -> None:
+    source = "def testCamelCase():\n    pass\n\n\ndef test_snake():\n    pass\n\n\ndef helper():\n    pass\n"
+    assert guardrails._test_names(source) == frozenset({"testCamelCase", "test_snake"})
 
 
 def test_removals_need_a_citation_each() -> None:
