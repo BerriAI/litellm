@@ -3758,6 +3758,7 @@ class SearchProviders(str, Enum):
     YOU_COM = "you_com"
     APISERPENT = "apiserpent"
     TINYFISH = "tinyfish"
+    NIMBLE = "nimble"
 
 
 # Create a set of all search provider values for quick lookup

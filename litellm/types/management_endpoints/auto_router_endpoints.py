@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final, Literal, TypeAlias
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.utils import StandardLoggingRoutingDecision
@@ -146,11 +146,13 @@ class AutoRouterBenchmarksResponse(BaseModel):
 
 ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]
 
+ShadowEvalDirection: TypeAlias = Literal["forward", "reverse"]
+
 DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
 
 
 class StartShadowEvalRequest(BaseModel):
-    """Start shadowing a key's traffic through an auto-router for blind comparison."""
+    """Start duplicating a key's traffic for blind comparison against an auto-router."""
 
     api_key_id: str = Field(
         description=(
@@ -158,7 +160,23 @@ class StartShadowEvalRequest(BaseModel):
             "key's traffic; requests made with any other key are not sampled."
         )
     )
-    router_name: str = Field(description="The auto-router config to shadow requests through")
+    router_name: str = Field(description="The auto-router under evaluation, in either direction")
+    direction: ShadowEvalDirection = Field(
+        default="forward",
+        description=(
+            "forward answers 'should this key adopt router_name': it samples the requests the key did NOT "
+            "route through the router and duplicates them through it. reverse answers 'is the router still "
+            "worth it for a key already on it': it samples the requests the router did serve and duplicates "
+            "them against baseline_model. The response the caller received is always the real arm"
+        ),
+    )
+    baseline_model: str | None = Field(
+        default=None,
+        description=(
+            "Required when direction is reverse and rejected otherwise: the fixed model the router's own "
+            "responses are judged against. Must be a plain model rather than another auto-router"
+        ),
+    )
     shadow_percentage: float = Field(
         ge=0.1,
         le=100.0,
@@ -193,15 +211,33 @@ class StartShadowEvalRequest(BaseModel):
     def _round_percentage(cls, value: float) -> float:
         return round(value, 2)
 
+    @model_validator(mode="after")
+    def _baseline_model_matches_direction(self) -> "StartShadowEvalRequest":
+        if self.direction == "reverse" and self.baseline_model is None:
+            raise ValueError("baseline_model is required when direction is 'reverse'")
+        if self.direction == "forward" and self.baseline_model is not None:
+            raise ValueError("baseline_model is only meaningful when direction is 'reverse'")
+        return self
+
 
 class ShadowEvalSlice(BaseModel):
     """Judge outcomes for one slice of a job's verdicts (a router tier, or one of the
-    models the shadowed key currently uses)."""
+    models that served the real arm)."""
 
     group: str
     turn_count: int
-    real_win_rate_pct: float = Field(description="Share of judged turns where the real (control) model won")
-    shadow_win_rate_pct: float = Field(description="Share of judged turns where the shadowed router's pick won")
+    real_win_rate_pct: float = Field(
+        description=(
+            "Share of judged turns the real arm won, meaning the response the caller actually received: "
+            "the key's own model in forward mode, the router's pick in reverse"
+        )
+    )
+    shadow_win_rate_pct: float = Field(
+        description=(
+            "Share of judged turns the shadow arm won, meaning the duplicated response nobody was served: "
+            "the router's pick in forward mode, baseline_model in reverse"
+        )
+    )
     tie_rate_pct: float
     avg_judge_confidence: float
 
@@ -210,7 +246,12 @@ class ShadowEvalResult(BaseModel):
     """Stratified results of a shadow-eval job's verdicts so far."""
 
     by_tier: tuple[ShadowEvalSlice, ...]
-    by_current_model: tuple[ShadowEvalSlice, ...]
+    by_current_model: tuple[ShadowEvalSlice, ...] = Field(
+        description=(
+            "Sliced by the model that served the real arm: the key's incumbent models in forward mode, "
+            "and in reverse the models the router itself picked"
+        )
+    )
     overall_shadow_win_rate_pct: float
     overall_tie_rate_pct: float
 
@@ -226,6 +267,8 @@ class ShadowEvalJobResponse(BaseModel):
     job_id: str = Field(validation_alias=AliasChoices("id", "job_id"))
     api_key_id: str = Field(description="The hashed virtual key whose traffic this job evaluates, and only that key's")
     router_name: str
+    direction: ShadowEvalDirection = "forward"
+    baseline_model: str | None = None
     judge_model: str
     shadow_percentage: float
     max_turns: int
