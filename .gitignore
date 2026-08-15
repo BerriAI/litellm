@@ -1,6 +1,7 @@
 .python-version
 .venv
 .venv-typecheck
+.venv-typecheck.lock
 .venv_policy_test
 .env
 .claude

@@ -6,6 +6,7 @@
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
+	lint-dict-usage lint-dict-usage-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety check pre-commit \
@@ -35,7 +36,9 @@ help:
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its limit"
 	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
 	@echo "  make lint-ruff-budget-update - Ratchet ruff-strict-budget.json limits down by what this branch fixed"
-	@echo "  make lint-budget-update - Ratchet all budgets down (ruff + type-discipline + basedpyright)"
+	@echo "  make lint-dict-usage    - Gate mypy-inferred mutable-dict usage (DICT001) against its budget"
+	@echo "  make lint-dict-usage-budget-update - Ratchet dict-usage-budget.json limits down by what this branch fixed"
+	@echo "  make lint-budget-update - Ratchet all budgets down (ruff + type-discipline + basedpyright + dict-usage)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -191,6 +194,10 @@ lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
 lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/type_discipline_gate.py --base origin/litellm_internal_staging
 
+# Inferred mutable-dict usage (DICT001), the mypy-powered complement to LIT001/LIT002.
+lint-dict-usage: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
+	$(UV_RUN) python scripts/dict_usage_gate.py --base origin/litellm_internal_staging
+
 # --update lowers each limit by what this branch fixed since its branch point, so
 # it needs the base ref fetched to resolve the merge-base.
 lint-basedpyright-budget-update: install-dev lint-fetch-base
@@ -212,8 +219,11 @@ lint-ruff-budget-update: install-dev lint-fetch-base
 lint-type-discipline-budget-update: install-dev lint-fetch-base
 	$(UV_RUN) python scripts/type_discipline_gate.py --update
 
-# Ratchet all budgets in one shot (ruff strict + type-discipline + basedpyright)
-lint-budget-update: lint-ruff-budget-update lint-type-discipline-budget-update lint-basedpyright-budget-update
+lint-dict-usage-budget-update: install-dev lint-fetch-base
+	$(UV_RUN) python scripts/dict_usage_gate.py --update
+
+# Ratchet all budgets in one shot (ruff strict + type-discipline + basedpyright + dict-usage)
+lint-budget-update: lint-ruff-budget-update lint-type-discipline-budget-update lint-basedpyright-budget-update lint-dict-usage-budget-update
 
 check-circular-imports: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
@@ -232,7 +242,7 @@ check-import-safety: $(LINT_DEP_INSTALL)
 lint: lint-install lint-fetch-base
 	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
-lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
+lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-dict-usage lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety

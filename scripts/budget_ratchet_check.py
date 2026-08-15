@@ -44,6 +44,7 @@ DEFAULT_BUDGETS: tuple[str, ...] = (
     "ruff-strict-budget.json",
     "type-discipline-budget.json",
     "basedpyright-code-budget.json",
+    "dict-usage-budget.json",
 )
 GRADUATION_CONFIGS = MappingProxyType({"ruff-strict-budget.json": "ruff.toml"})
 

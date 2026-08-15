@@ -142,6 +142,54 @@ jobs:
         run: |
           uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
+  # Separate from `lint` on purpose: each DICT001 pass is a full mypy build of the
+  # litellm tree (minutes, and double that when the base pass is needed), which
+  # would blow the lint job's 15-minute timeout. The gate provisions its own
+  # .venv-typecheck (frozen sync + Prisma client) and the gate script itself is
+  # stdlib-only, so the job skips the main-venv sync entirely.
+  dict-usage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - name: Fetch gate base (merge-base with target branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+          MERGE_BASE=$(retry gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          test -n "$MERGE_BASE"
+          retry git fetch --no-tags --depth=1 origin "$MERGE_BASE"
+          echo "GATE_BASE_SHA=$MERGE_BASE" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Check dict-usage budget (DICT001, delta vs base)
+        run: |
+          python scripts/dict_usage_gate.py --base "$GATE_BASE_SHA"
+
   # Intentionally NON-GATING. This job turns red when a *-budget.json ceiling is
   # raised (or a rule/budget is dropped) so a loosening is obvious in review, but it
   # must be kept OUT of the branch-protection required-checks list so a justified
