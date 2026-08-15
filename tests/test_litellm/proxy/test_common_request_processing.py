@@ -835,7 +835,13 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-margin-percent" not in headers
 
     def test_get_custom_headers_per_component_cost_breakdown(self):
-        """Test that per-component cost headers are included when component breakdown is available."""
+        """Test per-component cost headers with production breakdown semantics.
+
+        cost_calculator stores full prompt cost (cache pricing included) as input_cost
+        and full completion cost (reasoning included) as output_cost, so the invariant
+        is input + output + tool_usage == total with cache components nested inside
+        input and reasoning nested inside output.
+        """
         from litellm.litellm_core_utils.litellm_logging import (
             Logging as LiteLLMLoggingObj,
         )
@@ -862,9 +868,7 @@ class TestProxyBaseLLMRequestProcessing:
         cache_creation_cost: Final = 0.00001
         reasoning_cost: Final = 0.000015
         tool_usage_cost: Final = 0.00003
-        total_cost: Final = (
-            input_cost + cache_read_cost + cache_creation_cost + output_cost + tool_usage_cost
-        )
+        total_cost: Final = input_cost + output_cost + tool_usage_cost
 
         logging_obj.set_cost_breakdown(
             input_cost=input_cost,
@@ -906,12 +910,14 @@ class TestProxyBaseLLMRequestProcessing:
 
         component_sum: Final = (
             float(headers["x-litellm-response-cost-input"])
-            + float(headers["x-litellm-response-cost-cache-read"])
-            + float(headers["x-litellm-response-cost-cache-creation"])
             + float(headers["x-litellm-response-cost-output"])
             + float(headers["x-litellm-response-cost-tool-usage"])
         )
         assert component_sum == pytest.approx(float(headers["x-litellm-response-cost"]))
+        cache_sum: Final = float(headers["x-litellm-response-cost-cache-read"]) + float(
+            headers["x-litellm-response-cost-cache-creation"]
+        )
+        assert cache_sum <= float(headers["x-litellm-response-cost-input"])
         assert float(headers["x-litellm-response-cost-reasoning"]) <= float(headers["x-litellm-response-cost-output"])
 
     def test_get_custom_headers_without_cost_breakdown_omits_component_headers(self):
