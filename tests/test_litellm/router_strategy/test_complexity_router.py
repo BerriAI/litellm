@@ -496,15 +496,16 @@ class TestModelSelection:
         assert router.get_model_for_tier(ComplexityTier.MEDIUM) == "mid"
 
     def test_get_model_for_tier_empty_pool_raises(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": []},
+                "default_model": "mid",
+            },
+        )
         with pytest.raises(ValueError, match="tier pool for SIMPLE must not be empty"):
-            ComplexityRouter(
-                model_name="test-router",
-                litellm_router_instance=mock_router_instance,
-                complexity_router_config={
-                    "tiers": {"SIMPLE": []},
-                    "default_model": "mid",
-                },
-            )
+            router.get_model_for_tier(ComplexityTier.SIMPLE)
 
 
 class TestPreRoutingHook:
@@ -3882,7 +3883,7 @@ class TestSessionAffinity:
         cache.async_set_cache.assert_called_once()
         call_kwargs = cache.async_set_cache.call_args.kwargs
         assert call_kwargs["ttl"] == 120
-        assert call_kwargs["value"] == "gpt-4o-mini"
+        assert call_kwargs["value"] == ("gpt-4o-mini", "SIMPLE")
 
     @pytest.mark.asyncio
     async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
@@ -5576,12 +5577,14 @@ class TestRedactedLoggingDropsPromptText:
             "tier_boundaries": {"simple_medium": 0.15, "medium_complex": 0.35, "complex_reasoning": 0.6},
             "classifier_model": "claude-haiku",
             "escalated": True,
+            "tier_litellm_params": {"reasoning_effort": "xhigh"},
             "signals": ["code (python)"],
             "matched_keyword": "deploy to k8s",
             "escalation_keyword": "LITELLM ESCALATE",
         }
         kept = Router._redact_prompt_text_if_needed(request_kwargs={}, routing_decision=full)
         assert set(full) - set(kept) == {"signals", "matched_keyword", "escalation_keyword"}
+        assert kept["tier_litellm_params"] == {"reasoning_effort": "xhigh"}
 
     @pytest.mark.asyncio
     async def test_redaction_via_request_header_is_honored(self):
@@ -8182,12 +8185,33 @@ def test_tier_model_params_accept_a_single_object():
     "tiers",
     [
         {"REASONING": [{"litellm_params": {"reasoning_effort": "xhigh"}}]},
-        {"REASONING": []},
     ],
 )
 def test_tier_model_params_reject_malformed_entries(tiers):
     with pytest.raises(ValidationError):
         ComplexityRouterConfig(tiers=tiers)
+
+
+def test_tier_model_params_reject_duplicate_models():
+    with pytest.raises(ValidationError, match="duplicate model_name"):
+        ComplexityRouterConfig(
+            tiers={
+                "REASONING": [
+                    {"model_name": "opus", "litellm_params": {"reasoning_effort": "xhigh"}},
+                    {"model_name": "opus", "litellm_params": {"reasoning_effort": "low"}},
+                ]
+            }
+        )
+
+
+def test_non_adaptive_empty_tier_pool_remains_valid():
+    config = ComplexityRouterConfig(tiers={"SIMPLE": []})
+    assert config.tiers == {"SIMPLE": []}
+
+
+def test_adaptive_empty_tier_pool_is_rejected():
+    with pytest.raises(ValidationError, match="adaptive=True"):
+        ComplexityRouterConfig(adaptive=True, tiers={"SIMPLE": []})
 
 
 def test_tier_model_params_are_used_by_pools_and_savings_baseline(mock_router_instance):
@@ -8234,3 +8258,67 @@ async def test_tier_model_params_reach_the_hook_response_and_override_client_val
     assert response.litellm_params == {"reasoning_effort": "xhigh", "max_tokens": 512}
     assert response.routing_decision is not None
     assert response.routing_decision["tier_litellm_params"] == response.litellm_params
+
+
+@pytest.mark.asyncio
+async def test_session_pin_outside_tiers_does_not_inherit_medium_params(mock_router_instance):
+    mock_router_instance.cache = DualCache()
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "tiers": {
+                "SIMPLE": "mini",
+                "MEDIUM": {"model_name": "medium", "litellm_params": {"reasoning_effort": "low"}},
+            },
+            "session_affinity": True,
+            "default_model": "orphan",
+        },
+    )
+    request_kwargs = {"metadata": {"session_id": "orphan-session"}}
+    await mock_router_instance.cache.async_set_cache(
+        key=router._get_session_affinity_cache_key("orphan-session", request_kwargs),
+        value="orphan",
+    )
+
+    response = await router.async_pre_routing_hook(
+        model="test-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert response is not None
+    assert response.model == "orphan"
+    assert response.litellm_params == {}
+
+
+@pytest.mark.asyncio
+async def test_session_pin_uses_recorded_tier_when_model_is_in_multiple_tiers(mock_router_instance):
+    mock_router_instance.cache = DualCache()
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "tiers": {
+                "SIMPLE": {"model_name": "shared", "litellm_params": {"reasoning_effort": "low"}},
+                "REASONING": {"model_name": "shared", "litellm_params": {"reasoning_effort": "xhigh"}},
+            },
+            "session_affinity": True,
+        },
+    )
+    request_kwargs = {"metadata": {"session_id": "shared-session"}}
+    await mock_router_instance.cache.async_set_cache(
+        key=router._get_session_affinity_cache_key("shared-session", request_kwargs),
+        value={"model": "shared", "tier": "SIMPLE"},
+    )
+
+    response = await router.async_pre_routing_hook(
+        model="test-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert response is not None
+    assert response.litellm_params == {"reasoning_effort": "low"}
+    assert response.routing_decision is not None
+    assert response.routing_decision["tier"] == "SIMPLE"

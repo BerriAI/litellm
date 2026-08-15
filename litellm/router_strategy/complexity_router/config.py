@@ -5,10 +5,12 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
+from collections.abc import Mapping
 from enum import Enum
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
 
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
@@ -163,7 +165,18 @@ class ComplexityTierModel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_name: str
-    litellm_params: dict[str, object] = Field(default_factory=dict)  # mutable-ok: Pydantic mapping field
+    litellm_params: Annotated[Mapping[str, object], SkipValidation()] = Field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    @field_validator("litellm_params", mode="before")
+    @classmethod
+    def _freeze_litellm_params(cls, value: Mapping[str, object]) -> Mapping[str, object]:
+        return MappingProxyType(dict(value))
+
+    @field_serializer("litellm_params")
+    def _serialize_litellm_params(self, value: Mapping[str, object]) -> Mapping[str, object]:
+        return dict(value)  # mutable-ok: Pydantic JSON serialization requires a concrete mapping
 
 
 def _normalize_tier_entries(
@@ -171,18 +184,17 @@ def _normalize_tier_entries(
     tier: str,
 ) -> tuple[str | list[str], tuple[ComplexityTierModel, ...]]:
     raw_entries: Final = raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,)
-    if not raw_entries:
-        raise ValueError(f"tier pool for {tier} must not be empty")
     entries: Final = tuple(
-        ComplexityTierModel(model_name=entry)
-        if isinstance(entry, str)
-        else ComplexityTierModel.model_validate(entry)
+        ComplexityTierModel(model_name=entry) if isinstance(entry, str) else ComplexityTierModel.model_validate(entry)
         for entry in raw_entries
     )
+    model_names: Final = tuple(entry.model_name for entry in entries)
+    if len(model_names) != len(frozenset(model_names)):
+        raise ValueError(f"tier {tier} contains duplicate model_name values; each pool entry needs distinct parameters")
     normalized: Final = (
         entries[0].model_name
         if not isinstance(raw_value, (list, tuple))
-        else [entry.model_name for entry in entries]  # mutable-ok: Pydantic normalization
+        else list(model_names)  # mutable-ok: config.tiers must preserve its existing list contract
     )
     return normalized, entries
 
@@ -453,7 +465,7 @@ class ComplexityRouterConfig(BaseModel):
             "A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True"
         ),
     )
-    tier_model_configs: dict[str, tuple[ComplexityTierModel, ...]] = Field(  # mutable-ok: Pydantic mapping field
+    tier_model_configs: Mapping[str, tuple[ComplexityTierModel, ...]] = Field(
         default_factory=dict,
     )
 
@@ -817,34 +829,53 @@ class ComplexityRouterConfig(BaseModel):
         if not isinstance(raw_tiers, dict):
             return value
         existing_configs: Final = value.get("tier_model_configs")
-        normalized_entries: Final = {  # mutable-ok: Pydantic normalization
-            tier: _normalize_tier_entries(raw_value, tier) for tier, raw_value in raw_tiers.items()
-        }
-        normalized_tiers: Final = {  # mutable-ok: Pydantic normalization
-            tier: normalized for tier, (normalized, _) in normalized_entries.items()
-        }
-        tier_model_configs: Final = {  # mutable-ok: Pydantic normalization
-            tier: entries for tier, (_, entries) in normalized_entries.items()
-        }
-        has_object_entry: Final = any(
-            not isinstance(entry, str)
-            for raw_value in raw_tiers.values()
-            for entry in (raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,))
+        normalized_entries: Final = MappingProxyType(
+            {tier: _normalize_tier_entries(raw_value, tier) for tier, raw_value in raw_tiers.items()}
         )
-        preserved_configs: Final = {  # mutable-ok: Pydantic normalization
-            tier: tuple(ComplexityTierModel.model_validate(entry) for entry in entries)
-            for tier, entries in existing_configs.items()
-        } if isinstance(existing_configs, dict) else {}  # mutable-ok: Pydantic normalization
-        normalized_tier_model_configs: Final = (
-            tier_model_configs
-            if has_object_entry or not isinstance(existing_configs, dict)
-            else preserved_configs
+        normalized_tiers: Final = MappingProxyType(
+            {tier: normalized for tier, (normalized, _) in normalized_entries.items()}
         )
-        return {  # mutable-ok: Pydantic normalization
-            **value,
-            "tiers": normalized_tiers,
-            "tier_model_configs": normalized_tier_model_configs,
-        }
+        incoming_configs: Final = (
+            tuple(
+                (
+                    tier,
+                    tuple(ComplexityTierModel.model_validate(entry) for entry in entries),
+                )
+                for tier, entries in existing_configs.items()
+            )
+            if isinstance(existing_configs, dict)
+            else ()
+        )
+        tier_model_configs: Final = MappingProxyType(
+            {
+                tier: tuple(
+                    entry.model_copy(
+                        update=MappingProxyType(
+                            {
+                                "litellm_params": next(
+                                    (
+                                        incoming.litellm_params
+                                        for incoming_tier, incoming_entries in incoming_configs
+                                        for incoming in incoming_entries
+                                        if incoming_tier == tier and incoming.model_name == entry.model_name
+                                    ),
+                                    entry.litellm_params,
+                                )
+                            }
+                        )
+                    )
+                    for entry in entries
+                )
+                for tier, (_, entries) in normalized_entries.items()
+            }
+        )
+        return MappingProxyType(
+            {
+                **value,
+                "tiers": normalized_tiers,
+                "tier_model_configs": tier_model_configs,
+            }
+        )
 
     @field_validator("escalation_keywords")
     @classmethod
@@ -1066,12 +1097,15 @@ class ComplexityRouterConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_adaptive_pools(self) -> "ComplexityRouterConfig":
+        if not self.adaptive:
+            return self
         normalized = {tier: (models if isinstance(models, list) else [models]) for tier, models in self.tiers.items()}
+        if not any(normalized.values()):
+            raise ValueError("adaptive=True requires at least one non-empty tier pool")
         empty: Final = [tier for tier, models in normalized.items() if not models]
         if empty:
-            raise ValueError(f"tier pools must be non-empty; empty tiers: {empty}")
-        if self.adaptive:
-            self.tiers = normalized
+            raise ValueError(f"adaptive=True tier pools must be non-empty; empty tiers: {empty}")
+        self.tiers = normalized
         return self
 
     @model_validator(mode="after")
