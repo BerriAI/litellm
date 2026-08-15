@@ -23,9 +23,9 @@ from litellm.proxy.utils import PrismaClient, ProxyUpdateSpend, enqueue_spend_lo
 
 @pytest.fixture(autouse=True)
 def reset_spend_log_queue_bytes() -> Iterator[None]:
-    PrismaClient._spend_log_queue_bytes = 0
+    PrismaClient.spend_log_queue_bytes = 0
     yield
-    PrismaClient._spend_log_queue_bytes = 0
+    PrismaClient.spend_log_queue_bytes = 0
 
 
 class _AsyncCM:

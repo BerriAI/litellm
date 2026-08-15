@@ -3013,7 +3013,7 @@ async def prefetch_config_params(prisma_client: "PrismaClient | None", param_nam
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
-    _spend_log_queue_bytes: ClassVar[int] = 0
+    spend_log_queue_bytes: ClassVar[int] = 0
     spend_logs_queue_monitor_task: "asyncio.Task[None] | None" = None
     tool_usage_transactions: list["ToolUsageTransaction"] = []
     _tool_usage_transactions_lock = asyncio.Lock()
@@ -5487,9 +5487,9 @@ async def enqueue_spend_logs(
             if at_head
             else tuple(prisma_client.spend_log_transactions) + tuple(logs)
         )
-        kept, kept_bytes = spend_log_queue_within_budget(queued, PrismaClient._spend_log_queue_bytes + added, max_bytes)
+        kept, kept_bytes = spend_log_queue_within_budget(queued, PrismaClient.spend_log_queue_bytes + added, max_bytes)
         prisma_client.spend_log_transactions[:] = kept
-        PrismaClient._spend_log_queue_bytes = kept_bytes
+        PrismaClient.spend_log_queue_bytes = kept_bytes
     if len(kept) < len(queued):
         verbose_proxy_logger.error(
             "Spend tracking - spend log queue is at its %d byte budget; dropped the %d oldest spend logs",
@@ -5507,8 +5507,8 @@ async def dequeue_spend_logs(prisma_client: PrismaClient, limit: int) -> list[di
     async with prisma_client._spend_log_transactions_lock:
         popped: Final = prisma_client.spend_log_transactions[:limit]
         prisma_client.spend_log_transactions[:] = prisma_client.spend_log_transactions[limit:]
-        PrismaClient._spend_log_queue_bytes = max(
-            0, PrismaClient._spend_log_queue_bytes - sum(spend_log_row_bytes(row) for row in popped)
+        PrismaClient.spend_log_queue_bytes = max(
+            0, PrismaClient.spend_log_queue_bytes - sum(spend_log_row_bytes(row) for row in popped)
         )
     return popped
 
