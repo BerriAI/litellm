@@ -3402,18 +3402,17 @@ TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 # files transformations. Listed for the same reason as the fields above: these sit on
 # a deployment that also serves chat, so leaking them into extra_body makes Bedrock
 # reject every non-batch request to that deployment.
-bedrock_batch_litellm_params: Final = [
+bedrock_batch_litellm_params: Final = (
     "aws_batch_role_arn",
     "s3_bucket_name",
     "s3_region_name",
     "s3_output_bucket_name",
     "bedrock_tags",
-]
+)
 
 all_litellm_params = (
     agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD]
-    + bedrock_batch_litellm_params
+    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params]
     + [
         "metadata",
         "litellm_metadata",
