@@ -1718,7 +1718,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
           <CreateUserButton
             userID={userID}
             accessToken={accessToken}
-            teams={teams}
             possibleUIRoles={possibleUIRoles}
             onUserCreated={handleUserCreated}
             isEmbedded={true}
