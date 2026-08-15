@@ -403,6 +403,59 @@ class TestDashscopeCostCalculator:
 
         assert math.isclose(completion_cost, 200 * 1.6e-06, rel_tol=1e-10)
 
+    def test_dashscope_model_zero_reasoning_rate_bills_reasoning_free(self):
+        """
+        Regression: a model declaring an explicit zero reasoning rate had it treated as
+        missing, billing reasoning tokens at the plain output rate instead of free.
+        """
+        litellm.model_cost["dashscope/qwen-zero-reasoning-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 4e-07,
+            "output_cost_per_token": 1.6e-06,
+            "output_cost_per_reasoning_token": 0,
+        }
+
+        usage = Usage(
+            prompt_tokens=500,
+            completion_tokens=200,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=150),
+        )
+        _, completion_cost = dashscope_cost_per_token(
+            model="qwen-zero-reasoning-test", usage=usage
+        )
+
+        assert math.isclose(completion_cost, 50 * 1.6e-06, rel_tol=1e-10)
+
+    def test_dashscope_tier_zero_reasoning_rate_bills_reasoning_free(self):
+        """
+        Regression: a tier declaring an explicit zero reasoning rate had it treated as
+        missing, billing reasoning tokens at the tier's output rate instead of free.
+        """
+        litellm.model_cost["dashscope/qwen-tier-zero-reasoning-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "tiered_pricing": [
+                {
+                    "range": [0, 1000],
+                    "input_cost_per_token": 4e-07,
+                    "output_cost_per_token": 1.6e-06,
+                    "output_cost_per_reasoning_token": 0,
+                }
+            ],
+        }
+
+        usage = Usage(
+            prompt_tokens=500,
+            completion_tokens=200,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=150),
+        )
+        _, completion_cost = dashscope_cost_per_token(
+            model="qwen-tier-zero-reasoning-test", usage=usage
+        )
+
+        assert math.isclose(completion_cost, 50 * 1.6e-06, rel_tol=1e-10)
+
     def test_dashscope_tiered_pricing_zero_input_falls_back_to_flat_rates(self):
         """
         No tier can be selected without input tokens, so an empty-prompt request must

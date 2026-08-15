@@ -7649,7 +7649,9 @@ class Router:
 
         A user-specified ``output_cost_per_token`` always wins. No-op without a
         tier table, when every tier declares its own output rate, or when the
-        backend model has no canonical entry.
+        backend model has no canonical entry or no flat output rate:
+        ``get_model_info`` synthesizes a zero for tiered-only backends, and
+        storing that zero would mark the deployment as explicitly priced free.
         """
         tiers: Final = model_info.get("tiered_pricing")
         if not isinstance(tiers, list) or not tiers:
@@ -7663,7 +7665,7 @@ class Router:
         except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped backend model
             return
         backend_rate: Final = backend_info.get("output_cost_per_token")
-        if backend_rate is not None:
+        if backend_rate:
             model_info["output_cost_per_token"] = backend_rate
 
     def _create_deployment(
