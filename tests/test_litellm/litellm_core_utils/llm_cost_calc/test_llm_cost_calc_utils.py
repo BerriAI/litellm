@@ -734,6 +734,46 @@ def test_generic_cost_per_token_tier_without_an_output_rate_bills_the_model_rate
         litellm.model_cost.pop(model, None)
 
 
+def test_router_deployment_with_input_only_tiers_bills_completions_at_the_backend_rate():
+    """Regression: the router registers a deployment's custom pricing as a standalone
+    model_cost entry holding only the supplied fields, so an input-only tier table left
+    the output-rate fallback nothing to read and billed every completion at 0."""
+    from litellm import Router
+
+    model_id = "litellm-test-router-tiered-input-only"
+    backend_model = "anthropic/claude-haiku-4-5"
+    backend_output_rate = litellm.get_model_info(backend_model)["output_cost_per_token"]
+    Router(
+        model_list=[
+            {
+                "model_name": "tiered-input-only",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_key": "sk-test",
+                    "tiered_pricing": [
+                        {"range": [0, 3000], "input_cost_per_token": 3.25e-07},
+                        {"range": [3000, 128000], "input_cost_per_token": 8.125e-07},
+                    ],
+                },
+                "model_info": {"id": model_id},
+            }
+        ]
+    )
+
+    try:
+        usage = Usage(prompt_tokens=21, completion_tokens=4, total_tokens=25)
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model_id,
+            usage=usage,
+            custom_llm_provider="anthropic",
+        )
+        assert round(prompt_cost, 12) == round(21 * 3.25e-07, 12)
+        assert round(completion_cost, 12) == round(4 * backend_output_rate, 12)
+        assert backend_output_rate > 0
+    finally:
+        litellm.model_cost.pop(model_id, None)
+
+
 def test_generic_cost_per_token_tiered_pricing_bills_reasoning_at_tier_rate():
     """Regression: a tier's output_cost_per_reasoning_token must price reasoning tokens
     on the generic path and in the logged breakdown, not the tier's plain output rate."""
