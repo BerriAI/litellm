@@ -38,6 +38,7 @@ from litellm.types.mcp import (
     MCPTransportType,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -2332,6 +2333,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
         ),
     )
+    control_plane_url: str | None = Field(
+        None,
+        description=(
+            "Global Control Plane: URL of the control plane whose admin UI manages this instance. "
+            "Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate "
+            "against it cross-origin, and restricts the SSO return_to origin to that URL. "
+            "No state is shared with the control plane"
+        ),
+    )
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
@@ -2629,6 +2639,14 @@ class ConfigYAML(LiteLLMPydanticObjectBase):
         description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache",
     )
     general_settings: ConfigGeneralSettings | None = None
+    worker_registry: list[WorkerRegistryEntry] | None = Field(
+        None,
+        description=(
+            "Global Control Plane: the independent proxy instances this instance's admin UI manages. "
+            "Setting it makes this a control plane, which serves the UI and does not route LLM requests. "
+            "Enterprise-only"
+        ),
+    )
     router_settings: UpdateRouterConfig | None = Field(
         None,
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",

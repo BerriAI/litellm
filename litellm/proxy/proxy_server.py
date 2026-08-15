@@ -5427,9 +5427,11 @@ class ProxyConfig:
             # Load vector stores from config
             litellm.vector_store_registry.load_vector_stores_from_config(vector_store_registry_config)
 
-        ## WORKER REGISTRY (Control Plane)
+        ## WORKER REGISTRY (Global Control Plane)
         worker_registry_config: Final = config.get("worker_registry", None)
         if worker_registry_config:
+            if premium_user is not True:
+                raise ValueError("Trying to use `worker_registry`" + CommonProxyErrors.not_premium_user.value)
             self.worker_registry = [WorkerRegistryEntry(**e) for e in worker_registry_config]
         else:
             self.worker_registry = []
