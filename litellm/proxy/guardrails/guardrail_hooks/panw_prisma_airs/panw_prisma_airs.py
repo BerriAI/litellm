@@ -32,7 +32,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
-    add_guardrail_scan_metadata,
+    add_guardrail_scan_id,
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
@@ -670,23 +670,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return error_detail
 
-    def _record_scan_metadata(
-        self,
-        request_data: dict[str, Any],
-        scan_result: Mapping[str, object],
-        is_response: bool,
-    ) -> None:
-        """Surface AIRS scan details on the response, so allowed calls are auditable too."""
-        add_guardrail_scan_metadata(
-            request_data=request_data,
-            guardrail_name=self.guardrail_name,
-            scan_metadata=(
-                ("direction", "response" if is_response else "request"),
-                ("action", str(scan_result.get("action", "block"))),
-                ("category", str(scan_result.get("category", "unknown"))),
-                *((field, str(scan_result[field])) for field in self._SCAN_DETAIL_FIELDS if scan_result.get(field)),
-            ),
-        )
+    def _record_scan_id(self, request_data: dict[str, Any], scan_result: Mapping[str, object]) -> None:
+        """Surface the AIRS scan id on the response, so allowed calls are auditable too."""
+        scan_id: Final = scan_result.get("scan_id")
+        add_guardrail_scan_id(request_data=request_data, scan_id=str(scan_id) if scan_id else None)
 
     def _handle_api_error_with_logging(
         self,
@@ -910,7 +897,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             event_type=GuardrailEventHooks.post_call,
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
-        self._record_scan_metadata(request_data, scan_result, is_response=True)
+        self._record_scan_id(request_data, scan_result)
 
     def _check_and_mark_scanned(self, data: dict, scan_type: str) -> bool:
         """
@@ -1040,7 +1027,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.pre_call,
             )
-            self._record_scan_metadata(data, scan_result, is_response=False)
+            self._record_scan_id(data, scan_result)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1161,7 +1148,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.post_call,
             )
-            self._record_scan_metadata(data, scan_result, is_response=True)
+            self._record_scan_id(data, scan_result)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1363,7 +1350,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     duration=(end_time - start_time).total_seconds(),
                     event_type=GuardrailEventHooks.post_call,
                 )
-                self._record_scan_metadata(request_data, scan_result, is_response=True)
+                self._record_scan_id(request_data, scan_result)
 
                 # Add guardrail to applied guardrails header for observability
                 add_guardrail_to_applied_guardrails_header(
@@ -1467,7 +1454,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 continue  # fallback_on_error="allow" — leave args unchanged
 
-            self._record_scan_metadata(request_data, scan_result, is_response=is_response)
+            self._record_scan_id(request_data, scan_result)
 
             action = scan_result.get("action", "block")
             # Always is_response=False for masked data lookup because
@@ -1787,7 +1774,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 new_texts.append(text)
                 continue
 
-            self._record_scan_metadata(request_data, scan_result, is_response=is_response)
+            self._record_scan_id(request_data, scan_result)
 
             action = scan_result.get("action", "block")
             masked_text = self._get_masked_text(scan_result, is_response=is_response)
@@ -1859,7 +1846,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 # If we reach here, fallback_on_error="allow"
             else:
-                self._record_scan_metadata(request_data, mcp_scan_result, is_response=False)
+                self._record_scan_id(request_data, mcp_scan_result)
                 action = mcp_scan_result.get("action", "block")
                 masked_text = self._get_masked_text(mcp_scan_result, is_response=False)
                 if action == "allow":

@@ -1,10 +1,8 @@
 import copy
-import json
 import os
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
-from urllib.parse import quote
 
 from typing_extensions import assert_never
 
@@ -51,8 +49,7 @@ reset_color_code: Final = "\033[0m"
 
 TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY: Final = "_pillar_response_headers_trusted"
 
-GUARDRAIL_SCAN_METADATA_METADATA_KEY: Final = "guardrail_scan_metadata"
-MAX_GUARDRAIL_SCAN_METADATA_HEADER_BYTES: Final = 8 * 1024
+GUARDRAIL_SCAN_IDS_METADATA_KEY: Final = "guardrail_scan_ids"
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -465,7 +462,9 @@ def get_logging_caching_headers(request_data: dict) -> dict | None:
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(_metadata["applied_guardrails"])
 
-    headers.update(_build_guardrail_scan_headers(_metadata.get(GUARDRAIL_SCAN_METADATA_METADATA_KEY)))
+    scan_ids: Final = _metadata.get(GUARDRAIL_SCAN_IDS_METADATA_KEY)
+    if scan_ids:
+        headers["x-litellm-guardrail-scan-id"] = ",".join(scan_ids)
 
     if "applied_policies" in _metadata:
         headers["x-litellm-applied-policies"] = ",".join(_metadata["applied_policies"])
@@ -499,7 +498,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
     {
         "applied_policies",
         "applied_guardrails",
-        GUARDRAIL_SCAN_METADATA_METADATA_KEY,
+        GUARDRAIL_SCAN_IDS_METADATA_KEY,
         "policy_sources",
         "guardrails",
         "guardrail_config",
@@ -562,44 +561,20 @@ def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_nam
         _metadata["applied_guardrails"] = [guardrail_name]
 
 
-def add_guardrail_scan_metadata(
-    request_data: dict,
-    guardrail_name: str | None,
-    scan_metadata: Sequence[tuple[str, str]],
-) -> None:
+def add_guardrail_scan_id(request_data: dict, scan_id: str | None) -> None:
     """
-    Record provider scan metadata (scan ids, profile, verdict) so it can be surfaced to the caller.
+    Record a provider scan id so it can be surfaced to the caller.
 
     Guardrails only return scan details to the client when they block, so allowed requests carry no
-    audit trail. Entries recorded here become the x-litellm-guardrail-scan-id and
-    x-litellm-guardrail-scan-metadata response headers.
+    audit trail. Ids recorded here become the x-litellm-guardrail-scan-id response header.
     """
-    if guardrail_name is None or not scan_metadata:
+    if not scan_id:
         return
     _, _metadata = get_or_create_metadata_bucket(request_data)
-    existing: Final = _metadata.get(GUARDRAIL_SCAN_METADATA_METADATA_KEY)
-    scans: Final = tuple(existing) if isinstance(existing, (list, tuple)) else ()
-    # mutable-ok: logging and response headers serialize scan entries as JSON, which needs plain dicts
-    entry: Final = dict((("guardrail", guardrail_name), *scan_metadata))
-    if entry not in scans:
-        _metadata[GUARDRAIL_SCAN_METADATA_METADATA_KEY] = (*scans, entry)
-
-
-def _build_guardrail_scan_headers(scan_entries: object) -> tuple[tuple[str, str], ...]:
-    """Render recorded guardrail scan metadata into response header pairs."""
-    if not isinstance(scan_entries, (list, tuple)):
-        return ()
-    entries: Final = tuple(entry for entry in scan_entries if isinstance(entry, dict))
-    if not entries:
-        return ()
-
-    scan_ids: Final = tuple(dict.fromkeys(str(entry["scan_id"]) for entry in entries if entry.get("scan_id")))
-    id_header: Final = (("x-litellm-guardrail-scan-id", ",".join(scan_ids)),) if scan_ids else ()
-
-    payload: Final = quote(json.dumps(entries, separators=(",", ":")), safe="")
-    if len(payload.encode("utf-8")) > MAX_GUARDRAIL_SCAN_METADATA_HEADER_BYTES:
-        return id_header
-    return (*id_header, ("x-litellm-guardrail-scan-metadata", payload))
+    existing: Final = _metadata.get(GUARDRAIL_SCAN_IDS_METADATA_KEY)
+    scan_ids: Final = tuple(existing) if isinstance(existing, (list, tuple)) else ()
+    if scan_id not in scan_ids:
+        _metadata[GUARDRAIL_SCAN_IDS_METADATA_KEY] = (*scan_ids, scan_id)
 
 
 def add_policy_to_applied_policies_header(request_data: dict, policy_name: str | None):
