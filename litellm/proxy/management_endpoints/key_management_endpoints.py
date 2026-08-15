@@ -106,6 +106,7 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     get_ui_settings_cached,
@@ -3516,6 +3517,61 @@ async def _build_model_max_budget_usage(
     return result
 
 
+async def _attach_budget_limits_usage(key_info: dict, api_key_hash: str) -> None:
+    """
+    Attach current-window spend to each entry in key_info["budget_limits"], in place.
+
+    Per-window spend is not persisted in the DB; it lives in the cross-pod spend
+    counters (spend:key:{hashed_token}:window:{budget_duration}) that
+    _virtual_key_multi_budget_check enforces against, so we read the same
+    counters via get_current_spend. Passing max_budget + window_start makes the
+    read re-check against the authoritative spend-log aggregate when the counter
+    is stale-low (e.g. after a Redis flush), same as the enforcement path.
+    """
+    from litellm.proxy.proxy_server import get_current_spend
+
+    budget_limits: Any = key_info.get("budget_limits")
+    if isinstance(budget_limits, str):
+        try:
+            budget_limits = json.loads(budget_limits)
+        except (TypeError, ValueError):
+            return
+        key_info["budget_limits"] = budget_limits
+    if not isinstance(budget_limits, list):
+        return
+
+    for idx, window in enumerate(budget_limits):
+        w: dict | None = None
+        if isinstance(window, dict):
+            w = window
+        elif hasattr(window, "model_dump"):
+            try:
+                w = window.model_dump()
+            except Exception:  # noqa: BLE001
+                continue
+            budget_limits[idx] = w
+        if not w:
+            continue
+        duration: Any = w.get("budget_duration")
+        max_budget: Any = w.get("max_budget")
+        if not duration:
+            continue
+        try:
+            max_budget = float(max_budget) if max_budget is not None else None
+        except (TypeError, ValueError):
+            max_budget = None
+        counter_key: Final = f"spend:key:{api_key_hash}:window:{duration}"
+        spend: Final = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
+            max_budget=max_budget,
+            window_entity_type="Key",
+            window_entity_id=api_key_hash,
+            window_start=get_budget_window_start(w),
+        )
+        w["current_spend"] = round(spend, 4)
+
+
 @router.post(
     "/v2/key/info",
     tags=["key management"],
@@ -3597,6 +3653,8 @@ async def info_key_fn_v2(
                     model_max_budget=model_max_budget,
                     user_api_key_cache=user_api_key_cache,
                 )
+            if k_token_hash:
+                await _attach_budget_limits_usage(key_info=k_dict, api_key_hash=k_token_hash)
 
             filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
@@ -3633,6 +3691,9 @@ async def info_key_fn(
         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
           the key has per-model budgets
+        - budget_limits: list | None - Concurrent budget windows. Each entry includes
+          current_spend: spend accumulated in the window so far (read from the same cross-pod
+          spend counter the budget enforcement uses)
         - models: list - Model_name's the key is allowed to call
         - tpm_limit / rpm_limit: int | None - Tokens and requests per minute limits
         - metadata: dict - Metadata for the key, e.g. {"team": "core-infra"}
@@ -3709,6 +3770,7 @@ async def info_key_fn(
                 model_max_budget=model_max_budget,
                 user_api_key_cache=user_api_key_cache,
             )
+        await _attach_budget_limits_usage(key_info=key_info, api_key_hash=key_token_hash)
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
