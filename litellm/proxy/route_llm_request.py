@@ -663,6 +663,52 @@ async def route_request(
     elif user_model is not None or route_type == "allm_passthrough_route":
         return getattr(litellm, f"{route_type}")(**data)
 
+    # Last resort before failing: the requested name may be a different spelling
+    # of a model this router already serves (e.g. a harness sending the dated
+    # 'claude-haiku-4-5-20251001' at a gateway that deploys it as
+    # 'anthropic/claude-haiku-4-5'). Resolution is same-provider and
+    # identity-attested only, and runs here -- after every configured route,
+    # including wildcards and default_deployment, has declined -- so it can only
+    # turn a hard failure into a success, never re-point working traffic.
+    if llm_router is not None and isinstance(data.get("model"), str):
+        canonical_target: Final = llm_router.resolve_canonical_model_name(
+            model=data["model"],
+            request_team_id=team_id,
+        )
+        if canonical_target is not None:
+            # AND-on-target: the caller must be allowed to call the *resolved*
+            # group. The requested spelling passing the earlier auth check is
+            # not enough -- without this, a key whose allowlist holds only a
+            # stale unserved name would ride the rewrite onto a deployment it
+            # was never granted. (Auth ran on the requested string before
+            # routing; the target group was not visible to it then.) On denial
+            # the rewrite is simply declined -- the request falls through to
+            # the same 400 it gets today, revealing nothing about the target.
+            target_allowed = True
+            if user_api_key_dict is not None:
+                from litellm.proxy.auth.auth_checks import can_key_call_model
+
+                try:
+                    await can_key_call_model(
+                        model=canonical_target,
+                        llm_model_list=llm_router.get_model_list(),
+                        valid_token=user_api_key_dict,
+                        llm_router=llm_router,
+                    )
+                except Exception:
+                    target_allowed = False
+            if target_allowed:
+                # Preserve the client's spelling for spend logs / debugging --
+                # after the rewrite it is otherwise invisible downstream.
+                metadata_field: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
+                existing_metadata = data.get(metadata_field)
+                if isinstance(existing_metadata, dict):
+                    existing_metadata.setdefault("requested_model", data["model"])
+                else:
+                    data[metadata_field] = {"requested_model": data["model"]}
+                data["model"] = canonical_target
+                return getattr(llm_router, f"{route_type}")(**data)
+
     # if no route found then it's a bad request
     route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
     raise ProxyModelNotFoundError(

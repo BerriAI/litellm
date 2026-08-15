@@ -3323,6 +3323,28 @@ def _can_object_call_model(
         ):
             return True
 
+    # Canonical resolution: if the requested model has no manual alias but
+    # *provably* serves the same model as something in the request's
+    # allowed-models list, that's a match. Crucially, this is NOT OR-semantics
+    # (as with manual aliases, where the admin blessed the alias itself). It's
+    # AND-on-target: the target must be explicitly allowed, and the raw
+    # requested name being in the allowlist grants nothing. This prevents a key
+    # allowed ["stale-deployment-name"] from gaining access to a different
+    # deployment via a canonical rewrite.
+    if llm_router and model not in (llm_router.model_group_alias or {}):
+        canonical_target: Final = llm_router.resolve_canonical_model_name(
+            model=model,
+            request_team_id=team_id,
+        )
+        if canonical_target is not None and _check_model_access_helper(
+            model=canonical_target,
+            llm_router=llm_router,
+            models=models,
+            team_model_aliases=team_model_aliases,
+            team_id=team_id,
+        ):
+            return True
+
     raise ProxyException(
         message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
