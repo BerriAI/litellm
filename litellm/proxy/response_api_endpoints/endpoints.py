@@ -12,6 +12,9 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_responses_api_usage as _blocked_responses_api_usage,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
@@ -23,7 +26,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
 )
-from litellm.types.llms.openai import REASONING_EFFORT, ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
 if TYPE_CHECKING:
@@ -162,13 +165,6 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     resolved: Final = _resolve_cursor_model_variant(raw_body, llm_router)
     if resolved is not raw_body:
         _safe_set_request_parsed_body(request=request, parsed_body=resolved)
-
-
-def _blocked_responses_api_usage(original_response: Any) -> ResponseAPIUsage:
-    usage: Final = getattr(original_response, "usage", None) if original_response is not None else None
-    if isinstance(usage, ResponseAPIUsage):
-        return usage
-    return ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0)
 
 
 @router.post(
