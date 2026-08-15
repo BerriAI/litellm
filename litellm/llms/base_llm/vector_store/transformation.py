@@ -172,6 +172,7 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         pass
 
@@ -183,6 +184,7 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         pass
 

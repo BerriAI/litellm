@@ -36,6 +36,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 DEFAULT_VALKEY_PORT: Final = 6379
+DEFAULT_SOCKET_CONNECT_TIMEOUT_SECONDS: Final = 5.0
+DEFAULT_SOCKET_TIMEOUT_SECONDS: Final = 30.0
 DEFAULT_MAX_NUM_RESULTS: Final = 10
 MIN_MAX_NUM_RESULTS: Final = 1
 MAX_MAX_NUM_RESULTS: Final = 50
@@ -138,7 +140,18 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             return query
         if not query:
             raise ValueError("query must not be empty")
-        return query[0]
+        return " ".join(query)
+
+    @staticmethod
+    def _socket_timeouts(timeout: float | httpx.Timeout | None) -> tuple[float, float]:
+        if isinstance(timeout, httpx.Timeout):
+            return (
+                timeout.connect or DEFAULT_SOCKET_CONNECT_TIMEOUT_SECONDS,
+                timeout.read or DEFAULT_SOCKET_TIMEOUT_SECONDS,
+            )
+        if timeout is not None:
+            return (min(float(timeout), DEFAULT_SOCKET_CONNECT_TIMEOUT_SECONDS), float(timeout))
+        return (DEFAULT_SOCKET_CONNECT_TIMEOUT_SECONDS, DEFAULT_SOCKET_TIMEOUT_SECONDS)
 
     @staticmethod
     def _knn_limit(vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams) -> int:
@@ -200,6 +213,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: "LiteLLMLoggingObj",
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         params: Final = _ValkeySearchParams.model_validate(litellm_params)
         query_text: Final = self._query_text(query)
@@ -219,7 +233,12 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             raw: Final = self.sync_client.ft(vector_store_id).search(knn, query_params=vec_params)
             return self._to_response(raw, query_text, params.text_field)
 
-        client: Final = _import_sync_redis().from_url(params.connection_url())
+        connect_timeout, op_timeout = self._socket_timeouts(timeout)
+        client: Final = _import_sync_redis().from_url(
+            params.connection_url(),
+            socket_connect_timeout=connect_timeout,
+            socket_timeout=op_timeout,
+        )
         try:
             raw_result: Final = client.ft(vector_store_id).search(knn, query_params=vec_params)
             return self._to_response(raw_result, query_text, params.text_field)
@@ -233,6 +252,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: "LiteLLMLoggingObj",
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         params: Final = _ValkeySearchParams.model_validate(litellm_params)
         query_text: Final = self._query_text(query)
@@ -254,7 +274,12 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             )
             return self._to_response(raw, query_text, params.text_field)
 
-        client: Final = _import_async_redis().from_url(params.connection_url())
+        connect_timeout, op_timeout = self._socket_timeouts(timeout)
+        client: Final = _import_async_redis().from_url(
+            params.connection_url(),
+            socket_connect_timeout=connect_timeout,
+            socket_timeout=op_timeout,
+        )
         try:
             raw_result: Final = await client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
                 knn, query_params=vec_params

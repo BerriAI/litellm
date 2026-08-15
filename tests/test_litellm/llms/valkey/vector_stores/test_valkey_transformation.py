@@ -5,6 +5,7 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 from urllib.parse import unquote, urlsplit
 
+import httpx
 import pytest
 
 from litellm.llms.valkey.vector_stores.transformation import (
@@ -138,14 +139,29 @@ def test_sync_search_maps_response_with_inverted_score_sorted_best_first():
     assert response["data"][1]["file_id"] == "doc:2"
 
 
-def test_sync_search_list_query_takes_first_element():
+def test_sync_search_list_query_joins_all_elements():
     embedding_fn = FakeEmbeddingFn([1.0])
     config = ValkeyVectorStoreConfig(sync_client=FakeRedis(), embedding_fn=embedding_fn)
 
     response = _search(config, query=["first query", "second query"])
 
-    assert embedding_fn.captured_kwargs["input"] == ["first query"]
-    assert response["search_query"] == "first query"
+    assert embedding_fn.captured_kwargs["input"] == ["first query second query"]
+    assert response["search_query"] == "first query second query"
+
+
+def test_socket_timeouts_default_to_bounded_values():
+    assert ValkeyVectorStoreConfig._socket_timeouts(None) == (5.0, 30.0)
+
+
+def test_socket_timeouts_derive_from_numeric_request_timeout():
+    assert ValkeyVectorStoreConfig._socket_timeouts(2.0) == (2.0, 2.0)
+    assert ValkeyVectorStoreConfig._socket_timeouts(120.0) == (5.0, 120.0)
+
+
+def test_socket_timeouts_derive_from_httpx_timeout():
+    timeout = httpx.Timeout(connect=3.0, read=7.0, write=1.0, pool=1.0)
+
+    assert ValkeyVectorStoreConfig._socket_timeouts(timeout) == (3.0, 7.0)
 
 
 def test_sync_search_expands_embedding_config_into_kwargs():
@@ -324,7 +340,7 @@ async def test_async_search_builds_knn_query_and_maps_response():
 
     response = await config.aexecute_search_vector_store_request(
         vector_store_id="my_index",
-        query=["async query", "ignored"],
+        query=["async query", "part two"],
         vector_store_search_optional_params={"max_num_results": 3},
         litellm_logging_obj=MagicMock(),
         litellm_params={
@@ -338,10 +354,10 @@ async def test_async_search_builds_knn_query_and_maps_response():
     assert client.index.searched_query_params == {"vec": struct.pack("<2f", 0.5, 0.5)}
     assert aembedding_fn.captured_kwargs == {
         "model": "openai/text-embedding-3-small",
-        "input": ["async query"],
+        "input": ["async query part two"],
         "api_key": "sk-async",
     }
-    assert response["search_query"] == "async query"
+    assert response["search_query"] == "async query part two"
     assert response["data"][0]["score"] == pytest.approx(0.9)
     assert response["data"][0]["content"] == [{"text": "async hit", "type": "text"}]
     assert response["data"][0]["file_id"] == "doc:9"

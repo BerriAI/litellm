@@ -2110,6 +2110,7 @@ def test_vector_store_search_handler_direct_config_sync_skips_http():
             custom_llm_provider="valkey",
             litellm_params=GenericLiteLLMParams(valkey_host="localhost"),
             logging_obj=logging_obj,
+            timeout=12.5,
             _is_async=False,
         )
 
@@ -2119,6 +2120,7 @@ def test_vector_store_search_handler_direct_config_sync_skips_http():
     call = config.sync_calls[0]
     assert call["vector_store_id"] == "vs_direct"
     assert call["query"] == "q"
+    assert call["timeout"] == 12.5
     assert call["vector_store_search_optional_params"] == {"max_num_results": 4}
     assert isinstance(call["litellm_params"], dict)
     assert call["litellm_params"]["valkey_host"] == "localhost"
@@ -2143,6 +2145,7 @@ async def test_vector_store_search_handler_direct_config_async_skips_http():
             custom_llm_provider="valkey",
             litellm_params=GenericLiteLLMParams(valkey_host="localhost"),
             logging_obj=logging_obj,
+            timeout=7.0,
             _is_async=True,
         )
 
@@ -2151,6 +2154,7 @@ async def test_vector_store_search_handler_direct_config_async_skips_http():
     assert len(config.async_calls) == 1
     assert config.async_calls[0]["query"] == ["q1", "q2"]
     assert config.async_calls[0]["litellm_params"]["valkey_host"] == "localhost"
+    assert config.async_calls[0]["timeout"] == 7.0
     pre_call_args = logging_obj.pre_call.call_args.kwargs["additional_args"]
     assert pre_call_args["query"] == ["q1", "q2"]
     assert pre_call_args["vector_store_id"] == "vs_direct"

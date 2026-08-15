@@ -9429,6 +9429,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                timeout=timeout,
             )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -9559,6 +9560,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                timeout=timeout,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
