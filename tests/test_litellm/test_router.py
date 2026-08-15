@@ -4,6 +4,9 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,6 +19,7 @@ sys.path.insert(
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.scheduler import FlowItem
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -7954,3 +7958,79 @@ def test_ensure_deployment_affinity_callback_is_idempotent():
     finally:
         for cb in router.optional_callbacks or []:
             litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+
+def _priority_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "code",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+            }
+        ],
+        default_priority=10,
+    )
+
+
+@dataclass(slots=True)
+class _QueueSpy:
+    """Records the priority of every request handed to the scheduler queue"""
+
+    inner: Callable[..., Awaitable[None]]
+    priorities: tuple[int, ...] = ()
+
+    async def __call__(self, request: FlowItem) -> None:
+        self.priorities = (*self.priorities, request.priority)
+        await self.inner(request=request)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_uses_default_priority_when_request_has_none():
+    """default_priority must be forwarded to the scheduler instead of blowing up the request"""
+    router: Final = _priority_router()
+    spy: Final = _QueueSpy(inner=router.scheduler.add_request)
+
+    with patch.object(router.scheduler, "add_request", new=spy):
+        response = await router.acompletion(
+            model="code",
+            messages=[{"role": "user", "content": "Hi"}],
+            mock_response="Hello",
+        )
+
+    assert spy.priorities == (10,)
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+@pytest.mark.asyncio
+async def test_acompletion_request_priority_wins_over_default_priority():
+    router: Final = _priority_router()
+    spy: Final = _QueueSpy(inner=router.scheduler.add_request)
+
+    with patch.object(router.scheduler, "add_request", new=spy):
+        response = await router.acompletion(
+            model="code",
+            messages=[{"role": "user", "content": "Hi"}],
+            priority=5,
+            mock_response="Hello",
+        )
+
+    assert spy.priorities == (5,)
+    assert response.choices[0].message.content == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_schedule_acompletion_queues_once_with_default_priority_configured():
+    """schedule_acompletion must not re-enter the scheduler via acompletion's default_priority"""
+    router: Final = _priority_router()
+    spy: Final = _QueueSpy(inner=router.scheduler.add_request)
+
+    with patch.object(router.scheduler, "add_request", new=spy):
+        response = await router.schedule_acompletion(
+            model="code",
+            messages=[{"role": "user", "content": "Hi"}],
+            priority=3,
+            mock_response="Hello",
+        )
+
+    assert spy.priorities == (3,)
+    assert response.choices[0].message.content == "Hello"
