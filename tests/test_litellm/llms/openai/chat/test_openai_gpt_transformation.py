@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
@@ -809,3 +810,64 @@ class TestCacheControlPreservationForCustomEndpoint:
             headers={},
         )
         assert all("cache_control" not in m for m in body["messages"])
+
+
+class TestToolMessageImageHoisting:
+    """transform_request moves tool-message images into a following user message
+    (OpenAI-compatible APIs only accept text in role:"tool" messages)."""
+
+    DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    HOISTED_USER_CONTENT = [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": DATA_URI}},
+    ]
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def _messages_with_image_part_in_tool(self):
+        return [
+            {"role": "user", "content": "read the screenshot"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "image_url", "image_url": {"url": self.DATA_URI}}],
+            },
+        ]
+
+    def test_transform_request_hoists_image_part_from_tool_message(self):
+        request = self.config.transform_request(
+            model="gpt-5.4-mini",
+            messages=self._messages_with_image_part_in_tool(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        result = request["messages"]
+        assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+        tool_message = result[2]
+        assert isinstance(tool_message["content"], str)
+        assert "image" in tool_message["content"]
+        assert result[3]["content"] == self.HOISTED_USER_CONTENT
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_hoists_image_part_from_tool_message(self):
+        request = await self.config.async_transform_request(
+            model="gpt-5.4-mini",
+            messages=self._messages_with_image_part_in_tool(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        result = request["messages"]
+        assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+        assert result[3]["content"] == self.HOISTED_USER_CONTENT
