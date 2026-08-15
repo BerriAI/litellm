@@ -3,7 +3,7 @@ This module is used to transform the request and response for the Voyage context
 This would be used for all the contextualized embeddings models in Voyage.
 """
 
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -167,7 +167,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         ``enable_auto_chunking=True`` requires ``input_type="document"``, so set
         it unless the caller already provided an ``input_type``.
         """
-        params: dict[str, Any] = {  # mutable-ok: building return value
+        params: dict[str, object] = {  # mutable-ok: building return value
             "enable_auto_chunking": True,
             "chunk_size": cls.AUTO_CHUNK_SIZE,
         }
