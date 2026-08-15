@@ -8986,6 +8986,7 @@ class ProxyStartupEvent:
                     llm_router=llm_router,
                     track_unmanaged_batch_cost=general_settings.get("track_unmanaged_batch_cost", False),
                 )
+                await check_batch_cost_job.confirm_batch_processed_support()
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
                     "interval",
