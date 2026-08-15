@@ -266,16 +266,7 @@ class CredentialLiteLLMParams(BaseModel):
     s3_region_name: str | None = None
     s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
-    # Same reason as ``azure_ad_token`` above: this model is a whitelist, so a
-    # managed-batch field it does not declare is silently dropped by
-    # ``get_deployment_credentials_with_provider`` before the batch and files
-    # transformations that read it ever run. ``s3_bucket_name`` /
-    # ``s3_region_name`` / ``aws_batch_role_arn`` were added for #25104; these two
-    # are the remainder of the same deployment config.
     s3_output_bucket_name: str | None = None
-    # A list of {"key": str, "value": str}; the batch transformation validates the
-    # shape itself via _validate_bedrock_tags, so this stays a plain list to keep
-    # that error message rather than failing earlier with a Pydantic one.
     bedrock_tags: list | None = None
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
