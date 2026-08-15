@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Protocol, TypedDict, TypeVar
 
 import fastapi
@@ -210,7 +211,7 @@ async def _find_spend_logs(
     """Read a bounded, stable page of spend log rows as Prisma model instances."""
     return await _spend_logs_table(prisma_client).find_many(
         where=where,
-        order=[{"startTime": "desc"}, {"request_id": "desc"}],
+        order=[{"startTime": "desc"}, {"request_id": "desc"}],  # mutable-ok: Prisma order input is list-shaped
         take=take,
         skip=skip,
     )
@@ -2829,18 +2830,20 @@ async def ui_view_request_response_for_request_id(
 
 def _set_legacy_spend_logs_response_headers(fastapi_response: fastapi.Response) -> None:
     fastapi_response.headers.update(
-        {
-            "Deprecation": "true",
-            "Link": '</spend/logs/v2>; rel="successor-version"',
-            "Warning": '299 LiteLLM "Legacy /spend/logs individual-log responses are paginated; use page/page_size or /spend/logs/v2"',
-        }
+        MappingProxyType(
+            {
+                "Deprecation": "true",
+                "Link": '</spend/logs/v2>; rel="successor-version"',
+                "Warning": '299 LiteLLM "Legacy /spend/logs individual-log responses are paginated; use page/page_size or /spend/logs/v2"',
+            }
+        )
     )
 
 
 @router.get(
     "/spend/logs",
     tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth), Depends(_set_legacy_spend_logs_response_headers)],
+    dependencies=(Depends(user_api_key_auth), Depends(_set_legacy_spend_logs_response_headers)),
     responses={
         200: {"model": list[LiteLLM_SpendLogs]},
     },
