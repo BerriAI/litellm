@@ -32068,6 +32068,8 @@ export interface components {
             ContentPolicyViolationErrorRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
+            /** Notfounderrorretries */
+            NotFoundErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
             /** Timeouterrorretries */
