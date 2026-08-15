@@ -42,6 +42,26 @@ def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
     assert prompt_usd + completion_usd > 0
 
 
+def test_cost_per_token_tiered_only_model_bills_at_tier_rate(monkeypatch):
+    """
+    Regression: models that publish only tiered_pricing (no top-level per-token rates),
+    e.g. volcengine doubao-seed-2.0, must reach the generic tiered path instead of
+    recording zero spend.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    prompt_usd, completion_usd = cost_per_token(
+        model="volcengine/doubao-seed-2-0-pro-260215",
+        prompt_tokens=40000,
+        completion_tokens=500,
+        custom_llm_provider="volcengine",
+    )
+
+    assert prompt_usd == pytest.approx(40000 * 7e-07)
+    assert completion_usd == pytest.approx(500 * 3.5e-06)
+
+
 def test_cost_per_token_non_string_model_does_not_hang():
     """
     The provider-prefix dedup loop must not spin forever when `model` is a
