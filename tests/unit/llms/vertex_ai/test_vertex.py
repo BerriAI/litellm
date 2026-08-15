@@ -1537,5 +1537,5 @@ def test_system_prompt_only_adds_blank_user_message():
     #########################################################
     # system message was passed in
     #########################################################
-    assert len(data["system_instruction"]) == 1
-    assert data["system_instruction"]["parts"][0]["text"] == SYSTEM_INSTRUCTION
+    assert len(data["systemInstruction"]) == 1
+    assert data["systemInstruction"]["parts"][0]["text"] == SYSTEM_INSTRUCTION
