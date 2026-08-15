@@ -4,7 +4,6 @@ Unit tests for DeepSeek chat transformation.
 Tests the thinking and reasoning_effort parameter handling for DeepSeek models.
 """
 
-import pytest
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
 
@@ -34,6 +33,17 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["thinking"] == {"type": "enabled"}
+
+    def test_map_thinking_disabled(self):
+        """Test that explicit disabled thinking is passed to DeepSeek."""
+        result = self.config.map_openai_params(
+            non_default_params={"thinking": {"type": "disabled"}},
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {"type": "disabled"}
 
     def test_map_thinking_with_budget_tokens_strips_budget(self):
         """Test that budget_tokens is stripped from thinking param (DeepSeek doesn't support it)."""
@@ -93,8 +103,8 @@ class TestDeepSeekThinkingParams:
 
         assert result["thinking"] == {"type": "enabled"}
 
-    def test_map_reasoning_effort_none_does_not_enable_thinking(self):
-        """Test that reasoning_effort='none' does not enable thinking."""
+    def test_map_reasoning_effort_none_disables_thinking(self):
+        """Test that reasoning_effort='none' explicitly disables thinking."""
         non_default_params = {"reasoning_effort": "none"}
         optional_params = {}
 
@@ -105,7 +115,7 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert "thinking" not in result
+        assert result["thinking"] == {"type": "disabled"}
 
     def test_map_reasoning_effort_null_does_not_enable_thinking(self):
         """Test that reasoning_effort=None does not enable thinking."""
@@ -138,6 +148,33 @@ class TestDeepSeekThinkingParams:
 
         # thinking should be set, reasoning_effort should not override
         assert result["thinking"] == {"type": "enabled"}
+
+    def test_thinking_disabled_takes_precedence_over_reasoning_effort(self):
+        result = self.config.map_openai_params(
+            non_default_params={
+                "thinking": {"type": "disabled"},
+                "reasoning_effort": "high",
+            },
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {"type": "disabled"}
+
+    def test_map_thinking_preserves_unrelated_optional_params(self):
+        result = self.config.map_openai_params(
+            non_default_params={
+                "thinking": {"type": "disabled", "budget_tokens": 2048},
+                "temperature": 0.2,
+            },
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {"type": "disabled"}
+        assert result["temperature"] == 0.2
 
     def test_invalid_thinking_type_ignored(self):
         """Test that invalid thinking type values are ignored."""
