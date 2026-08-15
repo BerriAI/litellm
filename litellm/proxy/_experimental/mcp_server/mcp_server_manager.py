@@ -1599,6 +1599,9 @@ class MCPServerManager:
                 manual_token_url,
             )
             use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type or obo_needs_discovery)
+            configured_authorization_url = manual_authorization_url
+            configured_token_url = manual_token_url
+            configured_registration_url = manual_registration_url
             manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
                 manual_issuer,
                 is_discovery_auth_type,
@@ -1725,6 +1728,9 @@ class MCPServerManager:
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
                 registration_url=resolved_registration_url,
+                configured_authorization_url=configured_authorization_url,
+                configured_token_url=configured_token_url,
+                configured_registration_url=configured_registration_url,
                 token_endpoint_auth_method=server_config.get("token_endpoint_auth_method", None),
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
@@ -2170,6 +2176,9 @@ class MCPServerManager:
             is_discovery_auth_type
             or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url),
         )
+        configured_authorization_url: Final = manual_authorization_url
+        configured_token_url: Final = manual_token_url
+        configured_registration_url: Final = manual_registration_url
         manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
             manual_issuer,
             is_discovery_auth_type,
@@ -2222,6 +2231,9 @@ class MCPServerManager:
             authorization_url=manual_authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
             token_url=manual_token_url or getattr(gated_oauth_metadata, "token_url", None),
             registration_url=manual_registration_url or getattr(gated_oauth_metadata, "registration_url", None),
+            configured_authorization_url=configured_authorization_url,
+            configured_token_url=configured_token_url,
+            configured_registration_url=configured_registration_url,
             token_endpoint_auth_method=(
                 credentials_dict.get("token_endpoint_auth_method") if credentials_dict else None
             ),
@@ -5858,9 +5870,9 @@ class MCPServerManager:
             args=getattr(server, "args", None) or [],
             env=getattr(server, "env", None) or {},
             issuer=server.issuer,
-            authorization_url=server.authorization_url,
-            token_url=server.token_url,
-            registration_url=server.registration_url,
+            authorization_url=server.configured_authorization_url or server.authorization_url,
+            token_url=server.configured_token_url or server.token_url,
+            registration_url=server.configured_registration_url or server.registration_url,
             oauth2_flow=server.oauth2_flow,
             dcr_bridge=server.dcr_bridge,
             token_exchange_endpoint=server.token_exchange_endpoint,
@@ -5968,9 +5980,9 @@ class MCPServerManager:
             args=getattr(server, "args", None) or [],
             env=getattr(server, "env", None) or {},
             issuer=server.issuer,
-            authorization_url=server.authorization_url,
-            token_url=server.token_url,
-            registration_url=server.registration_url,
+            authorization_url=server.configured_authorization_url or server.authorization_url,
+            token_url=server.configured_token_url or server.token_url,
+            registration_url=server.configured_registration_url or server.registration_url,
             oauth2_flow=server.oauth2_flow,
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,

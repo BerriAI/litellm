@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, TypeVar, Union, cast, overload
 
 from litellm import _custom_logger_compatible_callbacks_literal
@@ -3006,6 +3007,62 @@ async def prefetch_config_params(prisma_client: "PrismaClient | None", param_nam
         )
 
 
+class _ForcedRecreateDeclined(Exception):
+    """A forced recreate was declined by the engine-generation guard.
+
+    Distinct from a reconnect *failure*: the machinery worked, it just found
+    that another path had already replaced the writer, so it left the engines
+    alone. The caller's engine may still be poisoned, so the cycle must not
+    report success, but it must not count as a failure either, or the record
+    of what could not be repaired would gate the retry that recovers.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class _StaleReadEngine:
+    """The read engine a query observed, identified rather than only counted.
+
+    `PrismaClient.read_db` resolves to the reader while it is available and to
+    the writer once it is not, and the two carry independent generation
+    counters that both start at zero and advance on the same reconnect
+    cadence. A bare generation compared across that switch would silently pit
+    one engine's counter against another's, so the wrapper is carried with the
+    number and a switch counts as the engine having moved.
+
+    Holding the wrapper itself rather than its `id()` is load-bearing, not
+    incidental: the strong reference keeps the wrapper alive, so its address
+    cannot be recycled under a stored observation and match an unrelated
+    engine later. It is only free because writer and reader both live as long
+    as the client does; a replaceable reader would make this a retention leak.
+    """
+
+    wrapper: PrismaWrapper
+    generation: int
+
+    @classmethod
+    def observe(cls, wrapper: PrismaWrapper) -> "_StaleReadEngine":
+        return cls(wrapper=wrapper, generation=wrapper.engine_generation)
+
+    def is_still_live(self, current: PrismaWrapper) -> bool:
+        """Whether this exact engine is still serving reads, unreplaced.
+
+        A True answer must never be the only thing standing between a poisoned
+        engine and its repair. The generation moves only after a replacement
+        connects, and a recreate whose connect raises leaves it unmoved until
+        some later recreate succeeds, so this can report an engine as live
+        after it has stopped working. What bounds that is the failed-repair
+        record in `_cooldown_applies`, written by a repair attempt that fails
+        rather than by whatever broke the engine: the two need not be the same
+        recreate, since the synchronous token-refresh fallback in
+        `PrismaWrapper.__getattr__` recreates outside the reconnect machinery
+        and records nothing. The record is written only for callers that named
+        an engine, and it collapses the rest of the burst for up to one
+        cooldown window rather than guaranteeing a repair, since the cooldown
+        conjunct underneath it still expires and lets a later caller retry.
+        """
+        return self.wrapper is current and self.generation == current.engine_generation
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -3153,6 +3210,14 @@ class PrismaClient:
             float(os.getenv("PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS", "0.1")),
         )
         self._consecutive_reconnect_failures: int = 0
+        # Last generation of each read engine whose repair was attempted and
+        # failed. Scoped to the engine rather than counted globally so an
+        # unrelated reconnect failure cannot suppress a stale reader's
+        # recovery, and keyed per wrapper rather than held in one slot so a
+        # writer failure cannot evict the reader's record and hand the waiver
+        # back to a caller whose engine is still unrepaired. Bounded at two
+        # entries: a client has one writer and at most one reader.
+        self._failed_recreate_generations: Mapping[PrismaWrapper, int] = MappingProxyType({})
         self._reconnect_escalation_threshold: int = max(1, int(os.getenv("PRISMA_RECONNECT_ESCALATION_THRESHOLD", "3")))
         self._engine_pidfd: int = -1
         self._engine_pid: int = 0
@@ -3166,6 +3231,19 @@ class PrismaClient:
         """Underlying writer Prisma wrapper, regardless of read-replica routing."""
         if isinstance(self.db, RoutingPrismaWrapper):
             return self.db.writer
+        return self.db
+
+    @property
+    def read_db(self) -> PrismaWrapper:
+        """Underlying wrapper that top-level reads are dispatched to.
+
+        Identical to `writer_db` without a read replica. With one configured
+        it is the reader, which is the engine `query_first` actually runs on,
+        so anything reasoning about the state of the connection that served a
+        read has to consult this rather than the writer.
+        """
+        if isinstance(self.db, RoutingPrismaWrapper):
+            return self.db.read_target
         return self.db
 
     def tx(self) -> "TransactionManager":
@@ -3391,18 +3469,30 @@ class PrismaClient:
         `attempt_db_reconnect`, which is singleflight: when a schema change
         poisons every pooled connection at once, the first cached-plan error
         recreates the client and the concurrent waiters reuse that single
-        recreate instead of racing to kill each other's fresh engine. We then
-        retry the identical query exactly once.
+        recreate instead of racing to kill each other's fresh engine. We pass
+        `force_recreate` so the reconnect skips its `SELECT 1` liveness probe:
+        the connection is healthy here, it is the prepared statements on it
+        that are stale, so a passing probe would otherwise skip the recreate
+        and leave the retry to hit the same error. We then retry the identical
+        query exactly once.
 
         The retry reuses the original query byte-for-byte. Mutating the SQL
         (e.g. injecting a unique comment) would defeat PostgreSQL's plan cache,
         forcing a fresh plan on every request and pegging the database CPU.
 
-        If the reconnect is skipped because a recent reconnect is still within
-        its cooldown, the retry runs against the same connection and may fail
-        again; the get_data backoff decorator re-runs the lookup and a later
-        attempt reconnects once the cooldown elapses.
+        The reconnect cooldown must not gate the engine this query itself saw
+        as stale, or a migration landing within the cooldown of an earlier
+        reconnect leaves auth failing until it elapses. The engine observed
+        before the query names it, so the reconnect bypasses the cooldown only
+        while that same engine is still the live one.
+
+        It is observed from `read_db`, not `writer_db`: `query_first` is a
+        top-level read, so with a read replica configured it runs on the reader
+        and it is the reader's prepared statements that went stale. Naming the
+        writer here would let an unrelated writer reconnect re-arm the cooldown
+        while the reader stayed poisoned.
         """
+        stale_read_engine: Final = _StaleReadEngine.observe(self.read_db)
         try:
             return await self.db.query_first(sql_query, *args)
         except Exception as e:
@@ -3414,7 +3504,11 @@ class PrismaClient:
                 "query. This may occur during rolling deployments when schema "
                 "changes are applied."
             )
-            await self.attempt_db_reconnect(reason="postgres_cached_plan_error")
+            await self.attempt_db_reconnect(
+                reason="postgres_cached_plan_error",
+                force_recreate=True,
+                stale_read_engine=stale_read_engine,
+            )
             return await self.db.query_first(sql_query, *args)
 
     @backoff.on_exception(
@@ -4697,7 +4791,11 @@ class PrismaClient:
         self._cleanup_engine_watcher()
         asyncio.create_task(self._start_engine_watcher())
 
-    async def _run_reconnect_cycle(self, timeout_seconds: float | None = None) -> None:
+    async def _run_reconnect_cycle(
+        self,
+        timeout_seconds: float | None = None,
+        force_recreate: bool = False,
+    ) -> None:
         """
         Run a reconnect cycle with a single overall timeout budget.
 
@@ -4708,6 +4806,11 @@ class PrismaClient:
         the client via the non-blocking kill-then-construct flow rather than
         calling disconnect(), which blocks the event loop on the synchronous
         subprocess.Popen.wait() inside prisma-client-py (see issue #26191).
+
+        `force_recreate` skips the direct path's liveness probe, for callers
+        whose failure lives in the session state rather than the connection
+        (stale prepared statements after a schema change): a reachable writer
+        proves nothing about those, so the probe must not veto the recreate.
         """
         effective_timeout: Final = (
             timeout_seconds if timeout_seconds is not None else self._db_watchdog_reconnect_timeout_seconds
@@ -4747,8 +4850,29 @@ class PrismaClient:
                 # direct path there is no SELECT 1 probe here, so the generation
                 # guard is the only thing standing between a crash-reconnect and
                 # a refresh that raced it.
-                await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
+                recreated: Final = await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
                 await self._start_engine_watcher()
+                # Same contract as the direct path below: a forced caller asked
+                # for its engine to be replaced, so a decline is not a success.
+                # Reachable here because the escalation threshold flips
+                # `_engine_confirmed_dead`, which routes the next cycle, forced
+                # callers included, down this branch.
+                if force_recreate is True and recreated is False:
+                    # Clear the dead-engine flag first, restoring the policy the
+                    # non-forced path already has: a decline does not raise for
+                    # it, so it falls through to the clear below. Only the
+                    # forced branch would strand the flag, and stranding it
+                    # routes the next cycle back down this probe-free branch,
+                    # where the refreshed generation now matches and the
+                    # recreate kills the healthy engine a refresh just spawned
+                    # (#29176). This has to stay AFTER `_start_engine_watcher`
+                    # above: clearing the flag while the watcher is still torn
+                    # down would be worse than either alone.
+                    self._engine_confirmed_dead = False
+                    raise _ForcedRecreateDeclined(
+                        "Forced Prisma recreate declined by the generation guard; "
+                        "the engine that failed was not replaced"
+                    )
 
             await asyncio.wait_for(_do_heavy_reconnect(), timeout=effective_timeout)
             # Only clear the "dead engine" flag after the heavy reconnect
@@ -4773,44 +4897,106 @@ class PrismaClient:
                 # detect a refresh that landed since cycle entry and skip the
                 # redundant restart.
                 writer: Final = self.writer_db
-                try:
-                    await writer.query_raw("SELECT 1")
-                    verbose_proxy_logger.info(
-                        "Writer healthy on probe; skipping recreate (engine "
-                        "likely already replaced by a token refresh)."
-                    )
-                    if isinstance(self.db, RoutingPrismaWrapper):
-                        self.db.mark_writer_recovered()
-                    await self._start_engine_watcher()
-                    return
-                except Exception as probe_err:
-                    verbose_proxy_logger.warning(
-                        "Writer probe failed (%s); recreating Prisma client.",
-                        probe_err,
-                    )
+                if force_recreate is False:
+                    try:
+                        await writer.query_raw("SELECT 1")
+                        verbose_proxy_logger.info(
+                            "Writer healthy on probe; skipping recreate (engine "
+                            "likely already replaced by a token refresh)."
+                        )
+                        if isinstance(self.db, RoutingPrismaWrapper):
+                            self.db.mark_writer_recovered()
+                        await self._start_engine_watcher()
+                        return
+                    except Exception as probe_err:
+                        verbose_proxy_logger.warning(
+                            "Writer probe failed (%s); recreating Prisma client.",
+                            probe_err,
+                        )
                 # Fresh Prisma client + new engine subprocess. The previous
                 # "lightweight" path called `disconnect()` which blocks the
                 # event loop on `subprocess.Popen.wait()`; since that call
                 # ends up killing the engine anyway, we do it non-blockingly
                 # via `_kill_engine_process` inside `recreate_prisma_client`.
                 self._cleanup_engine_watcher()
-                await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
+                recreated: Final = await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
                 await self._start_engine_watcher()
                 # Smoke-test the writer specifically; query_raw on the routing
                 # wrapper sends to the reader, which would not validate the
-                # newly-recreated writer engine.
+                # newly-recreated writer engine. The reader is left to the
+                # caller's own retried query, a stronger check than SELECT 1,
+                # and a reader that fails to come back sets `_reader_unavailable`
+                # so reads fall through to the writer just recreated here.
                 await self.writer_db.query_raw("SELECT 1")
+                # A recreate can decline: the optimistic-lock guard no-ops when
+                # the writer generation moved since cycle entry, and the routing
+                # wrapper then leaves the reader untouched as well. Callers that
+                # merely suspect a transport blip are happy either way, but a
+                # forced caller asked for this engine to be replaced because its
+                # session state is poisoned, and it was not. Do not report that
+                # as a success: it would reset the consecutive-failure count and
+                # log a repair that never happened.
+                if force_recreate is True and recreated is False:
+                    raise _ForcedRecreateDeclined(
+                        "Forced Prisma recreate declined by the generation guard; "
+                        "the engine that failed was not replaced"
+                    )
 
             await asyncio.wait_for(_do_direct_reconnect(), timeout=effective_timeout)
+
+    def _cooldown_applies(self, stale_read_engine: "_StaleReadEngine | None") -> bool:
+        """
+        Whether the reconnect cooldown should still gate this caller.
+
+        The cooldown collapses a burst of callers onto one recreate, so it
+        keeps gating a caller whose named engine has already been replaced:
+        that recreate is the one it was waiting for. While that engine is still
+        the live one the damage is still being served, so deferring to an
+        unrelated reconnect's cooldown would leave it broken until the cooldown
+        elapses.
+
+        A named engine always describes the one that served the failing read
+        (see `_query_first_with_cached_plan_fallback`), so it is compared
+        against `read_db`, identity included: `read_db` can resolve to a
+        different wrapper than it did at observation time.
+
+        The waiver is withdrawn once a repair of this same engine has been
+        tried and failed. A failed recreate leaves the generation where it was,
+        so without this every queued caller would still see its own engine live
+        and run its own full recreate serially instead of collapsing onto one
+        attempt, which is what the cooldown is for. The record is scoped to the
+        engine rather than to a global failure count: an unrelated reconnect
+        failing somewhere else says nothing about whether this engine can be
+        repaired, and gating on it would suppress the recovery this method
+        exists to allow.
+
+        The record is never cleared, and does not need to be. Generations are
+        monotonic per wrapper, so once the engine is repaired every later
+        caller names a higher one and the entry can never match again. And this
+        method is only ever the first half of the gate: the cooldown window
+        itself still expires, so an engine that can never be repaired degrades
+        to the plain cooldown rather than being suppressed forever.
+        """
+        if stale_read_engine is None:
+            return True
+        if self._failed_recreate_generations.get(stale_read_engine.wrapper) == stale_read_engine.generation:
+            return True
+        return not stale_read_engine.is_still_live(self.read_db)
 
     async def _attempt_reconnect_inside_lock(
         self,
         force: bool,
         reason: str,
         timeout_seconds: float | None,
+        force_recreate: bool = False,
+        stale_read_engine: "_StaleReadEngine | None" = None,
     ) -> bool:
         now: Final = time.time()
-        if force is False and now - self._db_last_reconnect_attempt_ts < self._db_reconnect_cooldown_seconds:
+        if (
+            force is False
+            and self._cooldown_applies(stale_read_engine)
+            and now - self._db_last_reconnect_attempt_ts < self._db_reconnect_cooldown_seconds
+        ):
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt inside lock due to cooldown. reason=%s",
                 reason,
@@ -4834,12 +5020,43 @@ class PrismaClient:
 
         reconnect_succeeded = False
         try:
-            await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
+            await self._run_reconnect_cycle(timeout_seconds=timeout_seconds, force_recreate=force_recreate)
             reconnect_succeeded = True
             self._consecutive_reconnect_failures = 0
             verbose_proxy_logger.info("Prisma DB reconnect succeeded. reason=%s", reason)
+        except _ForcedRecreateDeclined as declined:
+            # A decline is raised only when the recreate returns False, which
+            # happens only at the generation guard, and the generation moves
+            # only after a replacement has connected. So a decline is proof
+            # that a replacement SUCCEEDED, and zeroing a consecutive-failure
+            # count on that proof is right by definition rather than by
+            # analogy to what a reported success used to do. Note what it
+            # proves is that the WRITER was replaced, not that this caller's
+            # engine was repaired: on a read replica the reader can still be
+            # poisoned, since the wrapper returns before touching it. Leaving
+            # the count at the threshold would let the escalation check above
+            # re-arm the dead-engine flag on the very next attempt and send a
+            # healthy replacement back down the probe-free heavy path.
+            self._consecutive_reconnect_failures = 0
+            verbose_proxy_logger.warning("Prisma DB reconnect declined. reason=%s detail=%s", reason, declined)
         except Exception as reconnect_err:
             self._consecutive_reconnect_failures += 1
+            # Remember WHICH engine could not be repaired, so the rest of this
+            # caller's burst collapses onto the cooldown instead of each
+            # retrying the recreate that just failed. Recorded only for a
+            # caller that named a generation: a watchdog or transport-error
+            # reconnect failing here is unrelated to any stale read engine and
+            # must not suppress its waiver.
+            if stale_read_engine is not None:
+                # Key off the wrapper the CALLER named, never a freshly resolved
+                # `read_db`. A failed reader recreate is itself what marks the
+                # reader unavailable, so re-resolving here would file the
+                # reader's failure under the writer: the poisoned reader would
+                # lose its record and the healthy writer would gain a spurious
+                # one, wrong in both directions at once.
+                self._failed_recreate_generations = MappingProxyType(
+                    {**self._failed_recreate_generations, stale_read_engine.wrapper: stale_read_engine.generation}
+                )
             verbose_proxy_logger.error(
                 "Prisma DB reconnect failed (%d consecutive). reason=%s error=%s",
                 self._consecutive_reconnect_failures,
@@ -4857,15 +5074,35 @@ class PrismaClient:
         force: bool = False,
         timeout_seconds: float | None = None,
         lock_timeout_seconds: float | None = None,
+        force_recreate: bool = False,
+        stale_read_engine: "_StaleReadEngine | None" = None,
     ) -> bool:
         """
         Attempt to reconnect the Prisma client in a singleflight manner.
+
+        `force` bypasses the cooldown unconditionally; `force_recreate`
+        bypasses the liveness probe that would otherwise skip recreating a
+        reachable engine; `stale_read_engine` bypasses the cooldown only while
+        the engine that produced the caller's failure is still the live one
+        (see `_cooldown_applies`).
+
+        A `force_recreate` caller can also get False for a third reason: the
+        generation guard declined because another path had already replaced
+        the engine, which is a successful outcome reported as False. Callers
+        that branch on the return value (`exception_handler` raises on False,
+        `auth_checks` retries only on True) would misread that as a dead end,
+        and are safe today only because neither passes `force_recreate`. Do
+        not add it to one of them without revisiting how it reads the result.
 
         Returns:
             bool: True if reconnection succeeded, else False.
         """
         now: Final = time.time()
-        if force is False and now - self._db_last_reconnect_attempt_ts < self._db_reconnect_cooldown_seconds:
+        if (
+            force is False
+            and self._cooldown_applies(stale_read_engine)
+            and now - self._db_last_reconnect_attempt_ts < self._db_reconnect_cooldown_seconds
+        ):
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt due to cooldown. reason=%s",
                 reason,
@@ -4874,7 +5111,9 @@ class PrismaClient:
 
         if lock_timeout_seconds is None:
             async with self._db_reconnect_lock:
-                return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
+                return await self._attempt_reconnect_inside_lock(
+                    force, reason, timeout_seconds, force_recreate, stale_read_engine
+                )
 
         lock_acquired_by_timeout_task = False
 
@@ -4923,7 +5162,9 @@ class PrismaClient:
             return False
 
         try:
-            return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
+            return await self._attempt_reconnect_inside_lock(
+                force, reason, timeout_seconds, force_recreate, stale_read_engine
+            )
         finally:
             self._db_reconnect_lock.release()
 

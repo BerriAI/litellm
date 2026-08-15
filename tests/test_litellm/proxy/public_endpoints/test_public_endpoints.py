@@ -243,6 +243,33 @@ def test_bedrock_mantle_provider_fields():
     assert fields_by_key["api_base"]["field_type"] == "text"
 
 
+def test_vllm_provider_display_names_are_distinct():
+    """Hosted and local vLLM must not share a dropdown label.
+
+    The Add Model provider dropdown is driven by /public/providers/fields.
+    Both entries previously rendered as near-identical "vllm"/"Vllm" rows
+    with the same logo, so admins could not tell them apart.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    hosted = next((p for p in providers if p["provider"] == "Hosted_Vllm"), None)
+    local = next((p for p in providers if p["provider"] == "VLLM"), None)
+    assert hosted is not None, "Hosted vLLM provider entry not found"
+    assert local is not None, "Local vLLM provider entry not found"
+
+    assert hosted["provider_display_name"] == "Hosted vLLM"
+    assert local["provider_display_name"] == "Local vLLM"
+    assert hosted["provider_display_name"].casefold() != local["provider_display_name"].casefold()
+    assert hosted["litellm_provider"] == "hosted_vllm"
+    assert local["litellm_provider"] == "vllm"
+
+
 def test_nvidia_riva_provider_fields():
     app_instance = FastAPI()
     app_instance.include_router(router)

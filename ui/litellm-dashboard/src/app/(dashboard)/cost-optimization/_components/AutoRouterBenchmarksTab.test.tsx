@@ -66,6 +66,36 @@ const totals = (overrides: Partial<Totals> = {}): Totals => ({
   ...overrides,
 });
 
+const zeroBucket = { turns: 0, hits: 0, hit_rate_pct: 0 };
+
+const zeroCache: AutoRouterCacheStats = {
+  coverage_pct: 0,
+  hit_rate_pct: 0,
+  same_model: zeroBucket,
+  first_visit: zeroBucket,
+  return_to_tier: zeroBucket,
+  unordered_turns: 0,
+  return_misses_expired: 0,
+  return_misses_within_ttl: 0,
+  return_misses_unknown: 0,
+  ttl_5m_turns: 0,
+  ttl_1h_turns: 0,
+};
+
+const zeroTotals: Totals = {
+  sessions: 0,
+  turns: 0,
+  avg_turns_per_session: 0,
+  avg_session_seconds: 0,
+  avg_tokens_per_session: 0,
+  spend: 0,
+  saved_spend: 0,
+  baseline_spend: 0,
+  saved_pct: 0,
+  saved_per_session: 0,
+  cache: zeroCache,
+};
+
 const group = (overrides: Partial<AutoRouterBenchmarkGroup> = {}): AutoRouterBenchmarkGroup => ({
   router_name: "claude-auto",
   router_type: "complexity",
@@ -162,6 +192,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("97.7%")).toBeInTheDocument();
     expect(screen.getByText("24.3%")).toBeInTheDocument();
     expect(screen.getByText("81.6%")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Share of turns by bucket" })).not.toHaveClass("bg-muted");
   });
 
   it("summarizes the cache column from the bucketed turns, not the session turns", () => {
@@ -252,11 +283,25 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("Auto-router usage is unavailable right now")).toBeInTheDocument();
   });
 
-  it("says so when there are no auto-router sessions at all", () => {
-    mockHook({ data: response([]) });
+  it("renders the full dashboard with zeroed stats when the window has no sessions", () => {
+    mockHook({ data: response([], zeroTotals) });
     renderTab();
 
-    expect(screen.getByText("No auto-router sessions in this window yet")).toBeInTheDocument();
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.getAllByText("$0.00")).toHaveLength(4);
+    expect(screen.getByText("across 0 sessions")).toBeInTheDocument();
+    expect(screen.getByText("0s")).toBeInTheDocument();
+    expect(screen.getByText(/turns measured/)).toBeInTheDocument();
+    expect(screen.getAllByText("0.0%").length).toBeGreaterThan(0);
+    expect(screen.getByRole("img", { name: "Share of turns by bucket" })).toHaveClass("bg-muted");
+  });
+
+  it("shows the savings delta as an unsigned zero when nothing was saved", () => {
+    mockHook({ data: response([], zeroTotals) });
+    renderTab();
+
+    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(screen.queryByText("-0%")).not.toBeInTheDocument();
   });
 
   it("requests the default thirty day window and widens or narrows it from the picker", () => {
@@ -303,7 +348,7 @@ describe("AutoRouterBenchmarksTab", () => {
   });
 
   it("keeps the window picker reachable while a window has no sessions", () => {
-    mockHook({ data: response([]) });
+    mockHook({ data: response([], zeroTotals) });
     renderTab();
 
     expect(screen.getByRole("tab", { name: "30d" })).toBeInTheDocument();
