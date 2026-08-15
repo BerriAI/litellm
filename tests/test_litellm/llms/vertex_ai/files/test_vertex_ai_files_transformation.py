@@ -1802,6 +1802,20 @@ class TestVertexEmbeddingsBatchOutputTranslation:
         assert result["response"] is None
         assert result["error"]["message"] == "Quota exceeded"
 
+    def test_should_fail_the_whole_entry_when_a_fanned_out_row_is_missing(self, config):
+        """A partial `data` array would shift embeddings onto the wrong input positions."""
+        (result,) = self._transform(
+            config,
+            [self._vertex_embeddings_output_row(key="request-1#1/2")],
+        )
+
+        assert result["custom_id"] == "request-1"
+        assert result["response"] is None
+        assert result["error"]["code"] == "vertex_ai_error"
+        assert result["error"]["message"] == (
+            "Vertex returned embeddings for input positions [1] of the 2 requested"
+        )
+
     def test_should_end_to_end_round_trip_a_fanned_out_embeddings_batch(self, config):
         first_row, second_row = _wrap_entries(
             [
