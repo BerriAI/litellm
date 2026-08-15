@@ -4,7 +4,7 @@ usage/spend data by querying the aggregated daily activity endpoints.
 """
 
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import date
 from typing import Any, Final, Literal, cast
 
@@ -499,9 +499,9 @@ async def _process_tool_call(
 
 async def _acompletion(
     model: str,
-    messages: list[dict[str, Any]],
+    messages: Sequence[Mapping[str, Any]],
     temperature: float,
-    tools: list[dict[str, Any]] | None = None,
+    tools: Sequence[Mapping[str, Any]] | None = None,
     stream: bool = False,
 ) -> ModelResponse | CustomStreamWrapper:
     """Route through llm_router for proxy model names, bare litellm otherwise.
@@ -513,12 +513,15 @@ async def _acompletion(
     """
     from litellm.proxy.proxy_server import llm_router
 
+    msgs: Final = cast(list, messages)  # cast-ok: acompletion's messages param is a bare `list`
+    tool_specs: Final = cast(list | None, tools)  # cast-ok: same, for `functions`-style params
+
     if llm_router is not None and model in llm_router.get_model_names():
         return await llm_router.acompletion(
-            model=model, messages=messages, temperature=temperature, tools=tools, stream=stream
+            model=model, messages=msgs, temperature=temperature, tools=tool_specs, stream=stream
         )
     return await litellm.acompletion(
-        model=model, messages=messages, temperature=temperature, tools=tools, stream=stream
+        model=model, messages=msgs, temperature=temperature, tools=tool_specs, stream=stream
     )
 
 
