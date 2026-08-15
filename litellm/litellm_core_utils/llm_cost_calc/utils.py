@@ -99,7 +99,7 @@ def get_billable_input_tokens(usage: Usage) -> int:
     Returns the number of billable input tokens.
     Subtracts cached tokens from prompt tokens if applicable.
     """
-    details: Final = _parse_prompt_tokens_details(usage)
+    details: Final = parse_prompt_tokens_details(usage)
     return usage.prompt_tokens - details["cache_hit_tokens"]
 
 
@@ -519,7 +519,7 @@ class PromptTokensDetailsResult(TypedDict):
     audio_length_seconds: float
 
 
-def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
+def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     cache_hit_tokens: Final = cast(int | None, getattr(usage.prompt_tokens_details, "cached_tokens", 0)) or 0
     cache_creation_tokens: Final = (
         cast(
@@ -589,7 +589,7 @@ class CompletionTokensDetailsResult(TypedDict):
     video_tokens: int
 
 
-def _parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResult:
+def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResult:
     audio_tokens: Final = (
         cast(
             int | None,
@@ -826,7 +826,7 @@ def generic_cost_per_token(
         audio_length_seconds=0.0,
     )
     if usage.prompt_tokens_details:
-        prompt_tokens_details = _parse_prompt_tokens_details(usage)
+        prompt_tokens_details = parse_prompt_tokens_details(usage)
 
     ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
     ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
@@ -881,7 +881,7 @@ def generic_cost_per_token(
     video_tokens = 0
     is_text_tokens_total = False
     if usage.completion_tokens_details is not None:
-        completion_tokens_details: Final = _parse_completion_tokens_details(usage)
+        completion_tokens_details: Final = parse_completion_tokens_details(usage)
         audio_tokens = completion_tokens_details["audio_tokens"]
         text_tokens = completion_tokens_details["text_tokens"]
         reasoning_tokens = completion_tokens_details["reasoning_tokens"]
@@ -1006,9 +1006,7 @@ def get_token_type_cost_breakdown(
     )
 
     reasoning_tokens = (
-        _parse_completion_tokens_details(usage)["reasoning_tokens"]
-        if usage.completion_tokens_details is not None
-        else 0
+        parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
     )
     if not reasoning_tokens:
         reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
@@ -1030,7 +1028,7 @@ def get_token_type_cost_breakdown(
     cache_creation_tokens = 0
     cache_creation_token_details: CacheCreationTokenDetails | None = None
     if usage.prompt_tokens_details is not None:
-        prompt_tokens_details: Final = _parse_prompt_tokens_details(usage)
+        prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens = prompt_tokens_details["cache_hit_tokens"]
         cache_creation_tokens = prompt_tokens_details["cache_creation_tokens"]
         cache_creation_token_details = prompt_tokens_details["cache_creation_token_details"]

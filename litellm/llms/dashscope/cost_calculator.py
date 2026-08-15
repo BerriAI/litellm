@@ -12,8 +12,8 @@ from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _parse_completion_tokens_details,
-    _parse_prompt_tokens_details,
+    parse_completion_tokens_details,
+    parse_prompt_tokens_details,
 )
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
@@ -33,12 +33,12 @@ class TokenBreakdown:
 
 
 def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
-    prompt_details: Final = _parse_prompt_tokens_details(usage)
+    prompt_details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = prompt_details["cache_hit_tokens"]
     cache_creation_tokens: Final = prompt_details["cache_creation_tokens"]
     text_tokens: Final = max(usage.prompt_tokens - cached_tokens - cache_creation_tokens, 0)
 
-    reasoning_tokens: Final = _parse_completion_tokens_details(usage)["reasoning_tokens"]
+    reasoning_tokens: Final = parse_completion_tokens_details(usage)["reasoning_tokens"]
     completion_tokens: Final = max((usage.completion_tokens or 0) - reasoning_tokens, 0)
 
     return TokenBreakdown(

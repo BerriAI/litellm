@@ -10,10 +10,10 @@ from pydantic import BaseModel, ValidationError
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_token_base_cost,
     _get_web_search_requests,
-    _parse_prompt_tokens_details,
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_provider_specific_geo_multiplier,
+    parse_prompt_tokens_details,
 )
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage", service_ti
     if usage.prompt_tokens_details is None:
         return 0.0
 
-    prompt_tokens_details: Final = _parse_prompt_tokens_details(usage)
+    prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
     (
         _,
         _,
