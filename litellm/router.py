@@ -10719,9 +10719,7 @@ class Router:
                 self._canonical_model_index = build_canonical_index(
                     cast("list[DeploymentTypedDict]", self.model_list)
                 )
-            except Exception as exc:
-                # Never let index construction brick a router: degrade to
-                # 'strict' behaviour instead.
+            except Exception as exc:  # noqa: BLE001  # index construction must never brick a router; degrade to 'strict'
                 verbose_router_logger.error("canonical-resolution: index build failed, disabling feature: %s", exc)
                 self._canonical_model_index = {}
             self._canonical_model_index_cost_generation = cost_generation

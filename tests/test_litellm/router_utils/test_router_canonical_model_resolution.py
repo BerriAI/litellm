@@ -231,6 +231,27 @@ class TestRouterResolveCanonicalModelName:
         )
         assert router.resolve_canonical_model_name(DATED) is None
 
+    def test_get_canonical_model_index_builds_and_caches(self, anthropic_router: Router):
+        """The index is built on demand, memoized, and keyed by identity."""
+        index = anthropic_router._get_canonical_model_index()
+        assert index[("anthropic", UNDATED)] == ANTHROPIC_GROUP
+        # Second call returns the same memoized object (no rebuild).
+        assert anthropic_router._get_canonical_model_index() is index
+
+    def test_get_canonical_model_index_survives_build_failure(
+        self, anthropic_router: Router, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A failing index build degrades to 'strict', never raises."""
+        import litellm.router as router_module
+
+        def boom(*_args: object, **_kwargs: object) -> dict:
+            raise RuntimeError("cost map exploded")
+
+        monkeypatch.setattr(router_module, "build_canonical_index", boom)
+        anthropic_router._canonical_model_index = None
+        assert anthropic_router._get_canonical_model_index() == {}
+        assert anthropic_router.resolve_canonical_model_name(DATED) is None
+
     def test_index_rebuilds_after_model_list_change(self, anthropic_router: Router):
         assert anthropic_router.resolve_canonical_model_name(DATED) == ANTHROPIC_GROUP
         anthropic_router.set_model_list(

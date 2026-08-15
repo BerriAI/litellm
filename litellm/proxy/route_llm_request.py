@@ -672,11 +672,13 @@ async def route_request(
     # turn a hard failure into a success, never re-point working traffic.
     requested_model: Final[object] = data.get("model")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType] - data is an untyped request dict
     if llm_router is not None and isinstance(requested_model, str):
-        canonical_target: Final = llm_router.resolve_canonical_model_name(
+        canonical_target: Final[object] = llm_router.resolve_canonical_model_name(
             model=requested_model,
             request_team_id=team_id,
         )
-        if canonical_target is not None:
+        # Require a real model-group name: a router stub that returns a
+        # non-string (e.g. a test double) must not be read as "resolved".
+        if isinstance(canonical_target, str) and canonical_target:
             # AND-on-target: the caller must be allowed to call the *resolved*
             # group. The requested spelling passing the earlier auth check is
             # not enough -- without this, a key whose allowlist holds only a
@@ -698,7 +700,7 @@ async def route_request(
                         valid_token=user_api_key_dict,
                         llm_router=llm_router,
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001  # any auth failure declines the rewrite; never widens access
                     target_allowed = False
             if target_allowed:
                 # Preserve the client's spelling for spend logs / debugging --

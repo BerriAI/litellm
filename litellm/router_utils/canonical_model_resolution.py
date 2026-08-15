@@ -88,7 +88,7 @@ def _infer_provider(model: str) -> str | None:
     """
     try:
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
-    except Exception:
+    except Exception:  # noqa: BLE001  # an unplaceable name simply never resolves; never fail the request
         return None
     return custom_llm_provider or None
 
@@ -112,7 +112,7 @@ def canonicalize(model: str) -> tuple[str, str] | None:
     # is exactly the normalization wanted here.
     try:
         stripped, _, _, _ = litellm.get_llm_provider(model=model)
-    except Exception:
+    except Exception:  # noqa: BLE001  # an unplaceable name simply never resolves; never fail the request
         return None
     return (provider, stripped or model)
 
@@ -172,7 +172,7 @@ def build_canonical_index(
                 group_identity[model_group] = None
                 continue
             group_identity.setdefault(model_group, identity)
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover - a malformed deployment must not abort the index build
             verbose_router_logger.debug("canonical-resolution: skipping deployment: %s", exc)
             continue
 
@@ -183,9 +183,11 @@ def build_canonical_index(
         # Index the canonical spelling plus any dated<->undated sibling the cost
         # map attests is the same model.
         spellings: list[str] = [canonical_name]
-        for candidate in _undated_variants(canonical_name):
-            if _same_model_per_cost_map(canonical_name, candidate):
-                spellings.append(candidate)
+        spellings.extend(
+            candidate
+            for candidate in _undated_variants(canonical_name)
+            if _same_model_per_cost_map(canonical_name, candidate)
+        )
         for dated, entry in litellm.model_cost.items():
             if not isinstance(dated, str) or not isinstance(entry, Mapping) or dated in spellings:
                 continue

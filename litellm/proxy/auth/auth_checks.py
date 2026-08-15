@@ -3332,11 +3332,13 @@ def _can_object_call_model(
     # allowed ["stale-deployment-name"] from gaining access to a different
     # deployment via a canonical rewrite.
     if llm_router and model not in (llm_router.model_group_alias or {}):
-        canonical_target: Final = llm_router.resolve_canonical_model_name(
+        canonical_target: Final[object] = llm_router.resolve_canonical_model_name(
             model=model,
             request_team_id=team_id,
         )
-        if canonical_target is not None and _check_model_access_helper(
+        # Require a real model-group name; a non-string from a router stub must
+        # never be treated as a grant.
+        if isinstance(canonical_target, str) and canonical_target and _check_model_access_helper(
             model=canonical_target,
             llm_router=llm_router,
             models=models,
