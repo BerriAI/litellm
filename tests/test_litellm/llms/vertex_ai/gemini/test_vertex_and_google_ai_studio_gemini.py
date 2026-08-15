@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from copy import deepcopy
-from typing import List, cast
+from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -5562,10 +5562,12 @@ def test_calculate_web_search_requests_counts_unique_queries():
     metadata items must collapse to the distinct-query count, and empty strings must
     be ignored, matching Google's documented Grounding-with-Search billing rule.
     """
-    duplicates_in_one_item = [{"webSearchQueries": ["euro 2024 winner", "euro 2024 winner", "spain england final", ""]}]
+    duplicates_in_one_item: Final = [
+        {"webSearchQueries": ["euro 2024 winner", "euro 2024 winner", "spain england final", ""]}
+    ]
     assert VertexGeminiConfig._calculate_web_search_requests(duplicates_in_one_item) == 2
 
-    duplicates_across_items = [
+    duplicates_across_items: Final = [
         {"webSearchQueries": ["euro 2024 winner"]},
         {"webSearchQueries": ["euro 2024 winner", "spain england final"]},
     ]
