@@ -3517,6 +3517,20 @@ async def _build_model_max_budget_usage(
     return result
 
 
+def _budget_window_to_dict(window: object) -> dict | None:
+    """Coerce a budget_limits entry to a dict; None when the entry is unusable."""
+    if isinstance(window, dict):
+        return window
+    model_dump = getattr(window, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped: Any = model_dump()
+        except Exception:  # noqa: BLE001
+            return None
+        return dumped if isinstance(dumped, dict) else None
+    return None
+
+
 async def _attach_budget_limits_usage(key_info: dict, api_key_hash: str) -> None:
     """
     Attach current-window spend to each entry in key_info["budget_limits"], in place.
@@ -3541,17 +3555,10 @@ async def _attach_budget_limits_usage(key_info: dict, api_key_hash: str) -> None
         return
 
     for idx, window in enumerate(budget_limits):
-        w: dict | None = None
-        if isinstance(window, dict):
-            w = window
-        elif hasattr(window, "model_dump"):
-            try:
-                w = window.model_dump()
-            except Exception:  # noqa: BLE001
-                continue
-            budget_limits[idx] = w
+        w: Final = _budget_window_to_dict(window)
         if not w:
             continue
+        budget_limits[idx] = w
         duration: Any = w.get("budget_duration")
         max_budget: Any = w.get("max_budget")
         if not duration:
