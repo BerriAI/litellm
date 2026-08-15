@@ -9079,21 +9079,26 @@ class Router:
             model_info_name = model
 
         model_info: Final = litellm.get_model_info(model=model_info_name)
-
-        ## CHECK USER SET MODEL INFO
-        raw_user_model_info: Final = deployment.get("model_info") or {}
-        user_model_info: Final = (
-            raw_user_model_info.model_dump(exclude_none=True)
-            if isinstance(raw_user_model_info, BaseModel)
-            else {key: value for key, value in raw_user_model_info.items() if value is not None}
-        )
-
         if model_info is None:
             return model_info
 
-        # get_model_info() hands back an lru_cache'd dict; merging into a copy keeps
-        # deployment overrides out of the shared entry
-        return cast(ModelMapInfo, {**model_info, **user_model_info})
+        ## CHECK USER SET MODEL INFO
+        raw_user_model_info: Final = deployment.get("model_info")
+        user_model_info: Final = (
+            raw_user_model_info.model_dump(exclude_none=True)
+            if isinstance(raw_user_model_info, BaseModel)
+            else raw_user_model_info
+        )
+
+        # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
+        # values are skipped or Deployment's None pricing defaults would erase the map's
+        merged_model_info: Final = copy.copy(model_info)
+        if user_model_info:
+            for key, value in user_model_info.items():
+                if value is not None:
+                    merged_model_info[key] = value
+
+        return merged_model_info
 
     def get_model_info(self, id: str) -> dict | None:
         """
