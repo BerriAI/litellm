@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm
 from litellm.proxy import proxy_server
 from litellm.router_utils import pattern_match_deployments
+from litellm.types.utils import CredentialItem, TokenCountResponse
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -93,6 +95,61 @@ def test_token_counter_missing_input_returns_400(
     assert "prompt or messages or contents" in response.text
 
 
+def test_token_counter_named_credentials_do_not_mutate_router_deployment(client, auth_as, monkeypatch):
+    """Provider token counting must not pin rotating credentials to the router."""
+    named_credential = CredentialItem(
+        credential_name="rotating-bedrock",
+        credential_values={"aws_session_token": "temporary-session-token"},
+        credential_info={"custom_llm_provider": "bedrock"},
+    )
+    router_deployment = {
+        "litellm_params": {
+            "model": "bedrock/anthropic.claude-3-sonnet",
+            "litellm_credential_name": "rotating-bedrock",
+        },
+        "model_info": {},
+    }
+
+    mock_router = MagicMock()
+    mock_router.async_get_available_deployment = AsyncMock(return_value=router_deployment)
+    mock_counter = MagicMock()
+    mock_counter.should_use_token_counting_api.return_value = True
+    mock_counter.count_tokens = AsyncMock(
+        return_value=TokenCountResponse(
+            total_tokens=1,
+            request_model="claude-bedrock",
+            model_used="anthropic.claude-3-sonnet",
+            tokenizer_type="bedrock_api",
+        )
+    )
+
+    monkeypatch.setattr(litellm, "credential_list", [named_credential])
+    monkeypatch.setattr(proxy_server, "llm_router", mock_router)
+    monkeypatch.setattr(
+        proxy_server,
+        "_get_provider_token_counter",
+        lambda deployment, model: (
+            mock_counter,
+            "anthropic.claude-3-sonnet",
+            "bedrock",
+        ),
+    )
+
+    with auth_as():
+        response = client.post(
+            "/utils/token_counter?call_endpoint=true",
+            json={
+                "model": "claude-bedrock",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 200
+    hydrated_deployment = mock_counter.count_tokens.await_args.kwargs["deployment"]
+    assert hydrated_deployment["litellm_params"]["aws_session_token"] == "temporary-session-token"
+    assert "aws_session_token" not in router_deployment["litellm_params"]
+
+
 # ---------------------------------------------------------------------------
 # GET /utils/supported_openai_params
 # ---------------------------------------------------------------------------
@@ -117,9 +174,7 @@ def patched_supported_params(monkeypatch):
 def test_supported_openai_params_happy_path(client, auth_as, patched_supported_params):
     """Pins ``GET /utils/supported_openai_params``."""
     with auth_as():
-        response = client.get(
-            "/utils/supported_openai_params", params={"model": "gpt-4"}
-        )
+        response = client.get("/utils/supported_openai_params", params={"model": "gpt-4"})
     assert response.status_code == 200
     assert normalize(response.json()) == {
         "supported_openai_params": ["max_tokens", "temperature", "top_p"],
