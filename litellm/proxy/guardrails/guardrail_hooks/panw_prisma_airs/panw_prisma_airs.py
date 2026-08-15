@@ -27,6 +27,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -85,6 +86,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
         violation_message_template: str | None = None,
+        http_client: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         """Initialize PANW Prisma AIRS guardrail handler."""
@@ -132,6 +134,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_name,
             )
 
+        self.http_client = http_client
         self.fallback_on_error = fallback_on_error
         # Coerce defensively. The dashboard UI persists this field as a JSON
         # string, and Pydantic extras (the path that splats model_dump into
@@ -346,7 +349,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         try:
             # Use LiteLLM's async HTTP client
-            async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+            async_client: Final = self.http_client or get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.GuardrailCallback
+            )
 
             # Bypass wrapper to access follow_redirects parameter
             response: Final = await async_client.client.post(

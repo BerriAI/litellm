@@ -19,6 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.caching import DualCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
     PanwPrismaAirsHandler,
@@ -5505,134 +5506,136 @@ class TestPanwAirsScanIdExposure:
     }
 
     @staticmethod
+    def _handler(*scan_results) -> PanwPrismaAirsHandler:
+        """Handler wired to a stubbed AIRS endpoint, one queued scan result per call."""
+        pending = list(scan_results)
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            payload = pending.pop(0) if len(pending) > 1 else pending[0]
+            return httpx.Response(200, json=payload)
+
+        http_client = AsyncHTTPHandler()
+        http_client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        return make_handler(http_client=http_client)
+
+    @staticmethod
     def _recorded_scan_ids(request_data):
         metadata = {**request_data.get("metadata", {}), **request_data.get("litellm_metadata", {})}
         return metadata.get("guardrail_scan_ids", ())
 
-    @pytest.mark.asyncio
-    async def test_pre_call_allow_records_scan_id(self, base_handler, user_api_key_dict):
-        data = _simple_data(litellm_call_id="test-call-id", metadata={})
-
-        with patch.object(base_handler, "_call_panw_api", return_value=self.ALLOW_SCAN_RESULT):
-            await base_handler.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=DualCache(),
-                data=data,
-                call_type="completion",
-            )
-
-        assert self._recorded_scan_ids(data) == ("scan-abc-123",)
-
-    @pytest.mark.asyncio
-    async def test_post_call_allow_records_response_scan_id(self, base_handler, user_api_key_dict):
-        data = {"model": "gpt-4", "litellm_call_id": "test-call-id", "metadata": {}}
-        response = ModelResponse(
+    @staticmethod
+    def _response() -> ModelResponse:
+        return ModelResponse(
             id="test_id",
             choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
             model="gpt-4",
         )
 
-        with patch.object(base_handler, "_call_panw_api", return_value=self.ALLOW_SCAN_RESULT):
-            await base_handler.async_post_call_success_hook(
-                data=data, user_api_key_dict=user_api_key_dict, response=response
-            )
+    @pytest.mark.asyncio
+    async def test_pre_call_allow_records_scan_id(self, user_api_key_dict):
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
 
         assert self._recorded_scan_ids(data) == ("scan-abc-123",)
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_allow_records_scan_id(self, base_handler):
+    async def test_post_call_allow_records_response_scan_id(self, user_api_key_dict):
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
+        data = {"model": "gpt-4", "litellm_call_id": "test-call-id", "metadata": {}}
+
+        await handler.async_post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=self._response()
+        )
+
+        assert self._recorded_scan_ids(data) == ("scan-abc-123",)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_allow_records_scan_id(self):
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
         inputs: GenericGuardrailAPIInputs = {"texts": ["Hello world"]}
         request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4", "metadata": {}}
 
-        with patch.object(base_handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
-            mock_api.return_value = self.ALLOW_SCAN_RESULT
-            await base_handler.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+        await handler.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
 
         assert self._recorded_scan_ids(request_data) == ("scan-abc-123",)
 
     @pytest.mark.asyncio
-    async def test_allowed_scan_id_becomes_response_header(self, base_handler, user_api_key_dict):
+    async def test_allowed_scan_id_becomes_response_header(self, user_api_key_dict):
         from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
 
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
         data = _simple_data(litellm_call_id="test-call-id", metadata={})
 
-        with patch.object(base_handler, "_call_panw_api", return_value=self.ALLOW_SCAN_RESULT):
-            await base_handler.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=DualCache(),
-                data=data,
-                call_type="completion",
-            )
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
 
         headers = get_logging_caching_headers(data)
         assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123"
         assert "x-litellm-guardrail-scan-metadata" not in headers
 
     @pytest.mark.asyncio
-    async def test_request_and_response_scan_ids_are_both_exposed(self, base_handler, user_api_key_dict):
+    async def test_request_and_response_scan_ids_are_both_exposed(self, user_api_key_dict):
         from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
 
-        data = _simple_data(litellm_call_id="test-call-id", metadata={})
-        response = ModelResponse(
-            id="test_id",
-            choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
-            model="gpt-4",
+        handler = self._handler(
+            self.ALLOW_SCAN_RESULT,
+            {**self.ALLOW_SCAN_RESULT, "scan_id": "scan-response-456"},
         )
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
 
-        with patch.object(base_handler, "_call_panw_api", return_value=self.ALLOW_SCAN_RESULT):
-            await base_handler.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=DualCache(),
-                data=data,
-                call_type="completion",
-            )
-        with patch.object(
-            base_handler,
-            "_call_panw_api",
-            return_value={**self.ALLOW_SCAN_RESULT, "scan_id": "scan-response-456"},
-        ):
-            await base_handler.async_post_call_success_hook(
-                data=data, user_api_key_dict=user_api_key_dict, response=response
-            )
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        await handler.async_post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=self._response()
+        )
 
         headers = get_logging_caching_headers(data)
         assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123,scan-response-456"
 
     @pytest.mark.asyncio
-    async def test_repeated_scan_id_is_not_duplicated(self, base_handler, user_api_key_dict):
+    async def test_repeated_scan_id_is_not_duplicated(self, user_api_key_dict):
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
         data = _simple_data(litellm_call_id="test-call-id", metadata={})
-        response = ModelResponse(
-            id="test_id",
-            choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
-            model="gpt-4",
+
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        await handler.async_post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=self._response()
         )
 
-        with patch.object(base_handler, "_call_panw_api", return_value=self.ALLOW_SCAN_RESULT):
-            await base_handler.async_pre_call_hook(
+        assert self._recorded_scan_ids(data) == ("scan-abc-123",)
+
+    @pytest.mark.asyncio
+    async def test_blocked_scan_still_returns_scan_id_in_error(self, user_api_key_dict):
+        handler = self._handler({**self.ALLOW_SCAN_RESULT, "action": "block", "category": "malicious"})
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
                 cache=DualCache(),
                 data=data,
                 call_type="completion",
             )
-            await base_handler.async_post_call_success_hook(
-                data=data, user_api_key_dict=user_api_key_dict, response=response
-            )
-
-        assert self._recorded_scan_ids(data) == ("scan-abc-123",)
-
-    @pytest.mark.asyncio
-    async def test_blocked_scan_still_returns_scan_id_in_error(self, base_handler, user_api_key_dict):
-        data = _simple_data(litellm_call_id="test-call-id", metadata={})
-        blocked = {**self.ALLOW_SCAN_RESULT, "action": "block", "category": "malicious"}
-
-        with patch.object(base_handler, "_call_panw_api", return_value=blocked):
-            with pytest.raises(HTTPException) as exc_info:
-                await base_handler.async_pre_call_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    cache=DualCache(),
-                    data=data,
-                    call_type="completion",
-                )
 
         assert exc_info.value.detail["error"]["scan_id"] == "scan-abc-123"
 
