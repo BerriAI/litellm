@@ -59,7 +59,6 @@ export const CategoryFilter: React.FC<CategoryFilterProps> = ({ categories, sele
             </ComboboxChip>
           ))}
           <ComboboxChipsInput
-            className="border-0 bg-transparent"
             placeholder={selectedCategories.length === 0 ? "Select categories to filter by" : undefined}
           />
         </ComboboxChips>

@@ -190,7 +190,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               Metrics&quot; on the Usage page or individual requests in the Logs page.
             </p>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 items-center gap-4 md:grid-cols-3">
               <Combobox
                 multiple
                 items={uniqueApiKeys}
@@ -207,7 +207,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select Virtual Keys" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select Virtual Keys" />
                 </ComboboxChips>
                 <ComboboxContent anchor={anchor1}>
                   <ComboboxEmpty>No virtual keys found</ComboboxEmpty>
@@ -237,7 +237,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select Models" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select Models" />
                 </ComboboxChips>
                 <ComboboxContent anchor={anchor2}>
                   <ComboboxEmpty>No models found</ComboboxEmpty>

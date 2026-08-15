@@ -675,18 +675,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </AlertDescription>
         </Alert>
       )}
-      {entityType === "team" && (
-        <div className="mb-4">
-          <p className="mb-2 text-sm text-foreground">Filter by team</p>
-          <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />
-        </div>
-      )}
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
         showFilters={entityType !== "team" && entityList !== null && entityList.length > 0}
-        filterLabel={getFilterLabel(entityType)}
+        filterSlot={
+          entityType === "team" ? <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} /> : undefined
+        }
+        filterLabel={entityType === "team" ? "Filter by team" : getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}

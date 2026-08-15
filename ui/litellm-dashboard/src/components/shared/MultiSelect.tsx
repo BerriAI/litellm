@@ -102,7 +102,7 @@ export function MultiSelect({
               ))}
               <ComboboxChipsInput
                 placeholder={loading ? "Loading..." : placeholder}
-                className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
+                className="min-w-24"
                 aria-label={placeholder}
               />
             </>

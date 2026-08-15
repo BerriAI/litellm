@@ -303,7 +303,10 @@ function DataTableBodyRow<TData>({
 function MessageRow({ colSpan, children }: { colSpan: number; children: React.ReactNode }) {
   return (
     <TableRow className="hover:bg-transparent">
-      <TableCell colSpan={colSpan} className="h-24 text-center align-middle text-sm text-muted-foreground">
+      <TableCell
+        colSpan={colSpan}
+        className="h-24 text-center align-middle text-sm whitespace-normal text-muted-foreground"
+      >
         {children}
       </TableCell>
     </TableRow>
