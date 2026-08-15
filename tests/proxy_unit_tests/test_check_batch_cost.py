@@ -313,6 +313,102 @@ class TestCheckBatchCost:
         assert update_data["status"] == "complete"
 
     @pytest.mark.asyncio
+    async def test_output_fetch_passes_deployment_credentials_as_trusted_snapshot(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """Bedrock resolves the output bucket ONLY from the immutable snapshot kwarg.
+
+        Spreading the credentials as plain kwargs is not enough: get_litellm_params drops
+        s3_bucket_name, so without _litellm_internal_model_credentials the cost poller
+        cannot read the output file and every completed Bedrock batch stays unbilled.
+        """
+        from types import MappingProxyType
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        mock_job = MagicMock()
+        mock_job.id = "job-bedrock-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "file-output-123"
+        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={
+                "custom_llm_provider": "bedrock",
+                "s3_bucket_name": "configured-batch-bucket",
+                "aws_region_name": "us-east-1",
+            }
+        )
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "bedrock"
+        mock_deployment.litellm_params.model = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = b'{"recordId":"req-1"}'
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=[decoded_id, None],
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                return_value=mock_file_content,
+            ) as mock_afile_content,
+            patch(
+                "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                return_value=[{"recordId": "req-1"}],
+            ),
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+                return_value=(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["claude-haiku-4-5"]),
+            ),
+            patch(
+                "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                return_value=("anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock", None, None),
+            ),
+            patch("litellm.litellm_core_utils.litellm_logging.Logging") as mock_logging_cls,
+        ):
+            mock_logging_obj = MagicMock()
+            mock_logging_obj.async_success_handler = AsyncMock()
+            mock_logging_cls.return_value = mock_logging_obj
+
+            await check_batch_cost_instance.check_batch_cost()
+
+        mock_afile_content.assert_awaited()
+        passed_kwargs = mock_afile_content.await_args[1]
+        snapshot = passed_kwargs.get("_litellm_internal_model_credentials")
+        assert snapshot is not None, "cost poller must pass the trusted credential snapshot"
+        assert isinstance(
+            snapshot, MappingProxyType
+        ), "snapshot must be a MappingProxyType; a plain dict is rejected by get_configured_s3_bucket_name"
+        assert snapshot["s3_bucket_name"] == "configured-batch-bucket"
+
+    @pytest.mark.asyncio
     async def test_primary_path_completion_update_includes_batch_processed(
         self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
     ):
