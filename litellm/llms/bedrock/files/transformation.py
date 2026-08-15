@@ -572,6 +572,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     def _map_openai_embedding_to_bedrock_params(
         self,
         openai_request_body: _OpenAIBatchRecordBody,
+        model: str,
     ) -> dict[str, object]:
         """
         Transform an OpenAI /v1/embeddings request body into the
@@ -591,8 +592,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             AmazonTitanV2Config,
         )
 
-        _model: Final = openai_request_body.get("model", "")
-        if not self._is_titan_v2_embed_model(_model):
+        if not self._is_titan_v2_embed_model(model):
             # Refuse early instead of silently shaping the body for the wrong
             # provider. The synchronous /v1/embeddings path supports more
             # models, but each has a different InvokeModel schema; mapping
@@ -600,11 +600,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise NotImplementedError(
                 "Bedrock batch embedding currently supports only Amazon "
                 "Titan Text Embeddings V2 (model id contains "
-                f"'titan-embed-text-v2'). Got model={_model!r}. Track other "
+                f"'titan-embed-text-v2'). Got model={model!r}. Track other "
                 "embedding models in https://github.com/BerriAI/litellm/issues."
             )
 
-        input_text: Final = self._coerce_embedding_input_to_string(openai_request_body.get("input"), model=_model)
+        input_text: Final = self._coerce_embedding_input_to_string(openai_request_body.get("input"), model=model)
 
         # Map OpenAI-style params (dimensions, encoding_format) onto the
         # Titan v2 schema (dimensions, embeddingTypes) via the embed config
@@ -699,6 +699,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     def _map_openai_to_bedrock_params(
         self,
         openai_request_body: Mapping[str, Any],
+        model: str,
         provider: str | None = None,
     ) -> dict[str, object]:
         """
@@ -711,7 +712,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         from litellm.types.utils import LlmProviders
 
-        _model: Final[str] = openai_request_body.get("model", "")
         messages: Final = openai_request_body.get("messages", [])
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
 
@@ -725,11 +725,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             mapped_params = config.map_openai_params(
                 non_default_params={},
                 optional_params=optional_params,
-                model=_model,
+                model=model,
                 drop_params=False,
             )
             return config.transform_request(
-                model=_model,
+                model=model,
                 messages=messages,
                 optional_params=mapped_params,
                 litellm_params={},
@@ -748,11 +748,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             mapped_params = converse_config.map_openai_params(
                 non_default_params=optional_params,
                 optional_params={},
-                model=_model,
+                model=model,
                 drop_params=False,
             )
             return converse_config.transform_request(
-                model=_model,
+                model=model,
                 messages=messages,
                 optional_params=mapped_params,
                 litellm_params={},
@@ -789,15 +789,18 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         }
         """
 
+        import litellm
+
         bedrock_jsonl_content: Final = []
         for idx, _openai_jsonl_content in enumerate(openai_jsonl_content):
             # Extract the request body from OpenAI format
             openai_body = _openai_jsonl_content.get("body", {})
-            model = openai_body.get("model", "")
+            record_model = openai_body.get("model", "")
+            resolved_model = litellm.model_alias_map.get(record_model, record_model)
 
             try:
-                model, _, _, _ = get_llm_provider(
-                    model=model,
+                stripped_model, _, _, _ = get_llm_provider(
+                    model=resolved_model,
                     custom_llm_provider=None,
                 )
             except Exception as e:
@@ -805,9 +808,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     "litellm.llms.bedrock.files.transformation.py::_transform_openai_jsonl_content_to_bedrock_jsonl_content() - Error inferring custom_llm_provider - %s",
                     e,
                 )
+                stripped_model = resolved_model
 
             # Determine provider from model name
-            provider = self.get_bedrock_invoke_provider(model)
+            provider = self.get_bedrock_invoke_provider(stripped_model)
 
             # Route to the embedding transformer when the OpenAI batch line
             # targets /v1/embeddings; every other endpoint shape is normalized
@@ -816,10 +820,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             # narrow contract and the embedding helper can evolve independently.
             record_kind = self._classify_batch_record(_openai_jsonl_content)
             if record_kind is BedrockBatchRecordKind.EMBEDDING:
-                model_input = self._map_openai_embedding_to_bedrock_params(openai_request_body=openai_body)
+                model_input = self._map_openai_embedding_to_bedrock_params(
+                    openai_request_body=openai_body, model=resolved_model
+                )
             else:
                 model_input = self._map_openai_to_bedrock_params(
                     openai_request_body=self._transform_batch_body_to_chat_body(openai_body, record_kind),
+                    model=resolved_model,
                     provider=provider,
                 )
 
