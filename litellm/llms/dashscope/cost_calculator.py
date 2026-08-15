@@ -7,7 +7,10 @@ Handles tiered pricing and prompt caching scenarios.
 from dataclasses import dataclass
 from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import calculate_tiered_cost
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
+    select_tier_for_input,
+    tier_rate,
+)
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -46,31 +49,19 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
 def _calculate_prompt_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tiered_pricing: list[dict] | None,
+    tier: dict | None,
 ) -> float:
     """Calculate total prompt cost including cached tokens."""
-    if tiered_pricing:
-        text_cost: Final = calculate_tiered_cost(
-            tokens=breakdown.text_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="input_cost_per_token",
-        )
-        cache_cost = calculate_tiered_cost(
-            tokens=breakdown.cached_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="cache_read_input_token_cost",
-            fallback_cost_key="input_cost_per_token",
-        )
-        return text_cost + cache_cost
+    if tier is not None:
+        input_rate: Final = tier_rate(tier, "input_cost_per_token")
+        cache_rate: Final = tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
+        return (breakdown.text_tokens * input_rate) + (breakdown.cached_tokens * cache_rate)
 
     input_cost: Final = float(model_info.get("input_cost_per_token") or 0.0)
 
     # For cache_cost, first try the specific key, then fall back to input_cost.
     cache_cost_val: Final = model_info.get("cache_read_input_token_cost")
-    if cache_cost_val is None:
-        cache_cost = input_cost
-    else:
-        cache_cost = float(cache_cost_val)
+    cache_cost: Final = input_cost if cache_cost_val is None else float(cache_cost_val)
 
     return (breakdown.text_tokens * input_cost) + (breakdown.cached_tokens * cache_cost)
 
@@ -78,31 +69,19 @@ def _calculate_prompt_cost(
 def _calculate_completion_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tiered_pricing: list[dict] | None,
+    tier: dict | None,
 ) -> float:
     """Calculate total completion cost including reasoning tokens."""
-    if tiered_pricing:
-        completion_cost: Final = calculate_tiered_cost(
-            tokens=breakdown.completion_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="output_cost_per_token",
-        )
-        reasoning_cost = calculate_tiered_cost(
-            tokens=breakdown.reasoning_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="output_cost_per_reasoning_token",
-            fallback_cost_key="output_cost_per_token",
-        )
-        return completion_cost + reasoning_cost
+    if tier is not None:
+        output_rate: Final = tier_rate(tier, "output_cost_per_token")
+        reasoning_rate: Final = tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
+        return (breakdown.completion_tokens * output_rate) + (breakdown.reasoning_tokens * reasoning_rate)
 
     output_cost: Final = float(model_info.get("output_cost_per_token") or 0.0)
 
     # For reasoning_cost, first try the specific key, then fall back to output_cost.
     reasoning_cost_val: Final = model_info.get("output_cost_per_reasoning_token")
-    if reasoning_cost_val is None:
-        reasoning_cost = output_cost
-    else:
-        reasoning_cost = float(reasoning_cost_val)
+    reasoning_cost: Final = output_cost if reasoning_cost_val is None else float(reasoning_cost_val)
 
     return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
@@ -122,11 +101,13 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     model_info: Final = get_model_info(model=model, custom_llm_provider="dashscope")
     breakdown: Final = _extract_token_breakdown(usage)
-    tiered_pricing = model_info.get("tiered_pricing") if isinstance(model_info.get("tiered_pricing"), list) else None
+    raw_tiered: Final = model_info.get("tiered_pricing")
+    tiered_pricing: Final = raw_tiered if isinstance(raw_tiered, list) else None
 
-    prompt_cost = _calculate_prompt_cost(breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing)
-    completion_cost: Final = _calculate_completion_cost(
-        breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing
-    )
+    total_input_tokens: Final = breakdown.text_tokens + breakdown.cached_tokens
+    tier: Final = select_tier_for_input(tiered_pricing, total_input_tokens) if tiered_pricing else None
+
+    prompt_cost: Final = _calculate_prompt_cost(breakdown=breakdown, model_info=model_info, tier=tier)
+    completion_cost: Final = _calculate_completion_cost(breakdown=breakdown, model_info=model_info, tier=tier)
 
     return prompt_cost, completion_cost
