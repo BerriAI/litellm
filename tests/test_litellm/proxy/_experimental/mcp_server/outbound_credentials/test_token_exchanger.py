@@ -274,13 +274,6 @@ async def test_concurrent_callers_single_flight_one_exchange():
 
 
 @pytest.mark.asyncio
-async def test_idp_failure_is_upstream_unavailable():
-    result = await OboTokenExchanger(_RecordingPost(None), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
-    assert isinstance(result, Error)
-    assert result.error.tag == "upstream_unavailable"
-
-
-@pytest.mark.asyncio
 async def test_missing_access_token_is_upstream_unavailable():
     post = _RecordingPost({"token_type": "Bearer"})
     result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)

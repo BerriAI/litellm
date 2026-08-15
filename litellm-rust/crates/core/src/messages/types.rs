@@ -1,5 +1,29 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use super::transformation::AnthropicMessagesProviderConfig;
+
+pub struct MessagesRequest<'a> {
+    pub model: &'a str,
+    pub body: Value,
+    pub api_key: Option<&'a str>,
+    pub api_base: Option<&'a str>,
+    pub custom_llm_provider: Option<&'a str>,
+    pub extra_headers: Option<Map<String, Value>>,
+    pub timeout: Option<Duration>,
+}
+
+pub(super) struct ProviderMessagesRequest {
+    pub(super) provider: String,
+    pub(super) model: String,
+    pub(super) config: &'static dyn AnthropicMessagesProviderConfig,
+    pub(super) url: String,
+    pub(super) body: Value,
+    pub(super) upstream_headers: Vec<(String, String)>,
+    pub(super) timeout: Option<Duration>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]

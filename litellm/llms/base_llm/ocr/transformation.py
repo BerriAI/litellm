@@ -2,7 +2,7 @@
 Base OCR transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from pydantic import PrivateAttr
@@ -19,7 +19,7 @@ else:
 # DocumentType for OCR - providers always receive a dict with
 # type="document_url" or type="image_url" (str values only).
 # File-type inputs are preprocessed to this format in litellm/ocr/main.py.
-DocumentType = Dict[str, str]
+DocumentType = dict[str, str]
 
 
 class OCRPageDimensions(LiteLLMPydanticObjectBase):
@@ -34,7 +34,7 @@ class OCRPageImage(LiteLLMPydanticObjectBase):
     """Image extracted from OCR page."""
 
     image_base64: str | None = None
-    bbox: Dict[str, Any] | None = None
+    bbox: dict[str, Any] | None = None
 
     model_config = {"extra": "allow"}
 
@@ -44,7 +44,7 @@ class OCRPage(LiteLLMPydanticObjectBase):
 
     index: int
     markdown: str
-    images: List[OCRPageImage] | None = None
+    images: list[OCRPageImage] | None = None
     dimensions: OCRPageDimensions | None = None
 
     model_config = {"extra": "allow"}
@@ -66,7 +66,7 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     Standardized to Mistral OCR format - other providers should transform to this format.
     """
 
-    pages: List[OCRPage]
+    pages: list[OCRPage]
     model: str
     document_annotation: Any | None = None
     usage_info: OCRUsageInfo | None = None
@@ -84,8 +84,8 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 class OCRRequestData(LiteLLMPydanticObjectBase):
     """OCR request data structure."""
 
-    data: Union[Dict, bytes] | None = None
-    files: Dict[str, Any] | None = None
+    data: dict | bytes | None = None
+    files: dict[str, Any] | None = None
 
 
 class BaseOCRConfig:
@@ -121,13 +121,13 @@ class BaseOCRConfig:
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
         litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         Override in provider-specific implementations.

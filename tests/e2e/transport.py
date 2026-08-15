@@ -16,7 +16,7 @@ import e2e_http
 from e2e_http import (
     URL,
     AuthHeaders,
-    FileUploadForm,
+    BinaryStream,
     ProbeResult,
     Result,
     StreamingResponse,
@@ -31,6 +31,15 @@ class Transport(Protocol):
     def stream(
         self, path: str, *, headers: BaseModel, json: BaseModel
     ) -> StreamingResponse: ...
+
+    def stream_binary(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        chunk_size: int = 8192,
+    ) -> BinaryStream: ...
 
     def send(
         self,
@@ -49,9 +58,24 @@ class Transport(Protocol):
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]: ...
 
     def delete[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        params: BaseModel | None = None,
+    ) -> Result[R]: ...
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]: ...
+
+    def put[R: BaseModel](
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]: ...
 
@@ -62,9 +86,11 @@ class Transport(Protocol):
         path: str,
         *,
         headers: BaseModel,
-        form: FileUploadForm,
+        form: BaseModel,
         filename: str,
         content: bytes,
+        file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]: ...
@@ -111,19 +137,51 @@ class HttpTransport:
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
+        """`timeout` overrides the transport-wide request_timeout for this call, for
+        pollers whose own deadline is shorter than it."""
         return e2e_http.get(
             self._url(path),
             headers=headers,
             params=params,
             response_type=response_type,
-            timeout=self.request_timeout,
+            timeout=self.request_timeout if timeout is None else timeout,
         )
 
     def delete[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        params: BaseModel | None = None,
     ) -> Result[R]:
         return e2e_http.delete(
+            self._url(path),
+            headers=headers,
+            json=json,
+            params=params,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return e2e_http.patch(
+            self._url(path),
+            headers=headers,
+            json=json,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def put[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return e2e_http.put(
             self._url(path),
             headers=headers,
             json=json,
@@ -136,6 +194,22 @@ class HttpTransport:
     ) -> StreamingResponse:
         return e2e_http.stream(
             self._url(path), headers=headers, json=json, timeout=self.request_timeout
+        )
+
+    def stream_binary(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        chunk_size: int = 8192,
+    ) -> BinaryStream:
+        return e2e_http.stream_binary(
+            self._url(path),
+            headers=headers,
+            json=json,
+            chunk_size=chunk_size,
+            timeout=self.request_timeout,
         )
 
     def send(
@@ -169,9 +243,11 @@ class HttpTransport:
         path: str,
         *,
         headers: BaseModel,
-        form: FileUploadForm,
+        form: BaseModel,
         filename: str,
         content: bytes,
+        file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]:
@@ -181,6 +257,8 @@ class HttpTransport:
             form=form,
             filename=filename,
             content=content,
+            file_content_type=file_content_type,
+            file_field=file_field,
             params=params,
             response_type=response_type,
             timeout=self.request_timeout,
@@ -206,8 +284,11 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/tag",
     "/budget",
     "/model/",
+    "/access_group",
     "/spend",
     "/global",
+    "/config",
+    "/guardrails",
     "/openapi.json",
 )
 
@@ -259,15 +340,44 @@ class SplitTransport:
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return self._route(path).get(
-            path, headers=headers, params=params, response_type=response_type
+            path,
+            headers=headers,
+            params=params,
+            response_type=response_type,
+            timeout=timeout,
         )
 
     def delete[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        params: BaseModel | None = None,
     ) -> Result[R]:
         return self._route(path).delete(
+            path,
+            headers=headers,
+            json=json,
+            response_type=response_type,
+            params=params,
+        )
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return self._route(path).patch(
+            path, headers=headers, json=json, response_type=response_type
+        )
+
+    def put[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return self._route(path).put(
             path, headers=headers, json=json, response_type=response_type
         )
 
@@ -275,6 +385,18 @@ class SplitTransport:
         self, path: str, *, headers: BaseModel, json: BaseModel
     ) -> StreamingResponse:
         return self._route(path).stream(path, headers=headers, json=json)
+
+    def stream_binary(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        chunk_size: int = 8192,
+    ) -> BinaryStream:
+        return self._route(path).stream_binary(
+            path, headers=headers, json=json, chunk_size=chunk_size
+        )
 
     def send(
         self,
@@ -297,9 +419,11 @@ class SplitTransport:
         path: str,
         *,
         headers: BaseModel,
-        form: FileUploadForm,
+        form: BaseModel,
         filename: str,
         content: bytes,
+        file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]:
@@ -309,6 +433,8 @@ class SplitTransport:
             form=form,
             filename=filename,
             content=content,
+            file_content_type=file_content_type,
+            file_field=file_field,
             params=params,
             response_type=response_type,
         )

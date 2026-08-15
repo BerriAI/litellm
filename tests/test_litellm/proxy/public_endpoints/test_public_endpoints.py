@@ -243,6 +243,34 @@ def test_bedrock_mantle_provider_fields():
     assert fields_by_key["api_base"]["field_type"] == "text"
 
 
+def test_nvidia_riva_provider_fields():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    riva = next((p for p in providers if p["provider"] == "NVIDIA_RIVA"), None)
+    assert riva is not None, "NVIDIA Riva provider entry not found"
+
+    assert riva["provider_display_name"] == "Nvidia Riva"
+    assert riva["litellm_provider"] == LlmProviders.NVIDIA_RIVA.value
+    assert riva["default_model_placeholder"].startswith("nvidia_riva/")
+
+    fields_by_key = {f["key"]: f for f in riva["credential_fields"]}
+
+    assert fields_by_key["api_base"]["required"] is True
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+    assert fields_by_key["api_key"]["required"] is False
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert "nvcf_function_id" in fields_by_key
+    assert fields_by_key["nvcf_function_id"]["required"] is False
+
+
 def test_google_ai_studio_provider_fields_expose_api_base():
     """The Google AI Studio (gemini) credential form must let admins set a custom
     api_base so they can point at a Gemini-compatible gateway (e.g. a self-hosted
@@ -582,6 +610,7 @@ def test_public_agent_hub_rewrites_upstream_url_to_proxy():
 
     mock_registry = MagicMock()
     mock_registry.get_public_agent_list.return_value = [agent]
+    mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
 
     with (
         patch("litellm.public_agent_groups", ["agent-123"]),
@@ -598,6 +627,57 @@ def test_public_agent_hub_rewrites_upstream_url_to_proxy():
     card = payload[0]
     assert upstream_url not in card.get("url", "")
     assert card["url"].endswith("/a2a/agent-123")
+
+
+def test_public_agent_hub_serializes_http_security_scheme_without_bearer_format():
+    """Regression: agents created through the UI carry an auto-generated
+    ``securitySchemes.LiteLLMKey`` of ``{"type": "http", "scheme": "bearer"}``
+    with no ``bearerFormat``. The endpoint response_model must accept this
+    optional-field-omitted scheme; otherwise response validation raises and
+    /public/agent_hub returns 500, which the frontend swallows into an empty
+    list and hides the Agent Hub tab."""
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="agent-123",
+        agent_name="public-agent",
+        agent_card_params={
+            "name": "public-agent",
+            "url": "https://upstream.internal.example.com/a2a",
+            "securitySchemes": {
+                "LiteLLMKey": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "LiteLLM virtual key",
+                }
+            },
+        },
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = [agent]
+    mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
+
+    with (
+        patch("litellm.public_agent_groups", ["agent-123"]),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload) == 1
+    scheme = payload[0]["securitySchemes"]["LiteLLMKey"]
+    assert scheme["type"] == "http"
+    assert scheme["scheme"] == "bearer"
+    assert "bearerFormat" not in scheme
 
 
 def test_public_agent_hub_returns_empty_when_no_public_groups():

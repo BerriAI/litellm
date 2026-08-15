@@ -1,0 +1,34 @@
+{
+  "anthropic_family": {
+    "label": "Anthropic Family",
+    "description": "Routes across the Claude model family: Haiku for simple queries, Sonnet for medium, Opus for complex and reasoning-heavy requests.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["claude-haiku-4-5"],
+        "MEDIUM": ["claude-sonnet-5"],
+        "COMPLEX": ["claude-opus-5"],
+        "REASONING": ["claude-fable-5"]
+      },
+      "classifier_type": "heuristic",
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false,
+      "deployment_affinity": true
+    }
+  },
+  "openai_family": {
+    "label": "OpenAI Family",
+    "description": "Routes across the GPT model family: gpt-5.4-nano for simple queries, gpt-5.4-mini for medium, gpt-5.4 for complex, o3 for reasoning-heavy requests.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["gpt-5.4-nano"],
+        "MEDIUM": ["gpt-5.4-mini"],
+        "COMPLEX": ["gpt-5.4"],
+        "REASONING": ["o3"]
+      },
+      "classifier_type": "heuristic",
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false,
+      "deployment_affinity": true
+    }
+  }
+}

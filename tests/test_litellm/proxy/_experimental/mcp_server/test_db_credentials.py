@@ -95,6 +95,17 @@ def _identity_server(**overrides):
         {"credentials": {"client_id": "new", "client_secret": "csec", "scopes": ["a"]}},
         {"credentials": {"client_id": "cid", "client_secret": "rotated", "scopes": ["a"]}},
         {"credentials": {"client_id": "cid", "client_secret": "csec", "scopes": ["b"]}},
+        # RFC 8707: upstream_resource is the audience the token is minted for, so changing it
+        # alone strands every stored per-user token on the previous audience.
+        {"credentials": {"client_id": "cid", "client_secret": "csec", "scopes": ["a"], "upstream_resource": "auto"}},
+        {
+            "credentials": {
+                "client_id": "cid",
+                "client_secret": "csec",
+                "scopes": ["a"],
+                "upstream_resource": "api://new-audience",
+            }
+        },
     ],
 )
 def test_mcp_oauth_token_identity_changes_on_mint_relevant_fields(overrides):
@@ -827,6 +838,82 @@ async def test_resolve_returns_none_for_missing_credential(monkeypatch):
     refresh.assert_not_called()
 
 
+class _RefreshResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._body
+
+
+def _refresh_server(**overrides):
+    base = dict(
+        token_url="https://idp.example.com/token",
+        server_id="srv-1",
+        client_id="cid",
+        client_secret="csec",
+        token_endpoint_auth_method=None,
+        upstream_resource=None,
+        url="https://up.example.com/mcp",
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+async def _run_refresh(monkeypatch, server, response_body=None):
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    captured: dict = {}
+
+    async def _post(url, headers=None, data=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["data"] = data
+        return _RefreshResponse(response_body or {"access_token": "at-new", "expires_in": 3600})
+
+    monkeypatch.setattr(db_mod, "get_async_httpx_client", lambda **_: SimpleNamespace(post=_post))
+    monkeypatch.setattr(db_mod, "store_user_oauth_credential", AsyncMock())
+    monkeypatch.setattr(db_mod, "get_user_oauth_credential", AsyncMock(return_value={"access_token": "at-new"}))
+
+    result = await db_mod.refresh_user_oauth_token(
+        prisma_client=MagicMock(),
+        user_id="alice",
+        server=server,
+        cred={"refresh_token": "rt-old", "scopes": ["a"]},
+    )
+    return result, captured
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_sends_upstream_resource_when_set(monkeypatch):
+    """The server-side silent refresh must carry the same RFC 8707 resource the authorize and initial
+    token legs sent; a strict authorization server rejects a refresh whose resource is absent with
+    invalid_target, forcing a needless re-auth."""
+    result, captured = await _run_refresh(monkeypatch, _refresh_server(upstream_resource="api://audience"))
+    assert result is not None
+    assert captured["data"]["grant_type"] == "refresh_token"
+    assert captured["data"]["resource"] == "api://audience"
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_sends_auto_derived_resource(monkeypatch):
+    result, captured = await _run_refresh(
+        monkeypatch, _refresh_server(upstream_resource="auto", url="https://mcp.example.com/mcp")
+    )
+    assert result is not None
+    assert captured["data"]["resource"] == "https://mcp.example.com/mcp"
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_omits_resource_when_unset(monkeypatch):
+    result, captured = await _run_refresh(monkeypatch, _refresh_server(upstream_resource=None))
+    assert result is not None
+    assert "resource" not in captured["data"]
+
+
 # ── per-user env-var rotation ─────────────────────────────────────────────────
 
 
@@ -1067,3 +1154,28 @@ async def test_delete_mcp_server_cleans_oauth_client_store():
     await delete_mcp_server(prisma, "s1", invalidate_token_cache=AsyncMock())
 
     prisma.db.litellm_mcpserveroauthclient.delete_many.assert_awaited_once_with(where={"server_id": "s1"})
+
+
+def test_mcp_oauth_token_identity_changes_when_only_upstream_resource_is_edited():
+    """A resource-only update must purge stored per-user tokens.
+
+    Changing ``upstream_resource`` changes the audience the next token is minted for, so every
+    token already stored for this server was minted for the old (or unbounded) audience. Without
+    this field in the identity, an administrator retargeting a server leaves authenticated users
+    calling tools with the previous audience's token until it expires, which is the token-reuse
+    RFC 8707 exists to stop.
+    """
+    from litellm.proxy._experimental.mcp_server.db import mcp_oauth_token_identity
+
+    creds = {"client_id": "cid", "client_secret": "csec", "scopes": ["a"]}
+    unset = _identity_server(credentials=dict(creds))
+    set_to_auto = _identity_server(credentials={**creds, "upstream_resource": "auto"})
+    set_to_explicit = _identity_server(credentials={**creds, "upstream_resource": "api://audience-one"})
+    retargeted = _identity_server(credentials={**creds, "upstream_resource": "api://audience-two"})
+
+    assert mcp_oauth_token_identity(unset) != mcp_oauth_token_identity(set_to_auto)
+    assert mcp_oauth_token_identity(unset) != mcp_oauth_token_identity(set_to_explicit)
+    assert mcp_oauth_token_identity(set_to_explicit) != mcp_oauth_token_identity(retargeted)
+    assert mcp_oauth_token_identity(set_to_explicit) == mcp_oauth_token_identity(
+        _identity_server(credentials={**creds, "upstream_resource": "api://audience-one"})
+    )

@@ -537,6 +537,37 @@ async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_exposes_sanitized_client_headers_to_logging(monkeypatch):
+    """The Responses API MCP bridge used to log an empty header dict, hiding the caller's
+    headers from logging callbacks and hooks."""
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    tool_name = "deepwiki-read_wiki_structure"
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+        raw_headers={"x-nuid": "nuid-1", "x-litellm-api-key": "sk-proxy", "cookie": "s=1"},
+    )
+
+    expected = {"x-nuid": "nuid-1", "cookie": "***REDACTED***"}
+    assert captured["metadata"]["headers"] == expected
+    assert captured["proxy_server_request"]["headers"] == expected
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monkeypatch):
     _setup_proxy_logging(monkeypatch)
     _setup_mcp_call_environment(monkeypatch)
@@ -606,3 +637,45 @@ def test_completion_with_function_tools_works_without_fastapi_installed():
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_extract_tool_call_details_reads_anthropic_tool_use_input():
+    """
+    Regression test (LIT-4517): an Anthropic tool_use block carries its arguments
+    under `input`, not `arguments`.
+
+    Given: A tool_use content block as /v1/messages returns it
+    When:  The shared extractor reads it
+    Then:  The arguments come back, so the MCP tool is called with them
+
+    Reading only `arguments` fails silently rather than loudly: _parse_tool_arguments
+    turns the resulting None into {}, so the tool still executes, just with every
+    argument dropped.
+    """
+    tool_use_block = {
+        "type": "tool_use",
+        "id": "toolu_01ABC",
+        "name": "read_wiki_structure",
+        "input": {"repoName": "BerriAI/litellm"},
+    }
+
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_use_block)
+
+    assert name == "read_wiki_structure"
+    assert call_id == "toolu_01ABC"
+    assert arguments == {"repoName": "BerriAI/litellm"}
+    assert LiteLLM_Proxy_MCP_Handler._parse_tool_arguments(arguments) == {"repoName": "BerriAI/litellm"}
+
+
+def test_extract_tool_call_details_still_prefers_openai_arguments():
+    """The OpenAI chat shape must keep winning; `input` is only the fallback."""
+    openai_tool_call = {
+        "id": "call_123",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
+
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(openai_tool_call)
+
+    assert name == "get_weather"
+    assert call_id == "call_123"
+    assert arguments == '{"city": "Paris"}'

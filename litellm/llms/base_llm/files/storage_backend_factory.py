@@ -29,7 +29,7 @@ def get_storage_backend(backend_type: str) -> BaseFileStorageBackend:
     Raises:
         ValueError: If backend_type is not supported
     """
-    verbose_logger.debug(f"Creating storage backend: type={backend_type}")
+    verbose_logger.debug("Creating storage backend: type=%s", backend_type)
 
     if backend_type == "azure_storage":
         return AzureBlobStorageBackend()

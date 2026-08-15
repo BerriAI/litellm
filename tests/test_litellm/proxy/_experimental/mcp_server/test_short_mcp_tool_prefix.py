@@ -20,7 +20,9 @@ from litellm.proxy._experimental.mcp_server.utils import (
     compute_short_server_prefix,
     get_server_prefix,
     is_short_mcp_tool_prefix_enabled,
+    is_tool_name_prefixed,
     iter_known_server_prefixes,
+    match_known_server_prefix,
     strip_known_server_prefix,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -193,6 +195,70 @@ class TestStripKnownServerPrefix:
 
     def test_none_server_falls_back_to_first_separator_split(self):
         assert strip_known_server_prefix("svc-tool", None) == "tool"
+
+
+# ---------------------------------------------------------------------------
+# match_known_server_prefix — the shared boundary primitive
+# ---------------------------------------------------------------------------
+
+
+class TestMatchKnownServerPrefix:
+    """Locates the boundary by matching registered prefixes instead of cutting
+    at the first separator, preferring the longest candidate so a prefix that
+    itself contains the separator still wins."""
+
+    def test_returns_matched_prefix_and_bare_name(self):
+        assert match_known_server_prefix("deepwiki-contents", ["deepwiki"]) == (
+            "deepwiki",
+            "contents",
+        )
+
+    def test_returns_none_when_no_candidate_matches(self):
+        assert match_known_server_prefix("contents", ["deepwiki"]) is None
+
+    def test_separator_must_follow_the_prefix(self):
+        assert match_known_server_prefix("deepwikicontents", ["deepwiki"]) is None
+
+    def test_uuid_prefix_survives_its_own_separators(self):
+        server_id = "117c814c-1a2b-3c4d-9e8f"
+        assert match_known_server_prefix(f"{server_id}-contents", [server_id]) == (
+            server_id,
+            "contents",
+        )
+
+    def test_longest_candidate_wins_over_leading_segment(self):
+        # "svc" is a registered prefix in its own right and also the leading
+        # segment of "svc-prod". A first-separator split hands the tool to
+        # "svc" with a bare name of "prod-run", attributing it to the wrong
+        # server; longest-match keeps it on "svc-prod".
+        assert match_known_server_prefix("svc-prod-run", ["svc", "svc-prod"]) == (
+            "svc-prod",
+            "run",
+        )
+
+    def test_candidates_are_normalised_before_matching(self):
+        assert match_known_server_prefix("my_server-run", ["my server"]) == (
+            "my_server",
+            "run",
+        )
+
+    def test_empty_candidate_never_matches_a_leading_separator(self):
+        assert match_known_server_prefix("-run", [""]) is None
+
+
+class TestIsToolNamePrefixedBoundary:
+    """The known-prefix gate decides which branch the call path takes, so it has
+    to agree with the prefix the list path actually emitted."""
+
+    def test_uuid_prefix_is_recognised(self):
+        server_id = "117c814c-1a2b-3c4d-9e8f"
+        assert is_tool_name_prefixed(f"{server_id}-contents", known_server_prefixes={server_id})
+
+    def test_unrelated_hyphenated_tool_is_still_not_prefixed(self):
+        # Negative control: an upstream tool whose own name contains the
+        # separator must not start reading as prefixed just because the gate
+        # got more permissive about where the boundary can fall.
+        assert not is_tool_name_prefixed("text-to-speech", known_server_prefixes={"deepwiki"})
 
 
 # ---------------------------------------------------------------------------
