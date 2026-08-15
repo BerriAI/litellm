@@ -24,6 +24,11 @@ from litellm.types.utils import (
 )
 
 
+def _output_item_type(output_item: object) -> str | None:
+    item_type: Final = output_item.get("type") if isinstance(output_item, dict) else getattr(output_item, "type", None)
+    return item_type if isinstance(item_type, str) else None
+
+
 def _usage_reports_server_side_web_search_calls(usage: Usage) -> bool:
     details: Final = getattr(usage, "server_side_tool_usage_details", None)
     if not isinstance(details, Mapping):
@@ -144,7 +149,7 @@ class StandardBuiltInToolCostTracking:
         """
         if isinstance(response_object, ResponsesAPIResponse):
             count = sum(
-                1 for output_item in response_object.output if getattr(output_item, "type", None) == "web_search_call"
+                1 for output_item in response_object.output if _output_item_type(output_item) == "web_search_call"
             )
             return max(count, 1)
         return 1
@@ -463,14 +468,7 @@ class StandardBuiltInToolCostTracking:
         Returns:
             True if the ResponsesAPIResponse includes one of the specified output types, False otherwise.
         """
-        output: Final = response_object.output
-        for output_item in output:
-            _output_type: str | None = (
-                output_item.get("type") if isinstance(output_item, dict) else getattr(output_item, "type", None)
-            )
-            if _output_type == output_type:
-                return True
-        return False
+        return any(_output_item_type(output_item) == output_type for output_item in response_object.output)
 
     @staticmethod
     def _safe_get_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo | None:
