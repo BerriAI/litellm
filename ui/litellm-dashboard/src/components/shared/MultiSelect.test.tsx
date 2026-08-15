@@ -23,13 +23,34 @@ const openPopup = async (input: HTMLElement) => {
   });
 };
 
+const stubWidth = (element: Element, width: number) =>
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+    width,
+    height: 32,
+    top: 0,
+    left: 0,
+    right: width,
+    bottom: 32,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+
+const CHIPS_WIDTH = 300;
+const INPUT_WIDTH = 200;
+
 describe("MultiSelect", () => {
   it("anchors the popup to the chips container rather than the inner input", async () => {
     const { input } = renderMultiSelect();
+    const chips = input.closest("[data-slot='combobox-chips']");
+    expect(chips).not.toBeNull();
+    stubWidth(chips as Element, CHIPS_WIDTH);
+    stubWidth(input, INPUT_WIDTH);
 
     const popup = await openPopup(input);
+    const positioner = popup.parentElement as HTMLElement;
 
-    expect(popup).toHaveAttribute("data-chips", "true");
+    expect(positioner.style.getPropertyValue("--anchor-width")).toBe(`${CHIPS_WIDTH}px`);
   });
 
   it("reports the selected option values", async () => {
