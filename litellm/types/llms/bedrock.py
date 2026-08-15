@@ -2,7 +2,7 @@ import json
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from typing_extensions import Required, TypedDict, override
+from typing_extensions import ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -217,8 +217,8 @@ class ConverseResponseOutputBlock(TypedDict):
 
 
 class ConverseCacheDetailBlock(TypedDict):
-    inputTokens: int
-    ttl: Literal["5m", "1h"]
+    inputTokens: ReadOnly[int]
+    ttl: ReadOnly[Literal["5m", "1h"]]
 
 
 class ConverseTokenUsageBlock(TypedDict):
@@ -229,7 +229,7 @@ class ConverseTokenUsageBlock(TypedDict):
     cacheReadInputTokens: int
     cacheWriteInputTokenCount: int
     cacheWriteInputTokens: int
-    cacheDetails: list[ConverseCacheDetailBlock]
+    cacheDetails: ReadOnly[list[ConverseCacheDetailBlock]]
 
 
 class ServiceTierBlock(TypedDict):
