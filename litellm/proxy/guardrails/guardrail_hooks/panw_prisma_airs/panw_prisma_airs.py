@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -64,6 +64,20 @@ class _ToolCallFunctionSlice(BaseModel):
 
     name: str | None = None
     arguments: str | None = None
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def _coerce_arguments(cls, value: object) -> str | None:
+        """Accept arguments that are already-parsed JSON.
+
+        The OpenAI request path forwards client-supplied ``tool_calls`` verbatim, so a
+        client can post a dict here. Rejecting it would make the whole tool call read as
+        unscannable and skip it silently, which is the one outcome a scanner must never
+        have.
+        """
+        if value is None or isinstance(value, str):
+            return value
+        return json.dumps(value) if isinstance(value, (dict, list)) else str(value)
 
 
 class _ToolCallSlice(BaseModel):
