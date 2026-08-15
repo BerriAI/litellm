@@ -34,6 +34,36 @@ def _build_token_row(token: str, user_id: str, blocked: bool, metadata=None):
     return row
 
 
+def _make_user_api_key_cache_mock():
+    """
+    A ``user_api_key_cache`` mock that supports both the async
+    ``async_set_cache`` (called by ``_cache_user_object``) and the sync
+    ``delete_cache`` (called by ``_invalidate_cached_user``). Plain
+    ``MagicMock()`` fails the ``await async_set_cache(...)`` call with
+    ``TypeError: object MagicMock can't be used in 'await' expression``;
+    plain ``AsyncMock()`` makes ``delete_cache`` async too, which raises
+    a coroutine-never-awaited warning. Cycle-15 SCIM /Users cache fix
+    (#37009) needs both surfaces.
+    """
+    cache_mock = MagicMock()
+    cache_mock.async_set_cache = AsyncMock()
+    return cache_mock
+
+
+def _make_logging_mock():
+    """
+    A ``proxy_logging_obj`` mock that supports the dual-cache invalidation
+    pattern called from ``_invalidate_cached_user`` and the equivalent
+    async cache-set call in ``_cache_user_object`` (used by the
+    cycle-15 SCIM /Users cache fix — see #37009). Plain ``MagicMock()``
+    fails the ``await ... async_delete_cache(...)`` call with
+    ``TypeError: object MagicMock can't be used in 'await' expression``.
+    """
+    logging_mock = MagicMock()
+    logging_mock.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+    return logging_mock
+
+
 def _build_prisma_with_keys(user_keys, mock_user=None, updated_user=None):
     mock_client = MagicMock()
     mock_db = MagicMock()
@@ -70,8 +100,14 @@ async def test_set_user_keys_blocked_flips_state_and_invalidates_cache():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
             AsyncMock(side_effect=fake_delete),
@@ -101,8 +137,14 @@ async def test_set_user_keys_blocked_noop_when_no_matching_keys():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
             AsyncMock(),
@@ -121,9 +163,7 @@ async def test_set_user_keys_unblocked_skips_admin_blocked_keys():
     """Reactivation must leave keys an admin blocked (no scim_blocked marker) alone."""
     keys = [
         # SCIM-blocked: should be unblocked.
-        _build_token_row(
-            "hash-scim", "user-x", blocked=True, metadata={"scim_blocked": True}
-        ),
+        _build_token_row("hash-scim", "user-x", blocked=True, metadata={"scim_blocked": True}),
         # Admin-blocked for unrelated reasons: must remain blocked.
         _build_token_row("hash-admin", "user-x", blocked=True, metadata={}),
     ]
@@ -136,8 +176,14 @@ async def test_set_user_keys_unblocked_skips_admin_blocked_keys():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
             AsyncMock(side_effect=fake_delete),
@@ -169,8 +215,14 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
             AsyncMock(),
@@ -184,9 +236,7 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
     assert update_kwargs["where"] == {"token": "hash-a"}
     assert update_kwargs["data"]["blocked"] is True
     assert '"scim_blocked": true' in update_kwargs["data"]["metadata"]
-    mock_db.litellm_usertable.delete.assert_awaited_once_with(
-        where={"user_id": user_id}
-    )
+    mock_db.litellm_usertable.delete.assert_awaited_once_with(where={"user_id": user_id})
 
 
 @pytest.mark.asyncio
@@ -211,14 +261,18 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
     mock_db.litellm_teammembership.delete_many = AsyncMock(
         side_effect=lambda **kw: call_order.append(("teammembership", kw)) or None
     )
-    mock_db.litellm_usertable.delete = AsyncMock(
-        side_effect=lambda **kw: call_order.append(("user", kw)) or None
-    )
+    mock_db.litellm_usertable.delete = AsyncMock(side_effect=lambda **kw: call_order.append(("user", kw)) or None)
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
             AsyncMock(),
@@ -239,12 +293,8 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
             ]
         }
     }
-    mock_db.litellm_organizationmembership.delete_many.assert_awaited_once_with(
-        where={"user_id": user_id}
-    )
-    mock_db.litellm_teammembership.delete_many.assert_awaited_once_with(
-        where={"user_id": user_id}
-    )
+    mock_db.litellm_organizationmembership.delete_many.assert_awaited_once_with(where={"user_id": user_id})
+    mock_db.litellm_teammembership.delete_many.assert_awaited_once_with(where={"user_id": user_id})
 
     stages = [stage for stage, _ in call_order]
     assert stages.index("user") > stages.index("invitation")
@@ -269,13 +319,9 @@ async def test_scim_patch_user_active_false_blocks_keys():
         metadata={"scim_active": False, "scim_metadata": {}},
     )
     keys = [_build_token_row("hash-z", user_id, blocked=False)]
-    mock_client, mock_db = _build_prisma_with_keys(
-        keys, mock_user=mock_user, updated_user=updated_user
-    )
+    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=mock_user, updated_user=updated_user)
 
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="replace", path="active", value="False")]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="active", value="False")])
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         id=user_id,
@@ -287,8 +333,14 @@ async def test_scim_patch_user_active_false_blocks_keys():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
             AsyncMock(return_value=mock_scim_user),
@@ -324,18 +376,10 @@ async def test_scim_patch_user_active_true_unblocks_keys():
         teams=[],
         metadata={"scim_active": True, "scim_metadata": {}},
     )
-    keys = [
-        _build_token_row(
-            "hash-r", user_id, blocked=True, metadata={"scim_blocked": True}
-        )
-    ]
-    mock_client, mock_db = _build_prisma_with_keys(
-        keys, mock_user=mock_user, updated_user=updated_user
-    )
+    keys = [_build_token_row("hash-r", user_id, blocked=True, metadata={"scim_blocked": True})]
+    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=mock_user, updated_user=updated_user)
 
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="replace", path="active", value="True")]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="active", value="True")])
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         id=user_id,
@@ -347,8 +391,14 @@ async def test_scim_patch_user_active_true_unblocks_keys():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
             AsyncMock(return_value=mock_scim_user),
@@ -386,13 +436,9 @@ async def test_scim_patch_user_no_active_change_does_not_touch_keys():
         teams=[],
         metadata={"scim_active": True, "scim_metadata": {}},
     )
-    mock_client, mock_db = _build_prisma_with_keys(
-        user_keys=[], mock_user=mock_user, updated_user=updated_user
-    )
+    mock_client, mock_db = _build_prisma_with_keys(user_keys=[], mock_user=mock_user, updated_user=updated_user)
 
-    patch_ops = SCIMPatchOp(
-        Operations=[SCIMPatchOperation(op="replace", path="displayName", value="New")]
-    )
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="displayName", value="New")])
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         id=user_id,
@@ -404,8 +450,14 @@ async def test_scim_patch_user_no_active_change_does_not_touch_keys():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
             AsyncMock(return_value=mock_scim_user),
@@ -445,14 +497,8 @@ async def test_scim_put_user_omitting_active_preserves_deactivated_state():
         teams=[],
         metadata={"scim_active": False},
     )
-    keys = [
-        _build_token_row(
-            "hash-keep-blocked", user_id, blocked=True, metadata={"scim_blocked": True}
-        )
-    ]
-    mock_client, mock_db = _build_prisma_with_keys(
-        keys, mock_user=deactivated, updated_user=deactivated
-    )
+    keys = [_build_token_row("hash-keep-blocked", user_id, blocked=True, metadata={"scim_blocked": True})]
+    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=deactivated, updated_user=deactivated)
 
     put_user = SCIMUser.model_validate(_build_put_user_payload(user_id))
 
@@ -467,8 +513,14 @@ async def test_scim_put_user_omitting_active_preserves_deactivated_state():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
             AsyncMock(return_value=mock_scim_user),
@@ -506,9 +558,7 @@ async def test_scim_put_user_explicit_active_false_blocks_keys():
         metadata={"scim_active": False, "scim_metadata": {}},
     )
     keys = [_build_token_row("hash-block-me", user_id, blocked=False)]
-    mock_client, mock_db = _build_prisma_with_keys(
-        keys, mock_user=active, updated_user=deactivated
-    )
+    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=active, updated_user=deactivated)
 
     put_user = SCIMUser.model_validate(_build_put_user_payload(user_id, active=False))
 
@@ -523,8 +573,14 @@ async def test_scim_put_user_explicit_active_false_blocks_keys():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            _make_user_api_key_cache_mock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            _make_logging_mock(),
+        ),
         patch(
             "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
             AsyncMock(return_value=mock_scim_user),

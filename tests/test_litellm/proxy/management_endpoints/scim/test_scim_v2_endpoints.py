@@ -2910,9 +2910,7 @@ async def test_patch_group_rename_recomputes_retained_members(mocker):
 
 
 @pytest.mark.asyncio
-async def test_process_group_patch_operations_add_retains_existing_members(
-    mocker, monkeypatch
-):
+async def test_process_group_patch_operations_add_retains_existing_members(mocker, monkeypatch):
     """A SCIM group ``add`` operation must not drop members already in the team.
 
     Team membership lives in members_with_roles; team creation leaves the legacy
@@ -2937,18 +2935,14 @@ async def test_process_group_patch_operations_add_retains_existing_members(
     )
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(op="add", path="members", value=[{"value": "new-user"}])
-        ],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": "new-user"}])],
     )
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     # new-user already exists in the DB
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=mocker.MagicMock(user_id="new-user")
-    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock(user_id="new-user"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -2960,9 +2954,7 @@ async def test_process_group_patch_operations_add_retains_existing_members(
 
 
 @pytest.mark.asyncio
-async def test_process_group_patch_operations_remove_uses_members_with_roles(
-    mocker, monkeypatch
-):
+async def test_process_group_patch_operations_remove_uses_members_with_roles(mocker, monkeypatch):
     """A ``remove`` op must diff against members_with_roles, so removing one
     member leaves the rest of the team intact rather than emptying it."""
 
@@ -2984,19 +2976,13 @@ async def test_process_group_patch_operations_remove_uses_members_with_roles(
     )
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(
-                op="remove", path="members", value=[{"value": "drop-user"}]
-            )
-        ],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[{"value": "drop-user"}])],
     )
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=mocker.MagicMock(user_id="drop-user")
-    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock(user_id="drop-user"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3440,9 +3426,7 @@ async def test_process_group_patch_remove_filtered_path_without_value(mocker):
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="user-1")
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-1"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3471,9 +3455,7 @@ async def test_process_group_patch_add_filtered_path_without_value(mocker):
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="user-3")
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-3"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3490,9 +3472,7 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     id from the filtered path, which would retain one member and drop the rest."""
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[
-            SCIMPatchOperation(op="replace", path='members[value eq "user-1"]', value=[])
-        ],
+        Operations=[SCIMPatchOperation(op="replace", path='members[value eq "user-1"]', value=[])],
     )
 
     existing_team = LiteLLM_TeamTable(
@@ -3508,9 +3488,7 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=LiteLLM_UserTable(user_id="user-1")
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-1"))
 
     _, final_members, _ = await _process_group_patch_operations(
         patch_ops=patch_ops,
@@ -3519,3 +3497,308 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     )
 
     assert final_members == set()
+
+
+class TestScimUserCacheInvalidation:
+    """
+    Regression pin for #37009.
+
+    SCIM PATCH/PUT/DELETE /Users/{id} previously only wrote to
+    `litellm_usertable` and left the in-memory user cache stale. The
+    user cache is keyed on the literal `user_id` (per
+    `auth_checks.py:1641`, `get_user_object`'s `async_get_cache` call),
+    unlike the team cache which is dual-keyed on
+    `team_id:{id}` + `team_alias:{alias}`. Operators using SCIM-driven
+    IdPs (Okta, Azure AD, OneLogin, etc.) expect a deactivation or
+    email rename to take effect immediately on the proxy; without
+    cache invalidation, the stale read is silently served on every
+    request for the TTL window — and in a multi-pod deployment, the
+    window extends across replicas.
+
+    Pin: each SCIM user endpoint must call the same cache-management
+    helpers the user management endpoints rely on. `update_user` and
+    `patch_user` must call `_refresh_cached_user` with the
+    post-mutation row. `delete_user` must invalidate (delete) the
+    `user_id` key in both the local LRU and the Redis side of the
+    dual cache. `create_user` needs no cache work — the user is new,
+    not yet in cache.
+    """
+
+    @staticmethod
+    def _make_user(user_id, user_email, teams):
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        return LiteLLM_UserTable(
+            user_id=user_id,
+            user_email=user_email,
+            teams=teams,
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_user_refreshes_user_cache(self, mocker):
+        """
+        `PUT /scim/v2/Users/{id}` must call `_refresh_cached_user` with
+        the post-mutation row after the database update. Regression pin
+        for #37009.
+        """
+        from litellm.proxy.management_endpoints.scim.scim_v2 import update_user
+        from litellm.types.proxy.management_endpoints.scim_v2 import (
+            SCIMUser,
+            SCIMUserEmail,
+            SCIMUserName,
+        )
+
+        user_id = "scim-update-cache-test"
+        existing_user = self._make_user(user_id=user_id, user_email="old@example.com", teams=[])
+
+        # `updated_user` is a MagicMock (not a Pydantic instance) because
+        # `_refresh_cached_user` does `LiteLLM_UserTable(**user_row.model_dump())`,
+        # and the test must provide a real `model_dump` callable. Pydantic
+        # v2 freezes field assignment, so we mock at the MagicMock level
+        # and explicitly set `model_dump` to a real dict. Mirrors the
+        # cycle-12 test pattern for SCIM /Groups.
+        updated_user = mocker.MagicMock()
+        updated_user.user_id = user_id
+        updated_user.user_email = "new@example.com"
+        updated_user.teams = []
+        updated_user.model_dump = mocker.MagicMock(
+            return_value={
+                "user_id": user_id,
+                "user_email": "new@example.com",
+                "teams": [],
+            }
+        )
+
+        mock_prisma_client = mocker.MagicMock()
+        mock_prisma_client.db = mocker.MagicMock()
+        mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+        mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+            AsyncMock(return_value=mock_prisma_client),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+            AsyncMock(return_value=existing_user),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+            AsyncMock(
+                return_value=SCIMUser(
+                    schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+                    id=user_id,
+                    userName=user_id,
+                    name=SCIMUserName(familyName="User", givenName="Test"),
+                    emails=[SCIMUserEmail(value="new@example.com")],
+                )
+            ),
+        )
+
+        mock_user_cache = mocker.MagicMock()
+        mock_logging = mocker.MagicMock()
+        mock_logging.internal_usage_cache.dual_cache = mocker.MagicMock()
+        mock_logging.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+        mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache)
+        mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging)
+
+        refresh_mock = mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._refresh_cached_user",
+            new=AsyncMock(),
+        )
+
+        scim_user = SCIMUser(
+            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            userName=user_id,
+            name=SCIMUserName(familyName="User", givenName="Test"),
+            emails=[SCIMUserEmail(value="new@example.com")],
+        )
+
+        await update_user(user_id=user_id, user=scim_user)
+
+        # Pin: update_user must call _refresh_cached_user exactly once
+        # with the post-mutation row. The post-mutation row is the
+        # object the Prisma `update` returned (the `updated_user`
+        # MagicMock), not the pre-mutation `existing_user`.
+        assert refresh_mock.await_count == 1, (
+            "update_user must call _refresh_cached_user exactly once after "
+            "the DB update (#37009 regression pin); "
+            f"got await_count={refresh_mock.await_count}"
+        )
+        call_kwargs = refresh_mock.await_args.kwargs
+        assert call_kwargs["user_row"] is updated_user
+        assert call_kwargs["user_api_key_cache"] is mock_user_cache
+        assert call_kwargs["proxy_logging_obj"] is mock_logging
+
+    @pytest.mark.asyncio
+    async def test_patch_user_refreshes_user_cache(self, mocker):
+        """
+        `PATCH /scim/v2/Users/{id}` must call `_refresh_cached_user`
+        after the database update. Regression pin for #37009.
+        """
+        from litellm.proxy.management_endpoints.scim.scim_v2 import patch_user
+        from litellm.types.proxy.management_endpoints.scim_v2 import (
+            SCIMPatchOp,
+            SCIMPatchOperation,
+            SCIMUser,
+            SCIMUserEmail,
+            SCIMUserName,
+        )
+
+        user_id = "scim-patch-cache-test"
+        existing_user = self._make_user(user_id=user_id, user_email="user@example.com", teams=["team-1"])
+        existing_user.metadata = {}
+
+        updated_user = mocker.MagicMock()
+        updated_user.user_id = user_id
+        updated_user.user_email = "user@example.com"
+        updated_user.teams = ["team-1"]
+        updated_user.model_dump = mocker.MagicMock(
+            return_value={
+                "user_id": user_id,
+                "user_email": "user@example.com",
+                "teams": ["team-1"],
+            }
+        )
+
+        mock_prisma_client = mocker.MagicMock()
+        mock_prisma_client.db = mocker.MagicMock()
+        mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+        mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+            AsyncMock(return_value=mock_prisma_client),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+            AsyncMock(return_value=existing_user),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._apply_patch_ops",
+            return_value=({"metadata": {}}, {"team-1"}),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_admin_group",
+            AsyncMock(return_value=None),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+            AsyncMock(
+                return_value=SCIMUser(
+                    schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+                    id=user_id,
+                    userName=user_id,
+                    name=SCIMUserName(familyName="User", givenName="Test"),
+                    emails=[SCIMUserEmail(value="user@example.com")],
+                )
+            ),
+        )
+
+        mock_user_cache = mocker.MagicMock()
+        mock_logging = mocker.MagicMock()
+        mock_logging.internal_usage_cache.dual_cache = mocker.MagicMock()
+        mock_logging.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+        mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache)
+        mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging)
+
+        refresh_mock = mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._refresh_cached_user",
+            new=AsyncMock(),
+        )
+
+        patch_ops = SCIMPatchOp(
+            schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            Operations=[SCIMPatchOperation(op="replace", path="displayName", value="New Name")],
+        )
+
+        await patch_user(user_id=user_id, patch_ops=patch_ops)
+
+        # Pin: patch_user must call _refresh_cached_user exactly once
+        # with the post-mutation row. The post-mutation row is the
+        # object the Prisma `update` returned, not the pre-mutation
+        # `existing_user`.
+        assert refresh_mock.await_count == 1, (
+            "patch_user must call _refresh_cached_user exactly once after "
+            "the DB update (#37009 regression pin); "
+            f"got await_count={refresh_mock.await_count}"
+        )
+        call_kwargs = refresh_mock.await_args.kwargs
+        assert call_kwargs["user_row"] is updated_user
+        assert call_kwargs["user_api_key_cache"] is mock_user_cache
+        assert call_kwargs["proxy_logging_obj"] is mock_logging
+
+    @pytest.mark.asyncio
+    async def test_delete_user_invalidates_user_cache(self, mocker):
+        """
+        `DELETE /scim/v2/Users/{id}` must invalidate the `user_id`
+        cache key in BOTH the local LRU
+        (`user_api_key_cache.delete_cache`) AND the Redis side of the
+        dual cache
+        (`proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache`).
+        Regression pin for #37009.
+        """
+        from litellm.proxy.management_endpoints.scim.scim_v2 import delete_user
+
+        user_id = "scim-delete-cache-test"
+
+        existing_user = mocker.MagicMock()
+        existing_user.teams = []
+
+        mock_prisma_client = mocker.MagicMock()
+        mock_prisma_client.db = mocker.MagicMock()
+        mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+        mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+        mock_prisma_client.db.litellm_usertable.delete = AsyncMock()
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+            AsyncMock(return_value=mock_prisma_client),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+            AsyncMock(return_value=existing_user),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
+            AsyncMock(),
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._delete_rows_referencing_user",
+            AsyncMock(),
+        )
+
+        mock_user_cache = mocker.MagicMock()
+        mock_logging = mocker.MagicMock()
+        mock_dual_cache = mocker.MagicMock()
+        mock_dual_cache.async_delete_cache = AsyncMock()
+        mock_logging.internal_usage_cache.dual_cache = mock_dual_cache
+        mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache)
+        mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging)
+
+        await delete_user(user_id=user_id)
+
+        # Pin: delete_user must invalidate the user_id cache key in
+        # BOTH the local LRU (user_api_key_cache.delete_cache) AND the
+        # Redis side of the dual cache
+        # (proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache).
+        # The user_id cache key is the literal `user_id` (per
+        # auth_checks.py:1641), not a `user_id:{id}` prefix.
+        mock_user_cache.delete_cache.assert_any_call(key=user_id)
+        mock_dual_cache.async_delete_cache.assert_any_call(key=user_id)

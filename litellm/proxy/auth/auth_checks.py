@@ -13,7 +13,7 @@ import asyncio
 import math
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Type, Union, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -1808,6 +1808,103 @@ async def _cache_team_object(
         user_api_key_cache.delete_cache(key=alias_key)
         if proxy_logging_obj is not None:
             await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
+
+
+async def _cache_user_object(
+    user_id: str,
+    user_table: LiteLLM_UserTable,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    """
+    Persist a ``LiteLLM_UserTable`` in the management-object cache keyed on
+    the literal ``user_id``.
+
+    The user cache is single-keyed (the ``user_id`` itself, not
+    ``"user_id:{}".format(user_id)`` like the team cache), so this helper
+    only writes one entry. The reader path is ``get_user_object`` at
+    line 1618; the writer path is the upsert fallback in
+    ``get_user_object`` at line 1732. SCIM ``update_user`` and
+    ``patch_user`` call this via ``_refresh_cached_user`` to keep the
+    cache in sync after a DB write — see #37009.
+    """
+    await _cache_management_object(
+        key=user_id,
+        value=user_table,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        model_type=LiteLLM_UserTable,
+    )
+
+
+async def _refresh_cached_user(
+    user_row: "LiteLLM_UserTable | Mapping[str, object]",
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    """
+    Refresh the in-memory cached user object after a DB write.
+
+    Every endpoint that mutates ``litellm_usertable`` and serves a
+    post-mutation ``LiteLLM_UserTable`` should call this so the cached
+    row used by ``get_user_object`` stays in sync. Without this, the
+    very next auth check that hits the cache serves the pre-mutation
+    user, which means a SCIM-driven deactivation or email rename does
+    not take effect on auth until the management-object TTL expires —
+    see #37009 and the same multi-prefix cache Achilles heel pattern
+    fixed in #35565 (team block/unblock) and #36817 (SCIM /Groups).
+
+    ``user_row`` is the Prisma row returned by ``update``/``find_unique``
+    on ``litellm_usertable``. The real Prisma client returns a
+    ``LiteLLM_UserTable`` Pydantic model (attribute access + a
+    ``model_dump()`` method); the helper supports both attribute access
+    and dict-style access so callers don't have to pre-shape the row.
+    """
+    if isinstance(user_row, dict):
+        row_id_raw = user_row["user_id"]
+        row_payload = user_row
+    else:
+        row_id_raw = user_row.user_id
+        row_payload = user_row.model_dump()
+    row_id = cast("str", row_id_raw)  # cast-ok: narrowing UserId to str (Prisma returns str; dict literal preserves it)
+
+    # Some callers (and pre-existing tests) hand us a dict with a
+    # JSON-stringified `metadata`. The real Prisma client returns a
+    # parsed dict, so the production path always takes the `else`
+    # branch above. The `dict` path here is a defensive shim: parse the
+    # string so `LiteLLM_UserTable(**row_payload)` validates.
+    if isinstance(row_payload, dict) and isinstance(row_payload.get("metadata"), str):
+        import json
+
+        try:
+            row_payload = {**row_payload, "metadata": json.loads(row_payload["metadata"])}
+        except (ValueError, TypeError):
+            row_payload = {**row_payload, "metadata": {}}
+    await _cache_user_object(
+        user_id=row_id,
+        user_table=LiteLLM_UserTable(**row_payload),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _invalidate_cached_user(
+    user_id: str,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    """
+    Invalidate (delete) the cached ``LiteLLM_UserTable`` for ``user_id``.
+
+    Use this when the user no longer exists in the database (e.g. SCIM
+    ``DELETE /Users/{id}``) — there is no post-mutation row to cache,
+    so refresh is wrong. Both the local LRU and the Redis side of the
+    dual cache are cleared so a same-user ``POST /user/new`` after
+    delete does not read a stale snapshot — see #37009.
+    """
+    user_api_key_cache.delete_cache(key=user_id)
+    if proxy_logging_obj is not None:
+        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=user_id)
 
 
 async def _cache_key_object(

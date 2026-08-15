@@ -38,7 +38,11 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+from litellm.proxy.auth.auth_checks import (
+    _delete_cache_key_object,
+    _invalidate_cached_user,
+    _refresh_cached_user,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
@@ -1275,6 +1279,23 @@ async def update_user(
             if new_active is not None and new_active != (True if prev_active is None else prev_active):
                 await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
 
+        # Refresh the in-memory user cache so the very next auth check
+        # sees the new `user_email` / `teams` / `metadata`. Without this,
+        # a SCIM-driven rename or email change does not take effect on
+        # auth until the management-object TTL expires — see #37009.
+        # Same pattern as the cycle-12 SCIM /Groups fix (#36817) and the
+        # cycle-9 team block/unblock fix (#35565).
+        from litellm.proxy.proxy_server import (
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        await _refresh_cached_user(
+            user_row=updated_user,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
         # Convert back to SCIM format
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(updated_user)
 
@@ -1330,6 +1351,24 @@ async def delete_user(
 
         # Delete user
         await UserRepository(prisma_client).table.delete(where={"user_id": user_id})
+
+        # Invalidate the in-memory user cache so the very next auth check
+        # sees the user as gone. Without this, a stale `user_id` entry
+        # stays readable until the management-object TTL expires — see
+        # #37009. The user is gone, so we invalidate (delete) rather
+        # than refresh. Both the local LRU and the Redis side of the
+        # dual cache are cleared, matching the dual-cache invalidation
+        # pattern from the cycle-12 SCIM /Groups fix (#36817).
+        from litellm.proxy.proxy_server import (
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        await _invalidate_cached_user(
+            user_id=user_id,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
         return Response(status_code=204)
     except Exception as e:
@@ -1679,6 +1718,25 @@ async def patch_user(
 
         if new_active is not None and new_active != (True if prev_active is None else prev_active):
             await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
+
+        # Refresh the in-memory user cache so the very next auth check
+        # sees the new `user_email` / `teams` / `metadata` / `active`
+        # state. Without this, a SCIM-driven deactivation (the `active`
+        # flag flip that just called `_set_user_keys_blocked` above) does
+        # not propagate to the cached `LiteLLM_UserTable` until the
+        # management-object TTL expires — see #37009. Same pattern as
+        # the `update_user` fix above, the cycle-12 SCIM /Groups fix
+        # (#36817), and the cycle-9 team block/unblock fix (#35565).
+        from litellm.proxy.proxy_server import (
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        await _refresh_cached_user(
+            user_row=updated_user,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(updated_user)
 
