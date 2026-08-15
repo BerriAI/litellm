@@ -961,9 +961,8 @@ describe("KeyEditView", () => {
     );
 
     const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    const clearIcon = resetBudgetItem.querySelector(".ant-select-clear");
-    expect(clearIcon).not.toBeNull();
-    fireEvent.mouseDown(clearIcon as Element);
+    await userEvent.click(within(resetBudgetItem).getByRole("combobox"));
+    await userEvent.click(await screen.findByText("Never resets"));
 
     await waitFor(() => {
       expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
@@ -995,7 +994,8 @@ describe("KeyEditView", () => {
     );
 
     const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    fireEvent.mouseDown(resetBudgetItem.querySelector(".ant-select-clear") as Element);
+    await userEvent.click(within(resetBudgetItem).getByRole("combobox"));
+    await userEvent.click(await screen.findByText("Never resets"));
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1251,9 +1251,10 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeTruthy();
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item") as HTMLElement;
+      await userEvent.click(within(orgFormItem).getByRole("combobox"));
+
+      expect(screen.queryByText("Engineering")).not.toBeInTheDocument();
     });
 
     it("should not disable the organization dropdown for admin users", async () => {
@@ -1273,9 +1274,10 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeFalsy();
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item") as HTMLElement;
+      await userEvent.click(within(orgFormItem).getByRole("combobox"));
+
+      expect(await screen.findByText("Engineering")).toBeInTheDocument();
     });
 
     it("should initialize organization from keyData", async () => {
@@ -1296,8 +1298,9 @@ describe("KeyEditView", () => {
         />,
       );
 
+      const orgFormItem = (await screen.findByText("Organization")).closest(".ant-form-item") as HTMLElement;
       await waitFor(() => {
-        expect(screen.getByText("Engineering")).toBeInTheDocument();
+        expect(within(orgFormItem).getByRole("combobox")).toHaveValue("Engineering");
       });
     });
   });
