@@ -27,6 +27,7 @@ def get_num_retries_from_retry_policy(
     TimeoutErrorRetries: Optional[int] = None
     RateLimitErrorRetries: Optional[int] = None
     ContentPolicyViolationErrorRetries: Optional[int] = None
+    NotFoundErrorRetries: Optional[int] = None
     """
     # if we can find the exception then in the retry policy -> return the number of retries
 
