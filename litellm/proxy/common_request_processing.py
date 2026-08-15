@@ -941,6 +941,17 @@ class CostBreakdownHeaderValues(NamedTuple):
     tool_usage_cost: float | None = None
 
 
+def _uncached_input_cost(
+    input_cost: float | None,
+    cache_read_cost: float | None,
+    cache_creation_cost: float | None,
+) -> float | None:
+    """The stored input cost nests the cache costs inside it; headers advertise the additive split instead."""
+    if input_cost is None:
+        return None
+    return input_cost - (cache_read_cost or 0.0) - (cache_creation_cost or 0.0)
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: LiteLLMLoggingObj | None,
 ) -> CostBreakdownHeaderValues:
@@ -957,7 +968,11 @@ def _get_cost_breakdown_from_logging_obj(
         discount_amount=cost_breakdown.get("discount_amount"),
         margin_total_amount=cost_breakdown.get("margin_total_amount"),
         margin_percent=cost_breakdown.get("margin_percent"),
-        input_cost=cost_breakdown.get("input_cost"),
+        input_cost=_uncached_input_cost(
+            input_cost=cost_breakdown.get("input_cost"),
+            cache_read_cost=cost_breakdown.get("cache_read_cost"),
+            cache_creation_cost=cost_breakdown.get("cache_creation_cost"),
+        ),
         output_cost=cost_breakdown.get("output_cost"),
         cache_read_cost=cost_breakdown.get("cache_read_cost"),
         cache_creation_cost=cost_breakdown.get("cache_creation_cost"),

@@ -835,12 +835,13 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-margin-percent" not in headers
 
     def test_get_custom_headers_per_component_cost_breakdown(self):
-        """Test per-component cost headers with production breakdown semantics.
+        """Test per-component cost headers against the stored production breakdown.
 
         cost_calculator stores full prompt cost (cache pricing included) as input_cost
-        and full completion cost (reasoning included) as output_cost, so the invariant
-        is input + output + tool_usage == total with cache components nested inside
-        input and reasoning nested inside output.
+        and full completion cost (reasoning included) as output_cost. The input header
+        subtracts the cache components so the emitted contract is additive:
+        input + cache_read + cache_creation + output + tool_usage == total, with
+        reasoning remaining a subset of output.
         """
         from litellm.litellm_core_utils.litellm_logging import (
             Logging as LiteLLMLoggingObj,
@@ -869,6 +870,7 @@ class TestProxyBaseLLMRequestProcessing:
         reasoning_cost: Final = 0.000015
         tool_usage_cost: Final = 0.00003
         total_cost: Final = input_cost + output_cost + tool_usage_cost
+        uncached_input_cost: Final = input_cost - cache_read_cost - cache_creation_cost
 
         logging_obj.set_cost_breakdown(
             input_cost=input_cost,
@@ -891,7 +893,7 @@ class TestProxyBaseLLMRequestProcessing:
         assert float(headers["x-litellm-response-cost"]) == pytest.approx(total_cost)
 
         assert "x-litellm-response-cost-input" in headers
-        assert float(headers["x-litellm-response-cost-input"]) == pytest.approx(input_cost)
+        assert float(headers["x-litellm-response-cost-input"]) == pytest.approx(uncached_input_cost)
 
         assert "x-litellm-response-cost-output" in headers
         assert float(headers["x-litellm-response-cost-output"]) == pytest.approx(output_cost)
@@ -910,14 +912,12 @@ class TestProxyBaseLLMRequestProcessing:
 
         component_sum: Final = (
             float(headers["x-litellm-response-cost-input"])
+            + float(headers["x-litellm-response-cost-cache-read"])
+            + float(headers["x-litellm-response-cost-cache-creation"])
             + float(headers["x-litellm-response-cost-output"])
             + float(headers["x-litellm-response-cost-tool-usage"])
         )
         assert component_sum == pytest.approx(float(headers["x-litellm-response-cost"]))
-        cache_sum: Final = float(headers["x-litellm-response-cost-cache-read"]) + float(
-            headers["x-litellm-response-cost-cache-creation"]
-        )
-        assert cache_sum <= float(headers["x-litellm-response-cost-input"])
         assert float(headers["x-litellm-response-cost-reasoning"]) <= float(headers["x-litellm-response-cost-output"])
 
     def test_get_custom_headers_without_cost_breakdown_omits_component_headers(self):
@@ -1152,6 +1152,31 @@ class TestProxyBaseLLMRequestProcessing:
         assert breakdown_no_discount.margin_percent is None
         assert breakdown_no_discount.input_cost == 0.00005
         assert breakdown_no_discount.output_cost == 0.00005
+
+        # Test that cache components stored nested inside input_cost are subtracted out
+        logging_obj_with_cache = LiteLLMLoggingObj(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-cache",
+            function_id="test-function-id-cache",
+        )
+        logging_obj_with_cache.set_cost_breakdown(
+            input_cost=0.00008,
+            output_cost=0.00002,
+            total_cost=0.0001,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            cache_read_cost=0.00003,
+            cache_creation_cost=0.00004,
+        )
+
+        breakdown_with_cache = _get_cost_breakdown_from_logging_obj(logging_obj_with_cache)
+        assert breakdown_with_cache.input_cost == pytest.approx(0.00001)
+        assert breakdown_with_cache.cache_read_cost == 0.00003
+        assert breakdown_with_cache.cache_creation_cost == 0.00004
+        assert breakdown_with_cache.output_cost == 0.00002
 
         # Test with None logging object
         breakdown_none = _get_cost_breakdown_from_logging_obj(None)
