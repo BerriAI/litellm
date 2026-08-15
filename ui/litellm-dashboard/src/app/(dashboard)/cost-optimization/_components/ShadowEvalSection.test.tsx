@@ -46,6 +46,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
       { model_name: "gpt-auto", litellm_params: { model: "auto_router/gpt-auto" } },
     ],
   })),
+  usePlainModelGroups: vi.fn(() => new Set(["prod-claude"])),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
@@ -388,14 +389,15 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
 
     await user.click(screen.getByPlaceholderText("Select a baseline model"));
-    await user.click(await screen.findByRole("option", { name: /openai\/gpt-4o/ }));
+    expect(await screen.findByRole("option", { name: /openai\/gpt-4o/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: /prod-claude/ }));
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
       api_key_id: "hash-alpha",
       router_name: "gpt-auto",
       direction: "reverse",
-      baseline_model: "openai/gpt-4o",
+      baseline_model: "prod-claude",
       shadow_percentage: 10,
       duration_days: 7,
       max_turns: 200,

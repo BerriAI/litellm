@@ -5,7 +5,7 @@ import React, { useMemo, useState } from "react";
 import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
-import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
+import { useAutoRouters, usePlainModelGroups } from "@/app/(dashboard)/hooks/models/useModels";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Badge } from "@/components/ui/badge";
@@ -274,8 +274,17 @@ const useJudgeModelOptions = (): SearchSelectOption[] => {
 };
 
 const useBaselineModelOptions = (): SearchSelectOption[] => {
+  const configuredGroups = usePlainModelGroups();
   const chatModels = useChatModelNames();
-  return useMemo(() => chatModels.map((model) => ({ label: model, value: model })), [chatModels]);
+  return useMemo(() => {
+    const configured = [...configuredGroups]
+      .toSorted((a, b) => a.localeCompare(b))
+      .map((model) => ({ label: model, value: model, sublabel: "Configured on this gateway" }));
+    const rest = chatModels
+      .filter((model) => !configuredGroups.has(model))
+      .map((model) => ({ label: model, value: model }));
+    return [...configured, ...rest];
+  }, [configuredGroups, chatModels]);
 };
 
 const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; label: string }[] = [
