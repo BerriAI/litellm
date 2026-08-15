@@ -2408,18 +2408,10 @@ async def test_cancel__unified_batch_id_allowed_when_managed_files_required(canc
     assert cancel_harness.router_acancel.call_count == 1
 
 
-# =========================================================================== #
-# Retrieve - who accounts for a managed batch's cost. Retrieving a batch and
-# the CheckBatchCost poller both computed it, so whichever observed completion
-# first won and the other either double counted or was locked out.
-# =========================================================================== #
 
 
 @pytest.mark.asyncio
 async def test_retrieve__managed_batch_defers_cost_to_the_poller_when_it_is_running(retrieve_harness):
-    """With the poller running it is the single accountant, so the retrieve must not also
-    record cost. Without this the same batch is billed once per retrieve, and a caller
-    polling its own batch inflates spend by however many times it looked."""
     with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
         await call_retrieve(retrieve_harness, _unified_batch_id())
 
@@ -2430,9 +2422,6 @@ async def test_retrieve__managed_batch_defers_cost_to_the_poller_when_it_is_runn
 
 @pytest.mark.asyncio
 async def test_retrieve__managed_batch_still_accounts_inline_without_a_poller(retrieve_harness):
-    """No poller means nothing else will ever account for this batch, so the retrieve has
-    to keep doing it. Suppressing here unconditionally would lose batch cost entirely on
-    any proxy running with batch polling disabled."""
     with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=False)):
         await call_retrieve(retrieve_harness, _unified_batch_id())
 
@@ -2443,8 +2432,6 @@ async def test_retrieve__managed_batch_still_accounts_inline_without_a_poller(re
 
 @pytest.mark.asyncio
 async def test_retrieve__raw_batch_id_is_untouched_by_the_poller_handoff(retrieve_harness):
-    """An unmanaged batch has no managed object row and so no poller queue entry. It must
-    keep accounting inline whatever the poller is doing."""
     with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
         await call_retrieve(retrieve_harness, "batch-raw-xyz")
 

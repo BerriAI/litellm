@@ -138,12 +138,6 @@ def _job_for(poller):
     ],
 )
 def test_batch_cost_poller_is_active(monkeypatch, polling_enabled, job, expected):
-    """The predicate must only claim the poller when it can actually be relied on, so a
-    proxy with polling switched off, without the enterprise job, or whose poller has not
-    confirmed batch_processed support keeps accounting for batch cost on the retrieve
-    path. The unconfirmed case is the one that matters for legacy schemas: without the
-    column the poller falls back to a query excluding terminal statuses, so a batch the
-    retrieve path already marked complete would never be accounted by anyone."""
     import litellm.constants
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -212,11 +206,6 @@ async def _run_update(monkeypatch, poller_active: bool) -> dict:
 
 @pytest.mark.asyncio
 async def test_retrieving_a_completed_batch_leaves_batch_processed_to_the_cost_poller(monkeypatch):
-    """batch_processed is what removes a batch from CheckBatchCost's queue, which selects
-    batch_processed=False. Retrieving a batch records no cost when the poller is active, so
-    setting the flag here retired the poller on behalf of work nobody had done: a cost
-    callback that then failed lost the batch's cost permanently with no retry left. The
-    status update must still happen so callers see the terminal state."""
     data = await _run_update(monkeypatch, poller_active=True)
 
     assert "batch_processed" not in data
@@ -225,8 +214,6 @@ async def test_retrieving_a_completed_batch_leaves_batch_processed_to_the_cost_p
 
 @pytest.mark.asyncio
 async def test_retrieving_a_completed_batch_still_marks_processed_without_a_cost_poller(monkeypatch):
-    """With no poller to hand off to, this path is the only accountant, so it keeps setting
-    the flag. Otherwise a proxy with polling disabled would never unblock file deletion."""
     data = await _run_update(monkeypatch, poller_active=False)
 
     assert data["batch_processed"] is True
@@ -234,9 +221,6 @@ async def test_retrieving_a_completed_batch_still_marks_processed_without_a_cost
 
 
 def test_batch_cost_poller_is_active_is_false_when_the_job_has_no_bound_poller(monkeypatch):
-    """A scheduler that hands back a plain function rather than a bound method leaves no
-    poller to interrogate, so the predicate stays conservative instead of assuming the
-    column is supported."""
     import litellm.constants
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -256,8 +240,6 @@ def test_batch_cost_poller_is_active_is_false_when_the_job_has_no_bound_poller(m
 
 
 def test_batch_cost_poller_is_active_is_false_when_get_job_raises(monkeypatch):
-    """Scheduler backends raise varied types; an unreadable scheduler must not be read as
-    a working poller."""
     import litellm.constants
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -277,8 +259,6 @@ def test_batch_cost_poller_is_active_is_false_when_get_job_raises(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_retrieving_a_batch_whose_status_is_unchanged_writes_nothing(monkeypatch):
-    """A caller polling an already-complete batch must not write at all, so repeated polls
-    cannot flip batch_processed or disturb whichever component owns accounting."""
     import litellm.proxy.openai_files_endpoints.common_utils as cu
 
     monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: False)
@@ -307,8 +287,6 @@ async def test_retrieving_a_batch_whose_status_is_unchanged_writes_nothing(monke
 
 @pytest.mark.asyncio
 async def test_update_batch_in_database_is_a_noop_for_unmanaged_batches(monkeypatch):
-    """Batches with no managed object row have neither the flag nor a poller queue entry, so
-    this path must leave them alone entirely."""
     import litellm.proxy.openai_files_endpoints.common_utils as cu
 
     prisma_client = MagicMock()
@@ -330,14 +308,8 @@ async def test_update_batch_in_database_is_a_noop_for_unmanaged_batches(monkeypa
 
 @pytest.mark.asyncio
 async def test_the_caller_s_accounting_decision_wins_over_a_later_poller_transition(monkeypatch):
-    """The ownership decision is made before the provider retrieval and acted on there, so
-    re-deciding afterwards can observe a poller that only just became usable. That split
-    left the retrieve accounting inline while the row stayed unmarked, so the poller
-    accounted for the same batch again and billed it twice. Passing the decision through
-    makes both halves agree even when the poller transitions mid-flight."""
     import litellm.proxy.openai_files_endpoints.common_utils as cu
 
-    # The predicate now reports an active poller, i.e. it flipped during the retrieval.
     monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: True)
     monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
 
@@ -366,9 +338,6 @@ async def test_the_caller_s_accounting_decision_wins_over_a_later_poller_transit
 
 @pytest.mark.asyncio
 async def test_a_caller_that_handed_off_accounting_still_leaves_the_marker_alone(monkeypatch):
-    """The mirror case: a caller that suppressed its own accounting must leave the marker
-    for the poller even if the predicate has since stopped reporting one, otherwise the
-    batch is retired without anyone having accounted for it."""
     import litellm.proxy.openai_files_endpoints.common_utils as cu
 
     monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: False)
