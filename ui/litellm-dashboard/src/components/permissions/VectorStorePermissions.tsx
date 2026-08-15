@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Text, Badge } from "@tremor/react";
 import { DatabaseIcon } from "@heroicons/react/outline";
+import { Badge } from "@/components/ui/badge";
 import { vectorStoreListCall } from "../networking";
 
 interface VectorStoreDetails {
@@ -52,10 +52,8 @@ export function VectorStorePermissions({ vectorStores, accessToken }: VectorStor
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <DatabaseIcon className="h-4 w-4 text-blue-600" />
-        <Text className="font-semibold text-gray-900">Vector Stores</Text>
-        <Badge color="blue" size="xs">
-          {vectorStores.length}
-        </Badge>
+        <p className="text-sm font-semibold text-gray-900">Vector Stores</p>
+        <Badge variant="secondary">{vectorStores.length}</Badge>
       </div>
 
       {vectorStores.length > 0 ? (
@@ -63,7 +61,7 @@ export function VectorStorePermissions({ vectorStores, accessToken }: VectorStor
           {vectorStores.map((store, index) => (
             <div
               key={index}
-              className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm font-medium"
+              className="inline-flex min-w-0 items-center px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm font-medium break-words"
             >
               {getVectorStoreDisplayName(store)}
             </div>
@@ -72,7 +70,7 @@ export function VectorStorePermissions({ vectorStores, accessToken }: VectorStor
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
           <DatabaseIcon className="h-4 w-4 text-gray-400" />
-          <Text className="text-gray-500 text-sm">No vector stores configured</Text>
+          <p className="text-gray-500 text-sm">No vector stores configured</p>
         </div>
       )}
     </div>

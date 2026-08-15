@@ -1,5 +1,35 @@
 region = "us-west-2"
-azs    = ["us-west-2a", "us-west-2b"]
+
+# Networking: by default the module creates a VPC, public/private subnets in
+# each AZ listed here, an internet gateway, a NAT gateway, and route tables.
+azs = ["us-west-2a", "us-west-2b"]
+
+# To deploy into networking you already own, drop `azs` and set these
+# instead. Nothing network-related is created then, so the private subnets
+# need their own egress for LLM providers, image pulls, and Secrets Manager.
+# vpc_id             = "vpc-0123456789abcdef0"
+# public_subnet_ids  = ["subnet-aaa", "subnet-bbb"]
+# private_subnet_ids = ["subnet-ccc", "subnet-ddd"]
+#
+# The tasks get their own security group either way. To reach a store that
+# only allows a group you already have, attach it here as well; the
+# `task_security_group_id` output names the module's own group.
+# additional_task_security_group_ids = ["sg-0123456789abcdef0"]
+
+# Data stores: Aurora Postgres and ElastiCache Redis are created by default.
+# Set create_* = false to point at your own, passing a connection string
+# (stored in Secrets Manager, injected as DATABASE_URL / REDIS_URL). Make
+# sure they allow inbound from the stack's tasks security group, which the
+# `task_security_group_id` output names.
+# create_database = false
+# database_url    = "postgresql://litellm:...@db.internal:5432/litellm"
+# create_redis    = false
+# redis_url       = "rediss://:...@cache.internal:6379"
+#
+# Leaving the URL empty runs without that component: no database means no
+# virtual keys, spend tracking, or UI persistence (master-key auth only), and
+# no Redis means rate limits, budgets, and router cooldowns go per-task
+# instead of cluster-wide.
 
 # Resource naming: every AWS resource the stack creates is named
 # `${tenant}-litellm-${env}` (or that plus a per-resource suffix). E.g.
@@ -56,6 +86,19 @@ env    = "stage"
 #   general_settings = {
 #     master_key   = "os.environ/LITELLM_MASTER_KEY"
 #     database_url = "os.environ/DATABASE_URL"
+#
+#     # Optional. The module already exports REDIS_HOST / REDIS_PORT / REDIS_SSL
+#     # from the ElastiCache group it provisions, and the proxy falls back to
+#     # those for cross-pod rate limits, spend tracking and the pod lock manager.
+#     # Set this block only to coordinate through a Redis the module does not
+#     # manage; it overrides the REDIS_* env fallback. Cluster mode takes
+#     # `startup_nodes` and sentinel takes `sentinel_nodes` + `service_name`
+#     # coordination_redis = {
+#     #   host     = "os.environ/COORDINATION_REDIS_HOST"
+#     #   port     = "os.environ/COORDINATION_REDIS_PORT"
+#     #   password = "os.environ/COORDINATION_REDIS_PASSWORD"
+#     #   ssl      = true
+#     # }
 #   }
 # }
 

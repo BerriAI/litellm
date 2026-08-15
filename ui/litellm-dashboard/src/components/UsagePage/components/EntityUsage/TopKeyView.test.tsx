@@ -1,5 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse } from "../../../key_team_helpers/key_list";
@@ -126,6 +126,45 @@ describe("TopKeyView", () => {
     await user.click(chartViewButton);
 
     expect(chartViewButton).toHaveClass("bg-blue-100");
+  });
+
+  it("renders cyan bars with truncated aliases in chart view and opens the key info modal on bar click", async () => {
+    const mockKeyInfo = { key: "info" };
+    const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
+    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
+    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          {
+            api_key: "key-123",
+            key_alias: "A Very Long Key Alias",
+            spend: 100,
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Chart View" }));
+
+    const bars = container.querySelectorAll("path.recharts-rectangle");
+    expect(bars).toHaveLength(1);
+    expect(bars[0].getAttribute("fill")).toBe("var(--color-cyan-500, #06b6d4)");
+    expect(screen.getAllByText("A Very Lon...").length).toBeGreaterThan(0);
+
+    fireEvent.click(bars[0]);
+
+    await waitFor(() => {
+      expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "key-123");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Key Info View for key-123")).toBeInTheDocument();
   });
 
   it("should switch to table view when table view button is clicked", async () => {

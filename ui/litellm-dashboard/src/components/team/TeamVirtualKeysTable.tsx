@@ -1,21 +1,29 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { Tooltip } from "@/components/atoms/Tooltip";
+import CopyButton from "@/components/shared/CopyButton";
 import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
-import { DataTable, DataTablePagination, DataTableSortHeader } from "@/components/shared/DataTable";
-import { ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { ColumnDef, PaginationState, SortingState } from "@tanstack/react-table";
-import { Badge, Icon, Text } from "@tremor/react";
-import { Popover, Tooltip, Typography } from "antd";
+import {
+  DataTable,
+  DataTableFilterDrawer,
+  DataTableFilterField,
+  DataTableSortHeader,
+  DataTableToolbar,
+} from "@/components/shared/DataTable";
+import { Badge } from "@/components/ui/badge";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { Input } from "@/components/ui/input";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
+import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { deriveKeyModelScope } from "../key_scope";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import FilterComponent, { FilterOption } from "../molecules/filter";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
-import { useQuery } from "@tanstack/react-query";
-import { fetchTeamFilterOptions } from "../key_team_helpers/filter_helpers";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface TeamVirtualKeysTableProps {
   teamId: string;
@@ -30,18 +38,29 @@ interface TeamVirtualKeysTableProps {
 const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
 
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
-  const { accessToken } = useAuthorized();
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 50,
   });
-  const [filters, setFilters] = useState<Record<string, string>>({
-    "Organization ID": "",
-    "Key Alias": "",
-    "User ID": "",
-  });
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, []);
+
+  const getFilterValue = useCallback(
+    (columnId: string): string | undefined => {
+      const entry = columnFilters.find((filter) => filter.id === columnId);
+      return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
+    },
+    [columnFilters],
+  );
 
   const sortBy = sorting.length > 0 ? sorting[0].id : "created_at";
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : "desc";
@@ -56,9 +75,8 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     refetch,
   } = useKeys(pageIndex + 1, pageSize, {
     teamID: teamId,
-    organizationID: filters["Organization ID"]?.trim() || undefined,
-    selectedKeyAlias: filters["Key Alias"]?.trim() || undefined,
-    userID: filters["User ID"]?.trim() || undefined,
+    selectedKeyAlias: searchQuery.trim() || undefined,
+    userID: getFilterValue("user_id"),
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
@@ -95,18 +113,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     [teamId, teamAlias, organization],
   );
 
-  const teamFilterOptionsQuery = useQuery({
-    queryKey: ["teamFilterOptions", teamId, accessToken],
-    queryFn: async () => fetchTeamFilterOptions(accessToken, teamId),
-    enabled: !!accessToken && !!teamId,
-    staleTime: 30000, // 30 seconds - align with useKeys
-  });
-  const teamFilterOptions = teamFilterOptionsQuery.data || {
-    keyAliases: [],
-    organizationIds: [],
-    userIds: [],
-  };
-
   const handleStorageChange = useCallback(() => {
     refetch?.();
   }, [refetch]);
@@ -116,76 +122,17 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     return () => window.removeEventListener("storage", handleStorageChange);
   }, [handleStorageChange]);
 
-  const handleFilterChange = useCallback((newFilters: Record<string, string>) => {
-    setFilters((prev) => ({
-      ...prev,
-      "Organization ID": newFilters["Organization ID"] ?? prev["Organization ID"],
-      "Key Alias": newFilters["Key Alias"] ?? prev["Key Alias"],
-      "User ID": newFilters["User ID"] ?? prev["User ID"],
-    }));
+  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
+    setColumnFilters(updaterOrValue);
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
   }, []);
-
-  const handleFilterReset = useCallback(() => {
-    setFilters({
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-    });
-    setSorting(DEFAULT_SORTING);
-    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
-
-  const filterOptions: FilterOption[] = useMemo(
-    () => [
-      {
-        name: "Organization ID",
-        label: "Organization ID",
-        isSearchable: true,
-        searchFn: async (searchText: string) => {
-          const { organizationIds } = teamFilterOptions;
-          if (!organizationIds.length) return [];
-          const lower = searchText.toLowerCase();
-          const filtered = lower ? organizationIds.filter((id) => id.toLowerCase().includes(lower)) : organizationIds;
-          return filtered.map((id) => ({ label: id, value: id }));
-        },
-      },
-      {
-        name: "Key Alias",
-        label: "Key Alias",
-        isSearchable: true,
-        searchFn: async (searchText: string) => {
-          const { keyAliases } = teamFilterOptions;
-          const lower = searchText.toLowerCase();
-          const filtered = lower ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower)) : keyAliases;
-          return filtered.map((alias) => ({ label: alias, value: alias }));
-        },
-      },
-      {
-        name: "User ID",
-        label: "User ID",
-        isSearchable: true,
-        searchFn: async (searchText: string) => {
-          const { userIds } = teamFilterOptions;
-          const lower = searchText.toLowerCase();
-          const filtered = lower
-            ? userIds.filter((u) => u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower))
-            : userIds;
-          return filtered.map((u) => ({
-            label: u.email ? `${u.id} (${u.email})` : u.id,
-            value: u.id,
-          }));
-        },
-      },
-    ],
-    [teamFilterOptions],
-  );
 
   const columns: ColumnDef<KeyResponse>[] = useMemo(
     () => [
       {
         id: "token",
         accessorKey: "token",
+        meta: { title: "Key ID" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Key ID" variant="header-cycle" />,
         size: 120,
         enableSorting: true,
@@ -196,17 +143,15 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "key_alias",
         accessorKey: "key_alias",
+        meta: { title: "Key Alias" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Key Alias" variant="header-cycle" />,
         size: 150,
         enableSorting: true,
         cell: (info) => {
           const value = info.getValue() as string;
-          const width = info.cell.column.getSize();
           return (
-            <Tooltip title={value}>
-              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-                {value ?? "-"}
-              </span>
+            <Tooltip content={value}>
+              <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
             </Tooltip>
           );
         },
@@ -236,12 +181,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const user = info.getValue() as { user_email?: string } | undefined;
           const value = user?.user_email;
-          const width = info.cell.column.getSize();
           return (
-            <Tooltip title={value}>
-              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-                {value ?? "-"}
-              </span>
+            <Tooltip content={value}>
+              <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
             </Tooltip>
           );
         },
@@ -255,12 +197,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const userId = info.getValue() as string | null;
           const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
-          const width = info.cell.column.getSize();
           return (
-            <Tooltip title={displayValue}>
-              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-                {displayValue ?? "-"}
-              </span>
+            <Tooltip content={displayValue}>
+              <span className="block max-w-full truncate font-mono text-xs">{displayValue ?? "-"}</span>
             </Tooltip>
           );
         },
@@ -268,6 +207,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "created_at",
         accessorKey: "created_at",
+        meta: { title: "Created At" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Created At" variant="header-cycle" />,
         size: 120,
         enableSorting: true,
@@ -287,21 +227,21 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const userEmail = created_by_user?.user_email ?? null;
           const isDefaultAdmin = userId === "default_user_id";
           const displayValue = userAlias || userEmail || userId;
-          const width = info.cell.column.getSize();
 
           const popoverContent = (
-            <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
+            <div className="flex min-w-[200px] max-w-[300px] flex-col gap-2 text-xs">
               {[
                 { label: "User Alias", value: userAlias },
                 { label: "User Email", value: userEmail },
                 { label: "User ID", value: userId },
               ].map(({ label, value }) => (
                 <div key={label} className="flex flex-col min-w-0">
-                  <span className="text-gray-400">{label}</span>
+                  <span className="text-muted-foreground">{label}</span>
                   {value ? (
-                    <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
-                      {value}
-                    </Typography.Text>
+                    <span className="flex items-center gap-1">
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs">{value}</span>
+                      <CopyButton value={value} label={`Copy ${label}`} />
+                    </span>
                   ) : (
                     <span className="font-mono">-</span>
                   )}
@@ -312,29 +252,31 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
 
           if (isDefaultAdmin && !userAlias && !userEmail) {
             return (
-              <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-                <span className="cursor-default">
+              <HoverCard>
+                <HoverCardTrigger render={<span className="cursor-default" />}>
                   <DefaultProxyAdminTag userId={userId} />
-                </span>
-              </Popover>
+                </HoverCardTrigger>
+                <HoverCardContent align="start">{popoverContent}</HoverCardContent>
+              </HoverCard>
             );
           }
 
           return (
-            <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-              <span
-                className="font-mono text-xs truncate block cursor-default"
-                style={{ maxWidth: width, overflow: "hidden" }}
+            <HoverCard>
+              <HoverCardTrigger
+                render={<span className="block max-w-full cursor-default truncate font-mono text-xs" />}
               >
                 {displayValue}
-              </span>
-            </Popover>
+              </HoverCardTrigger>
+              <HoverCardContent align="start">{popoverContent}</HoverCardContent>
+            </HoverCard>
           );
         },
       },
       {
         id: "updated_at",
         accessorKey: "updated_at",
+        meta: { title: "Updated At" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Updated At" variant="header-cycle" />,
         size: 120,
         enableSorting: true,
@@ -359,6 +301,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "spend",
         accessorKey: "spend",
+        meta: { title: "Spend (USD)" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" variant="header-cycle" />,
         size: 100,
         enableSorting: true,
@@ -367,6 +310,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "max_budget",
         accessorKey: "max_budget",
+        meta: { title: "Budget (USD)" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" variant="header-cycle" />,
         size: 110,
         enableSorting: true,
@@ -390,69 +334,77 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         enableSorting: false,
         cell: (info) => {
           const models = info.getValue() as string[];
+          const scope = deriveKeyModelScope(info.row.original.allowed_routes, info.row.original.key_type);
+          const emptyModelsBadge = !scope.hasModelAccess ? (
+            <Tooltip content={`Scoped to ${scope.label} routes; this key cannot call any models`}>
+              <Badge variant="secondary" className="mb-1">
+                No model access
+              </Badge>
+            </Tooltip>
+          ) : (
+            <Badge variant="destructive" className="mb-1">
+              All Proxy Models
+            </Badge>
+          );
           return (
             <div className="flex flex-col py-2">
               {Array.isArray(models) ? (
                 <div className="flex flex-col">
                   {models.length === 0 ? (
-                    <Badge size="xs" className="mb-1" color="red">
-                      <Text>All Proxy Models</Text>
-                    </Badge>
+                    emptyModelsBadge
                   ) : (
                     <>
                       <div className="flex items-start">
                         {models.length > 3 && (
-                          <div>
-                            <Icon
-                              icon={expandedAccordions[info.row.id] ? ChevronDownIcon : ChevronRightIcon}
-                              className="cursor-pointer"
-                              size="xs"
-                              onClick={() =>
-                                setExpandedAccordions((prev) => ({
-                                  ...prev,
-                                  [info.row.id]: !prev[info.row.id],
-                                }))
-                              }
-                            />
-                          </div>
+                          <button
+                            type="button"
+                            aria-label={expandedAccordions[info.row.id] ? "Collapse models" : "Expand models"}
+                            className="rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            onClick={() =>
+                              setExpandedAccordions((prev) => ({
+                                ...prev,
+                                [info.row.id]: !prev[info.row.id],
+                              }))
+                            }
+                          >
+                            {expandedAccordions[info.row.id] ? (
+                              <ChevronDown className="size-4" />
+                            ) : (
+                              <ChevronRight className="size-4" />
+                            )}
+                          </button>
                         )}
                         <div className="flex flex-wrap gap-1">
                           {models.slice(0, 3).map((model, index) =>
                             model === "all-proxy-models" ? (
-                              <Badge key={index} size="xs" color="red">
-                                <Text>All Proxy Models</Text>
+                              <Badge key={index} variant="destructive">
+                                All Proxy Models
                               </Badge>
                             ) : (
-                              <Badge key={index} size="xs" color="blue">
-                                <Text>
-                                  {model.length > 30
-                                    ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                    : getModelDisplayName(model)}
-                                </Text>
+                              <Badge key={index}>
+                                {model.length > 30
+                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                  : getModelDisplayName(model)}
                               </Badge>
                             ),
                           )}
                           {models.length > 3 && !expandedAccordions[info.row.id] && (
-                            <Badge size="xs" color="gray" className="cursor-pointer">
-                              <Text>
-                                +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
-                              </Text>
+                            <Badge variant="secondary">
+                              +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
                             </Badge>
                           )}
                           {expandedAccordions[info.row.id] && (
                             <div className="flex flex-wrap gap-1">
                               {models.slice(3).map((model, index) =>
                                 model === "all-proxy-models" ? (
-                                  <Badge key={index + 3} size="xs" color="red">
-                                    <Text>All Proxy Models</Text>
+                                  <Badge key={index + 3} variant="destructive">
+                                    All Proxy Models
                                   </Badge>
                                 ) : (
-                                  <Badge key={index + 3} size="xs" color="blue">
-                                    <Text>
-                                      {model.length > 30
-                                        ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                        : getModelDisplayName(model)}
-                                    </Text>
+                                  <Badge key={index + 3}>
+                                    {model.length > 30
+                                      ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                      : getModelDisplayName(model)}
                                   </Badge>
                                 ),
                               )}
@@ -503,27 +455,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           onDelete={refetch}
         />
       ) : (
-        <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="w-full mb-6">
-            <FilterComponent
-              options={filterOptions}
-              onApplyFilters={handleFilterChange}
-              initialValues={filters}
-              onResetFilters={handleFilterReset}
-            />
-          </div>
-
-          <div className="w-full mb-4">
-            <DataTablePagination
-              page={pageIndex}
-              pageSize={pageSize}
-              rowCount={rowCount}
-              onPageChange={(nextPage) => setTablePagination((prev) => ({ ...prev, pageIndex: nextPage }))}
-              onPageSizeChange={(nextSize) => setTablePagination({ pageIndex: 0, pageSize: nextSize })}
-              isLoading={isLoading || isFetching}
-            />
-          </div>
-
+        <div className="py-4 flex-1 overflow-hidden">
           <DataTable
             data={displayKeys}
             columns={columns}
@@ -534,14 +466,46 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
             pagination={tablePagination}
             onPaginationChange={setTablePagination}
             rowCount={rowCount}
-            paginationSlot={() => null}
+            filterMode="server"
+            columnFilters={columnFilters}
+            onColumnFiltersChange={handleColumnFiltersChange}
             enableColumnResizing
             columnResizeMode="onChange"
             isLoading={isLoading || isFetching}
             loadingMessage="Loading keys..."
-            noDataMessage="No keys found"
             maxBodyHeight="75vh"
             size="compact"
+            toolbar={(table) => (
+              <>
+                <DataTableToolbar
+                  table={table}
+                  searchValue={searchInput}
+                  onSearchChange={handleSearchChange}
+                  searchPlaceholder="Search by key alias…"
+                  onRefresh={() => refetch?.()}
+                  isRefreshing={isFetching}
+                  onOpenFilters={() => setFiltersOpen(true)}
+                  filterLabels={{ user_id: "User ID" }}
+                />
+                <DataTableFilterDrawer
+                  table={table}
+                  open={filtersOpen}
+                  onOpenChange={setFiltersOpen}
+                  title="Filters"
+                  description={`Narrow down keys for ${teamAlias ?? "this team"}`}
+                >
+                  {({ get, set }) => (
+                    <DataTableFilterField label="User ID">
+                      <Input
+                        value={(get("user_id") as string) ?? ""}
+                        onChange={(event) => set("user_id", event.target.value)}
+                        placeholder="Filter by user ID…"
+                      />
+                    </DataTableFilterField>
+                  )}
+                </DataTableFilterDrawer>
+              </>
+            )}
           />
         </div>
       )}

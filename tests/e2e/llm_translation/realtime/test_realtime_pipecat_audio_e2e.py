@@ -30,7 +30,7 @@ import pytest
 from realtime_client import (
     PROVIDERS,
     RealtimeProvider,
-    _ws_base_url,
+    ws_base_url,
     realtime_model,
 )
 
@@ -154,7 +154,7 @@ async def _run_pipeline(
 
     llm = LiteLLMRealtimeLLMService(
         api_key=key,
-        base_url=f"{_ws_base_url()}/v1/realtime",
+        base_url=f"{ws_base_url()}/v1/realtime",
         settings=OpenAIRealtimeLLMService.Settings(
             model=model,
             system_instruction=(
@@ -276,7 +276,7 @@ async def _run_audio_input_pipeline(
 
     llm = LiteLLMRealtimeLLMService(
         api_key=key,
-        base_url=f"{_ws_base_url()}/v1/realtime",
+        base_url=f"{ws_base_url()}/v1/realtime",
         settings=OpenAIRealtimeLLMService.Settings(
             model=model,
             system_instruction=(

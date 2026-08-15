@@ -1,4 +1,4 @@
-import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
+import { Form, Input, Modal, Select, Tag, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
@@ -8,26 +8,28 @@ import {
   modelAvailableCall,
 } from "@/components/networking";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
+import { type CompetitorIntentConfig } from "./content_filter/CompetitorIntentConfiguration";
 import {
   choiceToSkipSystemForCreate,
   choiceToSkipToolForCreate,
+  getGuardrailLogo,
   getGuardrailProviders,
+  getSupportedModesForProvider,
   guardrail_provider_map,
-  guardrailLogoMap,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
   shouldRenderContentFilterConfigSettings,
   shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
+  toModeArray,
 } from "./guardrail_info_helpers";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import { Logo } from "@/components/molecules/logo/Logo";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
 import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
-const { Title, Text, Link } = Typography;
 const { Option } = Select;
 
 // Define human-friendly descriptions for each mode
@@ -38,6 +40,7 @@ const modeDescriptions = {
   logging_only: "Logging Only - Only runs on logging callbacks without affecting the LLM call",
   pre_mcp_call: "Before MCP Tool Call - Runs before MCP tool execution and validates tool calls",
   during_mcp_call: "During MCP Tool Call - Runs in parallel with MCP tool execution for monitoring",
+  post_mcp_call: "After MCP Tool Call - Runs after MCP tool execution and checks the tool result",
 };
 
 interface GuardrailPreset {
@@ -60,6 +63,7 @@ interface GuardrailSettings {
   supported_entities: string[];
   supported_actions: string[];
   supported_modes: string[];
+  supported_modes_by_provider?: Record<string, string[]>;
   pii_entity_categories: Array<{
     category: string;
     entities: string[];
@@ -82,12 +86,54 @@ interface GuardrailSettings {
   };
 }
 
-interface LiteLLMParams {
-  guardrail: string;
-  mode: string;
-  default_on: boolean;
-  [key: string]: any; // Allow additional properties for specific guardrails
+interface ContentFilterPattern {
+  id: string;
+  type: "prebuilt" | "custom";
+  name: string;
+  display_name?: string;
+  pattern?: string;
+  action: "BLOCK" | "MASK";
 }
+
+interface ContentFilterBlockedWord {
+  id: string;
+  keyword: string;
+  action: "BLOCK" | "MASK";
+  description?: string;
+}
+
+interface SelectedContentCategory {
+  id: string;
+  category: string;
+  display_name: string;
+  action: "BLOCK" | "MASK";
+  severity_threshold: "high" | "medium" | "low";
+}
+
+interface JudgeCriterion {
+  name: string;
+  weight: number | string;
+  description?: string;
+}
+
+const createEmptyToolPermissionConfig = (): ToolPermissionConfig => ({
+  rules: [],
+  default_action: "deny",
+  on_disallowed_action: "block",
+  violation_message_template: "",
+});
+
+const getStepIndicatorStyle = (isDone: boolean, isCurrent: boolean): React.CSSProperties => {
+  if (isDone) return { background: "#4f46e5", color: "#fff", border: "none" };
+  if (isCurrent) return { background: "#fff", color: "#4f46e5", border: "2px solid #4f46e5" };
+  return { background: "#f8fafc", color: "#94a3b8", border: "1px solid #e2e8f0" };
+};
+
+const getStepTitleColor = (isDone: boolean, isCurrent: boolean): string => {
+  if (isCurrent) return "#1e293b";
+  if (isDone) return "#4f46e5";
+  return "#94a3b8";
+};
 
 // Mapping of provider -> list of param descriptors
 interface ProviderParam {
@@ -116,18 +162,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [currentStep, setCurrentStep] = useState(0);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
 
-  // Azure Text Moderation state
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [globalSeverityThreshold, setGlobalSeverityThreshold] = useState<number>(2);
-  const [categorySpecificThresholds, setCategorySpecificThresholds] = useState<{ [key: string]: number }>({});
-
   // Content Filter state
-  const [selectedPatterns, setSelectedPatterns] = useState<any[]>([]);
-  const [blockedWords, setBlockedWords] = useState<any[]>([]);
-  const [selectedContentCategories, setSelectedContentCategories] = useState<any[]>([]);
+  const [selectedPatterns, setSelectedPatterns] = useState<ContentFilterPattern[]>([]);
+  const [blockedWords, setBlockedWords] = useState<ContentFilterBlockedWord[]>([]);
+  const [selectedContentCategories, setSelectedContentCategories] = useState<SelectedContentCategory[]>([]);
   const [pendingCategorySelection, setPendingCategorySelection] = useState<string>("");
   const [competitorIntentEnabled, setCompetitorIntentEnabled] = useState(false);
-  const [competitorIntentConfig, setCompetitorIntentConfig] = useState<any>(null);
+  const [competitorIntentConfig, setCompetitorIntentConfig] = useState<CompetitorIntentConfig | null>(null);
 
   // Endpoint Settings state (step 5)
   const [selectedEndpointType, setSelectedEndpointType] = useState<string>("");
@@ -137,12 +178,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [endpointSettingsOpen, setEndpointSettingsOpen] = useState<boolean>(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
 
-  const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>({
-    rules: [],
-    default_action: "deny",
-    on_disallowed_action: "block",
-    violation_message_template: "",
-  });
+  const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>(
+    createEmptyToolPermissionConfig,
+  );
 
   const isToolPermissionProvider = useMemo(() => {
     if (!selectedProvider) {
@@ -168,7 +206,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         setGuardrailSettings(uiSettings);
         setProviderParams(providerParamsResp);
         if (modelsResp?.data) {
-          setAvailableModels(modelsResp.data.map((m: any) => m.id));
+          setAvailableModels(modelsResp.data.map((m: { id: string }) => m.id));
         }
 
         // Populate dynamic providers from API response
@@ -189,7 +227,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
     // Set provider
     setSelectedProvider(preset.provider);
-    const baseValues: Record<string, any> = {
+    const baseValues: Record<string, unknown> = {
       provider: preset.provider,
       guardrail_name: preset.guardrailNameSuggestion,
       mode: preset.mode,
@@ -205,7 +243,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     // Pre-select content category if specified
     if (preset.categoryName && guardrailSettings.content_filter_settings?.content_categories) {
       const category = guardrailSettings.content_filter_settings.content_categories.find(
-        (c: any) => c.name === preset.categoryName,
+        (c) => c.name === preset.categoryName,
       );
       if (category) {
         setSelectedContentCategories([
@@ -219,12 +257,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         ]);
       }
     }
-  }, [preset, visible, guardrailSettings]);
+  }, [preset, visible, guardrailSettings, form]);
 
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
     // Reset form fields that are provider-specific
-    const resetValues: Record<string, any> = {
+    const resetValues: Record<string, unknown> = {
       config: undefined,
       presidio_analyzer_api_base: undefined,
       presidio_anonymizer_api_base: undefined,
@@ -232,16 +270,26 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     if (value === "BlockCodeExecution") {
       resetValues.confidence_threshold = 0.5;
     }
+
+    // Drop selected modes the new provider does not support
+    const newProviderKey = guardrail_provider_map[value]?.toLowerCase();
+    const newProviderModes =
+      newProviderKey && guardrailSettings?.supported_modes_by_provider
+        ? guardrailSettings.supported_modes_by_provider[newProviderKey]
+        : undefined;
+    if (newProviderModes) {
+      const selectedModes = toModeArray(form.getFieldValue("mode"));
+      const keptModes = selectedModes.filter((m) => newProviderModes.includes(m));
+      if (keptModes.length !== selectedModes.length) {
+        resetValues.mode = keptModes.length > 0 ? keptModes : undefined;
+      }
+    }
+
     form.setFieldsValue(resetValues);
 
     // Reset PII selections when changing provider
     setSelectedEntities([]);
     setSelectedActions({});
-
-    // Reset Azure Text Moderation selections when changing provider
-    setSelectedCategories([]);
-    setGlobalSeverityThreshold(2);
-    setCategorySpecificThresholds({});
 
     // Reset Content Filter selections
     setSelectedPatterns([]);
@@ -251,12 +299,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setCompetitorIntentEnabled(false);
     setCompetitorIntentConfig(null);
 
-    setToolPermissionConfig({
-      rules: [],
-      default_action: "deny",
-      on_disallowed_action: "block",
-      violation_message_template: "",
-    });
+    setToolPermissionConfig(createEmptyToolPermissionConfig());
 
     // Default LLM-as-a-Judge to post_call mode
     if (value === "LlmAsAJudge") {
@@ -278,24 +321,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedActions((prev) => ({
       ...prev,
       [entity]: action,
-    }));
-  };
-
-  // Azure Text Moderation handlers
-  const handleCategorySelect = (category: string) => {
-    setSelectedCategories((prev) =>
-      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category],
-    );
-  };
-
-  const handleGlobalSeverityChange = (threshold: number) => {
-    setGlobalSeverityThreshold(threshold);
-  };
-
-  const handleCategorySeverityChange = (category: string, threshold: number) => {
-    setCategorySpecificThresholds((prev) => ({
-      ...prev,
-      [category]: threshold,
     }));
   };
 
@@ -334,63 +359,16 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setCurrentStep(currentStep - 1);
   };
 
-  const handleAddAndContinue = (competitorIntentOnly?: boolean) => {
-    // Competitor intent only: just advance to next step (no category to add)
-    if (competitorIntentOnly) {
-      setCurrentStep(currentStep + 1);
-      return;
-    }
-
-    if (!pendingCategorySelection || !guardrailSettings) return;
-
-    const contentFilterSettings = guardrailSettings.content_filter_settings;
-    if (!contentFilterSettings) return;
-
-    const category = contentFilterSettings.content_categories?.find((c) => c.name === pendingCategorySelection);
-    if (!category) return;
-
-    // Check if already added
-    if (selectedContentCategories.some((c) => c.category === pendingCategorySelection)) {
-      setPendingCategorySelection("");
-      setCurrentStep(currentStep + 1);
-      return;
-    }
-
-    // Add the category
-    setSelectedContentCategories([
-      ...selectedContentCategories,
-      {
-        id: `category-${Date.now()}`,
-        category: category.name,
-        display_name: category.display_name,
-        action: category.default_action as "BLOCK" | "MASK",
-        severity_threshold: "medium",
-      },
-    ]);
-
-    // Clear pending selection and advance to next step
-    setPendingCategorySelection("");
-    setCurrentStep(currentStep + 1);
-  };
-
   const resetForm = () => {
     form.resetFields();
     setSelectedProvider(null);
     setSelectedEntities([]);
     setSelectedActions({});
-    setSelectedCategories([]);
-    setGlobalSeverityThreshold(2);
-    setCategorySpecificThresholds({});
     setSelectedPatterns([]);
     setBlockedWords([]);
     setSelectedContentCategories([]);
     setPendingCategorySelection("");
-    setToolPermissionConfig({
-      rules: [],
-      default_action: "deny",
-      on_disallowed_action: "block",
-      violation_message_template: "",
-    });
+    setToolPermissionConfig(createEmptyToolPermissionConfig());
     setSelectedEndpointType("");
     setEndSessionAfterNFails(undefined);
     setOnViolation("warn");
@@ -423,9 +401,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           guardrail: string;
           mode: string;
           default_on: boolean;
-          [key: string]: any; // Allow dynamic properties
+          [key: string]: unknown; // Allow dynamic properties
         };
-        guardrail_info: any;
+        guardrail_info: Record<string, unknown>;
       } = {
         guardrail_name: values.guardrail_name,
         litellm_params: {
@@ -467,13 +445,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       // For Content Filter, add patterns, blocked words, categories, and optionally competitor intent
       if (shouldRenderContentFilterConfigSettings(values.provider)) {
         // Validate that at least one content filter setting is configured
-        const hasCompetitorIntent = competitorIntentEnabled && competitorIntentConfig?.brand_self?.length > 0;
-        if (
-          selectedPatterns.length === 0 &&
-          blockedWords.length === 0 &&
-          selectedContentCategories.length === 0 &&
-          !hasCompetitorIntent
-        ) {
+        const hasCompetitorIntent = competitorIntentEnabled && (competitorIntentConfig?.brand_self?.length ?? 0) > 0;
+        const hasContentFilterSelections =
+          selectedPatterns.length > 0 || blockedWords.length > 0 || selectedContentCategories.length > 0;
+        if (!hasContentFilterSelections && !hasCompetitorIntent) {
           NotificationsManager.fromBackend(
             "Please configure at least one content filter setting (category, pattern, keyword, or competitor intent)",
           );
@@ -505,14 +480,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             severity_threshold: c.severity_threshold || "medium",
           }));
         }
-        if (competitorIntentEnabled && competitorIntentConfig?.brand_self?.length > 0) {
+        if (hasCompetitorIntent && competitorIntentConfig) {
           guardrailData.litellm_params.competitor_intent_config = {
             competitor_intent_type: competitorIntentConfig.competitor_intent_type ?? "airline",
             brand_self: competitorIntentConfig.brand_self,
-            locations: competitorIntentConfig.locations?.length > 0 ? competitorIntentConfig.locations : undefined,
+            locations:
+              (competitorIntentConfig.locations?.length ?? 0) > 0 ? competitorIntentConfig.locations : undefined,
             competitors:
               competitorIntentConfig.competitor_intent_type === "generic" &&
-              competitorIntentConfig.competitors?.length > 0
+              (competitorIntentConfig.competitors?.length ?? 0) > 0
                 ? competitorIntentConfig.competitors
                 : undefined,
             policy: competitorIntentConfig.policy,
@@ -536,13 +512,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       }
 
       if (guardrailProvider === "llm_as_a_judge") {
-        const criteria: any[] = values.criteria || [];
+        const criteria: JudgeCriterion[] = values.criteria || [];
         if (criteria.length === 0) {
           NotificationsManager.fromBackend("Add at least one evaluation criterion");
           setLoading(false);
           return;
         }
-        const weightTotal = criteria.reduce((sum: number, c: any) => sum + (Number(c?.weight) || 0), 0);
+        const weightTotal = criteria.reduce((sum, c) => sum + (Number(c?.weight) || 0), 0);
         if (weightTotal !== 100) {
           NotificationsManager.fromBackend(`Criterion weights must sum to 100% (currently ${weightTotal}%)`);
           setLoading(false);
@@ -551,7 +527,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         guardrailData.litellm_params.judge_model = values.judge_model;
         guardrailData.litellm_params.overall_threshold = values.overall_threshold ?? 80;
         guardrailData.litellm_params.on_failure = values.on_failure ?? "block";
-        guardrailData.litellm_params.criteria = criteria.map((c: any) => ({
+        guardrailData.litellm_params.criteria = criteria.map((c) => ({
           name: c.name,
           weight: Number(c.weight),
           description: c.description || "",
@@ -652,6 +628,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   };
 
   const renderBasicInfo = () => {
+    const showProviderFields =
+      !isToolPermissionProvider &&
+      !shouldRenderContentFilterConfigSettings(selectedProvider) &&
+      !shouldRenderLLMJudgeFields(selectedProvider);
     return (
       <>
         <Form.Item
@@ -675,53 +655,19 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             dropdownRender={(menu) => menu}
             showSearch={true}
           >
-            {Object.entries(getGuardrailProviders()).map(([key, value]) => (
-              <Option
-                key={key}
-                value={key}
-                label={
-                  <div style={{ display: "flex", alignItems: "center" }}>
-                    {guardrailLogoMap[value] && (
-                      <img
-                        src={resolveLogoSrc(guardrailLogoMap[value])}
-                        alt=""
-                        style={{
-                          height: "20px",
-                          width: "20px",
-                          marginRight: "8px",
-                          objectFit: "contain",
-                        }}
-                        onError={(e) => {
-                          // Hide broken image icon if image fails to load
-                          e.currentTarget.style.display = "none";
-                        }}
-                      />
-                    )}
-                    <span>{value}</span>
-                  </div>
-                }
-              >
+            {Object.entries(getGuardrailProviders()).map(([key, value]) => {
+              const optionContent = (
                 <div style={{ display: "flex", alignItems: "center" }}>
-                  {guardrailLogoMap[value] && (
-                    <img
-                      src={resolveLogoSrc(guardrailLogoMap[value])}
-                      alt=""
-                      style={{
-                        height: "20px",
-                        width: "20px",
-                        marginRight: "8px",
-                        objectFit: "contain",
-                      }}
-                      onError={(e) => {
-                        // Hide broken image icon if image fails to load
-                        e.currentTarget.style.display = "none";
-                      }}
-                    />
-                  )}
+                  <Logo src={getGuardrailLogo(value)} label={value} className="h-5 w-5 mr-2 object-contain shrink-0" />
                   <span>{value}</span>
                 </div>
-              </Option>
-            ))}
+              );
+              return (
+                <Option key={key} value={key} label={optionContent}>
+                  {optionContent}
+                </Option>
+              );
+            })}
           </Select>
         </Form.Item>
 
@@ -732,7 +678,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           rules={[{ required: true, message: "Please select a mode" }]}
         >
           <Select optionLabelProp="label" mode="multiple">
-            {guardrailSettings?.supported_modes?.map((mode) => (
+            {getSupportedModesForProvider(guardrailSettings, selectedProvider)?.map((mode) => (
               <Option key={mode} value={mode} label={mode}>
                 <div>
                   <div>
@@ -823,15 +769,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         </Form.Item>
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        {!isToolPermissionProvider &&
-          !shouldRenderContentFilterConfigSettings(selectedProvider) &&
-          !shouldRenderLLMJudgeFields(selectedProvider) && (
-            <GuardrailProviderFields
-              selectedProvider={selectedProvider}
-              accessToken={accessToken}
-              providerParams={providerParams}
-            />
-          )}
+        {showProviderFields && (
+          <GuardrailProviderFields
+            selectedProvider={selectedProvider}
+            accessToken={accessToken}
+            providerParams={providerParams}
+          />
+        )}
       </>
     );
   };
@@ -948,48 +892,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       default:
         return null;
     }
-  };
-
-  const renderStepButtons = () => {
-    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 5 : 2;
-    const isLastStep = currentStep === totalSteps - 1;
-    const isCategoriesStep = shouldRenderContentFilterConfigSettings(selectedProvider) && currentStep === 1;
-    const hasPendingCategory = pendingCategorySelection !== "";
-    const hasCompetitorIntentConfigured =
-      competitorIntentEnabled && (competitorIntentConfig?.brand_self?.length ?? 0) > 0;
-    const canContinueFromCategoriesStep = hasPendingCategory || hasCompetitorIntentConfigured;
-
-    return (
-      <div className="flex justify-end space-x-2 mt-4">
-        {currentStep > 0 && <Button onClick={prevStep}>Previous</Button>}
-        {isCategoriesStep ? (
-          <>
-            <Button onClick={nextStep}>Skip</Button>
-            <Button
-              type="primary"
-              onClick={() => handleAddAndContinue(hasCompetitorIntentConfigured)}
-              disabled={!canContinueFromCategoriesStep}
-            >
-              {hasPendingCategory ? "Add & Continue →" : "Continue →"}
-            </Button>
-          </>
-        ) : (
-          <>
-            {!isLastStep && (
-              <Button type="primary" onClick={nextStep}>
-                Next
-              </Button>
-            )}
-            {isLastStep && (
-              <Button type="primary" onClick={handleSubmit} loading={loading}>
-                Create Guardrail
-              </Button>
-            )}
-          </>
-        )}
-        <Button onClick={handleClose}>Cancel</Button>
-      </div>
-    );
   };
 
   const renderEndpointSettings = () => {
@@ -1179,11 +1081,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                   <div className="flex flex-col items-center shrink-0" style={{ width: 24 }}>
                     <div
                       className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium shrink-0"
-                      style={{
-                        background: isDone ? "#4f46e5" : isCurrent ? "#fff" : "#f8fafc",
-                        color: isDone ? "#fff" : isCurrent ? "#4f46e5" : "#94a3b8",
-                        border: isCurrent ? "2px solid #4f46e5" : isDone ? "none" : "1px solid #e2e8f0",
-                      }}
+                      style={getStepIndicatorStyle(isDone, isCurrent)}
                     >
                       {isDone ? "\u2713" : index + 1}
                     </div>
@@ -1213,7 +1111,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                         className="text-sm"
                         style={{
                           fontWeight: isCurrent ? 600 : 500,
-                          color: isCurrent ? "#1e293b" : isDone ? "#4f46e5" : "#94a3b8",
+                          color: getStepTitleColor(isDone, isCurrent),
                         }}
                       >
                         {step.title}

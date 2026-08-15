@@ -30,12 +30,12 @@ describe("PolicySelect", () => {
   it("should be disabled when saving is true", () => {
     renderWithProviders(<PolicySelect value="untrusted" toolName="test-tool" saving={true} onChange={vi.fn()} />);
     expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByRole("combobox").closest(".ant-select")).toHaveClass("ant-select-disabled");
+    expect(screen.getByRole("combobox")).toBeDisabled();
   });
 
   it("should not be disabled when saving is false", () => {
     renderWithProviders(<PolicySelect value="untrusted" toolName="test-tool" saving={false} onChange={vi.fn()} />);
-    expect(screen.getByRole("combobox").closest(".ant-select")).not.toHaveClass("ant-select-disabled");
+    expect(screen.getByRole("combobox")).toBeEnabled();
   });
 });
 

@@ -150,6 +150,57 @@ class TestIncrementTokenDetailMetrics:
             10.0
         )
 
+    def test_cache_creation_falls_back_to_cache_write_tokens(self, sample_enum_values):
+        logger = _make_mock_logger()
+        payload = {
+            "metadata": {
+                "usage_object": {
+                    "prompt_tokens": 12000,
+                    "completion_tokens": 100,
+                    "total_tokens": 12100,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 0,
+                        "cache_write_tokens": 800,
+                    },
+                }
+            },
+        }
+
+        PrometheusLogger._increment_token_detail_metrics(
+            logger,
+            standard_logging_payload=payload,
+            enum_values=sample_enum_values,
+        )
+
+        logger.litellm_input_cache_creation_tokens_metric.labels().inc.assert_called_once_with(
+            800.0
+        )
+
+    def test_cache_write_tokens_takes_precedence_over_cache_creation_tokens(
+        self, sample_enum_values
+    ):
+        logger = _make_mock_logger()
+        payload = {
+            "metadata": {
+                "usage_object": {
+                    "prompt_tokens_details": {
+                        "cache_creation_tokens": 25,
+                        "cache_write_tokens": 800,
+                    },
+                }
+            },
+        }
+
+        PrometheusLogger._increment_token_detail_metrics(
+            logger,
+            standard_logging_payload=payload,
+            enum_values=sample_enum_values,
+        )
+
+        logger.litellm_input_cache_creation_tokens_metric.labels().inc.assert_called_once_with(
+            800.0
+        )
+
     def test_skips_metrics_when_value_is_zero(self, sample_enum_values):
         logger = _make_mock_logger()
         payload = {

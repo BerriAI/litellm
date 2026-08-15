@@ -28,3 +28,15 @@ pub(crate) const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 /// Provider attributed to realtime sessions in the logging payload.
 #[cfg(feature = "server")]
 pub(crate) const DEFAULT_PROVIDER: &str = "openai";
+
+pub(crate) const DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS: u64 = 10;
+pub(crate) const DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS: u64 = 300;
+
+/// HTTP path for the non-streaming Anthropic Messages route.
+#[cfg(feature = "server")]
+pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";
+
+/// Request headers owned by the gateway and never forwarded upstream.
+#[cfg(feature = "server")]
+pub(crate) const MESSAGES_HEADERS_NOT_FORWARDED: &[&str] =
+    &["authorization", "connection", "content-length", "host"];

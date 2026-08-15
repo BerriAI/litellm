@@ -10,7 +10,7 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-litellm-core.workspace = true
+litellm-core = { workspace = true, features = ["bedrock-auth"] }
 litellm-ai-gateway = { workspace = true, default-features = false }
 pyo3 = { workspace = true, features = ["extension-module"] }
 pyo3-async-runtimes.workspace = true

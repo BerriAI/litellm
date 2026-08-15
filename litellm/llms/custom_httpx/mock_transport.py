@@ -9,7 +9,7 @@ so the full proxy -> router -> OpenAI SDK -> httpx path is exercised.
 import json
 import time
 import uuid
-from typing import Tuple
+from typing import Final
 
 import httpx
 
@@ -51,7 +51,7 @@ def _chat_completion_json(model: str) -> dict:
 # Transport
 # ---------------------------------------------------------------------------
 
-_JSON_HEADERS = {
+_JSON_HEADERS: Final = {
     "content-type": "application/json",
 }
 
@@ -64,18 +64,18 @@ class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
     """
 
     @staticmethod
-    def _parse_request(request: httpx.Request) -> Tuple[str, bool]:
+    def _parse_request(request: httpx.Request) -> tuple[str, bool]:
         """Extract model from the request body."""
         try:
-            body = json.loads(request.content)
+            body: Final = json.loads(request.content)
         except (json.JSONDecodeError, ValueError):
             return ("mock-model", False)
-        model = body.get("model", "mock-model")
+        model: Final = body.get("model", "mock-model")
         return (model, False)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         model, _ = self._parse_request(request)
-        body = json.dumps(_chat_completion_json(model)).encode()
+        body: Final = json.dumps(_chat_completion_json(model)).encode()
         return httpx.Response(
             status_code=200,
             headers=_JSON_HEADERS,
@@ -84,7 +84,7 @@ class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         model, _ = self._parse_request(request)
-        body = json.dumps(_chat_completion_json(model)).encode()
+        body: Final = json.dumps(_chat_completion_json(model)).encode()
         return httpx.Response(
             status_code=200,
             headers=_JSON_HEADERS,

@@ -28,6 +28,7 @@ def _make_guardrail(name="g", should_run=True, override=None):
     cb.event_hook = GuardrailEventHooks.post_call
     cb.should_run_guardrail = MagicMock(return_value=should_run)
     cb.async_post_call_success_hook = AsyncMock(return_value=override)
+    cb.run_in_parallel = False
     return cb
 
 

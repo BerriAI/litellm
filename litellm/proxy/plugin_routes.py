@@ -27,22 +27,23 @@ import json
 import os
 import time
 from collections.abc import Mapping
+from typing import Final
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import PluginConfig, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
-router = APIRouter()
+router: Final = APIRouter()
 
 # Hop-by-hop headers (RFC 7230) and the litellm session cookie — never forwarded
 # to a plugin backend.  Credential headers are added on top per-request from the
 # canonical SpecialHeaders set so the plugin only ever authenticates via its own
 # injected plugin_key.
-_HOP_BY_HOP_STRIP = frozenset(
+_HOP_BY_HOP_STRIP: Final = frozenset(
     {
         "host",
         "connection",
@@ -65,10 +66,10 @@ def _configured_key_header_names() -> frozenset[str]:
         from litellm.proxy import proxy_server
     except Exception:
         return frozenset()
-    general_settings = getattr(proxy_server, "general_settings", None)
+    general_settings: Final = getattr(proxy_server, "general_settings", None)
     if not isinstance(general_settings, dict):
         return frozenset()
-    name: object = general_settings.get("litellm_key_header_name")
+    name: Final[object] = general_settings.get("litellm_key_header_name")
     return frozenset({name.lower()}) if isinstance(name, str) and name else frozenset()
 
 
@@ -88,7 +89,7 @@ def _request_strip_headers() -> frozenset[str]:
 # encoding headers causes clients to attempt double-decompression (garbage) or
 # incorrect length checks.  set-cookie is removed so plugins cannot overwrite
 # litellm session cookies.
-_RESPONSE_STRIP = {
+_RESPONSE_STRIP: Final = {
     "content-encoding",
     "transfer-encoding",
     "content-length",
@@ -114,7 +115,7 @@ def _safe_response_headers(raw: "Mapping[str, str]") -> dict[str, str]:
 
 
 # In-memory plugin registry — populated from general_settings at startup
-_plugin_registry: dict[str, PluginConfig] = {}
+_plugin_registry: Final[dict[str, PluginConfig]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -130,12 +131,12 @@ def _plugin_fernet(plugin_name: str) -> Fernet:
     A plugin possessing its own key cannot derive the master salt or
     forge claims intended for a different plugin.
     """
-    salt = os.getenv("LITELLM_SALT_KEY", "").encode()
-    derived = _hmac.new(salt, plugin_name.encode(), hashlib.sha256).digest()
+    salt: Final = os.getenv("LITELLM_SALT_KEY", "").encode()
+    derived: Final = _hmac.new(salt, plugin_name.encode(), hashlib.sha256).digest()
     return Fernet(base64.urlsafe_b64encode(derived))
 
 
-_CLAIM_TTL_SECONDS = 30  # identity claims expire after 30 s
+_CLAIM_TTL_SECONDS: Final = 30  # identity claims expire after 30 s
 
 
 def issue_plugin_session_claim(plugin_name: str, user_id: str | None, user_role: str | None) -> str:
@@ -145,7 +146,7 @@ def issue_plugin_session_claim(plugin_name: str, user_id: str | None, user_role:
     contains NO litellm bearer token — the plugin can only derive the
     caller's identity, not act as them against the proxy.
     """
-    claim = {
+    claim: Final = {
         "plugin": plugin_name,
         "user_id": user_id or "",
         "user_role": user_role or "",
@@ -161,8 +162,8 @@ def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict:
     the claim is expired.  Returns the decoded claim dict on success.
     """
     try:
-        raw = _plugin_fernet(plugin_name).decrypt(ciphertext.encode(), ttl=_CLAIM_TTL_SECONDS)
-        claim = json.loads(raw)
+        raw: Final = _plugin_fernet(plugin_name).decrypt(ciphertext.encode(), ttl=_CLAIM_TTL_SECONDS)
+        claim: Final = json.loads(raw)
     except (InvalidToken, Exception) as exc:
         raise ValueError("Invalid, tampered, or expired plugin session claim") from exc
 
@@ -182,9 +183,9 @@ def register_plugins_from_config(general_settings: dict[str, object]) -> None:
     Replaces (not merges) so plugins removed from config are immediately
     unreachable without requiring a process restart.
     """
-    raw = general_settings.get("plugins")
-    entries: list[object] = raw if isinstance(raw, list) else []
-    new_registry = {p.name: p for p in (PluginConfig.model_validate(entry) for entry in entries)}
+    raw: Final = general_settings.get("plugins")
+    entries: Final[list[object]] = raw if isinstance(raw, list) else []
+    new_registry: Final = {p.name: p for p in (PluginConfig.model_validate(entry) for entry in entries)}
     _plugin_registry.clear()
     _plugin_registry.update(new_registry)
 
@@ -236,8 +237,8 @@ async def plugin_auth_token(
         )
     if plugin_name not in _plugin_registry:
         raise HTTPException(status_code=404, detail=f"Plugin '{plugin_name}' is not registered.")
-    user_id = getattr(user_api_key_dict, "user_id", None)
-    user_role = getattr(user_api_key_dict, "user_role", None)
+    user_id: Final = getattr(user_api_key_dict, "user_id", None)
+    user_role: Final = getattr(user_api_key_dict, "user_role", None)
     return {"session_claim": issue_plugin_session_claim(plugin_name, user_id, user_role)}
 
 
@@ -269,7 +270,7 @@ async def plugin_proxy(
             status_code=403,
         )
 
-    plugin = _plugin_registry.get(plugin_name)
+    plugin: Final = _plugin_registry.get(plugin_name)
     if not plugin:
         return Response(
             content=f"Plugin '{plugin_name}' not registered",
@@ -277,34 +278,34 @@ async def plugin_proxy(
         )
 
     target_url = f"{plugin.url.rstrip('/')}/{path}"
-    query = request.url.query
+    query: Final = request.url.query
     if query:
         target_url = f"{target_url}?{query}"
 
-    body = await request.body()
+    body: Final = await request.body()
 
     # Strip caller credentials and hop-by-hop headers from forwarded request
-    strip = _request_strip_headers()
-    forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in strip}
+    strip: Final = _request_strip_headers()
+    forward_headers: Final = {k: v for k, v in request.headers.items() if k.lower() not in strip}
 
     # Inject plugin's own credential as upstream auth (if configured)
-    plugin_key = plugin.plugin_key
+    plugin_key: Final = plugin.plugin_key
     if plugin_key:
         forward_headers["authorization"] = f"Bearer {plugin_key}"
 
     # Forward caller identity so the plugin can enforce its own access control.
     # The plugin MUST NOT trust these as credentials — they are informational.
     # The plugin_key above is the only authentication mechanism.
-    user_id = getattr(user_api_key_dict, "user_id", None)
-    user_role = getattr(user_api_key_dict, "user_role", None)
+    user_id: Final = getattr(user_api_key_dict, "user_id", None)
+    user_role: Final = getattr(user_api_key_dict, "user_role", None)
     if user_id:
         forward_headers["x-litellm-user-id"] = str(user_id)
     if user_role:
         forward_headers["x-litellm-user-role"] = str(user_role)
 
-    handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint)
+    handler: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint)
     try:
-        req = handler.client.build_request(
+        req: Final = handler.client.build_request(
             method=request.method,
             url=target_url,
             headers=forward_headers,
@@ -312,7 +313,7 @@ async def plugin_proxy(
         )
         # Do not follow redirects — a redirect to an internal URL would allow
         # the plugin to SSRF the proxy into fetching arbitrary internal services.
-        resp = await handler.client.send(req, follow_redirects=False)
+        resp: Final = await handler.client.send(req, follow_redirects=False)
     except Exception:
         return Response(
             content=f"Cannot connect to plugin '{plugin_name}' at {plugin.url}",

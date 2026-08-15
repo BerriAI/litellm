@@ -40,6 +40,7 @@ export const AUTH_TYPE = {
   BASIC: "basic",
   OAUTH2: "oauth2",
   OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
+  OAUTH2_ID_JAG: "oauth2_id_jag",
   AWS_SIGV4: "aws_sigv4",
   TRUE_PASSTHROUGH: "true_passthrough",
   OAUTH_DELEGATE: "oauth_delegate",
@@ -51,6 +52,29 @@ export const AUTH_TYPE = {
 // their real auth_type so the backend does not treat them as needing a stored per-user token.
 export const isClientForwardedTokenMode = (authType?: string | null): boolean =>
   authType === AUTH_TYPE.TRUE_PASSTHROUGH || authType === AUTH_TYPE.OAUTH_DELEGATE;
+
+/**
+ * Whether the gateway acquires the OAuth client itself during /authorize (so the browser must NOT
+ * pre-register one). This MUST mirror the backend `resolve_ephemeral_dcr_client` mint condition
+ * exactly, cell for cell, or a mode where the two disagree either dead-ends (browser skips a
+ * register the gateway never performs) or double-registers. The gateway mints for every
+ * `true_passthrough` server, and for `oauth_delegate` only when it is NOT a dcr_bridge server: the
+ * interactive oauth_delegate dcr_bridge sign-in captures the SSO user through the browser's own
+ * front-door registration, which the mint must not preempt.
+ */
+export const gatewayMintsClientFor = (server: { auth_type?: string | null; dcr_bridge?: boolean | null }): boolean =>
+  server.auth_type === AUTH_TYPE.TRUE_PASSTHROUGH ||
+  (server.auth_type === AUTH_TYPE.OAUTH_DELEGATE && !server.dcr_bridge);
+
+// Auth modes that cannot be used through the gateway aggregate connect flow, where the client holds
+// only an identity-only session bearer and upstream credentials are resolved server-side per user.
+// The client-forwarded modes need the caller to present the upstream Authorization per call, and
+// oauth2_token_exchange (OBO) needs the caller's own IdP token as the subject to exchange; the
+// session bearer is neither, so none of these can complete a tool call on this connection.
+// oauth2_id_jag is deliberately NOT here: it falls back to the identity assertion captured for the
+// session's user at SSO login, so the identity-only bearer is enough to resolve it server-side.
+export const isUnsupportedOnGatewayConnect = (authType?: string | null): boolean =>
+  isClientForwardedTokenMode(authType) || authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
 
 export const OAUTH_FLOW = {
   INTERACTIVE: "interactive",
@@ -81,6 +105,8 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
     client_id: credentials.client_id ?? null,
     client_secret: credentials.client_secret ?? null,
     scopes: credentials.scopes ?? null,
+    upstream_resource: credentials.upstream_resource ?? null,
+    issuer: values.issuer ?? null,
     authorization_url: values.authorization_url ?? null,
     token_url: values.token_url ?? null,
     registration_url: values.registration_url ?? null,
@@ -95,6 +121,77 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
 // silently revert it to the saved record (edit, whose Form has initialValues). Shared by the create and
 // edit forms so what gets wiped cannot drift.
 export const CLEARED_ON_INVALIDATION = ["credentials"] as const;
+
+// The declared-app filter over form.credentials. It is a pure key filter with no mode/transition
+// guard because the surrounding code establishes that a client_id/client_secret in form.credentials
+// is ALWAYS admin-typed in every reachable state: the create form holds the DCR-minted client in a
+// ref and never writes it into the form store, the edit form's onTokenReceived never writes client
+// keys, and the invalidation reset clears the whole object atomically. So preserving the string
+// client keys across any invalidation (URL/endpoint edit, true_passthrough<->oauth_delegate switch,
+// or a round trip through another mode) is always legitimate, while the output key filter excludes
+// token-shaped keys so a preserve can never carry minted material through. Shared by both forms.
+const DECLARED_APP_CREDENTIAL_KEYS = ["client_id", "client_secret"] as const;
+
+// Admin-typed credential config that is NOT part of the declared OAuth app. It is preserved across an
+// invalidation for the same reason the client keys are (nothing programmatic writes it, so a reset
+// would destroy admin input), but it must stay OUT of the declared-app set: whether an app exists is
+// a distinct question that gates the "app may not match upstream" warning, and a server using dynamic
+// client registration can set a resource indicator while having no app at all.
+export const ADMIN_CONFIG_CREDENTIAL_KEYS = ["upstream_resource"] as const;
+
+// Minted token material the oauth2 authorize path writes beside the app keys; stripped from restored
+// snapshots and from any credentials that transit to the temp-session preview so a stale token never
+// reaches the backend or a client-forwarded server row.
+export const MINTED_TOKEN_CREDENTIAL_KEYS = ["access_token", "refresh_token", "expires_in", "scope"] as const;
+
+const pickStringCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+  keys: readonly string[],
+): Record<string, string> | undefined => {
+  if (!credentials) return undefined;
+  const kept = Object.fromEntries(
+    keys
+      .filter((key) => typeof credentials[key] === "string" && credentials[key] !== "")
+      .map((key) => [key, credentials[key] as string]),
+  );
+  return Object.keys(kept).length > 0 ? kept : undefined;
+};
+
+// Does the admin have a declared OAuth client app? Answers only that question; use
+// preservedAdminCredentials for anything deciding what survives a reset or reaches the backend, or a
+// server that only carries admin config would read as having an app it never declared.
+export const preservedDeclaredAppCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined => pickStringCredentials(credentials, DECLARED_APP_CREDENTIAL_KEYS);
+
+// Everything the admin typed into `credentials` and nothing minted: the declared app plus the config
+// keys. This is what must survive the invalidation reset and what a client-forwarded row may persist,
+// so dropping a key from here silently discards admin input on an unrelated edit.
+export const preservedAdminCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined =>
+  pickStringCredentials(credentials, [...DECLARED_APP_CREDENTIAL_KEYS, ...ADMIN_CONFIG_CREDENTIAL_KEYS]);
+
+// Drop minted token keys, keeping everything else (the declared app plus any non-token config).
+export const withoutMintedTokenCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | undefined => {
+  if (!credentials) return undefined;
+  const kept = Object.fromEntries(
+    Object.entries(credentials).filter(([key]) => !(MINTED_TOKEN_CREDENTIAL_KEYS as readonly string[]).includes(key)),
+  );
+  // Return undefined (not {}) when only minted keys were present, so a restore spreads `credentials:
+  // undefined` (the fields keep their placeholder / keep-existing state) rather than blanking them.
+  return Object.keys(kept).length > 0 ? kept : undefined;
+};
+
+// The client-forwarded modes share one credential class (same declared app, same authorize relay), so
+// a switch between them must NOT be treated as an app change. Mirrors the backend _credential_auth_class
+// in db.py; kept in sync so the UI's keep-existing copy and the backend's merge cannot disagree.
+export const credentialAuthClass = (authType: string | null | undefined): string | null => {
+  if (authType === AUTH_TYPE.TRUE_PASSTHROUGH || authType === AUTH_TYPE.OAUTH_DELEGATE) return "client_forwarded";
+  return authType ?? null;
+};
 
 // True when a token was authorized in this session (authorizedIdentity recorded at mint time) and the
 // form's current identity no longer matches it. Every invalidation decision in both forms goes through
@@ -268,6 +365,12 @@ export interface MCPToolsViewerProps {
   /** When true (interactive OAuth2), the server uses PKCE passthrough. */
   delegate_auth_to_upstream?: boolean | null;
   /**
+   * Read together with auth_type by gatewayMintsClientFor: an oauth_delegate dcr_bridge server is
+   * NOT gateway-minted (its interactive sign-in registers through the browser front door), so the
+   * tools-page Authorize must know the flag to decide whether to pre-register a client.
+   */
+  dcr_bridge?: boolean | null;
+  /**
    * Connection field present on every OAuth2 flow (interactive and M2M alike),
    * so it does not indicate the mode. Retained for callers/other uses; not read
    * for mode detection — see getMcpOAuthMode.
@@ -293,6 +396,7 @@ export interface MCPServer {
   transport?: string | null;
   auth_type?: string | null;
   oauth2_flow?: string | null;
+  issuer?: string | null;
   authorization_url?: string | null;
   token_url?: string | null;
   registration_url?: string | null;
@@ -319,7 +423,10 @@ export interface MCPServer {
   available_on_public_internet?: boolean;
   delegate_auth_to_upstream?: boolean;
   oauth_passthrough?: boolean;
+  dcr_bridge?: boolean | null;
   max_concurrent_requests?: number | null;
+  /** Redacted to null in server responses; present when constructing a server locally. */
+  credentials?: Record<string, unknown> | null;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;
@@ -331,6 +438,7 @@ export interface MCPServer {
   byok_description?: string[] | null;
   byok_api_key_help_url?: string | null;
   has_user_credential?: boolean | null;
+  connected_app_reachable?: boolean | null;
 
   /** GitHub / source repository URL */
   source_url?: string | null;

@@ -17,6 +17,7 @@ export type AreaChartProps<TDatum extends Record<string, unknown>> = {
   showLegend?: boolean;
   showGridLines?: boolean;
   showTooltip?: boolean;
+  showDots?: boolean;
   customTooltip?: ChartTooltipComponent;
   className?: string;
   style?: React.CSSProperties;
@@ -32,11 +33,24 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
   showLegend = true,
   showGridLines = true,
   showTooltip = true,
+  showDots = false,
   customTooltip,
   className,
   style,
 }: AreaChartProps<TDatum>) {
   const gradientId = React.useId().replace(/:/g, "");
+
+  if (data.length === 0) {
+    return (
+      <div
+        className={cn("flex h-80 w-full items-center justify-center rounded-lg border border-dashed", className)}
+        style={style}
+      >
+        <p className="text-sm text-muted-foreground">No data</p>
+      </div>
+    );
+  }
+
   const fills = categoryFills(categories.length, colors);
   const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
   const TooltipContent = customTooltip ?? ValueTooltip;
@@ -82,7 +96,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
             strokeWidth={2}
             fill={`url(#fill-${gradientId}-${i})`}
             fillOpacity={1}
-            dot={false}
+            dot={showDots ? { r: 3.5, strokeWidth: 2, stroke: fills[i], fill: "var(--background, #fff)" } : false}
             isAnimationActive={false}
           />
         ))}

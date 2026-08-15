@@ -56,7 +56,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     setIsLoadingTeams(true);
     setTeamsLoaded(false);
     try {
-      const teamsResponse = await teamListCall(accessToken, null, userId);
+      const teamsResponse = await teamListCall(accessToken, null, null);
       const teamsArray = Array.isArray(teamsResponse) ? teamsResponse : teamsResponse?.data || [];
       const teamAliases = teamsArray.map((t: any) => t.team_alias).filter(Boolean);
       setAvailableTeams(teamAliases);
