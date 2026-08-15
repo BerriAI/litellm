@@ -1045,6 +1045,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               entityList={userOptions.length > 0 ? userOptions : null}
               premiumUser={premiumUser}
               dateValue={dateValue}
+              filterSearch={{
+                onSearchChange: setSettledUserSearch,
+                onLoadMore: fetchNextUsersPage,
+                hasNextPage: hasNextUsersPage,
+                isLoading: isLoadingUsers,
+                isFetchingNextPage: isFetchingNextUsersPage,
+              }}
             />
           )}
           {/* User Agent Activity Panel */}

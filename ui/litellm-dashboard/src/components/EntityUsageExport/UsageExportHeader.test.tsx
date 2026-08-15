@@ -1,4 +1,4 @@
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import UsageExportHeader from "./UsageExportHeader";
@@ -69,5 +69,61 @@ describe("UsageExportHeader", () => {
       />,
     );
     expect(screen.getByText("Team")).toBeInTheDocument();
+  });
+
+  describe("single-select filter with server-side search", () => {
+    const searchProps = {
+      ...defaultProps,
+      entityType: "user" as const,
+      showFilters: true,
+      filterMode: "single" as const,
+      filterLabel: "Filter by user",
+      filterPlaceholder: "Select user to filter...",
+    };
+
+    it("should report the typed query so users outside the loaded page can be found", async () => {
+      const user = userEvent.setup();
+      const onSearchChange = vi.fn();
+      renderWithProviders(
+        <UsageExportHeader
+          {...searchProps}
+          filterOptions={[{ label: "alpha70@example.com (u-70)", value: "u-70" }]}
+          onFiltersChange={vi.fn()}
+          filterSearch={{
+            onSearchChange,
+            onLoadMore: vi.fn(),
+            hasNextPage: true,
+            isLoading: false,
+            isFetchingNextPage: false,
+          }}
+        />,
+      );
+
+      const input = screen.getByRole("combobox");
+      await user.click(input);
+      await user.type(input, "alpha10");
+
+      expect(input).toHaveValue("alpha10");
+      await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith("alpha10"));
+    });
+
+    it("should keep the filter mounted when a search returns no loaded options", () => {
+      renderWithProviders(
+        <UsageExportHeader
+          {...searchProps}
+          filterOptions={[]}
+          onFiltersChange={vi.fn()}
+          filterSearch={{
+            onSearchChange: vi.fn(),
+            onLoadMore: vi.fn(),
+            hasNextPage: false,
+            isLoading: false,
+            isFetchingNextPage: false,
+          }}
+        />,
+      );
+
+      expect(screen.getByRole("combobox")).toBeInTheDocument();
+    });
   });
 });

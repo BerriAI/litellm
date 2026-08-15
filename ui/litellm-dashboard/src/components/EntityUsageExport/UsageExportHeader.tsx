@@ -16,8 +16,9 @@ import {
   ComboboxValue,
   useComboboxAnchor,
 } from "@/components/ui/combobox";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import EntityUsageExportModal from "./EntityUsageExportModal";
-import type { EntitySpendData, EntityType } from "./types";
+import type { EntitySpendData, EntityType, FilterSearch } from "./types";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface UsageExportHeaderProps {
@@ -32,6 +33,7 @@ interface UsageExportHeaderProps {
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
   filterMode?: "multiple" | "single";
+  filterSearch?: FilterSearch;
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
@@ -48,6 +50,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   onFiltersChange,
   filterOptions = [],
   filterMode = "multiple",
+  filterSearch,
   customTitle,
   compactLayout = false,
   teams = [],
@@ -55,7 +58,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-  const hasFilters = showFilters && filterOptions.length > 0;
+  const hasFilters = showFilters && (filterOptions.length > 0 || filterSearch !== undefined);
   const optionValues = filterOptions.map((option) => option.value);
   const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
 
@@ -72,6 +75,39 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
     </ComboboxContent>
   );
 
+  const searchableSingleSelect =
+    filterSearch === undefined ? null : (
+      <PaginatedSearchSelect
+        options={filterOptions}
+        value={selectedFilters[0] ?? undefined}
+        onValueChange={(next: string) => onFiltersChange?.(next === "" ? [] : [next])}
+        onSearchChange={filterSearch.onSearchChange}
+        onLoadMore={filterSearch.onLoadMore}
+        hasNextPage={filterSearch.hasNextPage}
+        isLoading={filterSearch.isLoading}
+        isFetchingNextPage={filterSearch.isFetchingNextPage}
+        placeholder={filterPlaceholder}
+        emptyText="No options found"
+      />
+    );
+
+  const singleSelect = searchableSingleSelect ?? (
+    <Combobox
+      items={optionValues}
+      value={selectedFilters[0] ?? null}
+      onValueChange={(next: string | null) => onFiltersChange?.(next ? [next] : [])}
+      itemToStringLabel={labelOf}
+    >
+      <ComboboxInput
+        className="w-full"
+        placeholder={filterPlaceholder}
+        aria-label={filterPlaceholder}
+        showClear={selectedFilters.length > 0}
+      />
+      {filterList}
+    </Combobox>
+  );
+
   return (
     <>
       <div className="mb-4">
@@ -85,20 +121,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
             <div>
               {filterLabel && <label className="text-sm font-medium text-gray-700 block mb-2">{filterLabel}</label>}
               {filterMode === "single" ? (
-                <Combobox
-                  items={optionValues}
-                  value={selectedFilters[0] ?? null}
-                  onValueChange={(next: string | null) => onFiltersChange?.(next ? [next] : [])}
-                  itemToStringLabel={labelOf}
-                >
-                  <ComboboxInput
-                    className="w-full"
-                    placeholder={filterPlaceholder}
-                    aria-label={filterPlaceholder}
-                    showClear={selectedFilters.length > 0}
-                  />
-                  {filterList}
-                </Combobox>
+                singleSelect
               ) : (
                 <Combobox
                   multiple
