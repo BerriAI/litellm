@@ -109,7 +109,7 @@ describe("Guardrail Info", () => {
     );
 
     const logo = await findByAltText("Presidio PII logo");
-    expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("microsoft_azure.svg"));
   });
 
   it("should not render the edit button for config guardrails", async () => {

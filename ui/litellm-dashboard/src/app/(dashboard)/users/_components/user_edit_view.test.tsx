@@ -241,7 +241,7 @@ describe("UserEditView", () => {
 
     await waitFor(() => {
       const modelsSelect = screen.getByRole("combobox", { name: /select models/i });
-      expect(modelsSelect).not.toBeDisabled();
+      expect(modelsSelect).toBeEnabled();
     });
   });
 
@@ -300,7 +300,7 @@ describe("UserEditView", () => {
 
     await waitFor(() => {
       const budgetInput = screen.getByRole("spinbutton", { name: /max budget/i });
-      expect(budgetInput).not.toBeDisabled();
+      expect(budgetInput).toBeEnabled();
     });
   });
 

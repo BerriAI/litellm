@@ -76,10 +76,10 @@ describe("TransformRequestPanel", () => {
     });
 
     const output = await screen.findByText(/api\.anthropic\.com\/v1\/messages/);
-    expect(output.textContent).toContain("curl -X POST");
-    expect(output.textContent).toContain("-H 'x-api-key: redacted'");
-    expect(output.textContent).toContain('"model": "claude-opus-4-8"');
-    expect(output.textContent).toContain('"max_tokens": 42');
+    expect(output).toHaveTextContent(/curl \-X POST/);
+    expect(output).toHaveTextContent(/\-H 'x\-api\-key: redacted'/);
+    expect(output).toHaveTextContent(/"model": "claude\-opus\-4\-8"/);
+    expect(output).toHaveTextContent(/"max_tokens": 42/);
     expect(notify.success).toHaveBeenCalledWith("Request transformed successfully");
   });
 

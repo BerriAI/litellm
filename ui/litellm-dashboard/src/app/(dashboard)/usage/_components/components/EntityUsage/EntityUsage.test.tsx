@@ -838,7 +838,7 @@ describe("EntityUsage", () => {
 
     const sectors = container.querySelectorAll(".recharts-pie-sector path");
     expect(sectors).toHaveLength(1);
-    expect(sectors[0].getAttribute("fill")).toBe("var(--color-cyan-500, #06b6d4)");
+    expect(sectors[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
 
     const centerLabels = Array.from(container.querySelectorAll("text.fill-foreground")).map((text) => text.textContent);
     expect(centerLabels).toContain("$100.50");
@@ -883,7 +883,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} />);
 
     const logo = await screen.findByAltText("openai logo");
-    expect(logo.getAttribute("src")).toContain("openai_small");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("openai_small"));
   });
 
   describe("capability gating", () => {

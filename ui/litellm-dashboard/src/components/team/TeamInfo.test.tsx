@@ -816,7 +816,7 @@ describe("TeamInfoView", () => {
       const secretField = await screen.findByPlaceholderText(
         '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
       );
-      expect(secretField).not.toBeDisabled();
+      expect(secretField).toBeEnabled();
     });
 
     it("should add team member when form is submitted", async () => {
