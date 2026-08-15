@@ -66,7 +66,9 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
         effort_body: Final = self._translate_chat_template_kwargs(moved_body, optional_params, model)
         final_body: Final = self._translate_guided_into_extra_body(effort_body, optional_params)
         base: Final = {  # mutable-ok: JSON request body
-            k: v for k, v in optional_params.items() if k not in ("extra_body", "response_format", "reasoning_effort")
+            k: v
+            for k, v in optional_params.items()
+            if k not in ("extra_body", "response_format", "reasoning_effort", "thinking")
         }
         if final_body:
             base["extra_body"] = final_body
@@ -92,7 +94,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
         extra_body: Mapping[str, object], optional_params: Mapping[str, object]
     ) -> dict:  # mutable-ok: JSON request body
         moved: Final = dict(extra_body)  # mutable-ok: JSON request body
-        for key in ("response_format", "reasoning_effort"):
+        for key in ("response_format", "reasoning_effort", "thinking"):
             value = optional_params.get(key)
             if value is None:
                 continue
