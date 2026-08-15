@@ -3785,17 +3785,16 @@ async def test_ui_view_spend_logs_team_member_no_permission_blocked(
 class _LegacySpendLogsPaginationDB:
     def __init__(self, spend_logs):
         self.litellm_spendlogs = self
-        self.spend_logs = spend_logs
-        self.find_many_calls = []
+        self.spend_logs = tuple(spend_logs)
+        self.find_many = AsyncMock(side_effect=self._find_many)
 
-    async def find_many(self, *args, **kwargs):
-        self.find_many_calls.append(kwargs)
+    async def _find_many(self, *args, **kwargs):
         where = kwargs.get("where", {})
-        filtered = [
+        filtered = tuple(
             row
             for row in self.spend_logs
             if all(key == "startTime" or row.get(key) == value for key, value in where.items())
-        ]
+        )
         skip = kwargs.get("skip", 0)
         take = kwargs.get("take")
         return filtered[skip:] if take is None else filtered[skip : skip + take]
@@ -3840,15 +3839,18 @@ def test_legacy_spend_logs_default_pagination_is_bounded(legacy_spend_logs_reque
     assert response.status_code == 200
     assert isinstance(response.json(), list)
     assert len(response.json()) == 50
+    assert response.headers["deprecation"] == "true"
+    assert response.headers["link"] == '</spend/logs/v2>; rel="successor-version"'
+    assert response.headers["warning"] == (
+        '299 LiteLLM "Legacy /spend/logs individual-log responses are paginated; use page/page_size or /spend/logs/v2"'
+    )
     mock_prisma.get_data.assert_not_awaited()
-    assert mock_prisma.db.find_many_calls == [
-        {
-            "where": {},
-            "order": [{"startTime": "desc"}, {"request_id": "desc"}],
-            "take": 50,
-            "skip": 0,
-        }
-    ]
+    mock_prisma.db.find_many.assert_awaited_once_with(
+        where={},
+        order=[{"startTime": "desc"}, {"request_id": "desc"}],
+        take=50,
+        skip=0,
+    )
 
 
 @pytest.mark.parametrize(
@@ -3867,8 +3869,12 @@ def test_legacy_spend_logs_pagination_is_pushed_to_database(
 
     assert response.status_code == 200
     assert isinstance(response.json(), list)
-    assert mock_prisma.db.find_many_calls[0]["take"] == expected_take
-    assert mock_prisma.db.find_many_calls[0]["skip"] == expected_skip
+    mock_prisma.db.find_many.assert_awaited_once_with(
+        where={},
+        order=[{"startTime": "desc"}, {"request_id": "desc"}],
+        take=expected_take,
+        skip=expected_skip,
+    )
 
 
 @pytest.mark.parametrize("params", [{"page": 0}, {"page_size": 0}, {"page_size": 1001}])
@@ -3876,7 +3882,7 @@ def test_legacy_spend_logs_rejects_invalid_pagination(legacy_spend_logs_request,
     response, mock_prisma = legacy_spend_logs_request([], params)
 
     assert response.status_code == 422
-    assert mock_prisma.db.find_many_calls == []
+    mock_prisma.db.find_many.assert_not_awaited()
     mock_prisma.get_data.assert_not_awaited()
 
 
@@ -3909,9 +3915,12 @@ def test_legacy_spend_logs_filtered_paths_are_paginated(legacy_spend_logs_reques
 
     assert response.status_code == 200
     assert isinstance(response.json(), list)
-    assert mock_prisma.db.find_many_calls[0]["where"] == expected_where
-    assert mock_prisma.db.find_many_calls[0]["take"] == 3
-    assert mock_prisma.db.find_many_calls[0]["skip"] == 3
+    mock_prisma.db.find_many.assert_awaited_once_with(
+        where=expected_where,
+        order=[{"startTime": "desc"}, {"request_id": "desc"}],
+        take=3,
+        skip=3,
+    )
 
 
 def test_legacy_spend_logs_request_id_lookup_remains_precise(legacy_spend_logs_request):
@@ -3927,9 +3936,12 @@ def test_legacy_spend_logs_request_id_lookup_remains_precise(legacy_spend_logs_r
 
     assert response.status_code == 200
     assert response.json() == [spend_logs[0]]
-    assert mock_prisma.db.find_many_calls[0]["where"] == {"request_id": "req-target"}
-    assert mock_prisma.db.find_many_calls[0]["take"] == 1
-    assert mock_prisma.db.find_many_calls[0]["skip"] == 0
+    mock_prisma.db.find_many.assert_awaited_once_with(
+        where={"request_id": "req-target"},
+        order=[{"startTime": "desc"}, {"request_id": "desc"}],
+        take=1,
+        skip=0,
+    )
 
 
 class _CaptureFilterDB:

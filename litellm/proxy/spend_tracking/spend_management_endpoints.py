@@ -2827,10 +2827,20 @@ async def ui_view_request_response_for_request_id(
     return None
 
 
+def _set_legacy_spend_logs_response_headers(fastapi_response: fastapi.Response) -> None:
+    fastapi_response.headers.update(
+        {
+            "Deprecation": "true",
+            "Link": '</spend/logs/v2>; rel="successor-version"',
+            "Warning": '299 LiteLLM "Legacy /spend/logs individual-log responses are paginated; use page/page_size or /spend/logs/v2"',
+        }
+    )
+
+
 @router.get(
     "/spend/logs",
     tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(user_api_key_auth), Depends(_set_legacy_spend_logs_response_headers)],
     responses={
         200: {"model": list[LiteLLM_SpendLogs]},
     },
