@@ -699,6 +699,41 @@ def test_generic_cost_per_token_tiered_pricing_is_all_or_nothing():
         litellm.model_cost.pop(model, None)
 
 
+def test_generic_cost_per_token_tier_without_an_output_rate_bills_the_model_rate():
+    """Regression: a tier table that spells out only input rates served every completion for
+    free, since a tier's missing output rate has no tier-level fallback to stand in for it."""
+    model = "litellm-test-tiered-input-only"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "output_cost_per_token": 2e-06,
+                "output_cost_per_reasoning_token": 5e-06,
+                "tiered_pricing": [{"range": [0, 128000], "input_cost_per_token": 1e-03}],
+            }
+        }
+    )
+
+    try:
+        usage = Usage(
+            prompt_tokens=13,
+            completion_tokens=182,
+            total_tokens=195,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=100),
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert round(prompt_cost, 12) == round(13 * 1e-03, 12)
+        assert round(completion_cost, 12) == round((82 * 2e-06) + (100 * 5e-06), 12)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
 def test_generic_cost_per_token_tiered_pricing_bills_reasoning_at_tier_rate():
     """Regression: a tier's output_cost_per_reasoning_token must price reasoning tokens
     on the generic path and in the logged breakdown, not the tier's plain output rate."""

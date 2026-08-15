@@ -226,6 +226,8 @@ def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | N
     tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
     if tier is None:
         return None
+    if "output_cost_per_reasoning_token" not in tier and "output_cost_per_token" not in tier:
+        return None
     return tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
 
 
@@ -236,15 +238,23 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, 
     Tiered pricing is all-or-nothing: one tier is picked from the request's input tokens
     and every token of the request is billed at that tier's rate. Rates the tier does not
     declare fall back to the tier's input rate, so a request never mixes tiers.
+
+    An output rate is the exception: a tier table that spells out only input rates would
+    otherwise serve every completion for free, so the model's own output rate stands in.
     """
     tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
     if tier is None:
         return None
 
     cache_creation_cost: Final = tier_rate(tier, "cache_creation_input_token_cost", "input_cost_per_token")
+    completion_cost: Final = (
+        tier_rate(tier, "output_cost_per_token")
+        if "output_cost_per_token" in tier
+        else _get_cost_per_unit(model_info, "output_cost_per_token") or 0.0
+    )
     return (
         tier_rate(tier, "input_cost_per_token"),
-        tier_rate(tier, "output_cost_per_token"),
+        completion_cost,
         cache_creation_cost,
         tier_rate(tier, "cache_creation_input_token_cost_above_1hr", "cache_creation_input_token_cost")
         or cache_creation_cost,
