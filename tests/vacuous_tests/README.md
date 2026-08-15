@@ -31,7 +31,7 @@ python tests/vacuous_tests/inventory.py --queue 15 --area tests/test_litellm/pro
 
 `--todays-area` picks one area per day from the ranked list, rotating by date. That keeps every PR inside one owner's area and needs no state file, so two runs on the same day cannot disagree about where they are working
 
-`inventory_baseline.json` records per-file candidate counts. `--check` fails when any count grows, so the number can only go down. If you are adding a deliberate assert-by-not-raising test, say so in the test's docstring and regenerate the baseline
+`inventory_baseline.json` names every known candidate per file and bucket, not just how many there are. `--check` fails on any candidate it does not already name, so fixing one test does not open a slot for a new vacuous one in the same file. The cost is that renaming or moving a known candidate also fails the check, which is a one-command fix: if the failure is a rename, or a deliberate assert-by-not-raising test whose docstring says so, regenerate the baseline
 
 ## Stage B: does the test actually have teeth
 

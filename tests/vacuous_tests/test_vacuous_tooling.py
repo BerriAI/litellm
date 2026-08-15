@@ -140,20 +140,46 @@ def test_classifies_methods_of_test_classes() -> None:
 
 def test_ratchet_rejects_new_candidates() -> None:
     failures = inventory.regressions(
-        {"tests/test_sample.py": {"no_assert": 2}},
-        {"tests/test_sample.py": {"no_assert": 1}},
+        {"tests/test_sample.py": {"no_assert": ["test_known", "test_new"]}},
+        {"tests/test_sample.py": {"no_assert": ["test_known"]}},
     )
-    assert failures == ["tests/test_sample.py: no_assert went from 1 to 2"]
+    assert failures == ["tests/test_sample.py::test_new is a new no_assert candidate"]
+
+
+def test_ratchet_rejects_a_replacement_that_keeps_the_count_unchanged() -> None:
+    failures = inventory.regressions(
+        {"tests/test_sample.py": {"no_assert": ["test_new"]}},
+        {"tests/test_sample.py": {"no_assert": ["test_fixed"]}},
+    )
+    assert failures == ["tests/test_sample.py::test_new is a new no_assert candidate"]
 
 
 def test_ratchet_allows_fewer_candidates_and_untouched_files() -> None:
-    baseline = {"tests/test_sample.py": {"no_assert": 2}, "tests/test_other.py": {"dead_skip": 1}}
-    assert inventory.regressions({"tests/test_sample.py": {"no_assert": 1}}, baseline) == []
+    baseline = {
+        "tests/test_sample.py": {"no_assert": ["test_a", "test_b"]},
+        "tests/test_other.py": {"dead_skip": ["test_c"]},
+    }
+    assert inventory.regressions({"tests/test_sample.py": {"no_assert": ["test_a"]}}, baseline) == []
 
 
 def test_ratchet_rejects_candidates_in_a_new_file() -> None:
-    failures = inventory.regressions({"tests/test_new.py": {"trivial_assert": 1}}, {})
-    assert failures == ["tests/test_new.py: trivial_assert went from 0 to 1"]
+    failures = inventory.regressions({"tests/test_new.py": {"trivial_assert": ["test_thing"]}}, {})
+    assert failures == ["tests/test_new.py::test_thing is a new trivial_assert candidate"]
+
+
+def test_identities_group_candidate_names_per_file_and_bucket() -> None:
+    source = """
+    def test_no_assert():
+        compute()
+
+    def test_trivial():
+        assert True
+    """
+    path = os.path.join(inventory.REPO_ROOT, "tests", "test_sample.py")
+    candidates = inventory.classify_file(path, textwrap.dedent(source))
+    assert inventory.to_identities(candidates) == {
+        "tests/test_sample.py": {"no_assert": ["test_no_assert"], "trivial_assert": ["test_trivial"]}
+    }
 
 
 def _mutant_descriptions(source: str, lines: List[int], tmp_path: str) -> List[str]:

@@ -8,9 +8,11 @@ notices.
 
 Two jobs:
 
-1. Ratchet (CI). `--check` compares the per-file candidate counts against
-   `inventory_baseline.json` and fails when any count grows, so new vacuous
-   tests cannot land. Regenerate with `--update-baseline` after a cleanup.
+1. Ratchet (CI). `--check` compares the candidates found now against the ones
+   named in `inventory_baseline.json` and fails on any candidate the baseline
+   does not already name, so a new vacuous test cannot land by taking the slot
+   of one that was fixed. Regenerate with `--update-baseline` after a cleanup
+   or a rename.
 2. Queue (automation). `--queue N` prints the next N candidates for the daily
    run, skipping anything Stage B has already cleared in
    `verified_not_vacuous.json`. `--todays-area` keeps a run inside one area,
@@ -415,12 +417,20 @@ def collect(root: str = TESTS_ROOT) -> List[Candidate]:
     return sorted(candidates, key=lambda c: (c.path, c.lineno))
 
 
-def to_counts(candidates: Iterable[Candidate]) -> Dict[str, Dict[str, int]]:
-    counts: Dict[str, Dict[str, int]] = {}
+def to_identities(candidates: Iterable[Candidate]) -> Dict[str, Dict[str, List[str]]]:
+    """Which tests are candidates, per file and bucket.
+
+    The baseline records names, not counts, so that a fixed test being replaced
+    by a newly vacuous one in the same file cannot ride through on an unchanged
+    count.
+    """
+    grouped: Dict[str, Dict[str, List[str]]] = {}
     for candidate in candidates:
-        counts.setdefault(candidate.path, {})
-        counts[candidate.path][candidate.bucket] = counts[candidate.path].get(candidate.bucket, 0) + 1
-    return {path: dict(sorted(buckets.items())) for path, buckets in sorted(counts.items())}
+        grouped.setdefault(candidate.path, {}).setdefault(candidate.bucket, []).append(candidate.name)
+    return {
+        path: {bucket: sorted(names) for bucket, names in sorted(buckets.items())}
+        for path, buckets in sorted(grouped.items())
+    }
 
 
 def load_json(path: str, default: object) -> object:
@@ -437,34 +447,39 @@ def cleared_ids() -> Set[str]:
     return set()
 
 
-def write_baseline(counts: Dict[str, Dict[str, int]]) -> None:
+def write_baseline(identities: Dict[str, Dict[str, List[str]]]) -> None:
     totals: Dict[str, int] = {}
-    for buckets in counts.values():
-        for bucket, count in buckets.items():
-            totals[bucket] = totals.get(bucket, 0) + count
+    for buckets in identities.values():
+        for bucket, names in buckets.items():
+            totals[bucket] = totals.get(bucket, 0) + len(names)
     payload = {
         "_comment": (
-            "Ratchet baseline for tests/vacuous_tests/inventory.py. Counts may only "
-            "decrease; regenerate with --update-baseline after a cleanup."
+            "Ratchet baseline for tests/vacuous_tests/inventory.py. It names every known "
+            "candidate per file and bucket, and any candidate missing from it fails the "
+            "check. Regenerate with --update-baseline after a cleanup or a rename."
         ),
         "totals": dict(sorted(totals.items())),
-        "files": counts,
+        "files": identities,
     }
     with open(BASELINE_PATH, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=False)
         handle.write("\n")
 
 
-def regressions(counts: Dict[str, Dict[str, int]], baseline_files: Dict[str, Dict[str, int]]) -> List[str]:
+def regressions(
+    identities: Dict[str, Dict[str, List[str]]],
+    baseline_files: Dict[str, Dict[str, List[str]]],
+) -> List[str]:
     return sorted(
-        f"{path}: {bucket} went from {baseline_files.get(path, {}).get(bucket, 0)} to {count}"
-        for path, buckets in counts.items()
-        for bucket, count in buckets.items()
-        if count > baseline_files.get(path, {}).get(bucket, 0)
+        f"{path}::{name} is a new {bucket} candidate"
+        for path, buckets in identities.items()
+        for bucket, names in buckets.items()
+        for name in names
+        if name not in baseline_files.get(path, {}).get(bucket, [])
     )
 
 
-def check_against_baseline(counts: Dict[str, Dict[str, int]]) -> int:
+def check_against_baseline(identities: Dict[str, Dict[str, List[str]]]) -> int:
     baseline = load_json(BASELINE_PATH, None)
     if baseline is None:
         print(
@@ -472,25 +487,28 @@ def check_against_baseline(counts: Dict[str, Dict[str, int]]) -> int:
             file=sys.stderr,
         )
         return 1
-    base_files: Dict[str, Dict[str, int]] = baseline["files"]
-    failures = regressions(counts, base_files)
+    base_files: Dict[str, Dict[str, List[str]]] = baseline["files"]
+    failures = regressions(identities, base_files)
     if failures:
         print("Vacuous-test ratchet failed. New candidate vacuous tests:\n", file=sys.stderr)
         for line in failures:
             print(f"  - {line}", file=sys.stderr)
         print(
             "\nEach bucket is explained in tests/vacuous_tests/README.md. Make the new "
-            "test assert something a mutant can break; if this is a deliberate "
-            "assert-by-not-raising test, add a docstring saying so and regenerate the "
-            "baseline with:\n"
+            "test assert something a mutant can break. A renamed or moved candidate "
+            "lands here too; if this is a rename, or a deliberate assert-by-not-raising "
+            "test with a docstring saying so, regenerate the baseline with:\n"
             "  python tests/vacuous_tests/inventory.py --update-baseline",
             file=sys.stderr,
         )
         return 1
-    improvements = 0
-    for path, buckets in base_files.items():
-        for bucket, count in buckets.items():
-            improvements += max(0, count - counts.get(path, {}).get(bucket, 0))
+    improvements = sum(
+        1
+        for path, buckets in base_files.items()
+        for bucket, names in buckets.items()
+        for name in names
+        if name not in identities.get(path, {}).get(bucket, [])
+    )
     print(f"Vacuous-test ratchet OK ({improvements} candidate(s) below baseline).")
     return 0
 
@@ -554,14 +572,14 @@ def main() -> int:
     args = parser.parse_args()
 
     candidates = collect(args.root)
-    counts = to_counts(candidates)
+    identities = to_identities(candidates)
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as handle:
             json.dump([c.to_json() for c in candidates], handle, indent=2)
             handle.write("\n")
     if args.update_baseline:
-        write_baseline(counts)
+        write_baseline(identities)
         print(f"wrote {os.path.relpath(BASELINE_PATH, REPO_ROOT)}")
     today = rotated_area(candidates, date.today())
     if args.areas:
@@ -576,7 +594,7 @@ def main() -> int:
     ):
         print_report(candidates)
     if args.check:
-        return check_against_baseline(counts)
+        return check_against_baseline(identities)
     return 0
 
 

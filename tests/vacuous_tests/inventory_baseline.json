@@ -1,5 +1,5 @@
 {
-  "_comment": "Ratchet baseline for tests/vacuous_tests/inventory.py. Counts may only decrease; regenerate with --update-baseline after a cleanup.",
+  "_comment": "Ratchet baseline for tests/vacuous_tests/inventory.py. It names every known candidate per file and bucket, and any candidate missing from it fails the check. Regenerate with --update-baseline after a cleanup or a rename.",
   "totals": {
     "dead_skip": 309,
     "no_assert": 723,
@@ -8,1143 +8,2669 @@
   },
   "files": {
     "tests/agent_tests/local_only_agent_tests/test_a2a_completion_bridge.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_vertex_agent_engine_streaming"
+      ]
     },
     "tests/audio_tests/test_audio_speech.py": {
-      "dead_skip": 3,
-      "no_assert": 3
+      "dead_skip": [
+        "test_audio_speech_cost_calc",
+        "test_audio_speech_litellm_vertex",
+        "test_runwayml_tts_async"
+      ],
+      "no_assert": [
+        "test_audio_speech_gemini",
+        "test_audio_speech_litellm_azure",
+        "test_audio_speech_litellm_openai"
+      ]
     },
     "tests/audio_tests/test_whisper.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_gpt_4o_transcribe",
+        "test_transcription_azure_whisper",
+        "test_transcription_openai_whisper"
+      ]
     },
     "tests/code_coverage_tests/callback_manager_test.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_no_unauthorized_callback_modifications"
+      ]
     },
     "tests/code_coverage_tests/ensure_async_clients_test.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_no_async_http_handler_usage"
+      ]
     },
     "tests/code_coverage_tests/test_aio_http_image_conversion.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_aiohttp",
+        "test_async_httpx",
+        "test_asyncified"
+      ]
     },
     "tests/code_coverage_tests/test_ban_set_verbose.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_no_hardcoded_set_verbose"
+      ]
     },
     "tests/code_coverage_tests/test_proxy_types_import.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_proxy_types_not_imported"
+      ]
     },
     "tests/documentation_tests/test_readme_providers.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_all_providers_documented",
+        "test_providers_alphabetically_ordered"
+      ]
     },
     "tests/documentation_tests/test_standard_logging_payload.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_standard_logging_payload_documentation"
+      ]
     },
     "tests/enterprise/litellm_enterprise/proxy/auth/test_route_checks.py": {
-      "no_assert": 6
+      "no_assert": [
+        "TestEnterpriseRouteChecks.test_should_call_route_enabled",
+        "TestEnterpriseRouteChecks.test_should_call_route_llm_disabled_management_enabled",
+        "TestEnterpriseRouteChecks.test_should_call_route_management_disabled_llm_enabled",
+        "TestEnterpriseRouteChecksMcpManagement.test_mcp_management_allowed_when_llm_api_disabled",
+        "TestEnterpriseRouteChecksModelListExemption.test_models_route_allowed_when_llm_api_disabled",
+        "TestEnterpriseRouteChecksModelListExemption.test_v1_models_route_allowed_when_llm_api_disabled"
+      ]
     },
     "tests/enterprise/litellm_enterprise/proxy/management_endpoints/test_project_endpoints_prisma.py": {
-      "dead_skip": 4,
-      "no_assert": 4
+      "dead_skip": [
+        "test_delete_project",
+        "test_new_project",
+        "test_project_info",
+        "test_update_project"
+      ],
+      "no_assert": [
+        "test_check_team_project_limits_all_proxy_models",
+        "test_check_team_project_limits_valid_subset",
+        "test_project_soft_budget_check",
+        "test_project_soft_budget_check_no_alert_under_budget"
+      ]
     },
     "tests/guardrails_tests/test_bedrock_guardrails.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_bedrock_guardrails_with_streaming_no_violation"
+      ]
     },
     "tests/guardrails_tests/test_deepkeep_guardrails.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_deepkeep_guard_config"
+      ]
     },
     "tests/guardrails_tests/test_eu_ai_act_article5.py": {
-      "no_assert": 1,
-      "trivial_assert": 1
+      "no_assert": [
+        "TestEUAIActArticle5ConditionalMatching.test_summary_statistics"
+      ],
+      "trivial_assert": [
+        "TestEUAIActPerformance.test_zero_cost_no_api_calls"
+      ]
     },
     "tests/guardrails_tests/test_lasso_guardrails.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_lasso_guard_config"
+      ]
     },
     "tests/guardrails_tests/test_sg_mas_ai_guardrails.py": {
-      "no_assert": 8,
-      "trivial_assert": 1
+      "no_assert": [
+        "TestMASDataGovernance.test_sentence",
+        "TestMASEdgeCases.test_case_insensitive_always_block",
+        "TestMASEdgeCases.test_exception_overrides_violation",
+        "TestMASFairnessBias.test_sentence",
+        "TestMASHumanOversight.test_sentence",
+        "TestMASModelSecurity.test_sentence",
+        "TestMASPerformance.test_summary_statistics",
+        "TestMASTransparencyExplainability.test_sentence"
+      ],
+      "trivial_assert": [
+        "TestMASEdgeCases.test_zero_cost_no_api_calls"
+      ]
     },
     "tests/guardrails_tests/test_sg_pdpa_guardrails.py": {
-      "no_assert": 10,
-      "trivial_assert": 1
+      "no_assert": [
+        "TestSGPDPADataTransfer.test_sentence",
+        "TestSGPDPADoNotCall.test_sentence",
+        "TestSGPDPAEdgeCases.test_case_insensitive_always_block",
+        "TestSGPDPAEdgeCases.test_case_insensitive_conditional",
+        "TestSGPDPAEdgeCases.test_exception_overrides_violation",
+        "TestSGPDPAEdgeCases.test_multiple_violations",
+        "TestSGPDPAPerformance.test_summary_statistics",
+        "TestSGPDPAPersonalIdentifiers.test_sentence",
+        "TestSGPDPAProfilingAutomatedDecisions.test_sentence",
+        "TestSGPDPASensitiveData.test_sentence"
+      ],
+      "trivial_assert": [
+        "TestSGPDPAEdgeCases.test_zero_cost_no_api_calls"
+      ]
     },
     "tests/guardrails_tests/test_tracing_guardrails.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_langfuse_trace_includes_guardrail_information"
+      ]
     },
     "tests/image_gen_tests/base_image_generation_test.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_openai_gpt_image_1"
+      ]
     },
     "tests/image_gen_tests/test_image_edits.py": {
-      "dead_skip": 1,
-      "no_assert": 2
+      "dead_skip": [
+        "test_recraft_image_edit_api"
+      ],
+      "no_assert": [
+        "test_openai_image_edit_litellm_router",
+        "test_openai_image_edit_with_bytesio"
+      ]
     },
     "tests/image_gen_tests/test_image_generation.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_aimage_generation_bedrock_with_optional_params"
+      ]
     },
     "tests/image_gen_tests/test_image_variation.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_image_variation_placeholder"
+      ]
     },
     "tests/integration/test_oci_integration.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_async_tool_use",
+        "test_tool_use"
+      ]
     },
     "tests/litellm/litellm_core_utils/test_json_schema_validation.py": {
-      "no_assert": 3
+      "no_assert": [
+        "TestPerRequestJsonSchemaValidation.test_global_off_no_per_request_skips_validation",
+        "TestPerRequestJsonSchemaValidation.test_per_request_off_overrides_global_on",
+        "TestPerRequestJsonSchemaValidation.test_valid_response_passes_with_per_request_on"
+      ]
     },
     "tests/litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_validate_trusted_redirect_uri_allows_forwarded_origin_from_trusted_proxy"
+      ]
     },
     "tests/litellm/proxy/vector_store_endpoints/test_vector_store_rbac.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_list_vector_stores_admin_not_blocked",
+        "test_list_vector_stores_allowed_when_not_disabled"
+      ]
     },
     "tests/litellm_utils_tests/test_aiohttp_handler.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_client_session_helper",
+        "test_event_loop_robustness",
+        "test_httpx_request_simulation"
+      ]
     },
     "tests/litellm_utils_tests/test_health_check.py": {
-      "dead_skip": 2,
-      "no_assert": 2
+      "dead_skip": [
+        "test_azure_img_gen_health_check",
+        "test_sagemaker_embedding_health_check"
+      ],
+      "no_assert": [
+        "test_ahealth_check_ocr",
+        "test_text_completion_health_check"
+      ]
     },
     "tests/litellm_utils_tests/test_secret_manager.py": {
-      "dead_skip": 2,
-      "no_assert": 4
+      "dead_skip": [
+        "test_oidc_circle_v1_with_amazon",
+        "test_oidc_circleci_with_azure"
+      ],
+      "no_assert": [
+        "test_oidc_circleci",
+        "test_oidc_circleci_v2",
+        "test_oidc_github",
+        "test_oidc_google"
+      ]
     },
     "tests/litellm_utils_tests/test_utils.py": {
-      "no_assert": 4
+      "no_assert": [
+        "test_dict_to_response_format_helper",
+        "test_get_provider_audio_transcription_config",
+        "test_get_whitelisted_models",
+        "test_validate_environment_empty_model"
+      ]
     },
     "tests/llm_responses_api_testing/test_anthropic_responses_api.py": {
-      "dead_skip": 5,
-      "no_assert": 1
+      "dead_skip": [
+        "TestAnthropicResponsesAPITest.test_basic_openai_responses_cancel_endpoint",
+        "TestAnthropicResponsesAPITest.test_basic_openai_responses_delete_endpoint",
+        "TestAnthropicResponsesAPITest.test_basic_openai_responses_get_endpoint",
+        "TestAnthropicResponsesAPITest.test_basic_openai_responses_streaming_delete_endpoint",
+        "TestAnthropicResponsesAPITest.test_cancel_responses_invalid_response_id"
+      ],
+      "no_assert": [
+        "test_multiturn_tool_calls"
+      ]
     },
     "tests/llm_responses_api_testing/test_azure_responses_api.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_azure_responses_api_preview_api_version"
+      ]
     },
     "tests/llm_responses_api_testing/test_google_ai_studio_responses_api.py": {
-      "dead_skip": 5,
-      "no_assert": 1
+      "dead_skip": [
+        "TestGoogleAIStudioResponsesAPITest.test_basic_openai_responses_cancel_endpoint",
+        "TestGoogleAIStudioResponsesAPITest.test_basic_openai_responses_delete_endpoint",
+        "TestGoogleAIStudioResponsesAPITest.test_basic_openai_responses_get_endpoint",
+        "TestGoogleAIStudioResponsesAPITest.test_basic_openai_responses_streaming_delete_endpoint",
+        "TestGoogleAIStudioResponsesAPITest.test_cancel_responses_invalid_response_id"
+      ],
+      "no_assert": [
+        "test_basic_google_ai_studio_responses_api_with_tools"
+      ]
     },
     "tests/llm_responses_api_testing/test_openai_responses_api.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_basic_openai_responses_with_websearch",
+        "test_mcp_tools_with_responses_api",
+        "test_openai_responses_litellm_router"
+      ]
     },
     "tests/llm_translation/reasoning_effort_grid/test_reasoning_effort_grid.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_reasoning_effort_grid"
+      ]
     },
     "tests/llm_translation/test_anthropic_completion.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestAnthropicCompletion.test_tool_call_no_arguments",
+        "test_claude_tool_use_with_anthropic_acreate"
+      ]
     },
     "tests/llm_translation/test_azure_agents.py": {
-      "swallowed_failure": 1
+      "swallowed_failure": [
+        "test_azure_ai_agents_conversation_continuity"
+      ]
     },
     "tests/llm_translation/test_azure_ai.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_azure_ai_request_format"
+      ]
     },
     "tests/llm_translation/test_azure_o_series.py": {
-      "no_assert": 3
+      "no_assert": [
+        "TestAzureOpenAIO3Mini.test_basic_tool_calling",
+        "TestAzureOpenAIO3Mini.test_prompt_caching",
+        "TestAzureOpenAIO3Mini.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_azure_openai.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_azure_openai_with_prompt_cache_key",
+        "test_completion_azure_deployment_id"
+      ]
     },
     "tests/llm_translation/test_bedrock_agentcore.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_bedrock_agentcore_with_streaming"
+      ]
     },
     "tests/llm_translation/test_bedrock_agents.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "test_bedrock_agents",
+        "test_bedrock_agents_with_streaming"
+      ]
     },
     "tests/llm_translation/test_bedrock_completion.py": {
-      "dead_skip": 5,
-      "no_assert": 12
+      "dead_skip": [
+        "test_bedrock_completion_test_4",
+        "test_completion_bedrock_claude_aws_bedrock_client",
+        "test_completion_bedrock_claude_aws_session_token",
+        "test_completion_claude_3_base64",
+        "test_nova_optional_params_tool_choice"
+      ],
+      "no_assert": [
+        "TestBedrockConverseChatCrossRegion.test_prompt_caching",
+        "TestBedrockConverseChatCrossRegion.test_tool_call_no_arguments",
+        "TestBedrockConverseChatNormal.test_tool_call_no_arguments",
+        "TestBedrockConverseNovaTestSuite.test_prompt_caching",
+        "TestBedrockConverseNovaTestSuite.test_tool_call_no_arguments",
+        "TestBedrockEmbedding.test_bedrock_image_embedding_transformation",
+        "test_base_aws_llm_get_credentials",
+        "test_bedrock_converse_route",
+        "test_bedrock_cross_region_inference",
+        "test_bedrock_empty_content_real_call",
+        "test_bedrock_mapped_converse_models",
+        "test_bedrock_meta_llama_function_calling"
+      ]
     },
     "tests/llm_translation/test_bedrock_gpt_oss.py": {
-      "no_assert": 4
+      "no_assert": [
+        "TestBedrockGPTOSS.test_completion_cost",
+        "TestBedrockGPTOSS.test_function_calling_with_tool_response",
+        "TestBedrockGPTOSS.test_prompt_caching",
+        "TestBedrockGPTOSS.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_bedrock_invoke_tests.py": {
-      "no_assert": 3
+      "no_assert": [
+        "TestBedrockInvokeClaudeJson.test_tool_call_no_arguments",
+        "TestBedrockInvokeNovaJson.test_json_response_pydantic_obj",
+        "TestBedrockInvokeNovaJson.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_bedrock_llama.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestBedrockTestSuite.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_bedrock_moonshot.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestBedrockMoonshotInvoke.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_bedrock_nova_embedding.py": {
-      "dead_skip": 6
+      "dead_skip": [
+        "TestNovaEmbeddingIntegration.test_async_text_embedding_e2e",
+        "TestNovaEmbeddingIntegration.test_different_dimensions",
+        "TestNovaEmbeddingIntegration.test_different_embedding_purposes",
+        "TestNovaEmbeddingIntegration.test_image_embedding_e2e",
+        "TestNovaEmbeddingIntegration.test_sync_text_embedding_e2e",
+        "TestNovaEmbeddingIntegration.test_video_embedding_e2e"
+      ]
     },
     "tests/llm_translation/test_bedrock_nova_json.py": {
-      "no_assert": 4
+      "no_assert": [
+        "TestBedrockNovaJson.test_json_response_nested_json_schema",
+        "TestBedrockNovaJson.test_json_response_nested_pydantic_obj",
+        "TestBedrockNovaJson.test_prompt_caching",
+        "TestBedrockNovaJson.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_cohere.py": {
-      "swallowed_failure": 2
+      "swallowed_failure": [
+        "test_cohere_embed_v4_error_handling",
+        "test_cohere_v2_error_handling"
+      ]
     },
     "tests/llm_translation/test_containers_api.py": {
-      "swallowed_failure": 1
+      "swallowed_failure": [
+        "test_container_files_api"
+      ]
     },
     "tests/llm_translation/test_databricks.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "TestDatabricksCompletion.test_pdf_handling",
+        "TestDatabricksCompletion.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_deepseek_completion.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestDeepSeekChatCompletion.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_gemini.py": {
-      "no_assert": 1,
-      "swallowed_failure": 1
+      "no_assert": [
+        "TestGoogleAIStudioGemini.test_tool_call_no_arguments"
+      ],
+      "swallowed_failure": [
+        "test_gemini_reasoning_effort_minimal"
+      ]
     },
     "tests/llm_translation/test_groq.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestGroq.test_tool_call_no_arguments",
+        "TestGroq.test_tool_call_with_empty_enum_property"
+      ]
     },
     "tests/llm_translation/test_huggingface_chat_completion.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestHuggingFace.test_completion_cost"
+      ]
     },
     "tests/llm_translation/test_jina_ai.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_jina_ai_embedding"
+      ]
     },
     "tests/llm_translation/test_langgraph.py": {
-      "swallowed_failure": 2
+      "swallowed_failure": [
+        "test_langgraph_acompletion_non_streaming",
+        "test_langgraph_acompletion_streaming"
+      ]
     },
     "tests/llm_translation/test_minimax_tts.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "TestMinimaxSpeechIntegration.test_speech_basic",
+        "TestMinimaxSpeechIntegration.test_speech_with_custom_params"
+      ]
     },
     "tests/llm_translation/test_mistral_api.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestMistralCompletion.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_nvidia_nim.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestNvidiaNim.test_basic_rerank"
+      ]
     },
     "tests/llm_translation/test_openai.py": {
-      "no_assert": 10
+      "no_assert": [
+        "TestOpenAIChatCompletion.test_prompt_caching",
+        "TestOpenAIChatCompletion.test_prompt_caching",
+        "TestOpenAIChatCompletion.test_tool_call_no_arguments",
+        "test_gpt_5_web_search",
+        "test_o1_parallel_tool_calls",
+        "test_openai_gpt_5_codex_reasoning",
+        "test_openai_responses_only_model_bridge",
+        "test_openai_tool_calling",
+        "test_openai_web_search",
+        "test_openai_web_search_streaming"
+      ]
     },
     "tests/llm_translation/test_openai_o1.py": {
-      "no_assert": 4
+      "no_assert": [
+        "TestOpenAIO1.test_prompt_caching",
+        "TestOpenAIO1.test_tool_call_no_arguments",
+        "TestOpenAIO3.test_prompt_caching",
+        "TestOpenAIO3.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_optional_params.py": {
-      "no_assert": 4,
-      "swallowed_failure": 2
+      "no_assert": [
+        "test_azure_response_format_param",
+        "test_bedrock_optional_params_simple",
+        "test_drop_nested_params_add_prop_and_strict",
+        "test_ollama_pydantic_obj"
+      ],
+      "swallowed_failure": [
+        "test_dynamic_drop_additional_params",
+        "test_dynamic_drop_params"
+      ]
     },
     "tests/llm_translation/test_perplexity_reasoning.py": {
-      "swallowed_failure": 1
+      "swallowed_failure": [
+        "TestPerplexityReasoning.test_perplexity_non_reasoning_models_dont_support_reasoning"
+      ]
     },
     "tests/llm_translation/test_prompt_factory.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_bedrock_tool_calling_pt",
+        "test_convert_generic_image_chunk_to_openai_image_obj",
+        "test_ollama_pt"
+      ]
     },
     "tests/llm_translation/test_replicate.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_replicate_deepseek_integration"
+      ]
     },
     "tests/llm_translation/test_rerank.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_basic_rerank_together_ai"
+      ]
     },
     "tests/llm_translation/test_router_llm_translation_tests.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestRouterLLMTranslation.test_prompt_caching",
+        "TestRouterLLMTranslation.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_snowflake.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_snowflake_tool_calling_responses_api"
+      ]
     },
     "tests/llm_translation/test_text_completion_unit_tests.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_huggingface_text_completion_logprobs"
+      ]
     },
     "tests/llm_translation/test_together_ai.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestTogetherAI.test_tool_call_no_arguments"
+      ]
     },
     "tests/llm_translation/test_vcr_redis_persister.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_save_swallows_redis_errors_so_teardown_does_not_fail"
+      ]
     },
     "tests/llm_translation/test_xai.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestXAIChat.test_tool_call_no_arguments"
+      ]
     },
     "tests/local_testing/test_acompletion.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_langfuse_double_logging"
+      ]
     },
     "tests/local_testing/test_acompletion_fallbacks.py": {
-      "swallowed_failure": 1
+      "swallowed_failure": [
+        "test_acompletion_fallbacks_bad_models"
+      ]
     },
     "tests/local_testing/test_acooldowns_router.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_multiple_deployments_parallel"
+      ]
     },
     "tests/local_testing/test_add_function_to_prompt.py": {
-      "swallowed_failure": 1
+      "swallowed_failure": [
+        "test_function_call_non_openai_model"
+      ]
     },
     "tests/local_testing/test_aim_guardrails.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_aim_guard_config"
+      ]
     },
     "tests/local_testing/test_alangfuse.py": {
-      "dead_skip": 8,
-      "no_assert": 2
+      "dead_skip": [
+        "test_aaalangfuse_logging_metadata",
+        "test_langfuse_logging_audio_transcriptions",
+        "test_langfuse_logging_custom_generation_name",
+        "test_langfuse_logging_embedding",
+        "test_langfuse_logging_function_calling",
+        "test_langfuse_logging_stream",
+        "test_langfuse_masked_input_output",
+        "test_make_request"
+      ],
+      "no_assert": [
+        "test_langfuse_logging_tool_calling",
+        "test_langfuse_prompt_type"
+      ]
     },
     "tests/local_testing/test_amazing_vertex_completion.py": {
-      "dead_skip": 12,
-      "no_assert": 3
+      "dead_skip": [
+        "test_aaavertex_ai_anthropic_async_streaming",
+        "test_aavertex_ai_anthropic_async",
+        "test_avertex_ai",
+        "test_avertex_ai_stream",
+        "test_gemini_pro_vision_base64",
+        "test_vertexai_aembedding",
+        "test_vertexai_embedding",
+        "test_vertexai_embedding_embedding_latest_input_type",
+        "test_vertexai_multimodal_embedding",
+        "test_vertexai_multimodal_embedding_base64image_in_input",
+        "test_vertexai_multimodal_embedding_image_in_input",
+        "test_vertexai_multimodal_embedding_text_input"
+      ],
+      "no_assert": [
+        "test_gemini_nullable_object_tool_schema_httpx",
+        "test_prompt_factory",
+        "test_vertex_schema_test"
+      ]
     },
     "tests/local_testing/test_anthropic_prompt_caching.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_router_prompt_caching_model_stored"
+      ]
     },
     "tests/local_testing/test_arize_ai.py": {
-      "dead_skip": 1,
-      "no_assert": 2
+      "dead_skip": [
+        "test_arize_callback"
+      ],
+      "no_assert": [
+        "test_async_dynamic_arize_config",
+        "test_async_otel_callback"
+      ]
     },
     "tests/local_testing/test_arize_phoenix.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_async_otel_callback"
+      ]
     },
     "tests/local_testing/test_assistants.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_create_thread_litellm"
+      ]
     },
     "tests/local_testing/test_async_fn.py": {
-      "dead_skip": 6
+      "dead_skip": [
+        "test_async_anyscale_response",
+        "test_async_completion_cloudflare",
+        "test_get_cloudflare_response_streaming",
+        "test_get_response_non_openai_streaming",
+        "test_hf_completion_tgi",
+        "test_sync_response_anyscale"
+      ]
     },
     "tests/local_testing/test_basic_python_version.py": {
-      "no_assert": 2,
-      "trivial_assert": 1
+      "no_assert": [
+        "test_litellm_proxy_server_config_no_general_settings",
+        "test_litellm_proxy_server_config_no_general_settings_v2_resolver"
+      ],
+      "trivial_assert": [
+        "test_litellm_proxy_server"
+      ]
     },
     "tests/local_testing/test_blocked_user_list.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "test_block_user_check",
+        "test_block_user_db_check"
+      ]
     },
     "tests/local_testing/test_caching.py": {
-      "dead_skip": 5,
-      "no_assert": 1
+      "dead_skip": [
+        "test_audio_caching",
+        "test_redis_cache_cluster_init_unit_test",
+        "test_redis_cache_cluster_init_with_env_vars_unit_test",
+        "test_redis_sentinel_caching",
+        "test_s3_cache_acompletion_azure"
+      ],
+      "no_assert": [
+        "test_caching_kwargs_input"
+      ]
     },
     "tests/local_testing/test_caching_ssl.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_redis_with_ssl"
+      ]
     },
     "tests/local_testing/test_completion.py": {
-      "dead_skip": 22,
-      "no_assert": 4,
-      "swallowed_failure": 3
+      "dead_skip": [
+        "test_acompletion_ollama_function_call",
+        "test_acompletion_ollama_function_call_stream",
+        "test_acompletion_stream_watsonx",
+        "test_acompletion_watsonx",
+        "test_azure_openai_ad_token",
+        "test_completion_anyscale_api",
+        "test_completion_codestral_chat_api",
+        "test_completion_empower",
+        "test_completion_gpt4_vision",
+        "test_completion_mistral_azure",
+        "test_completion_ollama_function_call",
+        "test_completion_ollama_function_call_stream",
+        "test_completion_ollama_hosted",
+        "test_completion_perplexity_api_2",
+        "test_completion_replicate_llama3",
+        "test_completion_replicate_vicuna",
+        "test_completion_stream_watsonx",
+        "test_completion_together_ai_mixtral",
+        "test_completion_volcengine",
+        "test_completion_watsonx_error",
+        "test_mistral_anyscale_stream",
+        "test_response_model_none"
+      ],
+      "no_assert": [
+        "test_completion_openai_params",
+        "test_edit_note",
+        "test_langfuse_completion",
+        "test_moderation"
+      ],
+      "swallowed_failure": [
+        "test_completion_azure_extra_headers",
+        "test_completion_fireworks_ai_dynamic_params",
+        "test_completion_hf_model_no_provider"
+      ]
     },
     "tests/local_testing/test_completion_cost.py": {
-      "dead_skip": 3,
-      "no_assert": 4
+      "dead_skip": [
+        "test_bedrock_cost_calc_with_region",
+        "test_completion_cost_databricks",
+        "test_vertex_ai_medlm_completion_cost"
+      ],
+      "no_assert": [
+        "test_completion_cost_azure_tts",
+        "test_completion_cost_databricks_embedding",
+        "test_cost_calculator_with_base_model_with_router",
+        "test_together_ai_embedding_completion_cost"
+      ]
     },
     "tests/local_testing/test_completion_with_retries.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_completion_with_0_num_retries",
+        "test_completion_with_retry_policy_no_error"
+      ]
     },
     "tests/local_testing/test_custom_callback_input.py": {
-      "dead_skip": 4
+      "dead_skip": [
+        "test_aaastandard_logging_payload_cache_hit",
+        "test_async_chat_sagemaker_stream",
+        "test_async_chat_vertex_ai_stream",
+        "test_async_text_completion_bedrock"
+      ]
     },
     "tests/local_testing/test_custom_llm.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_simple_image_generation",
+        "test_simple_image_generation_async"
+      ]
     },
     "tests/local_testing/test_custom_logger.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "test_async_custom_handler_embedding_optional_param_bedrock",
+        "test_azure_completion_stream"
+      ]
     },
     "tests/local_testing/test_docker_no_network_on_deploy.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestDockerNoNetworkOnDeploy.test_no_external_urls_in_startup_code"
+      ]
     },
     "tests/local_testing/test_dynamic_rate_limit_handler.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_multiple_projects"
+      ]
     },
     "tests/local_testing/test_embedding.py": {
-      "dead_skip": 4,
-      "swallowed_failure": 1
+      "dead_skip": [
+        "test_hf_embedddings_with_optional_params",
+        "test_sagemaker_aembeddings",
+        "test_sagemaker_embeddings",
+        "test_voyage_embeddings"
+      ],
+      "swallowed_failure": [
+        "test_hf_embedding"
+      ]
     },
     "tests/local_testing/test_exceptions.py": {
-      "dead_skip": 3,
-      "no_assert": 1,
-      "swallowed_failure": 3
+      "dead_skip": [
+        "test_content_policy_exceptionimage_generation_openai",
+        "test_context_window",
+        "test_context_window_with_fallbacks"
+      ],
+      "no_assert": [
+        "test_anthropic_tool_calling_exception"
+      ],
+      "swallowed_failure": [
+        "test_content_policy_violation_error_streaming",
+        "test_litellm_completion_vertex_exception",
+        "test_router_completion_vertex_exception"
+      ]
     },
     "tests/local_testing/test_function_call_parsing.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_function_call_parsing"
+      ]
     },
     "tests/local_testing/test_function_calling.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_groq_parallel_function_call"
+      ]
     },
     "tests/local_testing/test_function_setup.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_empty_content"
+      ]
     },
     "tests/local_testing/test_get_model_file.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_get_backup_model_cost_map"
+      ]
     },
     "tests/local_testing/test_get_model_info.py": {
-      "no_assert": 4
+      "no_assert": [
+        "test_get_model_info_completion_cost_unit_tests",
+        "test_get_model_info_custom_llm_with_model_name",
+        "test_get_model_info_simple_model_name",
+        "test_model_info_bedrock_converse"
+      ]
     },
     "tests/local_testing/test_guardrails_ai.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_guardrails_ai"
+      ]
     },
     "tests/local_testing/test_helicone_integration.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_helicone_logging_metadata"
+      ]
     },
     "tests/local_testing/test_llm_guard.py": {
-      "swallowed_failure": 1
+      "swallowed_failure": [
+        "test_llm_guard_error_raising"
+      ]
     },
     "tests/local_testing/test_lunary.py": {
-      "no_assert": 5
+      "no_assert": [
+        "test_lunary_logging",
+        "test_lunary_logging_with_metadata",
+        "test_lunary_logging_with_streaming_and_metadata",
+        "test_lunary_template",
+        "test_lunary_with_tools"
+      ]
     },
     "tests/local_testing/test_mock_request.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_async_mock_streaming_request_n_greater_than_1",
+        "test_mock_request",
+        "test_streaming_mock_request"
+      ]
     },
     "tests/local_testing/test_ollama.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "test_ollama_chat_function_calling",
+        "test_ollama_streaming_with_chunk_builder"
+      ]
     },
     "tests/local_testing/test_opik.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_opik_logging"
+      ]
     },
     "tests/local_testing/test_prometheus_service.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_init_prometheus"
+      ]
     },
     "tests/local_testing/test_prompt_injection_detection.py": {
-      "swallowed_failure": 2
+      "swallowed_failure": [
+        "test_prompt_injection_attack_valid_attack",
+        "test_prompt_injection_llm_eval"
+      ]
     },
     "tests/local_testing/test_router.py": {
-      "dead_skip": 6,
-      "no_assert": 9,
-      "swallowed_failure": 2
+      "dead_skip": [
+        "test_is_proxy_set",
+        "test_reading_keys_os_environ",
+        "test_reading_openai_keys_os_environ",
+        "test_router_azure_ad_token_provider",
+        "test_router_azure_ai_client_init",
+        "test_router_batch_endpoints"
+      ],
+      "no_assert": [
+        "test_function_calling",
+        "test_mistral_on_router",
+        "test_router_amoderation",
+        "test_router_anthropic_key_dynamic",
+        "test_router_correctly_reraise_error",
+        "test_router_provider_wildcard_routing",
+        "test_router_provider_wildcard_routing_regex",
+        "test_router_retries",
+        "test_router_specific_model_via_id"
+      ],
+      "swallowed_failure": [
+        "test_function_calling_on_router",
+        "test_router_rpm_pre_call_check"
+      ]
     },
     "tests/local_testing/test_router_batch_completion.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_batch_completion_fastest_response_streaming"
+      ]
     },
     "tests/local_testing/test_router_client_init.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_router_init_with_neither_api_key_nor_azure_service_principal_with_secret"
+      ]
     },
     "tests/local_testing/test_router_custom_routing.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_custom_routing"
+      ]
     },
     "tests/local_testing/test_router_fallbacks.py": {
-      "no_assert": 2,
-      "swallowed_failure": 3
+      "no_assert": [
+        "test_fallbacks_with_different_messages",
+        "test_router_fallbacks_with_model_id"
+      ],
+      "swallowed_failure": [
+        "test_custom_cooldown_times",
+        "test_sync_fallbacks",
+        "test_sync_fallbacks_streaming"
+      ]
     },
     "tests/local_testing/test_router_max_parallel_requests.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_max_parallel_requests_rpm_rate_limiting"
+      ]
     },
     "tests/local_testing/test_router_retries.py": {
-      "dead_skip": 1,
-      "swallowed_failure": 4
+      "dead_skip": [
+        "test_router_retry_policy_on_429_errprs"
+      ],
+      "swallowed_failure": [
+        "test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments",
+        "test_no_retry_for_not_found_error_404",
+        "test_no_retry_when_no_healthy_deployments",
+        "test_raise_context_window_exceeded_error"
+      ]
     },
     "tests/local_testing/test_router_timeout.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_router_timeouts"
+      ]
     },
     "tests/local_testing/test_rules.py": {
-      "swallowed_failure": 2
+      "swallowed_failure": [
+        "test_post_call_processing_error_async_response",
+        "test_pre_call_rule"
+      ]
     },
     "tests/local_testing/test_secret_detect_hook.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_basic_secret_detection_text_completion"
+      ]
     },
     "tests/local_testing/test_stream_chunk_builder.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_grok_bug"
+      ]
     },
     "tests/local_testing/test_streaming.py": {
-      "dead_skip": 8,
-      "no_assert": 6
+      "dead_skip": [
+        "test_completion_bedrock_ai21_stream",
+        "test_completion_nlp_cloud_stream",
+        "test_completion_ollama_hosted_stream",
+        "test_completion_replicate_llama3_streaming",
+        "test_completion_replicate_stream_bad_key",
+        "test_completion_watsonx_stream",
+        "test_hf_completion_tgi_stream",
+        "test_sagemaker_weird_response"
+      ],
+      "no_assert": [
+        "test_aastreaming_tool_calls_valid_json_str",
+        "test_openai_chat_completion_complete_response_call",
+        "test_openai_text_completion_call",
+        "test_success_callback_streaming",
+        "test_together_ai_completion_call_mistral",
+        "test_together_ai_completion_call_starcoder_bad_key"
+      ]
     },
     "tests/local_testing/test_supabase_integration.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_acompletion_sync",
+        "test_supabase_logging"
+      ]
     },
     "tests/local_testing/test_text_completion.py": {
-      "dead_skip": 3,
-      "no_assert": 1
+      "dead_skip": [
+        "test_completion_fireworks_ai_multiple_choices",
+        "test_completion_hf_prompt_array",
+        "test_text_completion_stream"
+      ],
+      "no_assert": [
+        "test_async_text_completion"
+      ]
     },
     "tests/local_testing/test_timeout.py": {
-      "dead_skip": 1,
-      "no_assert": 1
+      "dead_skip": [
+        "test_timeout_ollama"
+      ],
+      "no_assert": [
+        "test_httpx_timeout"
+      ]
     },
     "tests/local_testing/test_tpm_rpm_routing_v2.py": {
-      "swallowed_failure": 2
+      "swallowed_failure": [
+        "test_router_skip_rate_limited_deployments",
+        "test_single_deployment_tpm_zero"
+      ]
     },
     "tests/local_testing/test_unit_test_caching.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_get_kwargs_for_cache_key"
+      ]
     },
     "tests/local_testing/test_update_spend.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_batch_update_spend"
+      ]
     },
     "tests/local_testing/test_wandb.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_wandb_logging",
+        "test_wandb_logging_async"
+      ]
     },
     "tests/logging_callback_tests/test_alerting.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_send_llm_exception_to_slack"
+      ]
     },
     "tests/logging_callback_tests/test_amazing_s3_logs.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "test_s3_logging",
+        "test_s3_logging_async"
+      ]
     },
     "tests/logging_callback_tests/test_built_in_tools_cost_tracking.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_openai_responses_api_web_search_cost_tracking",
+        "test_openai_web_search_logging_cost_tracking"
+      ]
     },
     "tests/logging_callback_tests/test_datadog.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_datadog_logging"
+      ]
     },
     "tests/logging_callback_tests/test_datadog_llm_obs.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_datadog_llm_obs_logging"
+      ]
     },
     "tests/logging_callback_tests/test_langfuse_e2e_test.py": {
-      "no_assert": 10
+      "no_assert": [
+        "TestLangfuseLogging.test_langfuse_logging_completion",
+        "TestLangfuseLogging.test_langfuse_logging_completion_with_bedrock_llm_response",
+        "TestLangfuseLogging.test_langfuse_logging_completion_with_langfuse_metadata",
+        "TestLangfuseLogging.test_langfuse_logging_completion_with_malformed_llm_response",
+        "TestLangfuseLogging.test_langfuse_logging_completion_with_tags",
+        "TestLangfuseLogging.test_langfuse_logging_completion_with_tags_stream",
+        "TestLangfuseLogging.test_langfuse_logging_completion_with_vertex_llm_response",
+        "TestLangfuseLogging.test_langfuse_logging_with_non_serializable_metadata",
+        "TestLangfuseLogging.test_langfuse_logging_with_router",
+        "TestLangfuseLogging.test_langfuse_logging_with_various_metadata_types"
+      ]
     },
     "tests/logging_callback_tests/test_log_db_redis_services.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_dd_log_db_spend_failure_metrics"
+      ]
     },
     "tests/logging_callback_tests/test_pagerduty_alerting.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_pagerduty_alerting",
+        "test_pagerduty_alerting_high_failure_rate",
+        "test_pagerduty_hanging_request_alerting"
+      ]
     },
     "tests/mcp_tests/test_mcp_litellm_client.py": {
-      "swallowed_failure": 1
+      "swallowed_failure": [
+        "test_mcp_agent"
+      ]
     },
     "tests/mcp_tests/test_mcp_server.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_mcp_server_manager"
+      ]
     },
     "tests/mcp_tests/test_per_user_oauth_cache.py": {
-      "no_assert": 6
+      "no_assert": [
+        "TestMCPPerUserTokenCache.test_set_is_noop_on_cache_error",
+        "TestValidateTokenResponse.test_boolean_false_matches_lowercase_string_rule",
+        "TestValidateTokenResponse.test_boolean_value_matches_lowercase_string_rule",
+        "TestValidateTokenResponse.test_dot_notation_nested_field",
+        "TestValidateTokenResponse.test_numeric_value_string_coercion",
+        "TestValidateTokenResponse.test_passes_when_all_rules_match"
+      ]
     },
     "tests/ocr_tests/test_ocr_vertex_ai.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "TestVertexAIDeepSeekOCR.test_basic_ocr_with_url",
+        "TestVertexAIDeepSeekOCR.test_ocr_response_structure"
+      ]
     },
     "tests/openai_endpoints_tests/test_e2e_openai_responses_api.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_anthropic_with_responses_api"
+      ]
     },
     "tests/openai_endpoints_tests/test_openai_batches_endpoint.py": {
-      "dead_skip": 2,
-      "no_assert": 1
+      "dead_skip": [
+        "test_list_batches_with_target_model_names",
+        "test_vertex_batches_endpoint"
+      ],
+      "no_assert": [
+        "test_e2e_batches_files"
+      ]
     },
     "tests/otel_tests/test_guardrails.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "test_llm_guard_triggered",
+        "test_llm_guard_triggered_safe_request"
+      ]
     },
     "tests/pass_through_unit_tests/test_anthropic_messages_passthrough.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestAnthropicOpenAIAPI.test_anthropic_messages_litellm_router_streaming_with_logging"
+      ]
     },
     "tests/pass_through_unit_tests/test_bedrock_anthropic_messages_test.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_anthropic_messages_bedrock_converse_with_thinking",
+        "test_anthropic_messages_litellm_router_bedrock",
+        "test_should_not_fail_with_forwarded_headers_bedrock_invoke_messages"
+      ]
     },
     "tests/pass_through_unit_tests/test_websearch_interception_e2e.py": {
-      "no_assert": 5
+      "no_assert": [
+        "test_claude_code_native_websearch_streaming",
+        "test_is_web_search_tool_detection",
+        "test_litellm_standard_websearch_tool",
+        "test_pre_request_hook_modifies_request_body",
+        "test_websearch_interception_no_tool_call_streaming"
+      ]
     },
     "tests/proxy_admin_ui_tests/test_key_management.py": {
-      "dead_skip": 11
+      "dead_skip": [
+        "test_get_users",
+        "test_get_users_filters_dashboard_keys",
+        "test_get_users_key_count",
+        "test_key_update_with_model_specific_params",
+        "test_list_key_helper",
+        "test_list_key_helper_team_filtering",
+        "test_list_teams",
+        "test_regenerate_api_key",
+        "test_regenerate_api_key_with_new_alias_and_expiration",
+        "test_regenerate_key_ui",
+        "test_team_model_alias"
+      ]
     },
     "tests/proxy_admin_ui_tests/test_role_based_access.py": {
-      "dead_skip": 5
+      "dead_skip": [
+        "test_create_new_user_in_organization",
+        "test_org_admin_create_team_permissions",
+        "test_org_admin_create_user_permissions",
+        "test_org_admin_create_user_team_wrong_org_permissions",
+        "test_user_role_permissions"
+      ]
     },
     "tests/proxy_admin_ui_tests/test_usage_endpoints.py": {
-      "dead_skip": 3
+      "dead_skip": [
+        "test_global_spend_keys",
+        "test_global_spend_models",
+        "test_view_daily_spend_ui"
+      ]
     },
     "tests/proxy_security_tests/test_master_key_not_in_db.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_client"
+      ]
     },
     "tests/proxy_unit_tests/test_audit_logs_proxy.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_create_audit_log_in_db"
+      ]
     },
     "tests/proxy_unit_tests/test_auth_checks.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_can_key_call_model_via_access_group_ids"
+      ]
     },
     "tests/proxy_unit_tests/test_banned_keyword_list.py": {
-      "swallowed_failure": 1
+      "swallowed_failure": [
+        "test_banned_keywords_check"
+      ]
     },
     "tests/proxy_unit_tests/test_e2e_pod_lock_manager.py": {
-      "dead_skip": 8
+      "dead_skip": [
+        "test_concurrent_lock_acquisition",
+        "test_e2e_size_of_redis_buffer",
+        "test_lock_acquisition_with_expired_ttl",
+        "test_pod_lock_acquisition_after_completion",
+        "test_pod_lock_acquisition_after_expiry",
+        "test_pod_lock_acquisition_when_no_active_lock",
+        "test_pod_lock_release",
+        "test_release_expired_lock"
+      ]
     },
     "tests/proxy_unit_tests/test_jwt.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_team_token_output"
+      ]
     },
     "tests/proxy_unit_tests/test_key_generate_prisma.py": {
-      "dead_skip": 57,
-      "no_assert": 1
+      "dead_skip": [
+        "test_aadmin_only_routes",
+        "test_aasync_call_with_key_over_model_budget",
+        "test_auth_vertex_ai_route",
+        "test_aview_spend_per_user",
+        "test_call_with_end_user_over_budget",
+        "test_call_with_invalid_key",
+        "test_call_with_invalid_model",
+        "test_call_with_key_never_over_budget",
+        "test_call_with_key_over_budget",
+        "test_call_with_key_over_budget_no_cache",
+        "test_call_with_key_over_budget_stream",
+        "test_call_with_proxy_over_budget",
+        "test_call_with_proxy_over_budget_stream",
+        "test_call_with_user_over_budget",
+        "test_call_with_user_over_budget_stream",
+        "test_call_with_valid_model",
+        "test_call_with_valid_model_using_all_models",
+        "test_create_update_team",
+        "test_custom_api_key_header_name",
+        "test_default_key_params",
+        "test_delete_key",
+        "test_delete_key_auth",
+        "test_delete_nonexistent_key_returns_404",
+        "test_enforce_unique_key_alias",
+        "test_generate_and_call_key_info",
+        "test_generate_and_call_with_expired_key",
+        "test_generate_and_call_with_valid_key",
+        "test_generate_and_call_with_valid_key_never_expires",
+        "test_generate_and_update_key",
+        "test_generate_key_with_guardrails",
+        "test_generate_key_with_model_tpm_limit",
+        "test_get_paginated_teams",
+        "test_key_alias_uniqueness",
+        "test_key_aliases",
+        "test_key_generate_with_custom_auth",
+        "test_key_generate_with_secret_manager_call",
+        "test_key_name_null",
+        "test_key_name_set",
+        "test_key_with_no_permissions",
+        "test_list_keys",
+        "test_master_key_hashing",
+        "test_new_user_response",
+        "test_proxy_load_test_db",
+        "test_reset_budget_job",
+        "test_reset_spend_authentication",
+        "test_team_access_groups",
+        "test_team_guardrails",
+        "test_team_tags",
+        "test_update_logs_with_spend_logs_url",
+        "test_update_user_role",
+        "test_update_user_unit_test",
+        "test_upperbound_key_param_larger_budget",
+        "test_upperbound_key_param_larger_duration",
+        "test_upperbound_key_param_none_duration",
+        "test_user_api_key_auth",
+        "test_user_api_key_auth_without_master_key",
+        "test_view_spend_per_key"
+      ],
+      "no_assert": [
+        "test_end_user_cache_write_unit_test"
+      ]
     },
     "tests/proxy_unit_tests/test_proxy_config_unit_test.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_basic_reading_configs_from_files"
+      ]
     },
     "tests/proxy_unit_tests/test_proxy_server.py": {
-      "dead_skip": 9,
-      "no_assert": 2
+      "dead_skip": [
+        "test_add_callback_via_key",
+        "test_add_new_model",
+        "test_create_team_member_add",
+        "test_create_user_default_budget",
+        "test_load_router_config",
+        "test_proxy_model_group_alias_checks",
+        "test_proxy_model_group_info_rerank",
+        "test_sagemaker_embedding",
+        "test_user_info_team_list"
+      ],
+      "no_assert": [
+        "test_create_team_member_add_team_admin_user_api_key_auth",
+        "test_gemini_pass_through_endpoint"
+      ]
     },
     "tests/proxy_unit_tests/test_proxy_token_counter.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_vertex_ai_gemini_token_counting_with_contents"
+      ]
     },
     "tests/proxy_unit_tests/test_proxy_utils.py": {
-      "no_assert": 4
+      "no_assert": [
+        "test_check_complete_credentials_with_empty_string",
+        "test_check_complete_credentials_with_none",
+        "test_check_complete_credentials_with_real_key",
+        "test_check_complete_credentials_with_whitespace"
+      ]
     },
     "tests/proxy_unit_tests/test_response_polling_handler.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestResponsePollingHandler.test_update_state_does_nothing_without_redis"
+      ]
     },
     "tests/proxy_unit_tests/test_search_api_logging.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_search_api_logging_and_cost_tracking"
+      ]
     },
     "tests/proxy_unit_tests/test_skills_db.py": {
-      "dead_skip": 4
+      "dead_skip": [
+        "test_create_skill_sdk",
+        "test_delete_skill_sdk",
+        "test_get_skill_sdk",
+        "test_list_skills_sdk"
+      ]
     },
     "tests/proxy_unit_tests/test_user_api_key_auth.py": {
-      "no_assert": 5
+      "no_assert": [
+        "test_check_blocked_team",
+        "test_get_api_key_from_custom_header_bearer_token",
+        "test_get_api_key_from_custom_header_different_casing",
+        "test_get_api_key_from_custom_header_empty_value",
+        "test_get_api_key_from_custom_header_missing_header"
+      ]
     },
     "tests/router_unit_tests/test_router_adding_deployments.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "test_initialize_deployment_when_pass_through_disabled"
+      ]
     },
     "tests/router_unit_tests/test_router_aresponses_streaming_fallback.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_combine_responses_fallback_usage_passthrough_for_unknown_event"
+      ]
     },
     "tests/router_unit_tests/test_router_endpoints.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_moderation_endpoint"
+      ]
     },
     "tests/router_unit_tests/test_router_handle_error.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_send_llm_exception_alert_no_logger"
+      ]
     },
     "tests/router_unit_tests/test_router_helper_utils.py": {
-      "no_assert": 7,
-      "swallowed_failure": 1
+      "no_assert": [
+        "test_factory_function",
+        "test_image_generation",
+        "test_pass_through_assistants_endpoint_factory",
+        "test_routing_strategy_init",
+        "test_routing_strategy_init_valid_string_strategies",
+        "test_track_deployment_metrics",
+        "test_validate_fallbacks"
+      ],
+      "swallowed_failure": [
+        "test_handle_clientside_credential_no_metadata"
+      ]
     },
     "tests/store_model_in_db_tests/test_adding_passthrough_model.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_e2e_assemblyai_passthrough",
+        "test_e2e_assemblyai_passthrough_eu"
+      ]
     },
     "tests/test_end_users.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_end_user_new"
+      ]
     },
     "tests/test_fallbacks.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_chat_completion"
+      ]
     },
     "tests/test_health.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_health_liveliness",
+        "test_routes"
+      ]
     },
     "tests/test_keys.py": {
-      "dead_skip": 4,
-      "no_assert": 3,
-      "swallowed_failure": 2
+      "dead_skip": [
+        "test_aaaaakey_info_spend_values_streaming",
+        "test_key_info_spend_values",
+        "test_key_info_spend_values_sagemaker",
+        "test_key_with_budgets"
+      ],
+      "no_assert": [
+        "test_key_delete",
+        "test_key_delete_ui",
+        "test_key_gen"
+      ],
+      "swallowed_failure": [
+        "test_key_gen_bad_key",
+        "test_key_rate_limit"
+      ]
     },
     "tests/test_litellm/caching/test_redis_connection_pool.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_disconnect_idempotent"
+      ]
     },
     "tests/test_litellm/caching/test_s3_cache.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_s3_cache_async_disconnect"
+      ]
     },
     "tests/test_litellm/enterprise/enterprise_callbacks/send_emails/test_endpoints.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_save_email_settings_new_entry"
+      ]
     },
     "tests/test_litellm/enterprise/proxy/test_file_deletion_blocking.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_file_deletion_allowed_when_batch_polling_disabled",
+        "test_file_deletion_allowed_when_no_batches_reference_file"
+      ]
     },
     "tests/test_litellm/google_genai/test_google_genai_adapter_fixes.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "test_stream_transformation_error_handling"
+      ]
     },
     "tests/test_litellm/integrations/arize/test_arize_phoenix.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestTracerResolutionAndCache.test_flush_tracer_providers_noop_for_injected_provider"
+      ]
     },
     "tests/test_litellm/integrations/bitbucket/test_bitbucket_prompt_manager.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_bitbucket_prompt_manager_reload_prompts"
+      ]
     },
     "tests/test_litellm/integrations/code_interpreter_interception/test_handler.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_delete_container_swallows_errors"
+      ]
     },
     "tests/test_litellm/integrations/dotprompt/test_prompt_manager.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_prompt_main"
+      ]
     },
     "tests/test_litellm/integrations/focus/test_mavvrik_destination.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_valid_mavvrik_domains_accepted"
+      ]
     },
     "tests/test_litellm/integrations/focus/test_vantage_destination.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_should_skip_empty_content"
+      ]
     },
     "tests/test_litellm/integrations/newrelic/test_newrelic.py": {
-      "no_assert": 8
+      "no_assert": [
+        "TestEmitSupportabilityMetric.test_handles_exception",
+        "TestLogFailureEvent.test_async_exception_is_handled",
+        "TestLogFailureEvent.test_sync_exception_is_handled",
+        "TestLogSuccessEvent.test_async_exception_is_handled",
+        "TestLogSuccessEvent.test_exception_is_handled",
+        "TestRecordErrorMetric.test_handles_exception",
+        "TestRecordMessageEvents.test_handles_exception",
+        "TestRecordSummaryEvent.test_handles_exception"
+      ]
     },
     "tests/test_litellm/integrations/open_telemetry/test_otel_exception_handler.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_close_dangling_span_noop_when_otel_absent"
+      ]
     },
     "tests/test_litellm/integrations/open_telemetry/test_passthrough_parent_span.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_client_body_metadata_cannot_clobber_parent_span",
+        "test_non_streaming_passthrough_links_to_server_root",
+        "test_streaming_passthrough_links_to_server_root"
+      ]
     },
     "tests/test_litellm/integrations/otel/test_otel_v2_logger.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_module_level_emit_guardrail_span_noop_without_registered_logger",
+        "test_module_level_emit_guardrail_span_swallows_emit_errors"
+      ]
     },
     "tests/test_litellm/integrations/test_braintrust_logging.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestBraintrustLogger.test_validate_environment_with_api_key"
+      ]
     },
     "tests/test_litellm/integrations/test_custom_guardrail.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestOnlyScanNewMessages.test_mark_texts_scanned_survives_cache_write_failure"
+      ]
     },
     "tests/test_litellm/integrations/test_guardrail_logging_sync.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_noop_when_logging_obj_is_none"
+      ]
     },
     "tests/test_litellm/integrations/test_opentelemetry.py": {
-      "no_assert": 4
+      "no_assert": [
+        "TestOpenTelemetryFailureHookStampsServerSpan.test_no_parent_span_is_noop",
+        "TestOpenTelemetryPreprocessingDuration.test_none_span_is_noop",
+        "TestOpenTelemetrySetProxyRequestRouteAttributes.test_none_span_is_noop",
+        "TestOpenTelemetrySetResponseStatusCodeAttribute.test_none_span_is_noop"
+      ]
     },
     "tests/test_litellm/integrations/test_otel_team_attributes_matrix.py": {
-      "no_assert": 7
+      "no_assert": [
+        "TestAdminTeamInfoCells.test_team_info_3xx_not_applicable",
+        "TestAdminTeamInfoCells.test_team_info_4xx",
+        "TestAdminTeamInfoCells.test_team_info_5xx",
+        "TestLLMFailureCells.test_chat_completions_4xx",
+        "TestLLMFailureCells.test_chat_completions_5xx",
+        "TestLLMFailureCells.test_v1_messages_4xx",
+        "TestLLMFailureCells.test_v1_messages_5xx"
+      ]
     },
     "tests/test_litellm/integrations/test_prometheus_none_metadata.py": {
-      "no_assert": 3
+      "no_assert": [
+        "TestNoneMetadataHandling.test_set_llm_deployment_success_metrics_with_litellm_metadata_key",
+        "TestNoneMetadataHandling.test_set_llm_deployment_success_metrics_with_missing_litellm_params",
+        "TestNoneMetadataHandling.test_set_llm_deployment_success_metrics_with_none_metadata"
+      ]
     },
     "tests/test_litellm/integrations/test_prometheus_user_team_metrics.py": {
-      "trivial_assert": 9
+      "trivial_assert": [
+        "TestPrometheusUserTeamCountMetrics.test_concurrent_metric_updates",
+        "TestPrometheusUserTeamCountMetrics.test_metrics_can_be_updated_multiple_times",
+        "TestPrometheusUserTeamCountMetrics.test_metrics_handle_large_values",
+        "TestPrometheusUserTeamCountMetrics.test_team_count_metric_realistic_scenario",
+        "TestPrometheusUserTeamCountMetrics.test_team_count_metric_with_zero",
+        "TestPrometheusUserTeamCountMetrics.test_teams_count_metric_has_no_labels",
+        "TestPrometheusUserTeamCountMetrics.test_user_count_metric_has_no_labels",
+        "TestPrometheusUserTeamCountMetrics.test_user_count_metric_realistic_scenario",
+        "TestPrometheusUserTeamCountMetrics.test_user_count_metric_with_zero"
+      ]
     },
     "tests/test_litellm/integrations/test_rubrik.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestPostCallFailureHook.test_build_and_enqueue_swallows_flush_exception",
+        "TestPrependSystemPromptException.test_exception_during_unpack_is_caught_and_logged"
+      ]
     },
     "tests/test_litellm/integrations/test_s3_v2.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_async_upload_signs_object_key_with_space_the_way_s3_does",
+        "test_sync_upload_signs_object_key_with_space_the_way_s3_does"
+      ]
     },
     "tests/test_litellm/interactions/test_google_interactions_integration.py": {
-      "dead_skip": 3
+      "dead_skip": [
+        "TestGoogleInteractionsAgent.test_create_agent_interaction",
+        "TestGoogleInteractionsGetDelete.test_delete_interaction",
+        "TestGoogleInteractionsGetDelete.test_get_interaction"
+      ]
     },
     "tests/test_litellm/litellm_core_utils/prompt_templates/test_litellm_core_utils_prompt_templates_factory.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_bedrock_process_image_async_factory",
+        "test_bedrock_tools_unpack_defs",
+        "test_convert_gemini_messages"
+      ]
     },
     "tests/test_litellm/litellm_core_utils/test_dd_tracing.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "test_null_tracer_context_manager"
+      ]
     },
     "tests/test_litellm/litellm_core_utils/test_litellm_logging.py": {
-      "no_assert": 1,
-      "swallowed_failure": 1
+      "no_assert": [
+        "test_restore_correlation_context_safe_to_call_repeatedly"
+      ],
+      "swallowed_failure": [
+        "test_sentry_sample_rate"
+      ]
     },
     "tests/test_litellm/litellm_core_utils/test_max_streaming_duration.py": {
-      "no_assert": 4
+      "no_assert": [
+        "TestCustomStreamWrapperMaxDuration.test_should_not_raise_when_duration_is_none",
+        "TestCustomStreamWrapperMaxDuration.test_should_not_raise_when_under_limit",
+        "TestResponsesStreamingIteratorMaxDuration.test_should_not_raise_when_duration_is_none",
+        "TestResponsesStreamingIteratorMaxDuration.test_should_not_raise_when_under_limit"
+      ]
     },
     "tests/test_litellm/litellm_core_utils/test_streaming_handler.py": {
-      "no_assert": 4
+      "no_assert": [
+        "test_custom_stream_wrapper_aclose_no_underlying",
+        "test_custom_stream_wrapper_aclose_none_stream",
+        "test_raise_on_model_repetition_tolerates_empty_choices",
+        "test_stream_wrapper_del_never_raises_with_broken_logging_obj"
+      ]
     },
     "tests/test_litellm/litellm_core_utils/test_token_counter.py": {
-      "dead_skip": 1,
-      "no_assert": 5
+      "dead_skip": [
+        "test_gpt_4o_token_counter"
+      ],
+      "no_assert": [
+        "test_bad_input_token_counter",
+        "test_empty_tools",
+        "test_gpt_vision_token_counting",
+        "test_openai_token_with_image_and_text",
+        "test_token_encode_disallowed_special"
+      ]
     },
     "tests/test_litellm/litellm_core_utils/test_url_utils.py": {
-      "no_assert": 3
+      "no_assert": [
+        "TestHostAllowlist.test_allowlist_host_entry_matches_any_port",
+        "TestHostAllowlist.test_allowlist_strips_trailing_dot",
+        "TestHostAllowlist.test_allowlist_with_port_matches_default_port"
+      ]
     },
     "tests/test_litellm/llms/anthropic/experimental_pass_through/adapters/test_streaming_iterator_first_delta.py": {
-      "no_assert": 15
+      "no_assert": [
+        "test_contentless_lead_chunk_does_not_open_text_block_before_thinking_async",
+        "test_contentless_lead_chunk_does_not_open_text_block_before_thinking_sync",
+        "test_empty_reasoning_delta_mid_thinking_block_is_suppressed_async",
+        "test_empty_reasoning_delta_mid_thinking_block_is_suppressed_sync",
+        "test_full_thinking_snapshot_with_signature_emits_signature_only_async",
+        "test_full_thinking_snapshot_with_signature_emits_signature_only_sync",
+        "test_mixed_chunk_with_tool_call_emits_tool_use_once_async",
+        "test_mixed_chunk_with_tool_call_emits_tool_use_once_sync",
+        "test_mixed_reasoning_and_text_chunk_is_split_async",
+        "test_mixed_reasoning_and_text_chunk_is_split_sync",
+        "test_reasoning_content_first_stream_opens_thinking_block_at_index_zero_sync",
+        "test_role_only_lead_chunk_does_not_open_text_block_before_reasoning_content_async",
+        "test_role_only_lead_chunk_does_not_open_text_block_before_reasoning_content_sync",
+        "test_thinking_first_stream_opens_thinking_block_at_index_zero_async",
+        "test_thinking_first_stream_opens_thinking_block_at_index_zero_sync"
+      ]
     },
     "tests/test_litellm/llms/anthropic/experimental_pass_through/context_management/test_compact.py": {
-      "no_assert": 4
+      "no_assert": [
+        "test_async_handler_runs_polyfill_when_litellm_drop_params_true",
+        "test_async_handler_runs_polyfill_when_request_drop_params_true",
+        "test_sync_handler_runs_polyfill_when_litellm_drop_params_true",
+        "test_sync_handler_runs_polyfill_when_request_drop_params_true"
+      ]
     },
     "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_async_transform_ocr_response_preserves_azure_native_fields",
+        "test_transform_ocr_response_preserves_azure_native_fields"
+      ]
     },
     "tests/test_litellm/llms/base_llm/search/test_base_search_transformation.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_caller_supplied_key_is_honored_for_custom_api_base",
+        "test_server_secret_used_without_caller_api_base"
+      ]
     },
     "tests/test_litellm/llms/base_llm/test_base_model_iterator.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_aclose_is_noop_without_http_response"
+      ]
     },
     "tests/test_litellm/llms/bedrock/chat/test_converse_transformation.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_request_metadata_character_pattern"
+      ]
     },
     "tests/test_litellm/llms/bedrock/files/test_bedrock_files_transformation.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestBedrockFilesS3SignatureEncoding.test_create_file_signs_spaced_object_key_the_way_s3_does",
+        "TestBedrockFilesS3SignatureEncoding.test_file_content_signs_spaced_object_key_the_way_s3_does"
+      ]
     },
     "tests/test_litellm/llms/bedrock/test_anthropic_beta_support.py": {
-      "trivial_assert": 3
+      "trivial_assert": [
+        "TestAnthropicBetaHeaderSupport.test_prompt_caching_no_beta_header_chat_api",
+        "TestAnthropicBetaHeaderSupport.test_prompt_caching_no_beta_header_messages_api",
+        "TestAnthropicBetaHeaderSupport.test_prompt_caching_with_other_beta_headers"
+      ]
     },
     "tests/test_litellm/llms/cometapi/chat/test_cometapi_chat_transformation.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "test_cometapi_integration"
+      ]
     },
     "tests/test_litellm/llms/compactifai/test_compactifai.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_compactifai_models_endpoint"
+      ]
     },
     "tests/test_litellm/llms/custom_httpx/test_aiohttp_handler.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestBaseLLMAIOHTTPHandler.test_close_transport_without_aclose_method",
+        "TestBaseLLMAIOHTTPHandler.test_close_with_no_session"
+      ]
     },
     "tests/test_litellm/llms/custom_httpx/test_aiohttp_transport.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_threadsafe_close_done_callback_tolerates_cancelled_future"
+      ]
     },
     "tests/test_litellm/llms/custom_httpx/test_gemini_session_leak.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_new_event_loop_atexit"
+      ]
     },
     "tests/test_litellm/llms/databricks/test_databricks_e2e.py": {
-      "dead_skip": 13
+      "dead_skip": [
+        "test_chat_completion",
+        "test_chat_completion_default_user_agent",
+        "test_chat_completion_with_custom_user_agent",
+        "test_chat_completion_with_env_user_agent",
+        "test_embedding",
+        "test_langchain_litellm_with_user_agent",
+        "test_litellm_async_completion",
+        "test_litellm_embedding_with_user_agent",
+        "test_litellm_sdk_with_config_user_agent",
+        "test_litellm_streaming_completion",
+        "test_oauth_token_retrieval",
+        "test_token_redaction",
+        "test_user_agent_building"
+      ]
     },
     "tests/test_litellm/llms/deepgram/audio_transcription/test_deepgram_audio_transcription_transformation.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_bytes",
+        "test_file",
+        "test_io_bytes"
+      ]
     },
     "tests/test_litellm/llms/deepgram/test_deepgram_mock_transcription.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_audio_bytes",
+        "test_audio_file"
+      ]
     },
     "tests/test_litellm/llms/minimax/chat/test_transformation.py": {
-      "dead_skip": 4
+      "dead_skip": [
+        "test_minimax_chat_completion_basic",
+        "test_minimax_chat_completion_streaming",
+        "test_minimax_chat_completion_with_reasoning_split",
+        "test_minimax_chat_completion_with_tools"
+      ]
     },
     "tests/test_litellm/llms/minimax/messages/test_transformation.py": {
-      "dead_skip": 3
+      "dead_skip": [
+        "test_minimax_completion_basic",
+        "test_minimax_completion_with_thinking",
+        "test_minimax_completion_with_tools"
+      ]
     },
     "tests/test_litellm/llms/mistral/audio_transcription/test_mistral_audio_transcription_transformation.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "TestMistralAudioTranscription.test_audio_transcription_async"
+      ]
     },
     "tests/test_litellm/llms/mistral/test_mistral_chat_transformation.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_mistral_chat_transformation"
+      ]
     },
     "tests/test_litellm/llms/oci/test_oci_coverage_boost.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_require_cryptography_available_does_not_raise"
+      ]
     },
     "tests/test_litellm/llms/openai/responses/test_openai_count_tokens_transformation.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_validate_request_valid"
+      ]
     },
     "tests/test_litellm/llms/openai/responses/test_openai_responses_transformation.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestOpenAIResponsesAPIConfig.test_transform_responses_api_request",
+        "TestOpenAIResponsesAPIConfig.test_transform_responses_api_request_with_partial_images_param"
+      ]
     },
     "tests/test_litellm/llms/ovhcloud/test_ovhcloud_audio_transcription_transformation.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "TestOVHCloudAudioTranscription.test_audio_transcription_async"
+      ]
     },
     "tests/test_litellm/llms/s3_vectors/vector_stores/test_s3_vectors_transformation.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "TestS3VectorsVectorStoreConfig.test_transform_search_request"
+      ]
     },
     "tests/test_litellm/llms/tinyfish/test_tinyfish_search.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestDefaultMissingResultFields.test_non_dict_raw_json_is_noop",
+        "TestTransformSearchResponse.test_parameter_warnings_malformed_shapes_never_throw"
+      ]
     },
     "tests/test_litellm/llms/vertex_ai/audio_transcription/test_vertex_ai_audio_transcription_transformation.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestTransformRequest.test_body_is_json_serializable"
+      ]
     },
     "tests/test_litellm/llms/vertex_ai/gemini/test_vertex_ai_gemini_transformation.py": {
-      "swallowed_failure": 1
+      "swallowed_failure": [
+        "test_convert_tool_response_with_url_image"
+      ]
     },
     "tests/test_litellm/llms/vertex_ai/test_vertex.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_aaavertex_embeddings_distances",
+        "test_logprobs_unit_test",
+        "test_process_gemini_media_http_url"
+      ]
     },
     "tests/test_litellm/llms/vertex_ai/test_vertex_ai_batch_transformation.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_vertex_ai_cancel_batch_forwards_timeout"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/outbound_credentials/test_bridge_credentials.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "test_key_derivation_is_deterministic"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/outbound_credentials/test_dual_cache_token_backend.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_delete_is_swallowed_when_the_cache_raises",
+        "test_set_is_swallowed_when_the_cache_raises",
+        "test_set_is_swallowed_when_the_codec_raises"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/outbound_credentials/test_resolver.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_id_jag_invalidation_survives_an_assertion_store_outage"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/outbound_credentials/test_token_exchange_provider.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "test_build_gives_each_caller_an_independent_cache"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/test_byok_oauth_endpoints.py": {
-      "no_assert": 12
+      "no_assert": [
+        "test_check_byok_credential_has_credential",
+        "test_check_byok_credential_not_byok",
+        "test_validate_trusted_redirect_uri_accepts_cursor_native_callback",
+        "test_validate_trusted_redirect_uri_accepts_env_native_redirect_uri",
+        "test_validate_trusted_redirect_uri_accepts_ipv6_loopback_with_default_port",
+        "test_validate_trusted_redirect_uri_accepts_loopback",
+        "test_validate_trusted_redirect_uri_accepts_same_origin",
+        "test_validate_trusted_redirect_uri_falls_through_when_origin_lookup_fails",
+        "test_validate_trusted_redirect_uri_native_path_case_insensitive",
+        "test_validate_trusted_redirect_uri_native_wildcard_directory_prefix",
+        "test_validate_trusted_redirect_uri_same_origin_normalizes_default_port",
+        "test_validate_trusted_redirect_uri_wildcard_host_with_port_still_matches"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_hook_extra_headers.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestCallToolFlowsHookHeaders.test_openapi_server_no_error_without_hook_headers"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server.py": {
-      "no_assert": 4
+      "no_assert": [
+        "TestPreemptive401ModeAware.test_gateway_managed_interactive_with_stored_token_does_not_challenge",
+        "TestPreemptive401ModeAware.test_m2m_never_challenges",
+        "TestPreemptive401ModeAware.test_unstamped_m2m_shape_never_challenges",
+        "test_truncated_jsonrpc_response_with_nested_method_skips_lock"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py": {
-      "no_assert": 15
+      "no_assert": [
+        "TestMCPServerManager.test_invalidate_user_oauth_token_cache_swallows_legacy_cache_errors",
+        "TestMCPServerManager.test_key_tool_permission_allows_permitted_tool",
+        "TestMCPServerManager.test_pre_call_tool_check_allowed_tools_list_allows_tool",
+        "TestMCPServerManager.test_pre_call_tool_check_disallowed_tools_list_allows_tool",
+        "TestMCPServerManager.test_pre_call_tool_check_no_restrictions_allows_any_tool",
+        "TestRegistryTableConversionPreservesEnvVars.test_build_mcp_server_table_preserves_env_vars",
+        "TestServerToolListsHonorThePrefixBoundary.test_alias_form_allowlist_entry_still_matches_under_the_short_prefix_mode",
+        "TestServerToolListsHonorThePrefixBoundary.test_allowed_params_still_accept_the_configured_parameters",
+        "TestServerToolListsHonorThePrefixBoundary.test_allowlist_entry_prefixed_with_the_alias_matches_a_bare_call",
+        "TestServerToolListsHonorThePrefixBoundary.test_an_explicitly_empty_allowed_params_list_still_permits_an_argument_free_call",
+        "TestServerToolListsHonorThePrefixBoundary.test_bare_allowlist_entry_matches_on_an_alias_less_server",
+        "TestServerToolListsHonorThePrefixBoundary.test_tool_outside_the_blocklist_is_still_allowed",
+        "TestServerToolListsHonorThePrefixBoundary.test_wire_form_allowlist_entry_follows_a_non_default_separator",
+        "TestServerToolListsHonorThePrefixBoundary.test_wire_form_allowlist_entry_matches_on_an_alias_less_server",
+        "TestServerToolListsHonorThePrefixBoundary.test_wire_form_entry_matches_a_native_name_that_opens_with_the_prefix"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/test_short_mcp_tool_prefix.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "TestShortPrefixHelpers.test_short_prefix_is_deterministic"
+      ]
     },
     "tests/test_litellm/proxy/_experimental/mcp_server/test_utils.py": {
-      "no_assert": 3
+      "no_assert": [
+        "TestValidateAndNormalizeMcpServerPayload.test_accepts_valid_tool_display_name_on_create",
+        "TestValidateToolDisplayNames.test_allows_bedrock_safe_names",
+        "TestValidateToolDisplayNames.test_allows_none_and_empty"
+      ]
     },
     "tests/test_litellm/proxy/agent_endpoints/test_endpoints.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestCheckAgentManagementPermission.test_should_allow_proxy_admin"
+      ]
     },
     "tests/test_litellm/proxy/anthropic_endpoints/test_endpoints.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestStripTotalTokens.test_no_op_on_non_dict_response"
+      ]
     },
     "tests/test_litellm/proxy/auth/test_admin_viewer_handler_access.py": {
-      "no_assert": 6
+      "no_assert": [
+        "test_get_config_callbacks_allows_admin_viewer",
+        "test_get_config_field_info_allows_admin_viewer",
+        "test_get_config_list_allows_admin_viewer",
+        "test_invitation_info_allows_admin_viewer",
+        "test_model_cost_map_reload_status_allows_admin_viewer",
+        "test_model_cost_map_source_allows_admin_viewer"
+      ]
     },
     "tests/test_litellm/proxy/auth/test_auth_checks.py": {
-      "no_assert": 10
+      "no_assert": [
+        "TestGuardrailModificationCheck.test_allows_when_team_has_permission",
+        "TestGuardrailModificationCheck.test_noop_when_no_guardrail_keys_present",
+        "TestGuardrailModificationCheck.test_noop_when_string_is_not_json_object",
+        "test_can_object_call_model_with_alias",
+        "test_check_team_member_model_access_no_override_inherits_team",
+        "test_check_team_member_model_access_with_access_group",
+        "test_enforce_key_access_teamless_all_team_models_passes",
+        "test_team_member_budget_check_null_clone_with_null_default_skips_enforcement",
+        "test_team_member_budget_check_zero_team_default_treated_as_no_cap",
+        "test_virtual_key_max_budget_not_exceeded_does_not_raise"
+      ]
     },
     "tests/test_litellm/proxy/auth/test_handle_jwt.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_map_user_to_teams_null_inputs"
+      ]
     },
     "tests/test_litellm/proxy/auth/test_info_routes.py": {
-      "no_assert": 4
+      "no_assert": [
+        "test_key_info_route_access",
+        "test_model_info_route_access",
+        "test_team_info_route_access",
+        "test_v2_user_info_route_access"
+      ]
     },
     "tests/test_litellm/proxy/auth/test_multi_budget_windows.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_budget_limit_entry_objects_coerced",
+        "test_no_budget_limits_passes",
+        "test_under_budget_passes"
+      ]
     },
     "tests/test_litellm/proxy/auth/test_password_hashing.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "TestHashPassword.test_unique_salt_per_call"
+      ]
     },
     "tests/test_litellm/proxy/auth/test_route_checks.py": {
-      "no_assert": 20
+      "no_assert": [
+        "TestModelsRouteExemptFromDisableLLMEndpoints.test_should_models_route_allowed_when_llm_api_disabled",
+        "TestModelsRouteExemptFromDisableLLMEndpoints.test_should_models_route_allowed_when_llm_api_not_disabled",
+        "TestModelsRouteExemptFromDisableLLMEndpoints.test_should_v1_models_route_allowed_when_llm_api_disabled",
+        "test_available_roles_accessible_to_non_admin_users",
+        "test_compliance_routes_open_to_non_admin_roles",
+        "test_get_spend_routes_permission_keeps_access_for_internal_user",
+        "test_internal_user_can_access_key_reset_spend_route",
+        "test_internal_user_can_read_search_tools",
+        "test_internal_users_can_access_scoped_tag_usage_routes",
+        "test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist",
+        "test_non_proxy_admin_wildcard_allowed_routes",
+        "test_patch_team_gate_allows_org_admin_with_resolved_org",
+        "test_proxy_admin_viewer_allowed_management_reads",
+        "test_proxy_admin_viewer_can_access_all_global_spend_routes",
+        "test_proxy_admin_viewer_can_read_another_users_info",
+        "test_rag_routes_accessible_to_internal_user_viewer",
+        "test_team_update_gate_allows_org_admin_with_resolved_org",
+        "test_user_banner_read_open_to_non_admin_roles",
+        "test_user_daily_activity_routes_reachable_by_non_admin",
+        "test_vector_store_crud_accessible_to_internal_roles"
+      ]
     },
     "tests/test_litellm/proxy/auth/test_user_api_key_auth.py": {
-      "no_assert": 5
+      "no_assert": [
+        "test_get_api_key_with_custom_litellm_key_header_aws_sigv4",
+        "test_get_api_key_with_custom_litellm_key_header_basic_prefix",
+        "test_get_api_key_with_custom_litellm_key_header_bearer_prefix",
+        "test_get_api_key_with_custom_litellm_key_header_lowercase_bearer_prefix",
+        "test_get_api_key_with_custom_litellm_key_header_no_prefix"
+      ]
     },
     "tests/test_litellm/proxy/client/cli/autoroute/test_config.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestValidateConfig.test_passes_for_fully_valid_config"
+      ]
     },
     "tests/test_litellm/proxy/client/cli/autoroute/test_process.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestPidRecordRoundTrip.test_clear_missing_file_is_a_no_op",
+        "TestPollLiveliness.test_succeeds_when_health_check_returns_200_quickly"
+      ]
     },
     "tests/test_litellm/proxy/common_utils/test_auth_cache_invalidation_pubsub.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_publish_noops_without_coordination_redis",
+        "test_publish_swallows_redis_errors"
+      ]
     },
     "tests/test_litellm/proxy/common_utils/test_config_sync_pubsub.py": {
-      "no_assert": 4
+      "no_assert": [
+        "test_publish_noops_when_redis_cache_is_none",
+        "test_publish_swallows_client_init_errors",
+        "test_publish_swallows_redis_publish_errors",
+        "test_stop_before_start_is_a_noop"
+      ]
     },
     "tests/test_litellm/proxy/common_utils/test_reset_budget_job.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_get_data_reset_query_selects_null_budget_reset_at"
+      ]
     },
     "tests/test_litellm/proxy/db/db_transaction_queue/test_redis_update_buffer.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_validate_redis_transaction_buffer_passes_when_disabled",
+        "test_validate_redis_transaction_buffer_passes_with_redis"
+      ]
     },
     "tests/test_litellm/proxy/db/mcp_server/test_db.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "test_fetch_mcp_servers_by_team"
+      ]
     },
     "tests/test_litellm/proxy/db/test_gateway_request_tracking.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_flush_swallows_commit_failure_so_the_scheduler_survives"
+      ]
     },
     "tests/test_litellm/proxy/db/test_query_engine_reaper.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestSignalHelpers.test_send_signal_swallows_missing_pid"
+      ]
     },
     "tests/test_litellm/proxy/enterprise_billing/test_billing_metrics.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_shutdown_without_active_recorder_is_noop"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/content_filter/test_content_filter.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestContentFilterMCPPreCall.test_apply_guardrail_mcp_response_side_not_scanned",
+        "TestContentFilterMCPPreCall.test_apply_guardrail_non_mcp_name_arguments_not_scanned"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_cato_networks.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_cato_guard_config"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_cisco_ai_defense_chat.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestCiscoAIDefenseGuardrailInit.test_construction_succeeds_for_any_mode_inspection_combo",
+        "test_cisco_ai_defense_config_via_init_v2_chat"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_cisco_ai_defense_mcp.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_cisco_ai_defense_config_via_init_v2_mcp"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_crowdstrike_aidr.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_crowdstrike_aidr_guardrail_config"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_deepkeep.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_deepkeep_guard_config"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_grayswan.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_process_response_does_not_block_under_threshold"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_hiddenlayer.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_hiddenlayer_config_saas",
+        "test_hiddenlayer_config_v2"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_lasso.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_lasso_guard_config"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_model_armor.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_model_armor_non_text_response"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_noma.py": {
-      "no_assert": 3
+      "no_assert": [
+        "TestBackgroundProcessing.test_check_user_message_background_exception_handling",
+        "TestBackgroundProcessing.test_create_background_noma_check_exception",
+        "TestNomaGuardrailConfiguration.test_init_with_config"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_onyx.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_onyx_guard_config"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_pangea.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_pangea_guardrail_config"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_repelloai.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestRepelloAIInitialization.test_asset_id_optional_on_shared_litellm_params",
+        "TestRepelloAIInitialization.test_init_guardrails_v2_wiring"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_tool_permission.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestToolPermissionGuardrail.test_async_post_call_success_hook_param_patterns_allow"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/guardrail_hooks/unified_guardrails/test_anthropic_streaming_block.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_end_of_stream_block_emits_clean_anthropic_sse",
+        "test_mid_stream_block_emits_clean_anthropic_sse"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/test_content_filter_path_traversal.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestContentFilterPathTraversal.test_assert_within_categories_dir_allows_valid_file"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/test_deferred_guardrail_logging.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestFireDeferredStreamLogging.test_noop_when_no_deferred_args",
+        "TestFireDeferredStreamLogging.test_noop_when_no_logging_obj"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/test_guardrail_coverage.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_banned_keywords_skips_non_text_call_types"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/test_mcp_jwt_signer.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_required_claims_pass_when_present"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/test_pillar_guardrails.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_pillar_guard_config_advanced",
+        "test_pillar_guard_config_success"
+      ]
     },
     "tests/test_litellm/proxy/guardrails/test_prompt_security_guardrails.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_prompt_security_guard_config"
+      ]
     },
     "tests/test_litellm/proxy/hooks/test_batch_file_validation.py": {
-      "no_assert": 4
+      "no_assert": [
+        "test_pre_call_allows_all_team_models_key_when_model_in_team_allowlist",
+        "test_pre_call_allows_authorized_model_in_batch_file",
+        "test_pre_call_allows_teamless_all_team_models_key",
+        "test_pre_call_skips_check_when_no_models_present"
+      ]
     },
     "tests/test_litellm/proxy/management_endpoints/test_internal_user_endpoints.py": {
-      "no_assert": 5,
-      "trivial_assert": 1
+      "no_assert": [
+        "test_enforce_user_info_access_admin_bypass",
+        "test_enforce_user_info_access_no_user_id_allowed",
+        "test_enforce_user_info_access_owner_allowed",
+        "test_enforce_user_info_access_view_only_admin_can_read_other_users",
+        "test_enforce_user_info_access_view_only_admin_can_read_own"
+      ],
+      "trivial_assert": [
+        "test_check_duplicate_user_email_case_insensitive"
+      ]
     },
     "tests/test_litellm/proxy/management_endpoints/test_key_management_endpoints.py": {
-      "no_assert": 21
+      "no_assert": [
+        "TestAllowedRoutesCallerPermission.test_helper_accepts_derived_safe_preset_for_non_admin",
+        "TestKeyAliasSkipValidationOnUnchanged.test_update_key_alias_none_skips_validation",
+        "TestLIT1884KeyUpdateValidation.test_admin_can_remove_user_id",
+        "TestValidateKeyAliasFormat.test_validate_key_alias_format_valid",
+        "TestValidateKeyAliasFormat.test_validation_skipped_when_flag_disabled",
+        "test_check_custom_key_allowed_none_key_always_passes",
+        "test_check_custom_key_allowed_when_enabled",
+        "test_check_custom_key_allowed_when_unset",
+        "test_check_org_key_limits_no_org_limits",
+        "test_check_org_key_limits_on_update_excludes_self",
+        "test_check_org_key_limits_with_existing_keys_within_bounds",
+        "test_check_team_key_limits_exact_boundary",
+        "test_check_team_key_limits_mixed_scenarios",
+        "test_check_team_key_limits_no_key_limits",
+        "test_check_team_key_limits_no_team_limits",
+        "test_check_team_key_limits_on_update_excludes_self",
+        "test_check_team_key_limits_with_existing_keys_within_bounds",
+        "test_generate_service_account_works_with_team_id",
+        "test_update_key_admin_can_set_permissions",
+        "test_update_service_account_works_with_team_id",
+        "test_validate_public_image_url_accepts_http_and_noop_empty"
+      ]
     },
     "tests/test_litellm/proxy/management_endpoints/test_mcp_management_endpoints.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestValidateMCPRequiredFields.test_all_required_fields_present_passes",
+        "TestValidateMCPRequiredFields.test_no_required_fields_configured_always_passes"
+      ]
     },
     "tests/test_litellm/proxy/management_endpoints/test_org_admin_team_access.py": {
-      "no_assert": 4
+      "no_assert": [
+        "TestValidateMembership.test_direct_team_member_allowed",
+        "TestValidateMembership.test_org_admin_for_team_org_allowed",
+        "TestValidateMembership.test_proxy_admin_allowed",
+        "TestValidateMembership.test_team_key_matches_team_allowed"
+      ]
     },
     "tests/test_litellm/proxy/management_endpoints/test_project_org_authz.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_assign_key_org_allows_member"
+      ]
     },
     "tests/test_litellm/proxy/management_endpoints/test_ptu_model_settings.py": {
-      "no_assert": 7
+      "no_assert": [
+        "TestPtuCostAttributionGate.test_allows_a_request_without_ptu_fields_while_disabled",
+        "TestPtuCostAttributionGate.test_allows_every_ptu_field_once_enabled",
+        "test_validate_helper_accepts_a_single_open_ended_bound",
+        "test_validate_helper_accepts_ordered_window_without_count_or_rate",
+        "test_validate_helper_accepts_valid_window_on_merged_info",
+        "test_validate_helper_no_ptu_is_noop",
+        "test_validate_helper_passes_full_config"
+      ]
     },
     "tests/test_litellm/proxy/management_endpoints/test_team_endpoints.py": {
-      "no_assert": 7,
-      "trivial_assert": 1
+      "no_assert": [
+        "TestEmitTeamMembersMetric.test_noop_when_no_logger_registered",
+        "test_available_team_self_join_allows_no_budget_controls",
+        "test_available_team_self_join_with_caller_user_id_allowed",
+        "test_validate_member_user_id_provisioning_allows_email_only_member_for_non_proxy_admin",
+        "test_validate_member_user_id_provisioning_allows_existing_user_id_for_non_proxy_admin",
+        "test_validate_member_user_id_provisioning_allows_proxy_admin",
+        "test_validate_team_member_add_permissions_admin"
+      ],
+      "trivial_assert": [
+        "test_team_member_add_duplication_check_allows_new_member"
+      ]
     },
     "tests/test_litellm/proxy/management_endpoints/test_ui_sso.py": {
-      "no_assert": 5,
-      "trivial_assert": 2
+      "no_assert": [
+        "TestValidateReturnTo.test_allows_explicit_default_port",
+        "TestValidateReturnTo.test_allows_matching_custom_port",
+        "TestValidateReturnTo.test_allows_matching_origin",
+        "TestValidateReturnTo.test_allows_matching_origin_with_trailing_slash",
+        "TestValidateReturnTo.test_case_insensitive_hostname"
+      ],
+      "trivial_assert": [
+        "TestCLIPollingFunction.test_cli_poll_key_validation_invalid_format",
+        "TestCLISSOCallbackFunction.test_cli_sso_callback_validation_invalid_key"
+      ]
     },
     "tests/test_litellm/proxy/management_helpers/test_audit_log_callbacks.py": {
-      "no_assert": 3
+      "no_assert": [
+        "TestDispatchAuditLogToCallbacks.test_no_dispatch_when_callbacks_empty",
+        "TestDispatchAuditLogToCallbacks.test_nonblocking_on_callback_failure",
+        "TestDispatchAuditLogToCallbacks.test_skips_unresolvable_string_callback"
+      ]
     },
     "tests/test_litellm/proxy/management_helpers/test_object_permission_utils.py": {
-      "no_assert": 17
+      "no_assert": [
+        "test_empty_object_permission_passes_for_personal_non_admin",
+        "test_enforce_all_proxy_mcp_grant_allows_non_admin_without_sentinel",
+        "test_enforce_all_proxy_mcp_grant_allows_proxy_admin",
+        "test_personal_admin_can_assign_mcp_toolsets",
+        "test_personal_admin_can_assign_search_tools",
+        "test_personal_admin_can_assign_vector_stores",
+        "test_team_key_vector_stores_unrestricted_at_create",
+        "test_validate_access_groups_within_team_scope",
+        "test_validate_allow_all_keys_servers_always_allowed",
+        "test_validate_key_servers_within_team_scope",
+        "test_validate_no_object_permission",
+        "test_validate_no_team_only_allow_all_keys",
+        "test_validate_search_tools_no_key_request",
+        "test_validate_search_tools_subset_ok",
+        "test_validate_search_tools_team_unrestricted",
+        "test_validate_stale_mcp_server_ids_are_silently_dropped",
+        "test_validate_team_access_groups_resolve_to_servers"
+      ]
     },
     "tests/test_litellm/proxy/management_helpers/test_team_member_permission_checks.py": {
-      "no_assert": 7
+      "no_assert": [
+        "TestCanTeamMemberExecuteKeyManagementEndpoint.test_allows_team_admin_in_keys_team",
+        "TestEnforceMemberCanAssignAccessGroups.test_member_allowed_with_opt_in",
+        "TestEnforceMemberCanAssignAccessGroups.test_no_access_group_ids_is_noop",
+        "TestEnforceMemberCanAssignAccessGroups.test_personal_key_empty_access_groups_passes",
+        "TestEnforceMemberCanAssignAccessGroups.test_personal_key_proxy_admin_can_assign",
+        "TestEnforceMemberCanAssignAccessGroups.test_proxy_admin_bypasses",
+        "TestEnforceMemberCanAssignAccessGroups.test_team_admin_bypasses"
+      ]
     },
     "tests/test_litellm/proxy/management_helpers/test_team_metadata_validation.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_class_instance_with_async_call_is_accepted",
+        "test_valid_result_passes"
+      ]
     },
     "tests/test_litellm/proxy/openai_files_endpoint/test_files_endpoint.py": {
-      "dead_skip": 2,
-      "no_assert": 2
+      "dead_skip": [
+        "test_create_file_and_call_chat_completion_e2e",
+        "test_create_file_for_each_model"
+      ],
+      "no_assert": [
+        "test_managed_file_id_requirement_is_opt_in",
+        "test_require_managed_files_allows_owned_unified_managed_file_id"
+      ]
     },
     "tests/test_litellm/proxy/pass_through_endpoints/llm_provider_handlers/test_anthropic_passthrough_logging_handler.py": {
-      "no_assert": 8
+      "no_assert": [
+        "TestPureTextFastPathParity.test_parity_cache_tokens",
+        "TestPureTextFastPathParity.test_parity_empty_text_deltas",
+        "TestPureTextFastPathParity.test_parity_max_tokens_stop",
+        "TestPureTextFastPathParity.test_parity_multi_text_block",
+        "TestPureTextFastPathParity.test_parity_multibyte_batched_frames",
+        "TestPureTextFastPathParity.test_parity_no_ping",
+        "TestPureTextFastPathParity.test_parity_simple_text",
+        "TestPureTextFastPathParity.test_parity_single_delta"
+      ]
     },
     "tests/test_litellm/proxy/pass_through_endpoints/test_method_specific_routing.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_config_yaml_example"
+      ]
     },
     "tests/test_litellm/proxy/pass_through_endpoints/test_passthrough_auth_default.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_register_passthrough_with_auth_true_works_for_oss"
+      ]
     },
     "tests/test_litellm/proxy/proxy_server/test_background_health.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_schedule_background_health_check_db_save_noop_when_prisma_none",
+        "test_write_health_state_to_router_cache_noop_when_router_none",
+        "test_write_health_state_to_router_cache_swallows_internal_failures"
+      ]
     },
     "tests/test_litellm/proxy/proxy_server/test_lifecycle.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_flush_spend_logs_queue_on_shutdown_swallows_drain_errors"
+      ]
     },
     "tests/test_litellm/proxy/response_api_endpoints/test_endpoints.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestWSSessionCostTracking.test_router_budget_limiter_skips_arealtime_call_type",
+        "TestWSSessionCostTracking.test_router_budget_limiter_skips_aresponses_websocket_call_type"
+      ]
     },
     "tests/test_litellm/proxy/test_budget_reservation.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_release_budget_reservation_on_cancel_swallows_release_errors"
+      ]
     },
     "tests/test_litellm/proxy/test_common_request_processing.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestStreamingClientDisconnectLogging.test_apply_client_disconnect_metadata_none_returns_early"
+      ]
     },
     "tests/test_litellm/proxy/test_health_check_functions.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_save_background_health_checks_to_db_exception_handling"
+      ]
     },
     "tests/test_litellm/proxy/test_litellm_pre_call_utils.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestApplyKeyTagsPreAuth.test_key_tags_within_budget_passes_check"
+      ]
     },
     "tests/test_litellm/proxy/test_pricing_field_strip.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestStripClientPricingOverrides.test_metadata_strip_handles_non_dict_metadata"
+      ]
     },
     "tests/test_litellm/proxy/test_prometheus_cleanup.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestMaybeSetupPrometheusMultiprocDir.test_handles_string_callbacks"
+      ]
     },
     "tests/test_litellm/proxy/test_provider_url_destination_guard.py": {
-      "no_assert": 10
+      "no_assert": [
+        "TestNonStringDestinationValues.test_non_string_file_id_is_ignored",
+        "TestNonStringDestinationValues.test_non_string_model_is_ignored",
+        "TestRejectUrlValuedDestinations.test_allowlisted_host_passes",
+        "TestRejectUrlValuedDestinations.test_comma_batch_plain_models_pass",
+        "TestRejectUrlValuedDestinations.test_no_destination_field_passes",
+        "TestRejectUrlValuedDestinations.test_non_string_value_ignored",
+        "TestRejectUrlValuedDestinations.test_plain_file_id_passes",
+        "TestRejectUrlValuedDestinations.test_plain_model_passes",
+        "TestRejectUrlValuedDestinations.test_provider_prefixed_plain_model_passes",
+        "TestRejectUrlValuedDestinations.test_provider_prefixed_url_respects_allowlist"
+      ]
     },
     "tests/test_litellm/proxy/test_proxy_server.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "test_init_sso_settings_in_db_error_handling"
+      ]
     },
     "tests/test_litellm/proxy/test_pyroscope.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_init_pyroscope_returns_cleanly_when_disabled"
+      ]
     },
     "tests/test_litellm/proxy/test_route_llm_request.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_ordinary_request_is_not_rejected_by_the_mock_param_gate",
+        "test_raise_if_required_body_param_missing_allows_valid_requests"
+      ]
     },
     "tests/test_litellm/proxy/test_shared_health_check.py": {
-      "no_assert": 2
+      "no_assert": [
+        "TestSharedHealthCheckManager.test_cache_health_check_results_no_redis",
+        "TestSharedHealthCheckManager.test_release_health_check_lock_no_redis"
+      ]
     },
     "tests/test_litellm/proxy/test_team_org_move.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestAutoAddTeamMembersToOrg.test_logs_and_continues_on_error"
+      ]
     },
     "tests/test_litellm/proxy/utils/prisma_and_spend/test_prisma_client_engine_watcher.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_waitpid_thread_func_swallows_loop_runtime_error"
+      ]
     },
     "tests/test_litellm/proxy/utils/prisma_and_spend/test_spend_functions.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_update_daily_tag_spend_logs_and_swallows_errors"
+      ]
     },
     "tests/test_litellm/proxy/utils/proxy_logging/test_guardrail_pipeline.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_process_guardrail_metadata_no_metadata_is_noop"
+      ]
     },
     "tests/test_litellm/proxy/utils/proxy_logging/test_module_helpers.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_enrich_http_exception_no_op_for_non_http_exception"
+      ]
     },
     "tests/test_litellm/proxy/utils/proxy_logging/test_streaming_hooks.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_fire_deferred_stream_logging_no_logging_obj_no_error",
+        "test_init_response_taking_too_long_task_no_slack_instance_no_error_raises"
+      ]
     },
     "tests/test_litellm/repositories/test_repositories.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestConfigRepository.test_prefetch_params"
+      ]
     },
     "tests/test_litellm/responses/test_streaming_iterator_error_events.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_maybe_raise_for_error_event_passes_through_normal_chunk"
+      ]
     },
     "tests/test_litellm/router_strategy/adaptive_router/test_hooks.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_hook_swallows_exceptions_from_record_turn"
+      ]
     },
     "tests/test_litellm/router_strategy/test_complexity_router.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestKeywordFalsePositives.test_try_not_in_entry"
+      ]
     },
     "tests/test_litellm/router_strategy/test_router_routing_plugins.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "test_json_default_stable_id_is_stable_across_instances"
+      ]
     },
     "tests/test_litellm/router_utils/test_fallback_event_handlers.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestTriggerCooldownForFailedDeployment.test_silently_catches_exceptions"
+      ]
     },
     "tests/test_litellm/secret_managers/test_base_secret_manager.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_raise_if_unsafe_secret_name_allows_legitimate_aliases"
+      ]
     },
     "tests/test_litellm/test_add_deployment_no_master_key.py": {
-      "trivial_assert": 2
+      "trivial_assert": [
+        "test_add_deployment_without_master_key",
+        "test_add_deployment_without_salt_key_or_master_key"
+      ]
     },
     "tests/test_litellm/test_rag_openai_ingestion.py": {
-      "no_assert": 3
+      "no_assert": [
+        "test_existing_file_id_fails_for_unsupported_ingestion_provider",
+        "test_openai_ingest_existing_file_id_attaches_without_uploading",
+        "test_openai_ingest_existing_file_id_requires_vector_store_id"
+      ]
     },
     "tests/test_litellm/test_responses_id_security.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "TestEncryptResponseId.test_encrypt_response_id_maintains_prefix",
+        "TestEncryptResponseId.test_encrypt_response_id_success"
+      ]
     },
     "tests/test_litellm/test_router.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_router_with_model_info_and_model_group"
+      ]
     },
     "tests/test_litellm/test_router_silent_experiment.py": {
-      "no_assert": 2
+      "no_assert": [
+        "test_silent_experiment_acompletion_direct",
+        "test_silent_experiment_completion_direct"
+      ]
     },
     "tests/test_litellm/test_router_streaming_fallback_metadata.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_apply_fallback_hidden_params_to_item_none_item"
+      ]
     },
     "tests/test_litellm/test_ssl_verify_unit.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "TestBaseAWSLLMSSLVerify.test_get_credentials_propagates_ssl_verify"
+      ]
     },
     "tests/test_litellm/test_type_check_gate.py": {
-      "trivial_assert": 1
+      "trivial_assert": [
+        "test_fingerprints_carry_the_dependency_group_set"
+      ]
     },
     "tests/test_litellm/test_utils.py": {
-      "no_assert": 3,
-      "swallowed_failure": 3
+      "no_assert": [
+        "TestProxyLoggingBudgetAlerts.test_budget_alerts_with_email_when_instance_is_none",
+        "test_image_response_utils",
+        "test_max_tokens_consistency"
+      ],
+      "swallowed_failure": [
+        "TestProxyFunctionCalling.test_bedrock_converse_api_proxy_mappings",
+        "TestProxyFunctionCalling.test_edge_cases_and_malformed_proxy_models",
+        "TestProxyFunctionCalling.test_real_world_proxy_config_documentation"
+      ]
     },
     "tests/test_litellm/test_vcr_safe_body_matcher.py": {
-      "no_assert": 9
+      "no_assert": [
+        "test_key_fingerprint_matcher_matches_repeated_good_key_calls",
+        "test_safe_body_matcher_accepts_identical_bytes",
+        "test_safe_body_matcher_accepts_str_bytes_equivalent",
+        "test_safe_body_matcher_handles_jsonl_without_crashing",
+        "test_safe_body_matcher_matches_bodies_differing_only_by_cachebuster",
+        "test_safe_body_matcher_skips_telemetry_body",
+        "test_safe_body_matcher_treats_none_bodies_as_equal",
+        "test_tolerant_path_normalizes_bedrock_batch_s3_file_uuid",
+        "test_tolerant_path_normalizes_bedrock_managed_s3_file_uuid"
+      ]
     },
     "tests/test_litellm/test_xai_responses_auto_routing.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestXAIResponsesAutoRouting.test_completion_with_tools_routes_to_responses_api"
+      ]
     },
     "tests/test_litellm/types/test_types_utils.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_empty_choices"
+      ]
     },
     "tests/test_models.py": {
-      "dead_skip": 1,
-      "no_assert": 1
+      "dead_skip": [
+        "test_add_and_delete_models"
+      ],
+      "no_assert": [
+        "test_team_model_e2e"
+      ]
     },
     "tests/test_openai_endpoints.py": {
-      "dead_skip": 2,
-      "no_assert": 7
+      "dead_skip": [
+        "test_chat_completion_different_deployments",
+        "test_chat_completion_ratelimit"
+      ],
+      "no_assert": [
+        "test_chat_completion_anthropic_structured_output",
+        "test_chat_completion_streaming",
+        "test_completion",
+        "test_embeddings",
+        "test_image_generation",
+        "test_openai_wildcard_chat_completion",
+        "test_proxy_all_models"
+      ]
     },
     "tests/test_organizations.py": {
-      "no_assert": 4
+      "no_assert": [
+        "test_organization_delete",
+        "test_organization_list",
+        "test_organization_member_flow",
+        "test_organization_new"
+      ]
     },
     "tests/test_proxy_server_non_root.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "test_restructure_ui_html_files_NOT_skipped_locally",
+        "test_restructure_ui_html_files_skipped_in_non_root"
+      ]
     },
     "tests/test_spend_logs.py": {
-      "dead_skip": 4
+      "dead_skip": [
+        "test_get_predicted_spend_logs",
+        "test_spend_logs",
+        "test_spend_logs_high_traffic",
+        "test_spend_logs_with_org_id"
+      ]
     },
     "tests/test_team.py": {
-      "no_assert": 2,
-      "swallowed_failure": 1,
-      "trivial_assert": 1
+      "no_assert": [
+        "test_team_alias",
+        "test_team_new"
+      ],
+      "swallowed_failure": [
+        "test_team_info"
+      ],
+      "trivial_assert": [
+        "test_team_member_add_email"
+      ]
     },
     "tests/test_team_members.py": {
-      "dead_skip": 2
+      "dead_skip": [
+        "test_add_multiple_members",
+        "test_duplicate_user_addition"
+      ]
     },
     "tests/test_users.py": {
-      "dead_skip": 2,
-      "no_assert": 2
+      "dead_skip": [
+        "test_global_proxy_budget_update",
+        "test_users_budgets_reset"
+      ],
+      "no_assert": [
+        "test_user_new",
+        "test_user_update"
+      ]
     },
     "tests/vector_store_tests/test_azure_ai_vector_store.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_basic_search_vector_store"
+      ]
     },
     "tests/vector_store_tests/test_azure_vector_store.py": {
-      "no_assert": 1
+      "no_assert": [
+        "TestAzureOpenAIVectorStore.test_basic_search_vector_store"
+      ]
     },
     "tests/vector_store_tests/test_bedrock_vector_store.py": {
-      "no_assert": 1
+      "no_assert": [
+        "test_bedrock_search_with_router"
+      ]
     },
     "tests/vector_store_tests/test_ragflow_vector_store.py": {
-      "dead_skip": 1,
-      "no_assert": 1
+      "dead_skip": [
+        "TestRAGFlowVectorStore.test_basic_search_vector_store"
+      ],
+      "no_assert": [
+        "TestRAGFlowVectorStore.test_basic_create_vector_store"
+      ]
     },
     "tests/vector_store_tests/test_s3_vectors_vector_store.py": {
-      "dead_skip": 1
+      "dead_skip": [
+        "TestS3VectorsVectorStore.test_basic_create_vector_store"
+      ]
     }
   }
 }
