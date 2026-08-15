@@ -1352,6 +1352,7 @@ def test_track_deployment_metrics(model_list):
             "ContentPolicyViolationError",
             7,
         ),
+        (litellm.exceptions.NotFoundError, "NotFoundError", 0),
     ],
 )
 def test_get_num_retries_from_retry_policy(
@@ -1373,6 +1374,26 @@ def test_get_num_retries_from_retry_policy(
         )
     )
     assert calc_num_retries == num_retries
+
+
+def test_get_num_retries_from_retry_policy_not_found_error(model_list):
+    """Test NotFoundError retry policy mapping."""
+    from litellm.router import RetryPolicy
+    from litellm.router_utils.get_retry_from_policy import get_num_retries_from_retry_policy
+
+    backup_retry_policy = RetryPolicy(NotFoundErrorRetries=9)
+    exception = litellm.NotFoundError(
+        message="test",
+        llm_provider="openai",
+        model="gpt-5-mini",
+    )
+
+    calc_num_retries = get_num_retries_from_retry_policy(
+        exception=exception,
+        retry_policy=backup_retry_policy,
+    )
+
+    assert calc_num_retries == 9
 
 
 @pytest.mark.parametrize(

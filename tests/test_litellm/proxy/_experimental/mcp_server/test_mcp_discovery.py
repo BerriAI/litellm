@@ -103,6 +103,21 @@ class TestMCPRegistryFile:
         missing = expected - names
         assert not missing, f"Missing well-known servers: {missing}"
 
+    def test_root_mcp_servers_file_contains_github(self):
+        repo_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
+        )
+        config_path = os.path.join(repo_root, "mcp_servers.json")
+        assert os.path.exists(config_path), f"Config not found at {config_path}"
+
+        with open(config_path, "r") as f:
+            data = json.load(f)
+
+        assert "github" in data, "Root MCP config should include a GitHub server entry"
+        github_config = data["github"]
+        assert github_config.get("http_url") or github_config.get("sse_url")
+        assert "github" in (github_config.get("description") or "").lower()
+
     def test_env_vars_structure(self, registry_path):
         with open(registry_path, "r") as f:
             data = json.load(f)

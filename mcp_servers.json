@@ -1,4 +1,11 @@
 {
+    "github": {
+        "http_url": "https://api.githubcopilot.com/mcp/",
+        "description": "GitHub MCP server for repository operations, issues, pull requests, and workflow management.",
+        "env": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+        }
+    },
     "zapier": {
         "sse_url": "https://mcp.zapier.com/api/mcp"
     },
