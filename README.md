@@ -106,7 +106,7 @@ response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"ro
 
 ### AI Gateway (Proxy Server)
 
-[**Getting Started - E2E Tutorial**](https://docs.litellm.ai/docs/proxy/docker_quick_start) - Setup virtual keys, make your first request
+[**Getting Started - E2E Tutorial**](https://docs.litellm.ai/docs/proxy/docker_quick_start) - Set up virtual keys, make your first request
 
 ```shell
 uv tool install 'litellm[proxy]'
@@ -548,7 +548,7 @@ The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws
 
 ### Run in Developer Mode
 #### Services
-1. Setup .env file in root
+1. Set up .env file in root
 2. Run dependent services `docker-compose up db prometheus`
 
 #### Backend
