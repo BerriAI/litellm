@@ -505,8 +505,8 @@ if MCP_AVAILABLE:
         if merged is not None:
             updates["instructions"] = merged
         scoped_server_name: Final = _mcp_gateway_server_name.get()
-        if scoped_server_name is not None:
-            updates["server_name"] = scoped_server_name
+        if scoped_server_name is not None and scoped_server_name.strip():
+            updates["server_name"] = scoped_server_name.strip()
         return opts.model_copy(update=updates) if updates else opts
 
     ########################################################
@@ -1835,6 +1835,10 @@ if MCP_AVAILABLE:
             scoped_server_name = (
                 scoped_server.alias or scoped_server.server_name or scoped_server.name or scoped_server.server_id
             )
+            if not scoped_server_name and mcp_servers and len(mcp_servers) == 1:
+                scoped_server_name = mcp_servers[0]
+        elif scoped_server_endpoint and mcp_servers and len(mcp_servers) == 1 and not allowed:
+            scoped_server_name = mcp_servers[0]
         instructions_token: Final = _mcp_gateway_initialize_instructions.set(merged)
         server_name_token: Final = _mcp_gateway_server_name.set(scoped_server_name)
         try:

@@ -5236,6 +5236,215 @@ class TestGatewayCreateInitializationOptions:
         assert captured["server_name"] == "grafana"
         assert server.create_initialization_options().server_name == "litellm-mcp-server"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("alias", ["grafana", "playwright", "home_assistant"])
+    async def test_streamable_http_handler_scopes_server_name_for_distinct_aliases(self, alias: str):
+        """Regression test for issue #29800: /mcp/{alias} must return the specific alias name."""
+        try:
+            from litellm.proxy._experimental.mcp_server import server as mcp_server
+            from litellm.proxy._experimental.mcp_server.server import (
+                global_mcp_server_manager,
+                handle_streamable_http_mcp,
+                server,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scoped_server = MCPServer(
+            server_id=f"server-{alias}",
+            name=f"upstream-{alias}",
+            alias=alias,
+            transport=MCPTransport.http,
+            url=f"https://example.com/mcp/{alias}",
+        )
+        captured = {}
+
+        async def record_request(scope, receive, send):
+            captured["server_name"] = server.create_initialization_options().server_name
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": f"/mcp/{alias}",
+            "headers": [],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(
+                    UserAPIKeyAuth(api_key="sk-test"),
+                    None,
+                    [alias],
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[scoped_server],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                mcp_server.session_manager_stateless,
+                "handle_request",
+                side_effect=record_request,
+            ),
+        ):
+            receive = AsyncMock(return_value={"type": "http.request", "body": b""})
+            await handle_streamable_http_mcp(scope, receive, AsyncMock())
+
+        assert captured["server_name"] == alias
+        assert server.create_initialization_options().server_name == "litellm-mcp-server"
+
+    @pytest.mark.asyncio
+    async def test_streamable_http_handler_fallback_on_aggregate_endpoint(self):
+        """Aggregate /mcp endpoint with multiple servers returns default server name."""
+        try:
+            from litellm.proxy._experimental.mcp_server import server as mcp_server
+            from litellm.proxy._experimental.mcp_server.server import (
+                global_mcp_server_manager,
+                handle_streamable_http_mcp,
+                server,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        server_1 = MCPServer(
+            server_id="server-1",
+            name="upstream-1",
+            alias="grafana",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp/1",
+        )
+        server_2 = MCPServer(
+            server_id="server-2",
+            name="upstream-2",
+            alias="playwright",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp/2",
+        )
+        captured = {}
+
+        async def record_request(scope, receive, send):
+            captured["server_name"] = server.create_initialization_options().server_name
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(
+                    UserAPIKeyAuth(api_key="sk-test"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[server_1, server_2],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                mcp_server.session_manager_stateless,
+                "handle_request",
+                side_effect=record_request,
+            ),
+        ):
+            receive = AsyncMock(return_value={"type": "http.request", "body": b""})
+            await handle_streamable_http_mcp(scope, receive, AsyncMock())
+
+        assert captured["server_name"] == "litellm-mcp-server"
+        assert server.create_initialization_options().server_name == "litellm-mcp-server"
+
+    @pytest.mark.asyncio
+    async def test_scoped_request_empty_or_whitespace_alias_falls_back_to_default(self):
+        """When scoped server has empty or whitespace-only name fields, fallback to default."""
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _gateway_initialize_instructions_request_scope,
+                global_mcp_server_manager,
+                server,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scoped_server = MCPServer(
+            server_id="",
+            name="",
+            alias="   ",
+            server_name="",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp",
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[scoped_server],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ),
+        ):
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=None,
+                mcp_servers=["   "],
+                client_ip=None,
+                scoped_server_endpoint=True,
+            ):
+                assert server.create_initialization_options().server_name == "litellm-mcp-server"
+
+        assert server.create_initialization_options().server_name == "litellm-mcp-server"
+
     def test_contextvar_set_injects_instructions(self):
         """When ContextVar has a value, it appears in InitializationOptions."""
         try:
