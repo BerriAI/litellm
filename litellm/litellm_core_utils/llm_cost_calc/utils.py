@@ -337,9 +337,10 @@ def _apply_off_peak_pricing(
     cache_read_cost: float,
 ) -> tuple[float, float, float]:
     """Swap in off-peak per-token rates when the current UTC time is inside one of the model's
-    off_peak_pricing windows. Applied after threshold pricing so the discount is honored rather
-    than overwritten when a model combines off-peak and above-threshold rates. Any rate left
-    unset in off_peak_pricing falls back to the standard rate.
+    off_peak_pricing windows. An off-peak rate replaces the rate that would otherwise apply
+    rather than discounting it, so a model that also has tiered or above-threshold pricing bills
+    the flat off-peak rate for the whole request while the window is open. Any rate left unset in
+    off_peak_pricing falls back to the standard rate.
     """
     off_peak: Final = model_info.get("off_peak_pricing")
     if not off_peak:
@@ -352,6 +353,22 @@ def _apply_off_peak_pricing(
         _coerce_off_peak_rate(off_peak.get("output_cost_per_token"), completion_base_cost),
         _coerce_off_peak_rate(off_peak.get("cache_read_input_token_cost"), cache_read_cost),
     )
+
+
+def _apply_off_peak_to_base_costs(
+    model_info: ModelInfo,
+    current_time: datetime | None,
+    base_costs: tuple[float, float, float, float, float],
+) -> tuple[float, float, float, float, float]:
+    """Apply off-peak rates to an already-resolved set of base costs, whichever pricing path
+    produced them. Cache-creation rates are passed through untouched, since off_peak_pricing
+    has no field for them.
+    """
+    prompt, completion, cache_creation, cache_creation_above_1hr, cache_read = base_costs
+    off_peak_prompt, off_peak_completion, off_peak_cache_read = _apply_off_peak_pricing(
+        model_info, current_time, prompt, completion, cache_read
+    )
+    return (off_peak_prompt, off_peak_completion, cache_creation, cache_creation_above_1hr, off_peak_cache_read)
 
 
 def _get_token_base_cost(
@@ -376,7 +393,7 @@ def _get_token_base_cost(
     """
     tiered_base_costs: Final = _get_tiered_base_costs(model_info=model_info, usage=usage)
     if tiered_base_costs is not None:
-        return tiered_base_costs
+        return _apply_off_peak_to_base_costs(model_info, current_time, tiered_base_costs)
 
     # Get service tier aware cost keys
     input_cost_key: Final = _get_service_tier_cost_key("input_cost_per_token", service_tier)
@@ -410,15 +427,16 @@ def _get_token_base_cost(
         k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
     ]
     if not threshold_keys:
-        off_peak_prompt_cost, off_peak_completion_cost, off_peak_cache_read_cost = _apply_off_peak_pricing(
-            model_info, current_time, prompt_base_cost, completion_base_cost, cache_read_cost
-        )
-        return (
-            off_peak_prompt_cost,
-            off_peak_completion_cost,
-            cache_creation_cost,
-            cache_creation_cost_above_1hr,
-            off_peak_cache_read_cost,
+        return _apply_off_peak_to_base_costs(
+            model_info,
+            current_time,
+            (
+                prompt_base_cost,
+                completion_base_cost,
+                cache_creation_cost,
+                cache_creation_cost_above_1hr,
+                cache_read_cost,
+            ),
         )
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
@@ -519,15 +537,16 @@ def _get_token_base_cost(
             except Exception:
                 continue
 
-    discounted_prompt_cost, discounted_completion_cost, discounted_cache_read_cost = _apply_off_peak_pricing(
-        model_info, current_time, prompt_base_cost, completion_base_cost, cache_read_cost
-    )
-    return (
-        discounted_prompt_cost,
-        discounted_completion_cost,
-        cache_creation_cost,
-        cache_creation_cost_above_1hr,
-        discounted_cache_read_cost,
+    return _apply_off_peak_to_base_costs(
+        model_info,
+        current_time,
+        (
+            prompt_base_cost,
+            completion_base_cost,
+            cache_creation_cost,
+            cache_creation_cost_above_1hr,
+            cache_read_cost,
+        ),
     )
 
 

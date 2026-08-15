@@ -574,6 +574,38 @@ def test_get_model_info_propagates_off_peak_fields():
     assert info["off_peak_pricing"] == off_peak_pricing
 
 
+def test_get_token_base_cost_off_peak_wins_over_tiered_pricing():
+    """Tiered pricing resolves base rates on its own path and returns early, so off-peak has to
+    be applied there too or a model carrying both would silently bill the tier rate all day."""
+    from datetime import datetime, timezone
+
+    model_name = "litellm-test-off-peak-tiered"
+    litellm.register_model(
+        {
+            model_name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 3e-6, "output_cost_per_token": 6e-6},
+                ],
+                "off_peak_pricing": {
+                    "hours_utc": "16:30-00:30",
+                    "input_cost_per_token": 5e-7,
+                    "output_cost_per_token": 1e-6,
+                },
+            }
+        }
+    )
+    info = litellm.get_model_info(model=model_name)
+    usage = Usage(prompt_tokens=1_000, completion_tokens=100, total_tokens=1_100)
+
+    inside = _get_token_base_cost(info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert inside[:2] == (5e-7, 1e-6)
+
+    outside = _get_token_base_cost(info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert outside[:2] == (3e-6, 6e-6)
+
+
 def test_generic_cost_per_token_gpt54_above_272k_tokens(_local_model_cost_map):
     """GPT-5.4/5.4-pro: prompts >272K input tokens priced at 2x input, 1.5x output."""
     model = "gpt-5.4"
