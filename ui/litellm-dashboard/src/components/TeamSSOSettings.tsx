@@ -384,11 +384,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                         ))
                       }
                     </ComboboxValue>
-                    <ComboboxChipsInput
-                      className="border-0 bg-transparent"
-                      placeholder="Select permissions"
-                      aria-label="Team Member Permissions"
-                    />
+                    <ComboboxChipsInput placeholder="Select permissions" aria-label="Team Member Permissions" />
                   </ComboboxChips>
                   <ComboboxContent anchor={anchor}>
                     <ComboboxList>

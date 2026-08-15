@@ -256,11 +256,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
               </>
             )}
           </ComboboxValue>
-          <ComboboxChipsInput
-            placeholder="Select Models"
-            aria-label="Select Models"
-            className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
-          />
+          <ComboboxChipsInput placeholder="Select Models" aria-label="Select Models" className="min-w-24" />
         </ComboboxChips>
         <ComboboxContent anchor={anchor}>
           <ComboboxEmpty>No models found</ComboboxEmpty>
