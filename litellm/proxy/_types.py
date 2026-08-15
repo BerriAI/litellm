@@ -2340,7 +2340,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="serve the Claude Code gateway protocol (https://code.claude.com/docs/en/claude-apps-gateway) under /claude_code_gateway: OAuth device-flow sign-in reusing proxy SSO, plus managed settings and OTLP telemetry ingestion. Off by default",
     )
-    claude_code_gateway_managed_settings: Dict[str, Any] | None = Field(
+    claude_code_gateway_managed_settings: dict[str, Any] | None = Field(
         None,
         description="Claude Code managed-settings.json served verbatim at the gateway's /claude_code_gateway/managed/settings endpoint. When unset the endpoint returns 404 (no managed policy)",
     )
