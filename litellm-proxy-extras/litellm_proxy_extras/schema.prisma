@@ -945,6 +945,17 @@ model LiteLLM_DailyTagSpend {
 }
 
 
+// One row per live proxy worker process. Workers upsert their row on a fixed
+// heartbeat; counting rows with a recent heartbeat tells how many workers share
+// this database, which lets the Admin UI hide its "no Redis" warning for
+// deployments that are provably a single worker.
+model LiteLLM_ProxyWorkerHeartbeat {
+  worker_id         String   @id
+  hostname          String
+  started_at        DateTime @default(now())
+  last_heartbeat_at DateTime @default(now())
+}
+
 // Track the status of cron jobs running. Only allow one pod to run the job at a time
 model LiteLLM_CronJob {
   cronjob_id            String   @id @default(cuid()) // Unique ID for the record
