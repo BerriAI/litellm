@@ -687,6 +687,49 @@ def test_openai_responses_web_search_multiplied_by_call_count(local_model_cost_m
         )
 
 
+def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
+    """
+    Regression: output items that fail OpenAI SDK validation (e.g. xAI web_search_call
+    items without an "action" field) stay plain dicts in the output union. The per-call
+    counter must read their "type" key like the detection gate does, instead of flooring
+    a multi-search response to a single billable search.
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import Usage
+
+    model = "gpt-4o-search-preview"
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+
+    response = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1754900000,
+            "model": model,
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {"type": "web_search_call", "id": f"ws_{i}", "status": "completed"}
+                for i in range(3)
+            ],
+        }
+    )
+    assert all(isinstance(item, dict) for item in response.output)
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(3 * per_call), (
+        f"3 dict-shaped web searches must bill 3 x ${per_call}, got ${cost}"
+    )
+
+
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
 
