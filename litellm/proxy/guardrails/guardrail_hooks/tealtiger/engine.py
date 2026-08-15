@@ -61,18 +61,14 @@ class TealEngine:
 
         self._pii_policy = next((p for p in policies if p["type"] == "pii"), None)
         self._cost_policy = next((p for p in policies if p["type"] == "cost"), None)
-        self._tool_policy = next(
-            (p for p in policies if p["type"] == "tool_auth"), None
-        )
+        self._tool_policy = next((p for p in policies if p["type"] == "tool_auth"), None)
 
     def evaluate_text(self, text: str) -> Decision:
         correlation_id: Final = str(uuid.uuid4())
         if not text or not self._pii_policy:
             return Decision(Action.ALLOW.value, "NO_VIOLATIONS", correlation_id)
 
-        findings: Final = tuple(
-            name for name, pat in self.patterns.items() if pat.search(text)
-        )
+        findings: Final = tuple(name for name, pat in self.patterns.items() if pat.search(text))
         if not findings:
             return Decision(Action.ALLOW.value, "NO_VIOLATIONS", correlation_id)
 
