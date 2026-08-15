@@ -239,6 +239,53 @@ def test_module_under_test_is_recognised_from_imports() -> None:
     assert not mutation_probe._is_under_test("litellm/caching/dual_cache.py", imports)
 
 
+def test_swallowed_exception_becomes_a_mutant_that_a_no_assert_test_can_notice(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "root"
+    (root / "litellm").mkdir(parents=True)
+    target = root / "litellm" / "hooks.py"
+    target.write_text(
+        textwrap.dedent(
+            """
+            def record(value):
+                try:
+                    return int(value)
+                except ValueError:
+                    return 0
+            """
+        ).lstrip()
+    )
+    monkeypatch.setattr(mutation_probe, "REPO_ROOT", str(root))
+    mutants = mutation_probe.generate_mutants("litellm/hooks.py", range(1, 6))
+
+    swallows = [m for m in mutants if m.swallow]
+    assert len(swallows) == 1
+    assert "stop swallowing" in swallows[0].description
+    assert "raise" in swallows[0].source
+    assert "return 0" not in swallows[0].source
+    # A test that only claims "this does not raise" dies to that mutant and to
+    # nothing else, so it has to be tried first.
+    assert mutation_probe.select_mutants(mutants, 2)[0].swallow
+
+
+def test_already_reraising_handlers_produce_no_mutant(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "root"
+    (root / "litellm").mkdir(parents=True)
+    (root / "litellm" / "hooks.py").write_text(
+        textwrap.dedent(
+            """
+            def record(value):
+                try:
+                    return int(value)
+                except ValueError:
+                    raise
+            """
+        ).lstrip()
+    )
+    monkeypatch.setattr(mutation_probe, "REPO_ROOT", str(root))
+
+    assert not [m for m in mutation_probe.generate_mutants("litellm/hooks.py", range(1, 6)) if m.swallow]
+
+
 def test_area_rotation_moves_on_each_day_and_is_stable_within_one(monkeypatch) -> None:
     monkeypatch.setattr(inventory, "cleared_ids", lambda: frozenset())
     candidates = [

@@ -66,6 +66,9 @@ class Mutant:
     lineno: int
     description: str
     source: str
+    # A test that asserts by not raising can only be killed by a mutant that
+    # raises, so these go first in the budget.
+    swallow: bool = False
 
 
 @dataclass
@@ -208,7 +211,7 @@ NodeKey = Tuple[str, int, int]
 
 
 def _position(node: ast.AST) -> Tuple[int, int]:
-    if isinstance(node, (ast.expr, ast.stmt)):
+    if isinstance(node, (ast.expr, ast.stmt, ast.ExceptHandler)):
         return (node.lineno, node.col_offset)
     return (-1, -1)
 
@@ -288,7 +291,7 @@ def generate_mutants(path: str, lines: Iterable[int]) -> List[Mutant]:
     covered = set(lines)
     mutants: List[Mutant] = []
 
-    def emit(node: ast.AST, description: str, mutate: Mutation) -> None:
+    def emit(node: ast.AST, description: str, mutate: Mutation, swallow: bool = False) -> None:
         lineno, _ = _position(node)
         if lineno not in covered:
             return
@@ -296,9 +299,19 @@ def generate_mutants(path: str, lines: Iterable[int]) -> List[Mutant]:
             source = _mutant_source(original, _key(node), mutate)
         except Exception:
             return
-        mutants.append(Mutant(path=path, lineno=lineno, description=description, source=source))
+        mutants.append(
+            Mutant(path=path, lineno=lineno, description=description, source=source, swallow=swallow)
+        )
 
     for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler) and not _bare_reraise(node):
+            emit(
+                node,
+                f"stop swallowing `{_snippet(node.type) if node.type else 'except'}` and re-raise",
+                lambda n: ast.ExceptHandler(type=n.type, name=n.name, body=[ast.Raise()]),
+                swallow=True,
+            )
+            continue
         if isinstance(node, ast.Compare) and len(node.ops) == 1 and type(node.ops[0]) in COMPARE_SWAPS:
             swap = COMPARE_SWAPS[type(node.ops[0])]
             emit(
@@ -351,6 +364,11 @@ def _is_none(node: ast.expr) -> bool:
     return isinstance(node, ast.Constant) and node.value is None
 
 
+def _bare_reraise(handler: ast.ExceptHandler) -> bool:
+    only = handler.body[0] if len(handler.body) == 1 else None
+    return isinstance(only, ast.Raise) and only.exc is None
+
+
 def _snippet(node: ast.AST, limit: int = 60) -> str:
     try:
         rendered = ast.unparse(node)
@@ -360,7 +378,15 @@ def _snippet(node: ast.AST, limit: int = 60) -> str:
 
 
 def select_mutants(mutants: Sequence[Mutant], limit: int) -> List[Mutant]:
-    """Round-robin over distinct lines so the budget spreads across the code path."""
+    """Round-robin over distinct lines so the budget spreads across the code path.
+
+    Swallowed-exception mutants come first: a test whose only claim is that the
+    call does not raise cannot be killed by anything else, and getting that
+    wrong would call a real regression test vacuous.
+    """
+    swallows = [mutant for mutant in mutants if mutant.swallow][:limit]
+    if swallows:
+        return swallows + select_mutants([m for m in mutants if not m.swallow], limit - len(swallows))
     by_line: Dict[Tuple[str, int], List[Mutant]] = {}
     for mutant in mutants:
         by_line.setdefault((mutant.path, mutant.lineno), []).append(mutant)

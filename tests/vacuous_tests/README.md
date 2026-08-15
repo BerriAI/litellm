@@ -47,6 +47,8 @@ Verdicts: `vacuous` (survived every mutant), `not_vacuous` (a mutant killed it, 
 
 Only a `vacuous` verdict authorizes editing a test
 
+`not_vacuous` is a floor, not a compliment: it means the test notices when the code it covers changes behaviour or starts raising, which for an assert-by-not-raising test is all it ever claimed. Reviewing `verified_not_vacuous.json` is still worthwhile, since a cleared test can be weaker than its name suggests
+
 ## Fixing a vacuous test
 
 Refactor first: add the assertion the test's own name and docstring imply, then re-run the probe and confirm the mutant that used to survive now dies. Delete only when the behaviour is provably covered somewhere else, and cite that test id. When neither is possible, leave it alone and record why: a human should look at it
@@ -61,7 +63,9 @@ python tests/vacuous_tests/flake_gate.py "tests/x/test_y.py::test_z"
 
 ## Guardrails
 
-`guardrails.py` runs against the diff and rejects anything that games the metric: files outside `tests/`, edits to `conftest.py` or CI config, edits to this directory's own logic, test removals without a citation, and assertion counts dropping without tests being removed
+`guardrails.py` checks the daily automation's own PRs, so it fails by design on the PR that introduced this directory. It reads the committed diff (`base...HEAD`), not the working tree
+
+It runs against the diff and rejects anything that games the metric: files outside `tests/`, edits to `conftest.py` or CI config, edits to this directory's own logic, test removals without a citation, and assertion counts dropping without tests being removed
 
 ```bash
 python tests/vacuous_tests/guardrails.py --base origin/litellm_internal_staging
