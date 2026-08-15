@@ -2,7 +2,9 @@ import os
 import sys
 
 import httpx
+import litellm
 import pytest
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -14,6 +16,15 @@ from litellm.llms.openrouter.chat.transformation import (
     OpenrouterConfig,
     OpenRouterException,
 )
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        GetModelCostMap.load_local_model_cost_map(),
+    )
 
 
 class TestOpenRouterChatCompletionStreamingHandler:
@@ -542,6 +553,21 @@ def test_openrouter_reasoning_models_allow_reasoning_effort_param():
     assert supported_params.count("reasoning_effort") == 1
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openrouter/deepseek/deepseek-v4-flash",
+        "openrouter/deepseek/deepseek-v4-flash-0731",
+    ],
+)
+def test_openrouter_deepseek_v4_flash_models_allow_reasoning_effort(
+    model, local_model_cost_map
+):
+    supported_params = OpenrouterConfig().get_supported_openai_params(model=model)
+
+    assert "reasoning_effort" in supported_params
+
+
 def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
     """
     Models without reasoning support should not gain reasoning-specific params.
@@ -555,9 +581,9 @@ def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
     assert "reasoning_effort" not in supported_params
 
 
-def test_openrouter_reasoning_effort_max_maps_to_xhigh():
+def test_openrouter_reasoning_effort_max_passes_through():
     """
-    OpenRouter expects 'xhigh' instead of 'max' for reasoning_effort.
+    OpenRouter receives 'max' unchanged and owns its interpretation.
     """
     config = OpenrouterConfig()
 
@@ -568,7 +594,7 @@ def test_openrouter_reasoning_effort_max_maps_to_xhigh():
         drop_params=False,
     )
 
-    assert result["reasoning_effort"] == "xhigh"
+    assert result["reasoning_effort"] == "max"
 
 
 def test_openrouter_reasoning_effort_max_does_not_mutate_caller_dict():
@@ -618,3 +644,17 @@ def test_openrouter_reasoning_effort_high_passes_through():
     )
 
     assert result["reasoning_effort"] == "high"
+
+
+@pytest.mark.parametrize("reasoning_effort", ["none", "future-tier"])
+def test_openrouter_reasoning_effort_values_pass_through(
+    reasoning_effort, local_model_cost_map
+):
+    result = OpenrouterConfig().map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort},
+        optional_params={},
+        model="openrouter/deepseek/deepseek-v4-flash-0731",
+        drop_params=False,
+    )
+
+    assert result["reasoning_effort"] == reasoning_effort

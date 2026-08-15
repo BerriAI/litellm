@@ -10,6 +10,7 @@ Related issue: https://github.com/BerriAI/litellm/issues/22189
 """
 
 import litellm
+import pytest
 from litellm.llms.openrouter.responses.transformation import (
     OpenRouterResponsesAPIConfig,
 )
@@ -79,6 +80,18 @@ class TestOpenRouterResponsesAPIConfig:
             assert False, "Should have raised ValueError"
         except ValueError as e:
             assert "OpenRouter API key is required" in str(e)
+
+    @pytest.mark.parametrize("effort", ["none", "max", "future-tier"])
+    def test_reasoning_effort_passes_through_unchanged(self, effort):
+        config = OpenRouterResponsesAPIConfig()
+
+        result = config.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": effort}},
+            model="deepseek/deepseek-v4-flash-0731",
+            drop_params=False,
+        )
+
+        assert result["reasoning"] == {"effort": effort}
 
 
 class TestOpenRouterResponsesAPIRegistration:

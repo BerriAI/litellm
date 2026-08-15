@@ -38,25 +38,27 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Handles `thinking` and `reasoning_effort` parameters for DeepSeek reasoner models.
         DeepSeek supports `{"type": "enabled"}` and `{"type": "disabled"}` - no budget_tokens
         like Anthropic. `reasoning_effort="none"` is the OpenAI-style way to ask for thinking
-        off, so it maps to `{"type": "disabled"}`; any other effort keeps thinking on.
+        off, so it maps to `{"type": "disabled"}`. Other effort values are passed through
+        unchanged for DeepSeek to interpret.
 
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
         # Let parent handle standard params first
         optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
-        # Pop thinking/reasoning_effort from optional_params first (parent may have added them)
-        # Then re-add only if valid for DeepSeek
         thinking_value: Final = optional_params.pop("thinking", None)
-        reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
+        reasoning_effort = optional_params.get("reasoning_effort")
+        if isinstance(reasoning_effort, dict):
+            reasoning_effort = reasoning_effort.get("effort")
+            optional_params["reasoning_effort"] = reasoning_effort
 
-        # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
-        if isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
+        if reasoning_effort == "none":
+            optional_params.pop("reasoning_effort", None)
+            optional_params["thinking"] = {"type": "disabled"}
+        elif isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
             optional_params["thinking"] = {"type": thinking_value["type"]}
-
-        # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
-        elif reasoning_effort is not None:
-            optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
+        if reasoning_effort is None:
+            optional_params.pop("reasoning_effort", None)
 
         return optional_params
 

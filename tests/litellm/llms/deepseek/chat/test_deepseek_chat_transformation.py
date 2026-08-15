@@ -4,7 +4,6 @@ Unit tests for DeepSeek chat transformation.
 Tests the thinking and reasoning_effort parameter handling for DeepSeek models.
 """
 
-import pytest
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
 
@@ -52,7 +51,7 @@ class TestDeepSeekThinkingParams:
         assert "budget_tokens" not in result.get("thinking", {})
 
     def test_map_reasoning_effort_medium(self):
-        """Test that reasoning_effort='medium' maps to thinking enabled."""
+        """Test that reasoning_effort='medium' passes through unchanged."""
         non_default_params = {"reasoning_effort": "medium"}
         optional_params = {}
 
@@ -63,10 +62,11 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "medium"
+        assert "thinking" not in result
 
     def test_map_reasoning_effort_low(self):
-        """Test that reasoning_effort='low' maps to thinking enabled."""
+        """Test that reasoning_effort='low' passes through unchanged."""
         non_default_params = {"reasoning_effort": "low"}
         optional_params = {}
 
@@ -77,10 +77,11 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "low"
+        assert "thinking" not in result
 
     def test_map_reasoning_effort_high(self):
-        """Test that reasoning_effort='high' maps to thinking enabled."""
+        """Test that reasoning_effort='high' passes through unchanged."""
         non_default_params = {"reasoning_effort": "high"}
         optional_params = {}
 
@@ -91,10 +92,11 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "high"
+        assert "thinking" not in result
 
-    def test_map_reasoning_effort_none_does_not_enable_thinking(self):
-        """Test that reasoning_effort='none' does not enable thinking."""
+    def test_map_reasoning_effort_none_disables_thinking(self):
+        """Test that reasoning_effort='none' explicitly disables thinking."""
         non_default_params = {"reasoning_effort": "none"}
         optional_params = {}
 
@@ -105,7 +107,8 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert "thinking" not in result
+        assert result["thinking"] == {"type": "disabled"}
+        assert "reasoning_effort" not in result
 
     def test_map_reasoning_effort_null_does_not_enable_thinking(self):
         """Test that reasoning_effort=None does not enable thinking."""
@@ -121,8 +124,8 @@ class TestDeepSeekThinkingParams:
 
         assert "thinking" not in result
 
-    def test_thinking_takes_precedence_over_reasoning_effort(self):
-        """Test that thinking param takes precedence when both are provided."""
+    def test_thinking_and_reasoning_effort_are_both_preserved(self):
+        """Test that thinking and non-none effort are both preserved."""
         non_default_params = {
             "thinking": {"type": "enabled"},
             "reasoning_effort": "high",
@@ -136,8 +139,8 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        # thinking should be set, reasoning_effort should not override
         assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "high"
 
     def test_invalid_thinking_type_ignored(self):
         """Test that invalid thinking type values are ignored."""
