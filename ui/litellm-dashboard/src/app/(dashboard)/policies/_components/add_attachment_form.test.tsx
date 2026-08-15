@@ -1,5 +1,5 @@
 import React from "react";
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -139,8 +139,7 @@ describe("AddAttachmentForm", () => {
   };
 
   const enterTeam = async (user: UserEvent, value: string) => {
-    const item = screen.getByText("Teams").closest(".ant-form-item") as HTMLElement;
-    const input = within(item).getByRole("combobox");
+    const input = screen.getByLabelText("Teams");
     await user.click(input);
     await user.type(input, `${value}{Enter}`);
   };

@@ -23,7 +23,7 @@ const ALL_FAMILY_MODELS: ModelGroup[] = [
 const ANTHROPIC_ONLY_MODEL = ANTHROPIC_TIERS.COMPLEX[0];
 
 const openTemplateDropdown = (): void => {
-  fireEvent.mouseDown(screen.getByTestId("template-selector").querySelector(".ant-select-selector")!);
+  fireEvent.mouseDown(within(screen.getByTestId("template-selector")).getByRole("combobox"));
 };
 
 // Detailed Configuration is collapsed by default, so any test reaching into it (a tier select, an
@@ -32,13 +32,14 @@ const expandDetailedConfiguration = (): void => {
   fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
 };
 
-// The rendered antd option whose text starts with a preset label. Matching on text (not role +
-// accessible name) sidesteps antd's list re-rendering options in place on every state change.
-const optionByLabel = (label: string): HTMLElement | undefined =>
-  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).find((el) =>
-    el.textContent?.startsWith(label),
-  );
+const visibleOptions = (): HTMLElement[] =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd puts role="option" only on a hidden mirror list of raw values; the visible options carry no role, no aria-disabled, and only a tooltip in title
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option"));
 
+const optionByLabel = (label: string): HTMLElement | undefined =>
+  visibleOptions().find((el) => el.textContent?.startsWith(label));
+
+// eslint-disable-next-line local/no-antd-class-selectors -- antd signals option disabled state only through this class
 const isOptionDisabled = (option: HTMLElement): boolean => option.classList.contains("ant-select-item-option-disabled");
 
 const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(() => ({
@@ -349,9 +350,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
     openTemplateDropdown();
 
-    const labels = Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).map(
-      (option) => option.querySelector(".font-medium")?.textContent,
-    );
+    const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
 
     expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
   });
@@ -670,9 +669,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      const labels = Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).map(
-        (option) => option.querySelector(".font-medium")?.textContent,
-      );
+      const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
       expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
     });
 
