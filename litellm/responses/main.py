@@ -465,7 +465,7 @@ async def aresponses(
         ) and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs):
             if isinstance(input, str):
                 client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
-            elif not isinstance(input, list): # pyright: ignore[reportUnnecessaryIsInstance]
+            elif not isinstance(input, list):  # pyright: ignore[reportUnnecessaryIsInstance]
                 raise litellm.BadRequestError(
                     message=f"'input' must be a string or list of input items, got {type(input).__name__}",
                     model=model,
