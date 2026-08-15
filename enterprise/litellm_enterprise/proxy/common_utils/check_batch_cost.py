@@ -3,6 +3,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 """
 
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Dict, Final, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
@@ -564,6 +565,7 @@ class CheckBatchCost:
         credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
         _file_content = await afile_content(
             file_id=raw_output_file_id,
+            _litellm_internal_model_credentials=MappingProxyType(dict(credentials)),
             **credentials,
         )
 
