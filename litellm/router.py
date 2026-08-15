@@ -638,9 +638,14 @@ class Router:
         # group info cache and on cost-map mutation (generation counter).
         self._canonical_model_index: dict[tuple[str, str], str | None] | None = None
         self._canonical_model_index_cost_generation: int = -1
-        # Targets already announced at INFO, so a hot path logs once per target
-        # rather than once per request.
-        self._canonical_resolution_logged: set[str] = set()
+        # (requested, target) pairs already announced at INFO, so a hot path
+        # logs once per distinct pair rather than once per request. Keyed on
+        # the pair, not just the target, so each new requested spelling that
+        # resolves to an already-seen target is still observable -- this is
+        # the signal used to size demand for possible follow-up resolution
+        # rules, so a second spelling silently sharing the first's log line
+        # would undercount it.
+        self._canonical_resolution_logged: set[tuple[str, str]] = set()
         self._init_routing_groups(None)
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
@@ -10758,8 +10763,9 @@ class Router:
         # A target whose deployments have all been removed is not a live route.
         if not self.model_name_to_deployment_indices.get(target):
             return None
-        if target not in self._canonical_resolution_logged:
-            self._canonical_resolution_logged.add(target)
+        log_key: Final = (model, target)
+        if log_key not in self._canonical_resolution_logged:
+            self._canonical_resolution_logged.add(log_key)
             verbose_router_logger.info("canonical-resolution: '%s' -> '%s'", model, target)
         return target
 

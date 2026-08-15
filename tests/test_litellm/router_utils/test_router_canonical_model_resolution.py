@@ -136,6 +136,70 @@ class TestBuildIndexAndLookup:
         assert lookup(index, DATED) is None
         assert lookup(index, UNDATED) is None
 
+    def test_ambiguity_guard_not_defeated_by_group_named_like_sentinel(self):
+        """Regression: the ambiguity check used to compare against the string
+        '__absent__' as an "is this key missing" sentinel. A model group
+        literally named '__absent__' collided with that sentinel and could
+        silently overwrite a same-identity entry instead of triggering the
+        ambiguity decline."""
+        index = build_canonical_index(
+            [
+                {
+                    "model_name": "__absent__",
+                    "litellm_params": {"model": "anthropic/claude-haiku-4-5"},
+                },
+                {
+                    "model_name": "haiku-2",
+                    "litellm_params": {"model": "anthropic/claude-haiku-4-5"},
+                },
+            ]
+        )
+        assert lookup(index, DATED) is None
+        assert lookup(index, UNDATED) is None
+
+    def test_team_owned_deployment_never_indexed(self):
+        """Regression: a team-owned deployment (model_info.team_id set) must
+        never enter the global canonical index. Without this, a no-team key
+        could request an unclaimed spelling of a model whose only server is a
+        team's private deployment and land on that team's credentials/quota --
+        a team boundary is an access/billing boundary exactly like the
+        cross-provider boundary and must not be crossed by inference."""
+        index = build_canonical_index(
+            [
+                {
+                    "model_name": "internal-team-model-xyz",
+                    "litellm_params": {"model": "anthropic/claude-haiku-4-5"},
+                    "model_info": {
+                        "team_id": "team-A",
+                        "team_public_model_name": "claude-haiku-4-5",
+                    },
+                },
+            ]
+        )
+        assert lookup(index, DATED) is None
+        assert lookup(index, UNDATED) is None
+
+    def test_team_owned_deployment_does_not_block_global_sibling(self):
+        """A team-owned deployment coexisting with a global deployment of the
+        same identity must not suppress resolution to the global one."""
+        index = build_canonical_index(
+            [
+                {
+                    "model_name": "internal-team-model-xyz",
+                    "litellm_params": {"model": "anthropic/claude-haiku-4-5"},
+                    "model_info": {
+                        "team_id": "team-A",
+                        "team_public_model_name": "claude-haiku-4-5",
+                    },
+                },
+                {
+                    "model_name": ANTHROPIC_GROUP,
+                    "litellm_params": {"model": "anthropic/claude-haiku-4-5"},
+                },
+            ]
+        )
+        assert lookup(index, DATED) == ANTHROPIC_GROUP
+
     def test_request_for_own_group_name_is_not_a_rewrite(self):
         index = build_canonical_index(
             [
@@ -168,6 +232,44 @@ class TestRouterResolveCanonicalModelName:
     def test_recognized_model_short_circuits(self, anthropic_router: Router):
         """I1: a name the router already serves is never rewritten."""
         assert anthropic_router.resolve_canonical_model_name(ANTHROPIC_GROUP) is None
+
+    def test_no_team_caller_never_resolves_onto_team_owned_deployment(self):
+        """Regression: end-to-end version of the team-leak fix. A no-team
+        caller asking for an unclaimed spelling must not resolve onto a
+        deployment that is the sole server of that identity but is owned by a
+        team -- that would leak the team's credentials/quota to a global key."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "internal-team-model-xyz",
+                    "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "team-secret"},
+                    "model_info": {"team_id": "team-A", "team_public_model_name": "claude-haiku-4-5"},
+                },
+            ]
+        )
+        assert router.resolve_canonical_model_name(DATED, request_team_id=None) is None
+        # Even the requesting team's own id must not resolve through this path --
+        # team-scoped models are reached via the existing team-route machinery,
+        # not via canonical inference.
+        assert router.resolve_canonical_model_name(DATED, request_team_id="team-A") is None
+
+    def test_log_dedup_keyed_on_pair_not_target_alone(self, anthropic_router: Router, caplog: pytest.LogCaptureFixture):
+        """Regression: a second distinct requested spelling resolving to an
+        already-logged target must still get its own log line -- the
+        (requested, target) cardinality is the signal used to size demand for
+        follow-up resolution rules, so deduping on target alone would
+        undercount it."""
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="LiteLLM Router"):
+            assert anthropic_router.resolve_canonical_model_name(DATED) == ANTHROPIC_GROUP
+            assert anthropic_router.resolve_canonical_model_name(UNDATED) == ANTHROPIC_GROUP
+            # Re-requesting the same spelling must not double-log.
+            assert anthropic_router.resolve_canonical_model_name(DATED) == ANTHROPIC_GROUP
+        messages = [r.message for r in caplog.records if "canonical-resolution" in r.message]
+        assert any(DATED in m for m in messages)
+        assert any(UNDATED in m for m in messages)
+        assert sum(1 for m in messages if DATED in m) == 1
 
     def test_strict_mode_disables_resolution(self):
         from litellm.types.router import RouterGeneralSettings

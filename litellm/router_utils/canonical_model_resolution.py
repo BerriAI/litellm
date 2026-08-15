@@ -146,6 +146,17 @@ def build_canonical_index(
     the same canonical identity; mixed groups are skipped. When two groups claim
     one identity the entry is set to ``_AMBIGUOUS`` (None) so lookups decline.
 
+    Team-owned deployments (``model_info.team_id`` set) are never indexed. A
+    team boundary is an operator-drawn access/billing boundary exactly like a
+    provider boundary (see the module docstring's rule 2): auto-resolution must
+    not cross it. Concretely, without this exclusion a global (no-team) key
+    could request a team's deployment under an unclaimed spelling -- e.g. the
+    dated Anthropic ID -- and land on that team's credentials and quota, since
+    ``is_recognized_model``/target-authorization checks pass for unrestricted
+    keys and don't themselves re-derive team ownership. A team-scoped model
+    remains reachable exactly as it is today: by its team_public_model_name,
+    through the existing team-route machinery, which this module never touches.
+
     Never raises: a malformed deployment or cost-map entry degrades to a smaller
     index, never to a router that fails to boot.
     """
@@ -154,6 +165,11 @@ def build_canonical_index(
 
     for deployment in deployments:
         try:
+            model_info = deployment.get("model_info") or {}
+            if isinstance(  # pyright: ignore[reportUnnecessaryIsInstance] - config/DB rows can violate the TypedDict
+                model_info, Mapping
+            ) and model_info.get("team_id"):
+                continue
             # ``model_name``/``model`` are typed Required[str], but this index is
             # built from operator config and DB rows that can violate the type,
             # so both are validated at runtime rather than trusted.
@@ -196,10 +212,11 @@ def build_canonical_index(
 
         for spelling in spellings:
             key = (provider, spelling)
-            existing = index.get(key, "__absent__")
-            if existing == "__absent__":
+            if key not in index:
                 index[key] = model_group
-            elif existing != model_group:
+                continue
+            existing = index[key]
+            if existing != model_group:
                 # Two groups, same identity: decline rather than choose.
                 index[key] = _AMBIGUOUS
                 verbose_router_logger.info(
