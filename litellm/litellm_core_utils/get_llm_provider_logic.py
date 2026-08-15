@@ -345,7 +345,8 @@ def get_llm_provider(
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
                     elif endpoint == "https://api.tokenlab.sh/v1":
                         custom_llm_provider = "tokenlab"
-                        dynamic_api_key = get_secret_str("TOKENLAB_API_KEY")
+                        tokenlab_config: Final = JSONProviderRegistry.get("tokenlab")
+                        dynamic_api_key = get_secret_str(tokenlab_config.api_key_env) if tokenlab_config else None
                     elif endpoint == "https://pinstripes.io/v1":
                         custom_llm_provider = "pinstripes"
                         dynamic_api_key = get_secret_str("PINSTRIPES_API_KEY")
