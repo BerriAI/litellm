@@ -131,6 +131,9 @@ jobs:
       - name: memory_test
         run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py
 
+      - name: vacuous_test_tooling
+        run: uv run --no-sync pytest tests/vacuous_tests/test_vacuous_tooling.py
+
       - name: vacuous_test_ratchet
         run: uv run --no-sync python ./tests/vacuous_tests/inventory.py --check
 
