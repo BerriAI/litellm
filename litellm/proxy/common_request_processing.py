@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, overload
 
 import anyio
 import httpx
@@ -928,28 +928,57 @@ def _override_openai_response_model(
         )
 
 
+class CostBreakdownHeaderValues(NamedTuple):
+    original_cost: float | None = None
+    discount_amount: float | None = None
+    margin_total_amount: float | None = None
+    margin_percent: float | None = None
+    input_cost: float | None = None
+    output_cost: float | None = None
+    cache_read_cost: float | None = None
+    cache_creation_cost: float | None = None
+    reasoning_cost: float | None = None
+    tool_usage_cost: float | None = None
+
+
+def _uncached_input_cost(
+    input_cost: float | None,
+    cache_read_cost: float | None,
+    cache_creation_cost: float | None,
+) -> float | None:
+    """The stored input cost nests the cache costs inside it; headers advertise the additive split instead."""
+    if input_cost is None:
+        return None
+    return input_cost - (cache_read_cost or 0.0) - (cache_creation_cost or 0.0)
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: LiteLLMLoggingObj | None,
-) -> tuple[float | None, float | None, float | None, float | None]:
-    """
-    Extract discount and margin information from logging object's cost breakdown.
-
-    Returns:
-        Tuple of (original_cost, discount_amount, margin_total_amount, margin_percent)
-    """
+) -> CostBreakdownHeaderValues:
+    """Extract discount, margin, and per-component cost information from logging object's cost breakdown."""
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
-        return None, None, None, None
+        return CostBreakdownHeaderValues()
 
     cost_breakdown: Final = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
-        return None, None, None, None
+        return CostBreakdownHeaderValues()
 
-    original_cost: Final = cost_breakdown.get("original_cost")
-    discount_amount: Final = cost_breakdown.get("discount_amount")
-    margin_total_amount: Final = cost_breakdown.get("margin_total_amount")
-    margin_percent: Final = cost_breakdown.get("margin_percent")
-
-    return original_cost, discount_amount, margin_total_amount, margin_percent
+    return CostBreakdownHeaderValues(
+        original_cost=cost_breakdown.get("original_cost"),
+        discount_amount=cost_breakdown.get("discount_amount"),
+        margin_total_amount=cost_breakdown.get("margin_total_amount"),
+        margin_percent=cost_breakdown.get("margin_percent"),
+        input_cost=_uncached_input_cost(
+            input_cost=cost_breakdown.get("input_cost"),
+            cache_read_cost=cost_breakdown.get("cache_read_cost"),
+            cache_creation_cost=cost_breakdown.get("cache_creation_cost"),
+        ),
+        output_cost=cost_breakdown.get("output_cost"),
+        cache_read_cost=cost_breakdown.get("cache_read_cost"),
+        cache_creation_cost=cost_breakdown.get("cache_creation_cost"),
+        reasoning_cost=cost_breakdown.get("reasoning_cost"),
+        tool_usage_cost=cost_breakdown.get("tool_usage_cost"),
+    )
 
 
 def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None) -> float | None:
@@ -1075,13 +1104,7 @@ class ProxyBaseLLMRequestProcessing:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
 
-        # Extract discount and margin info from cost_breakdown if available
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(litellm_logging_obj=litellm_logging_obj)
+        cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(litellm_logging_obj=litellm_logging_obj)
 
         # Calculate updated spend for header (include current response_cost)
         current_spend: Final = user_api_key_dict.spend or 0.0
@@ -1110,12 +1133,36 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
             "x-litellm-response-cost": str(response_cost),
-            "x-litellm-response-cost-original": (str(original_cost) if original_cost is not None else None),
-            "x-litellm-response-cost-discount-amount": (str(discount_amount) if discount_amount is not None else None),
-            "x-litellm-response-cost-margin-amount": (
-                str(margin_total_amount) if margin_total_amount is not None else None
+            "x-litellm-response-cost-original": (
+                str(cost_breakdown.original_cost) if cost_breakdown.original_cost is not None else None
             ),
-            "x-litellm-response-cost-margin-percent": (str(margin_percent) if margin_percent is not None else None),
+            "x-litellm-response-cost-discount-amount": (
+                str(cost_breakdown.discount_amount) if cost_breakdown.discount_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-amount": (
+                str(cost_breakdown.margin_total_amount) if cost_breakdown.margin_total_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-percent": (
+                str(cost_breakdown.margin_percent) if cost_breakdown.margin_percent is not None else None
+            ),
+            "x-litellm-response-cost-input": (
+                str(cost_breakdown.input_cost) if cost_breakdown.input_cost is not None else None
+            ),
+            "x-litellm-response-cost-output": (
+                str(cost_breakdown.output_cost) if cost_breakdown.output_cost is not None else None
+            ),
+            "x-litellm-response-cost-cache-read": (
+                str(cost_breakdown.cache_read_cost) if cost_breakdown.cache_read_cost is not None else None
+            ),
+            "x-litellm-response-cost-cache-creation": (
+                str(cost_breakdown.cache_creation_cost) if cost_breakdown.cache_creation_cost is not None else None
+            ),
+            "x-litellm-response-cost-reasoning": (
+                str(cost_breakdown.reasoning_cost) if cost_breakdown.reasoning_cost is not None else None
+            ),
+            "x-litellm-response-cost-tool-usage": (
+                str(cost_breakdown.tool_usage_cost) if cost_breakdown.tool_usage_cost is not None else None
+            ),
             "x-litellm-classifier-cost": (str(classifier_cost) if classifier_cost is not None else None),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
