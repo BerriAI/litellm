@@ -1215,12 +1215,12 @@ def _transform_request_body(
                     generation_config["mediaResolution"] = media_resolution_value["level"]
 
         data: Final = RequestBody(contents=content)
-        # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
+        # Vertex rejects systemInstruction/tools/toolConfig alongside cachedContent.
         # Treat dropping these fields as a request mutation guarded by modify_params.
         can_send_cache_incompatible_fields: Final = cached_content is None or litellm.modify_params is False
         if can_send_cache_incompatible_fields:
             if system_instructions is not None:
-                data["system_instruction"] = system_instructions
+                data["systemInstruction"] = system_instructions
             if tools is not None:
                 data["tools"] = tools
             if tool_choice is not None:
