@@ -22,6 +22,20 @@ class ComplexityTier(str, Enum):
     REASONING = "REASONING"
 
 
+class ClassificationRubric(str, Enum):
+    """Which calibration examples the built-in classifier rubric carries."""
+
+    LEGACY = "legacy"
+    AGENTIC = "agentic"
+    CHAT = "chat"
+
+
+# Unset means LEGACY, so upgrading never moves an existing router's tier decisions or its bill. A
+# router created through the dashboard is stamped with a preset at create time, which is how new
+# routers get the calibrated rubric without changing what is already running.
+DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubric.LEGACY
+
+
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
     ComplexityTier.MEDIUM,
@@ -56,6 +70,30 @@ class KeywordTierRule(BaseModel):
         if not cleaned:
             raise ValueError("keyword_tier_rules entries must contain at least one non-empty keyword")
         self.keywords = cleaned
+        return self
+
+
+class ReminderMarkerPair(BaseModel):
+    """One open/close delimiter pair a harness wraps injected context in.
+
+    Normalizing here rather than at the scan is what makes matching case-insensitive: markers reach
+    the scan already lowered, so it lowercases only the haystack and never the needles. Stripping
+    keeps YAML indentation whitespace from becoming part of the delimiter.
+    """
+
+    open: str = Field(description="Opening delimiter, e.g. '<system-reminder>'")
+    close: str = Field(description="Closing delimiter, e.g. '</system-reminder>'")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ReminderMarkerPair":
+        open_marker: Final = self.open.strip().lower()
+        close_marker: Final = self.close.strip().lower()
+        if not open_marker or not close_marker:
+            raise ValueError("reminder_markers entries must not be blank")
+        if open_marker == close_marker:
+            raise ValueError("reminder_markers open and close must be different strings")
+        self.open = open_marker
+        self.close = close_marker
         return self
 
 
@@ -249,6 +287,59 @@ class ClassifierLLMConfig(BaseModel):
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
     )
+    classification_rubric: ClassificationRubric | None = Field(
+        default=None,
+        description=(
+            "Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, "
+            "multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the "
+            "most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed "
+            "traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational "
+            "traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without "
+            "changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples "
+            "existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive "
+            "with system_prompt, which replaces the rubric this would select. Only applies when classifier_type "
+            "is 'llm'."
+        ),
+    )
+    system_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Replaces the built-in complexity rubric as the classifier's entire system role. When set, "
+            "neither the default rubric nor the context-window closing line is appended, so the prompt "
+            "owns the whole taxonomy and the tier names SIMPLE/MEDIUM/COMPLEX/REASONING become whatever "
+            "buckets it defines: a prompt that classifies data sensitivity routes on that instead of on "
+            "difficulty. Two consequences of full replacement. The default rubric's closing paragraph is "
+            "the classifier's prompt-injection defense, telling it that the caller's quoted system prompt "
+            "and prior turns are material to judge and never instructions; a replacement that omits it "
+            "lets a caller ask for a tier and get it. And the heuristic fallback still scores complexity, "
+            "so a router on some other taxonomy wants classifier_fallback='default_model'. Leave unset "
+            "for the built-in rubric. Only applies when classifier_type is 'llm'."
+        ),
+    )
+
+    @field_validator("system_prompt")
+    @classmethod
+    def _reject_blank_system_prompt(cls, value: str | None) -> str | None:
+        # A blank string is a misconfiguration, not a request for the default: it would send an
+        # empty system role and leave the classifier with no rubric at all. None means default.
+        if value is not None and not value.strip():
+            raise ValueError("classifier_llm_config.system_prompt must be non-empty; omit it to use the default rubric")
+        return value
+
+    @model_validator(mode="after")
+    def _reject_rubric_with_system_prompt(self) -> "ClassifierLLMConfig":
+        # A custom prompt is the classifier's whole system role, so a preset set alongside it would never
+        # reach the wire. Rejecting it beats honoring one of two settings the operator asked for.
+        #
+        # None, not model_fields_set, is what marks the preset unchosen: this model is dumped and
+        # re-validated in place (see /auto_router/test_routing), and a dump re-states every field, so
+        # keying on fields_set would reject on the second pass what it accepted on the first.
+        if self.system_prompt is not None and self.classification_rubric is not None:
+            raise ValueError(
+                "classifier_llm_config.classification_rubric and system_prompt are mutually exclusive: system_prompt replaces "
+                "the built-in rubric the preset would select. Drop one."
+            )
+        return self
 
 
 class ComplexityRouterConfig(BaseModel):
@@ -263,10 +354,25 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    tier_labels: dict[ComplexityTier, str] = Field(
+        default_factory=dict,
+        description=(
+            "Display names for the complexity tiers, so a deployment can use its own vocabulary "
+            "(e.g. Cheap/Standard/Premium/Deep) in the dashboard, spend logs, and the LLM classifier "
+            "rubric. Purely operator-facing: config keys stay canonical (tiers, keyword_tier_rules[].tier, "
+            "tier_boundaries), API callers never see these names, and the heuristic scorer never reads them. "
+            "Unlisted tiers keep their canonical name. Partial maps are allowed."
+        ),
+    )
+
     # Tier boundaries (normalized scores)
     tier_boundaries: dict[str, float] = Field(
         default_factory=lambda: DEFAULT_TIER_BOUNDARIES.copy(),
-        description="Score boundaries between tiers",
+        description=(
+            "Score boundaries between tiers. These keys (simple_medium, medium_complex, complex_reasoning) "
+            "name the gaps between the default tier names and are not renameable by tier_labels; they are "
+            "scorer knobs persisted by name on every routing decision"
+        ),
     )
 
     # Token count thresholds
@@ -330,6 +436,19 @@ class ComplexityRouterConfig(BaseModel):
     classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
         description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
+    )
+
+    classifier_fallback: Literal["heuristic", "default_model"] = Field(
+        default="heuristic",
+        description=(
+            "What classifies the request when the LLM classifier errors, times out, or returns an "
+            "unparseable response. 'heuristic' runs the local complexity scorer, which is right when the "
+            "classifier grades complexity too. 'default_model' skips scoring and routes to default_model, "
+            "which is what a classifier on some other taxonomy wants: a prompt that grades data "
+            "sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to "
+            "what the operator configured. Requires default_model when set to 'default_model'. Only "
+            "applies when classifier_type is 'llm'."
+        ),
     )
 
     classifier_context_window_size: int = Field(
@@ -432,13 +551,39 @@ class ComplexityRouterConfig(BaseModel):
             "session's first turn and reuse it for every later turn, skipping re-classification. "
             "Off by default so every turn is classified on its own merits and routed to the cheapest "
             "adequate tier. Set True to keep a multi-turn session on one model, which preserves "
-            "provider prompt caches and avoids cross-model conversation-history errors."
+            "provider prompt caches and avoids cross-model conversation-history errors. Always "
+            "implies the deployment pin regardless of deployment_affinity: the session sticks to "
+            "one deployment of the pinned model, since freezing the model while re-shuffling its "
+            "deployments would still go cache-cold."
+        ),
+    )
+    deployment_affinity: bool = Field(
+        default=True,
+        description=(
+            "When True and a session_id is resolvable on the request, pin the deployment chosen "
+            "inside each routed model group and reuse it whenever the session returns to that "
+            "group, without pinning which group the session routes to. Independent of "
+            "session_affinity, which pins the model group instead (and always carries this "
+            "deployment pin with it): with session_affinity off, "
+            "every turn is still classified on its own merits while a session that escalates to a "
+            "stronger tier and comes back still lands on the deployment it used before, which is "
+            "what keeps a provider prompt cache warm. Pins are held per model group, so switching "
+            "tiers does not disturb the pin left behind in the previous group. On by default "
+            "because re-shuffling a conversation across deployments of the same model discards "
+            "that cache for no benefit; set False to keep every turn load-balanced across the "
+            "group, which is what a deployment set with tight per-deployment rate limits wants. "
+            "Inert when no session_id is resolvable, since there is nothing to key a pin on, and "
+            "suppressed when plugins are configured, for the same reason session_affinity is."
         ),
     )
     session_affinity_ttl_seconds: int = Field(
         default=3600,
         gt=0,
-        description="TTL for the session affinity pin; refreshed on every cache hit",
+        description=(
+            "TTL for the session affinity pin; refreshed on every cache hit. Bounds both the "
+            "session_affinity model pin and the deployment_affinity deployment pin, so it measures "
+            "idle time for the session's routing decisions rather than total session length"
+        ),
     )
 
     plugins: list[RoutingPlugin] | None = Field(
@@ -446,12 +591,15 @@ class ComplexityRouterConfig(BaseModel):
         description="RoutingPlugin instances that narrow the classified tier's candidate models before selection",
     )
 
-    reminder_markers: tuple[str, str] | None = Field(
+    reminder_markers: tuple[ReminderMarkerPair, ...] | None = Field(
         default=None,
+        min_length=1,
         description=(
-            "Override the (open, close) marker pair used to recognize and strip harness-injected "
-            "reminder blocks before classification. Defaults to Claude Code's convention, "
-            "('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive."
+            "Override the delimiter pairs used to recognize and strip harness-injected reminder "
+            "blocks before classification. A harness that wraps injected context differently per "
+            "agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than "
+            "adds to, the built-in default of ('<system-reminder>', '</system-reminder>'), so a "
+            "harness that also emits that pair lists it too. Matching is case-insensitive."
         ),
     )
 
@@ -509,6 +657,38 @@ class ComplexityRouterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_tier_labels(self) -> "ComplexityRouterConfig":
+        if not self.tier_labels:
+            return self
+        blank: Final = tuple(sorted(tier.value for tier, label in self.tier_labels.items() if not label.strip()))
+        if blank:
+            raise ValueError(f"tier_labels values must be non-empty; blank labels for tiers: {', '.join(blank)}")
+        shadowed: Final = tuple(
+            sorted(
+                f"{tier.value} -> {label.strip()}"
+                for tier, label in self.tier_labels.items()
+                if label.strip().upper() in ComplexityTier.__members__ and label.strip().upper() != tier.value
+            )
+        )
+        if shadowed:
+            raise ValueError(
+                "tier_labels values must not reuse another tier's canonical name, which would make logs "
+                f"and the classifier rubric ambiguous: {', '.join(shadowed)}"
+            )
+        labeled: Final = self.labeled_tiers()
+        folded_labels: Final = tuple(label.casefold() for _, label in labeled)
+        duplicated: Final = tuple(
+            " and ".join(tier.value for tier, label in labeled if label.casefold() == folded)
+            for position, folded in enumerate(folded_labels)
+            if folded_labels.count(folded) > 1 and folded_labels.index(folded) == position
+        )
+        if duplicated:
+            raise ValueError(
+                f"tier_labels values must be unique across tiers; shared labels for: {'; '.join(duplicated)}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_plugins_adaptive_combo(self) -> "ComplexityRouterConfig":
         if self.plugins and self.adaptive:
             raise ValueError(
@@ -517,17 +697,22 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
-    @model_validator(mode="after")
-    def _normalize_reminder_markers(self) -> "ComplexityRouterConfig":
-        if self.reminder_markers is None:
-            return self
-        open_marker, close_marker = (marker.strip().lower() for marker in self.reminder_markers)
-        if not open_marker or not close_marker:
-            raise ValueError("reminder_markers entries must not be blank")
-        if open_marker == close_marker:
-            raise ValueError("reminder_markers open and close must be different strings")
-        self.reminder_markers = (open_marker, close_marker)
-        return self
+    def tier_label(self, tier: ComplexityTier) -> str:
+        """Operator-facing display name for a tier, falling back to its canonical name."""
+        return self.tier_labels.get(tier, "").strip() or tier.value
+
+    def labeled_tiers(self) -> tuple[tuple[ComplexityTier, str], ...]:
+        """Every tier paired with its display name, in ascending severity order."""
+        return tuple((tier, self.tier_label(tier)) for tier in TIER_SEVERITY_ORDER)
+
+    def tier_for_label(self, label: str) -> ComplexityTier | None:
+        """Resolve a display name back to its tier, case-insensitively, then canonical names."""
+        folded: Final = label.strip().casefold()
+        labeled: Final = self.labeled_tiers()
+        return next(
+            (tier for tier, tier_label in labeled if tier_label.casefold() == folded),
+            next((tier for tier in TIER_SEVERITY_ORDER if tier.value.casefold() == folded), None),
+        )
 
 
 # Combined default config

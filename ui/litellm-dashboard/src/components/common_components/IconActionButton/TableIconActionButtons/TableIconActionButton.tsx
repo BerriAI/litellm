@@ -1,3 +1,4 @@
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   PencilAltIcon,
   PlayIcon,
@@ -8,7 +9,6 @@ import {
   ExternalLinkIcon,
   ClipboardCopyIcon,
 } from "@heroicons/react/outline";
-import { Tooltip } from "antd";
 import BaseActionButton from "../BaseActionButton";
 
 export interface TableIconActionButtonProps {
@@ -45,17 +45,21 @@ export default function TableIconActionButton({
   variant,
 }: TableIconActionButtonProps) {
   const { icon, className } = TableIconActionButtonMap[variant];
+  const title = disabled ? disabledTooltipText : tooltipText;
+  const button = (
+    <BaseActionButton icon={icon} onClick={onClick} className={className} disabled={disabled} dataTestId={dataTestId} />
+  );
+
+  if (!title) {
+    return <span>{button}</span>;
+  }
+
   return (
-    <Tooltip title={disabled ? disabledTooltipText : tooltipText}>
-      <span>
-        <BaseActionButton
-          icon={icon}
-          onClick={onClick}
-          className={className}
-          disabled={disabled}
-          dataTestId={dataTestId}
-        />
-      </span>
-    </Tooltip>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger render={<span />}>{button}</TooltipTrigger>
+        <TooltipContent>{title}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

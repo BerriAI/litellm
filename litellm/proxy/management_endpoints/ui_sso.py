@@ -16,9 +16,23 @@ import json
 import os
 import re
 import secrets
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from html import escape
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Final,
+    Literal,
+    NoReturn,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 from urllib.parse import parse_qs, urlencode, urlparse
 
 if TYPE_CHECKING:
@@ -27,6 +41,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -155,6 +170,142 @@ _CLI_SSO_SECRET_KEY_FRAGMENTS: Final = frozenset(
     }
 )
 
+_DbRecordT: Final = TypeVar("_DbRecordT", covariant=True)
+
+
+class _PrismaTableActions(Protocol[_DbRecordT]):
+    async def find_unique(
+        self,
+        where: Mapping[str, object],
+    ) -> _DbRecordT | None: ...
+
+    async def find_first(
+        self,
+        where: Mapping[str, object] | None = None,
+    ) -> _DbRecordT | None: ...
+
+    async def find_many(
+        self,
+        where: Mapping[str, object] | None = None,
+        include: Mapping[str, bool] | None = None,
+    ) -> Sequence[_DbRecordT]: ...
+
+    async def update(
+        self,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> _DbRecordT: ...
+
+    async def update_many(
+        self,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> int: ...
+
+
+class _UserMetadataRow(Protocol):
+    @property
+    def metadata(self) -> Mapping[str, object] | None: ...
+
+
+class _HasUserMetadataTable(Protocol):
+    @property
+    def table(self) -> "_PrismaTableActions[_UserMetadataRow]": ...
+
+
+def _user_meta_db(repo: "_HasUserMetadataTable") -> "_PrismaTableActions[_UserMetadataRow]":
+    return repo.table
+
+
+class _SsoConfigRow(Protocol):
+    @property
+    def sso_settings(self) -> Mapping[str, object] | None: ...
+
+
+class _HasSsoConfigTable(Protocol):
+    @property
+    def table(self) -> "_PrismaTableActions[_SsoConfigRow]": ...
+
+
+def _sso_config_db(repo: "_HasSsoConfigTable") -> "_PrismaTableActions[_SsoConfigRow]":
+    return repo.table
+
+
+class _TeamDetailRow(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _HasTeamDetailTable(Protocol):
+    @property
+    def table(self) -> "_PrismaTableActions[_TeamDetailRow]": ...
+
+
+def _team_detail_db(repo: "_HasTeamDetailTable") -> "_PrismaTableActions[_TeamDetailRow]":
+    return repo.table
+
+
+_MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
+
+
+def _decode_model_aliases(value: object) -> object:
+    """``/team/new`` stores team model aliases as a JSON-encoded string in the Json column."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return _MODEL_ALIASES_ADAPTER.validate_json(value)
+    except ValidationError:
+        return None
+
+
+class _TeamModelAliasTable(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_aliases: Annotated[Mapping[str, str] | None, BeforeValidator(_decode_model_aliases)] = None
+
+
+class _TeamRowGrants(BaseModel):
+    team_id: str
+    team_alias: str | None = None
+    models: tuple[str, ...] = ()
+    litellm_model_table: _TeamModelAliasTable | None = None
+
+
+class _CliSsoTeamDetail(BaseModel):
+    """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
+
+    team_id: str | None = None
+    team_alias: str | None = None
+    team_models: tuple[str, ...]
+    team_model_aliases: Mapping[str, str] | None = None
+
+
+_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[_CliSsoTeamDetail, ...])
+_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = _CliSsoTeamDetail(team_models=())
+
+
+class _CustomSsoCall(Protocol):
+    async def __call__(self, sso_response: object) -> SSOUserDefinedValues | None: ...
+
+
+class _ServicePrincipalAssignment(Protocol):
+    def get(self, key: str) -> str: ...
+
+
+class _ServicePrincipalPage(Protocol):
+    @overload
+    def get(
+        self,
+        key: Literal["value"],
+        default: Sequence["_ServicePrincipalAssignment"],
+    ) -> Sequence["_ServicePrincipalAssignment"]: ...
+
+    @overload
+    def get(self, key: Literal["@odata.nextLink"]) -> str | None: ...
+
+
+def _as_object(value: object) -> object:
+    return value
+
 
 def _hash_cli_sso_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
@@ -256,7 +407,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
         flow = cache.get_cache(key=cache_key)
     if isinstance(flow, str):
         try:
-            flow = json.loads(flow)
+            flow = _as_object(json.loads(flow))
         except ValueError:
             flow = None
     if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
@@ -421,7 +572,7 @@ def _flatten_cli_sso_metadata_for_poll(
 
 def build_cli_sso_attribution_metadata(
     result: CustomOpenID | OpenID | dict,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Build allowlisted, non-secret scalar attribution metadata from an SSO result.
 
@@ -432,7 +583,7 @@ def build_cli_sso_attribution_metadata(
     if not claim_map:
         return {}
 
-    metadata: Final[dict[str, Any]] = {}
+    metadata: Final[dict[str, object]] = {}
     for source_claim, dest_key in claim_map:
         if not _is_safe_cli_sso_metadata_dest_key(dest_key):
             verbose_proxy_logger.debug("Skipping unsafe CLI SSO metadata destination key: %s", dest_key)
@@ -474,14 +625,14 @@ def _merge_cli_sso_attribution_metadata(
 async def _persist_cli_sso_user_metadata(
     prisma_client: PrismaClient,
     user_id: str,
-    attribution_metadata: dict[str, Any],
+    attribution_metadata: dict[str, object],
 ) -> None:
     if not attribution_metadata:
         return
 
     try:
-        user_row: Final = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
-        existing_metadata: dict[str, Any] = {}
+        user_row: Final = await _user_meta_db(UserRepository(prisma_client)).find_unique(where={"user_id": user_id})
+        existing_metadata: dict[str, object] = {}
         if user_row is not None:
             row_metadata: Final = user_row.metadata
             if isinstance(row_metadata, dict):
@@ -491,7 +642,7 @@ async def _persist_cli_sso_user_metadata(
             existing_metadata=existing_metadata,
             attribution_metadata=attribution_metadata,
         )
-        await UserRepository(prisma_client).table.update_many(
+        await _user_meta_db(UserRepository(prisma_client)).update_many(
             where={"user_id": user_id},
             data={"metadata": merged_metadata},
         )
@@ -937,7 +1088,7 @@ async def google_login(
     # check if user defined a custom auth sso sign in handler, if yes, use it
     if user_custom_ui_sso_sign_in_handler is not None:
         try:
-            from litellm_enterprise.proxy.auth.custom_sso_handler import (  # type: ignore[import-untyped]
+            from litellm_enterprise.proxy.auth.custom_sso_handler import (
                 EnterpriseCustomSSOHandler,
             )
 
@@ -1104,7 +1255,7 @@ def generic_response_convertor(
                 )
 
     # Build extra_fields dict from GENERIC_USER_EXTRA_ATTRIBUTES if specified
-    extra_fields: dict[str, Any] | None = None
+    extra_fields: dict[str, object] | None = None
     if generic_user_extra_attributes:
         extra_fields = {}
         for attr_name in generic_user_extra_attributes.split(","):
@@ -1193,7 +1344,9 @@ async def _setup_team_mappings() -> Optional["TeamMappings"]:
 
         prisma_client: Final = get_prisma_client_or_throw("Prisma client is None, connect a database to your proxy")
 
-        sso_db_record: Final = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
+        sso_db_record: Final = await _sso_config_db(SSOConfigRepository(prisma_client)).find_unique(
+            where={"id": "sso_config"}
+        )
 
         if sso_db_record and sso_db_record.sso_settings:
             sso_settings_dict: Final = dict(sso_db_record.sso_settings)
@@ -1225,7 +1378,9 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
 
         prisma_client: Final = get_prisma_client_or_throw("Prisma client is None, connect a database to your proxy")
 
-        sso_db_record: Final = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
+        sso_db_record: Final = await _sso_config_db(SSOConfigRepository(prisma_client)).find_unique(
+            where={"id": "sso_config"}
+        )
 
         if sso_db_record and sso_db_record.sso_settings:
             sso_settings_dict: Final = dict(sso_db_record.sso_settings)
@@ -1273,7 +1428,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
     return role_mappings
 
 
-def _parse_generic_sso_headers() -> dict:
+def _parse_generic_sso_headers() -> dict[str, str]:
     """Parse comma-separated GENERIC_SSO_HEADERS env var into a dict."""
     raw: Final = os.getenv("GENERIC_SSO_HEADERS", None)
     if raw is None:
@@ -1677,7 +1832,7 @@ def _build_sso_user_update_data(
     result: Union["CustomOpenID", OpenID, dict] | None,
     user_email: str | None,
     user_id: str | None,
-) -> dict:
+) -> dict[str, object]:
     """
     Build the update data dictionary for SSO user upsert.
 
@@ -1689,7 +1844,7 @@ def _build_sso_user_update_data(
     Returns:
         dict: Update data containing user_email and optionally user_role if valid
     """
-    update_data: Final[dict] = {"user_email": normalize_email(user_email)}
+    update_data: Final[dict[str, object]] = {"user_email": normalize_email(user_email)}
 
     # Get SSO role from result and include if valid
     sso_role: Final = getattr(result, "user_role", None)
@@ -1740,7 +1895,7 @@ async def _sync_user_role_from_jwt_role_map(
 
     # Update existing DB record if role differs
     if user_info is not None and user_info.user_role != mapped_role.value:
-        await UserRepository(prisma_client).table.update(
+        await _user_meta_db(UserRepository(prisma_client)).update(
             where={"user_id": user_info.user_id},
             data={"user_role": mapped_role.value},
         )
@@ -1796,7 +1951,7 @@ async def check_and_update_if_proxy_admin_id(user_role: str, user_id: str, prism
             return user_role
 
         if prisma_client:
-            await UserRepository(prisma_client).table.update(
+            await _user_meta_db(UserRepository(prisma_client)).update(
                 where={"user_id": user_id},
                 data={"user_role": LitellmUserRoles.PROXY_ADMIN.value},
             )
@@ -2016,10 +2171,11 @@ async def _build_cli_sso_user_defined_values(
 ) -> SSOUserDefinedValues | None:
     from litellm.proxy.proxy_server import user_custom_sso
 
+    custom_sso_handler: Final[_CustomSsoCall | None] = user_custom_sso
     user_id: Final = parsed_openid_result.get("user_id")
-    if user_custom_sso is not None:
-        if inspect.iscoroutinefunction(user_custom_sso):
-            return await user_custom_sso(result)  # type: ignore
+    if custom_sso_handler is not None:
+        if inspect.iscoroutinefunction(custom_sso_handler):
+            return await custom_sso_handler(result)
         raise ValueError("user_custom_sso must be a coroutine function")
     if user_id is None:
         return None
@@ -2033,25 +2189,55 @@ async def _build_cli_sso_user_defined_values(
     )
 
 
+def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
+    team: Final = _TeamRowGrants.model_validate(team_row)
+    alias_table: Final = team.litellm_model_table
+    return _CliSsoTeamDetail(
+        team_id=team.team_id,
+        team_alias=team.team_alias,
+        team_models=team.models,
+        team_model_aliases=alias_table.model_aliases if alias_table is not None else None,
+    )
+
+
 async def _fetch_cli_sso_team_details(
     prisma_client: PrismaClient,
-    teams: list[str],
-) -> list[dict[str, Any]]:
-    team_details: Final[list[dict[str, Any]]] = []
+    teams: Sequence[str],
+) -> tuple[_CliSsoTeamDetail, ...] | None:
+    """``None`` means the lookup itself failed, which is not the same as the user having no teams."""
+    if not teams:
+        return ()
     try:
-        if teams:
-            prisma_teams: Final = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": teams}})
-            for team_row in prisma_teams:
-                team_dict = team_row.model_dump()
-                team_details.append(
-                    {
-                        "team_id": team_dict.get("team_id"),
-                        "team_alias": team_dict.get("team_alias"),
-                    }
-                )
+        prisma_teams: Final = await _team_detail_db(TeamRepository(prisma_client)).find_many(
+            where={"team_id": {"in": teams}},
+            include={"litellm_model_table": True},
+        )
     except Exception as e:
         verbose_proxy_logger.error("Error fetching team details for CLI SSO session: %s", e)
-    return team_details
+        return None
+    return tuple(_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
+
+
+def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[str]:
+    """The teams a login may bind to: only those whose row still exists.
+
+    A team deleted out from under a membership, which is what deleting an organization
+    leaves behind, can never resolve its grants, so offering it would refuse every
+    future login for that user with nothing they could do to recover.
+    """
+    return [detail.team_id for detail in team_details if detail.team_id is not None]
+
+
+def _selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> _CliSsoTeamDetail | None:
+    """``None`` means the team's grants are unknown. An empty grant is a real value meaning unrestricted,
+    so an unknown one must not be minted as empty."""
+    if team_id is None:
+        return _TEAMLESS_CLI_SSO_TEAM_DETAIL
+    try:
+        details: Final = _CLI_SSO_TEAM_DETAILS_ADAPTER.validate_python(team_details)
+    except ValidationError:
+        return None
+    return next((detail for detail in details if detail.team_id == team_id), None)
 
 
 async def _complete_cli_sso_callback_session(
@@ -2094,6 +2280,12 @@ async def _complete_cli_sso_callback_session(
         teams = user_info.teams if isinstance(user_info.teams, list) else []
 
     team_details: Final = await _fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
+    if team_details is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not resolve team model grants for this login. Please try again",
+        )
+    resolved_teams: Final = _cli_sso_session_teams(team_details)
     attribution_metadata: Final = build_cli_sso_attribution_metadata(result=result)
     if attribution_metadata:
         await _persist_cli_sso_user_metadata(
@@ -2107,8 +2299,8 @@ async def _complete_cli_sso_callback_session(
         "user_role": user_info.user_role,
         "models": user_info.models if hasattr(user_info, "models") else [],
         "user_email": user_email,
-        "teams": teams,
-        "team_details": team_details,
+        "teams": resolved_teams,
+        "team_details": [detail.model_dump() for detail in team_details],
         "attribution_metadata": attribution_metadata,
     }
     flow["sso_complete"] = True
@@ -2117,7 +2309,10 @@ async def _complete_cli_sso_callback_session(
     _set_cli_sso_flow(login_id=key, cache=cli_sso_session_cache, flow=flow)
 
     verbose_proxy_logger.info(
-        "Stored CLI SSO session for user: %s, teams: %s, num_teams: %s", user_info.user_id, teams, len(teams)
+        "Stored CLI SSO session for user: %s, teams: %s, num_teams: %s",
+        user_info.user_id,
+        resolved_teams,
+        len(resolved_teams),
     )
     verify_url: Final = get_custom_url(
         request_base_url=str(request.base_url),
@@ -2257,12 +2452,12 @@ async def cli_poll_key(
                 verbose_proxy_logger.info("Returning teams list for user %s to select from: %s", user_id, user_teams)
                 # Best-effort construction of team_details if it wasn't
                 # already cached for some reason.
-                team_details_response: list[dict[str, Any]] | None = None
+                team_details_response: list[dict[str, object]] | None = None
                 if isinstance(user_team_details, list) and user_team_details:
                     team_details_response = user_team_details
                 elif user_teams:
                     team_details_response = [{"team_id": t, "team_alias": None} for t in user_teams]
-                poll_response: dict[str, Any] = {
+                poll_response: dict[str, object] = {
                     "status": "ready",
                     "user_id": user_id,
                     "teams": user_teams,
@@ -2285,11 +2480,14 @@ async def cli_poll_key(
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
-            team_alias = None
-            if team_id and isinstance(user_team_details, list):
-                team_alias = next(
-                    (team.get("team_alias") for team in user_team_details if team.get("team_id") == team_id),
-                    None,
+            selected_team: Final = _selected_cli_sso_team_detail(
+                team_details=user_team_details,
+                team_id=team_id,
+            )
+            if selected_team is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Could not resolve the model grants for team: {team_id}. Please run `lite login` again",
                 )
 
             user_info: Final = LiteLLM_UserTable(
@@ -2301,7 +2499,9 @@ async def cli_poll_key(
             jwt_token: Final = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
                 user_info=user_info,
                 team_id=team_id,
-                team_alias=team_alias,
+                team_alias=selected_team.team_alias,
+                team_models=selected_team.team_models,
+                team_model_aliases=selected_team.team_model_aliases,
                 max_budget=None,
             )
 
@@ -2365,12 +2565,12 @@ async def insert_sso_user(
         if _should_use_role_from_sso_response(sso_role):
             # Preserve the SSO-extracted role, but apply other defaults
             preserved_role: Final = sso_role
-            user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
+            user_defined_values.update(litellm.default_internal_user_params)
             user_defined_values["user_role"] = preserved_role  # Restore preserved role
             verbose_proxy_logger.debug("Preserved SSO-extracted role '%s'", preserved_role)
         else:
             # SSO didn't provide a valid role, apply all defaults including role
-            user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
+            user_defined_values.update(litellm.default_internal_user_params)
 
     # Set budget for internal users
     if user_defined_values.get("user_role") == LitellmUserRoles.INTERNAL_USER.value:
@@ -2385,7 +2585,7 @@ async def insert_sso_user(
     new_user_request: Final = NewUserRequest(
         user_id=user_defined_values["user_id"],
         user_email=normalize_email(user_defined_values["user_email"]),
-        user_role=user_defined_values["user_role"],  # type: ignore
+        user_role=user_defined_values["user_role"],
         max_budget=user_defined_values["max_budget"],
         budget_duration=user_defined_values["budget_duration"],
         sso_user_id=user_defined_values["user_id"],
@@ -2816,7 +3016,7 @@ class SSOAuthenticationHandler:
                     state_only_params[key] = value
 
             # Get the redirect response from fastapi-sso with only state param
-            redirect_response: Final = await generic_sso.get_login_redirect(**state_only_params)  # type: ignore
+            redirect_response: Final = await generic_sso.get_login_redirect(**state_only_params)
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
@@ -2997,7 +3197,9 @@ class SSOAuthenticationHandler:
                     user_id=user_id,
                 )
 
-                await UserRepository(prisma_client).table.update_many(where={"user_id": user_id}, data=update_data)
+                await _user_meta_db(UserRepository(prisma_client)).update_many(
+                    where={"user_id": user_id}, data=update_data
+                )
             else:
                 verbose_proxy_logger.info("user not in DB, inserting user into LiteLLM DB")
                 # user not in DB, insert User into LiteLLM DB
@@ -3089,7 +3291,9 @@ class SSOAuthenticationHandler:
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         try:
-            team_obj: Final = await TeamRepository(prisma_client).table.find_first(where={"team_id": litellm_team_id})
+            team_obj: Final = await _team_detail_db(TeamRepository(prisma_client)).find_first(
+                where={"team_id": litellm_team_id}
+            )
             verbose_proxy_logger.debug("Team object: %s", team_obj)
 
             # only create a new team if it doesn't exist
@@ -3188,7 +3392,7 @@ class SSOAuthenticationHandler:
 
         if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
             email_domain: Final = user_email.split("@")[1]
-            allowed_domains: Final = os.getenv("ALLOWED_EMAIL_DOMAINS").split(",")  # type: ignore
+            allowed_domains: Final = os.getenv("ALLOWED_EMAIL_DOMAINS").split(",")
             if email_domain not in allowed_domains:
                 raise HTTPException(
                     status_code=401,
@@ -3211,7 +3415,7 @@ class SSOAuthenticationHandler:
             user_id = getattr(result, "id", None)
             user_email = normalize_email(getattr(result, "email", None))
             if user_role is None:
-                _role_from_attr: Final = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+                _role_from_attr: Final = getattr(result, generic_user_role_attribute_name, None)
                 if _role_from_attr is not None:
                     # Convert enum to string if needed
                     user_role = (
@@ -3278,9 +3482,10 @@ class SSOAuthenticationHandler:
         # But if it is, we want their models preferences
         user_defined_values: SSOUserDefinedValues | None = None
 
-        if user_custom_sso is not None:
-            if inspect.iscoroutinefunction(user_custom_sso):
-                user_defined_values = await user_custom_sso(result)  # type: ignore
+        custom_sso_handler: Final[_CustomSsoCall | None] = user_custom_sso
+        if custom_sso_handler is not None:
+            if inspect.iscoroutinefunction(custom_sso_handler):
+                user_defined_values = await custom_sso_handler(result)
             else:
                 raise ValueError("user_custom_sso must be a coroutine function")
         elif user_id is not None:
@@ -3352,8 +3557,8 @@ class SSOAuthenticationHandler:
             table_name="key",
         )
 
-        key = response["token"]  # type: ignore
-        user_id = response["user_id"]  # type: ignore
+        key = response["token"]
+        user_id = response["user_id"]
 
         user_role = user_defined_values["user_role"] or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
         if user_id and isinstance(user_id, str):
@@ -3448,7 +3653,7 @@ class SSOAuthenticationHandler:
             dict: Token exchange parameters
         """
         # Prepare token exchange parameters (may add code_verifier: str later)
-        token_params: Final[dict[str, Any]] = {"include_client_id": generic_include_client_id}
+        token_params: Final[dict[str, object]] = {"include_client_id": generic_include_client_id}
 
         # Retrieve PKCE code_verifier if PKCE was used in authorization.
         # Gate on GENERIC_CLIENT_USE_PKCE to avoid an unnecessary Redis round-trip
@@ -3663,7 +3868,7 @@ class SSOAuthenticationHandler:
         access_token string. Raises ProxyException on any validation failure.
         """
         try:
-            token_response_raw: Final = response.json()
+            token_response_raw: Final[object] = _as_object(response.json())
         except Exception as json_err:
             verbose_proxy_logger.error(
                 "Failed to parse token response as JSON: %s. Body: %s",
@@ -4016,7 +4221,7 @@ class MicrosoftSSOHandler:
         original_msft_result: Final = (
             await microsoft_sso.verify_and_process(
                 request=request,
-                convert_response=False,  # type: ignore
+                convert_response=False,
             )
             or {}
         )
@@ -4253,7 +4458,7 @@ class MicrosoftSSOHandler:
 
         while next_link is not None and page_count < MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
             response = await async_client.get(next_link, headers=headers)
-            response_json = response.json()
+            response_json: _ServicePrincipalPage = response.json()
             verbose_proxy_logger.debug("Response from service principal app role assigned to: %s", response_json)
 
             for _object in response_json.get("value", []):
@@ -4343,7 +4548,7 @@ class GoogleSSOHandler:
             return (
                 await google_sso.verify_and_process(
                     request=request,
-                    convert_response=False,  # type: ignore
+                    convert_response=False,
                 )
                 or {}
             )

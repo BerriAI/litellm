@@ -329,7 +329,7 @@ def cost_per_token(
     response: Any | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
-) -> tuple[float, float]:  # type: ignore
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -1522,7 +1522,7 @@ def completion_cost(
                 # see https://replicate.com/pricing
                 elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
                     # for unmapped replicate model, default to replicate's time tracking logic
-                    return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
+                    return get_replicate_completion_pricing(completion_response, total_time)
 
                 if model is None:
                     raise ValueError(

@@ -736,10 +736,8 @@ class RedisUpdateBuffer:
             # Process each field type
             for field in transaction_fields:
                 if transaction.get(field):
-                    for entity_id, amount in transaction[field].items():  # type: ignore
-                        combined_transaction[field][entity_id] = (  # type: ignore
-                            combined_transaction[field].get(entity_id, 0) + amount  # type: ignore
-                        )
+                    for entity_id, amount in transaction[field].items():
+                        combined_transaction[field][entity_id] = combined_transaction[field].get(entity_id, 0) + amount
 
         return combined_transaction
 

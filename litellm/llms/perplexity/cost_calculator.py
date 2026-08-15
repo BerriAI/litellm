@@ -39,7 +39,7 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         if value is None:
             return default
         try:
-            return float(value)  # type: ignore
+            return float(value)
         except (ValueError, TypeError):
             return default
 

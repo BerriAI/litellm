@@ -148,10 +148,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     ):
         self.presidio_analyzer_api_base: str | None = presidio_analyzer_api_base or get_secret(
             "PRESIDIO_ANALYZER_API_BASE", None
-        )  # type: ignore
+        )
         self.presidio_anonymizer_api_base: str | None = presidio_anonymizer_api_base or litellm.get_secret(
             "PRESIDIO_ANONYMIZER_API_BASE", None
-        )  # type: ignore
+        )
 
         if self.presidio_analyzer_api_base is None:
             raise Exception("Missing `PRESIDIO_ANALYZER_API_BASE` from environment")
@@ -831,7 +831,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return kwargs, result
 
-    async def async_post_call_success_hook(  # type: ignore
+    async def async_post_call_success_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1069,7 +1069,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     else:
                         all_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    yield chunk  # type: ignore[misc]
+                    yield chunk
                     continue
                 else:
                     if all_chunks:
@@ -1202,9 +1202,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
                     if pii_tokens:
-                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)  # type: ignore[misc]
+                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)
                     else:
-                        yield chunk  # type: ignore[misc]
+                        yield chunk
                     continue
                 else:
                     # /v1/responses events: unmask response.completed text in-place.
@@ -1251,7 +1251,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for chunk in remaining_chunks:
                 yield chunk
 
-    async def async_post_call_streaming_iterator_hook(  # type: ignore[override]
+    async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,

@@ -172,7 +172,7 @@ class VertexFineTuningAPI(VertexLLM):
             response: Final = await self.async_handler.post(
                 headers=headers,
                 url=fine_tuning_url,
-                json=request_data,  # type: ignore
+                json=request_data,
             )
 
             if response.status_code != 200:
@@ -182,7 +182,7 @@ class VertexFineTuningAPI(VertexLLM):
 
             verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
 
-            vertex_response: Final = ResponseTuningJob(  # type: ignore
+            vertex_response: Final = ResponseTuningJob(
                 **response.json(),
             )
 
@@ -241,7 +241,7 @@ class VertexFineTuningAPI(VertexLLM):
         base_url: Final = get_vertex_base_url(vertex_location)
         fine_tuning_url: Final = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
         if _is_async is True:
-            return self.acreate_fine_tuning_job(  # type: ignore
+            return self.acreate_fine_tuning_job(
                 fine_tuning_url=fine_tuning_url,
                 headers=headers,
                 request_data=fine_tune_job,
@@ -256,7 +256,7 @@ class VertexFineTuningAPI(VertexLLM):
         response: Final = sync_handler.post(
             headers=headers,
             url=fine_tuning_url,
-            json=fine_tune_job,  # type: ignore
+            json=fine_tune_job,
         )
 
         if response.status_code != 200:
@@ -265,7 +265,7 @@ class VertexFineTuningAPI(VertexLLM):
             )
 
         verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
-        vertex_response: Final = ResponseTuningJob(  # type: ignore
+        vertex_response: Final = ResponseTuningJob(
             **response.json(),
         )
 
@@ -333,7 +333,7 @@ class VertexFineTuningAPI(VertexLLM):
         response: Final = await self.async_handler.post(
             headers=headers,
             url=url,
-            json=request_data,  # type: ignore
+            json=request_data,
         )
 
         if response.status_code != 200:

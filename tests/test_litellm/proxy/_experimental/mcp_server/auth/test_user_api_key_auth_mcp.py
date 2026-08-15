@@ -2874,7 +2874,7 @@ class TestMCPCustomHeaderName:
                 mock_general_settings.get.return_value = general_setting
 
                 # Call the method
-                result = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+                result = MCPRequestHandler.get_mcp_client_side_auth_header_name()
 
                 # Assert the result
                 assert result == expected_header_name
@@ -2938,7 +2938,7 @@ class TestMCPCustomHeaderName:
         # Mock the header name method
         with patch.object(
             MCPRequestHandler,
-            "_get_mcp_client_side_auth_header_name",
+            "get_mcp_client_side_auth_header_name",
             return_value=custom_header_name,
         ):
             # Create headers from the test data
@@ -2963,7 +2963,7 @@ class TestMCPCustomHeaderName:
         # Mock the custom header name
         with patch.object(
             MCPRequestHandler,
-            "_get_mcp_client_side_auth_header_name",
+            "get_mcp_client_side_auth_header_name",
             return_value="custom-auth-header",
         ):
             # Create ASGI scope with custom header

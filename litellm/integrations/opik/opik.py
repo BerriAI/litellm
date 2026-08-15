@@ -168,7 +168,7 @@ class OpikLogger(CustomBatchLogger):
             response: Final = self.sync_httpx_client.post(
                 url=url,
                 headers=headers,
-                json=batch,  # type: ignore
+                json=batch,
             )
             response.raise_for_status()
             if response.status_code != 204:
@@ -252,7 +252,7 @@ class OpikLogger(CustomBatchLogger):
             response: Final = await self.async_httpx_client.post(
                 url=url,
                 headers=headers,
-                json=batch,  # type: ignore
+                json=batch,
             )
             response.raise_for_status()
 

@@ -1,7 +1,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import UserInfoView, { extractMcpEntitlement } from "./user_info_view";
+import UserInfoView from "./user_info_view";
+import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 
 const mockTeamMemberAddCall = vi.fn();
 const mockTeamMemberDeleteCall = vi.fn();
@@ -122,6 +123,19 @@ describe("UserInfoView", () => {
     expect(aliases.length).toBeGreaterThan(0);
   });
 
+  it("should render overview spend and budget with two decimal places", async () => {
+    mockUserGetInfoV2.mockResolvedValue({
+      ...MOCK_USER_DATA,
+      spend: 98.854,
+      max_budget: 3_000_000,
+    });
+
+    render(<UserInfoView {...defaultProps} />);
+
+    expect(await screen.findByText("$98.85")).toBeInTheDocument();
+    expect(screen.getByText(/of \$3,000,000\.00/)).toBeInTheDocument();
+  });
+
   it("should render teams in a table with team names", async () => {
     render(<UserInfoView {...defaultProps} />);
 
@@ -230,7 +244,7 @@ describe("UserInfoView", () => {
     });
 
     // The DeleteResourceModal's OK button has text "Delete" - find it within the modal
-    const modal = screen.getByText("Remove from Team").closest(".ant-modal") as HTMLElement;
+    const modal = screen.getByRole("dialog", { name: "Remove from Team" });
     const deleteConfirmButton = within(modal).getByRole("button", { name: /delete/i });
     await user.click(deleteConfirmButton);
 
@@ -358,7 +372,11 @@ describe("extractMcpEntitlement", () => {
   const CATALOG = [
     { server_id: "srv-1", server_name: "deploy_tracker", alias: "deploy" },
     { server_id: "srv-2", server_name: "issue_tracker", alias: null },
-    { server_id: "srv-via-group", server_name: "audit_log", alias: null },
+    { server_id: "srv-via-group", server_name: "audit_log", alias: null, mcp_access_groups: ["ops_readonly"] },
+  ] as any;
+
+  const TOOLSETS = [
+    { toolset_id: "ts-1", toolset_name: "audit", tools: [{ server_id: "srv-via-group", tool_name: "read" }] },
   ] as any;
 
   const form = (
@@ -452,12 +470,43 @@ describe("extractMcpEntitlement", () => {
   });
 
   it("keeps the allowlist of a deselected server that a retained access group still supplies", () => {
-    const result = extractMcpEntitlement(form({ accessGroups: ["ops_readonly"] }, { "srv-1": ["read"] }), CATALOG);
-    expect(result?.mcp_tool_permissions).toEqual({ "srv-1": ["read"] });
+    const result = extractMcpEntitlement(
+      form({ accessGroups: ["ops_readonly"] }, { "srv-via-group": ["read"] }),
+      CATALOG,
+      TOOLSETS,
+    );
+    expect(result?.mcp_tool_permissions).toEqual({ "srv-via-group": ["read"] });
   });
 
-  it("keeps the allowlist of a deselected server when a toolset is retained", () => {
-    const result = extractMcpEntitlement(form({ toolsets: ["ts-1"] }, { "srv-1": ["read"] }), CATALOG);
+  it("drops the allowlist of a deselected server that the retained access group does not contain", () => {
+    // The gateway grants each allowlist key as its own server, so retaining a group covering only
+    // srv-via-group must not keep srv-1 callable after the admin removed it.
+    const result = extractMcpEntitlement(
+      form({ accessGroups: ["ops_readonly"] }, { "srv-1": ["read"] }),
+      CATALOG,
+      TOOLSETS,
+    );
+    expect(result?.mcp_tool_permissions).toEqual({});
+  });
+
+  it("keeps the allowlist of a deselected server that a retained toolset still supplies", () => {
+    const result = extractMcpEntitlement(
+      form({ toolsets: ["ts-1"] }, { "srv-via-group": ["read"] }),
+      CATALOG,
+      TOOLSETS,
+    );
+    expect(result?.mcp_tool_permissions).toEqual({ "srv-via-group": ["read"] });
+  });
+
+  it("drops the allowlist of a deselected server that the retained toolset does not cover", () => {
+    const result = extractMcpEntitlement(form({ toolsets: ["ts-1"] }, { "srv-1": ["read"] }), CATALOG, TOOLSETS);
+    expect(result?.mcp_tool_permissions).toEqual({});
+  });
+
+  it("prunes nothing when a selected toolset is missing from the toolset catalog", () => {
+    // An unresolvable toolset could supply any server, so pruning against it would be a guess in
+    // the widening direction.
+    const result = extractMcpEntitlement(form({ toolsets: ["ts-unknown"] }, { "srv-1": ["read"] }), CATALOG, TOOLSETS);
     expect(result?.mcp_tool_permissions).toEqual({ "srv-1": ["read"] });
   });
 

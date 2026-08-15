@@ -581,7 +581,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("FIREWORKS_API_BASE") or "https://api.fireworks.ai/inference/v1"  # type: ignore
+        api_base = api_base or get_secret_str("FIREWORKS_API_BASE") or "https://api.fireworks.ai/inference/v1"
         dynamic_api_key: Final = api_key or (
             get_secret_str("FIREWORKS_API_KEY")
             or get_secret_str("FIREWORKS_AI_API_KEY")

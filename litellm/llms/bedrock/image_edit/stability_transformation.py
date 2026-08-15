@@ -122,7 +122,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             if k in param_mapping:
                 # Map param if mapping exists and value is valid
                 if k == "size" and v in OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO:
-                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]  # type: ignore
+                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
                 # Don't copy "size" itself to final dict
             elif k == "n":
                 # Store for logic but do not add to outgoing params
@@ -176,8 +176,8 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             image_b64: str
             if hasattr(image, "read") and callable(getattr(image, "read", None)):
                 # File-like object (e.g., BufferedReader from open())
-                image_bytes: Final = image.read()  # type: ignore
-                image_b64 = base64.b64encode(image_bytes).decode("utf-8")  # type: ignore
+                image_bytes: Final = image.read()
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
             elif isinstance(image, bytes):
                 # Raw bytes
                 image_b64 = base64.b64encode(image).decode("utf-8")
@@ -186,7 +186,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 image_b64 = image
             else:
                 # Try to handle as bytes
-                image_b64 = base64.b64encode(bytes(image)).decode("utf-8")  # type: ignore
+                image_b64 = base64.b64encode(bytes(image)).decode("utf-8")
 
             # For style-transfer models, map image to init_image
             model_lower: Final = model.lower()
@@ -196,7 +196,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 data["image"] = image_b64
 
         # Add optional params (already mapped in map_openai_params)
-        for key, value in image_edit_optional_request_params.items():  # type: ignore
+        for key, value in image_edit_optional_request_params.items():
             # Skip internal params (prefixed with _)
             if key.startswith("_") or value is None:
                 continue
@@ -209,7 +209,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                     file_value = value[0]
 
                 if hasattr(file_value, "read") and callable(getattr(file_value, "read", None)):
-                    file_bytes = file_value.read()  # type: ignore
+                    file_bytes = file_value.read()
                 elif isinstance(file_value, bytes):
                     file_bytes = file_value
                 elif isinstance(file_value, str):
@@ -217,7 +217,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                     data[key] = file_value
                     continue
                 else:
-                    file_bytes = file_value  # type: ignore
+                    file_bytes = file_value
 
                 if isinstance(file_bytes, bytes):
                     file_b64 = base64.b64encode(file_bytes).decode("utf-8")
@@ -242,15 +242,15 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             if key in numeric_int_fields:
                 # Convert to int (these are pixel values for outpaint)
                 try:
-                    data[key] = int(value)  # type: ignore
+                    data[key] = int(value)
                 except (ValueError, TypeError):
-                    data[key] = value  # type: ignore
+                    data[key] = value
             elif key in numeric_float_fields:
                 # Convert to float
                 try:
-                    data[key] = float(value)  # type: ignore
+                    data[key] = float(value)
                 except (ValueError, TypeError):
-                    data[key] = value  # type: ignore
+                    data[key] = value
 
             # Supported text fields
             elif key in [
@@ -263,7 +263,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 "select_prompt",
                 "search_prompt",
             ]:
-                data[key] = value  # type: ignore
+                data[key] = value
 
         return data, {}
 

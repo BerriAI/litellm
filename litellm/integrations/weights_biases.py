@@ -21,7 +21,7 @@ try:
     K = TypeVar("K", bound=str)
     V = TypeVar("V")
 
-    class OpenAIResponse(Protocol[K, V]):  # type: ignore
+    class OpenAIResponse(Protocol[K, V]):
         # contains a (known) object attribute
         object: Literal["chat.completion", "edit", "text_completion"]
 
@@ -70,7 +70,7 @@ try:
             end_time_ms: Final = start_time_ms + int(round(time_elapsed * 1000))
             span: Final = trace_tree.Span(
                 name=f"{response.get('model', 'openai')}_{response['object']}_{response.get('created')}",
-                attributes=dict(response),  # type: ignore
+                attributes=dict(response),
                 start_time_ms=start_time_ms,
                 end_time_ms=end_time_ms,
                 span_kind=trace_tree.SpanKind.LLM,

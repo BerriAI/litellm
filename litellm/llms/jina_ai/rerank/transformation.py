@@ -129,7 +129,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
         return RerankResponse(
             id=_json_response.get("id") or str(uuid.uuid4()),
-            results=transformed_results,  # type: ignore
+            results=transformed_results,
             meta=rerank_meta,
         )  # Return response
 

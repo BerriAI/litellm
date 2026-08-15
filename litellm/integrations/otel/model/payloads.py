@@ -364,6 +364,34 @@ class LLMCallSpanData:
 # --- the MCP tool-call model ------------------------------------------------- #
 
 
+def _upstream_address_port(resource: str | None) -> tuple[str | None, int | None]:
+    """Split a redacted MCP server origin into ``server.address`` / ``server.port``.
+
+    ``mcp_server_resource`` is a scheme + host + port origin with userinfo, path,
+    query and fragment already stripped. The port falls back to the scheme default
+    when the origin omits it, because a consumer that keys a downstream dependency
+    off the address renders a missing port as ``0``.
+
+    The origin is rebuilt without its IPv6 brackets upstream, so reading the port can
+    raise on an address the host check still admits: a zone-scoped ``fe80::1%25eth0``
+    leaves a truthy hostname of ``fe80`` behind. Both halves are read inside the guard
+    so an unparseable origin yields no address rather than propagating out of span
+    construction, matching how the redactor guards the same split.
+    """
+    if not resource:
+        return None, None
+    try:
+        parsed: Final = urlsplit(resource)
+        hostname: Final = parsed.hostname
+        port: Final = parsed.port
+    except ValueError:
+        return None, None
+    if not hostname:
+        return None, None
+    default_port: Final = 443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None
+    return hostname, port or default_port
+
+
 @dataclass(frozen=True)
 class MCPToolCallSpanData:
     """One MCP ``tools/call`` execution, parsed from a closed request's payload.
@@ -378,6 +406,8 @@ class MCPToolCallSpanData:
     method: str
     tool_name: str
     server_name: str | None
+    server_address: str | None
+    server_port: int | None
     session_id: str | None
     arguments_json: str | None
     result_json: str | None
@@ -390,11 +420,14 @@ class MCPToolCallSpanData:
         cls, payload: StandardLoggingPayload, capture_content: bool = False
     ) -> MCPToolCallSpanData:
         meta: Final = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
+        address, port = _upstream_address_port(as_str(meta.get("mcp_server_resource")) or None)
         return cls(
             operation=resolve_operation(as_str(payload.get("call_type"))),
             method=MCPMethod.TOOLS_CALL.value,
             tool_name=as_str(meta.get("name")) or "",
             server_name=as_str(meta.get("mcp_server_name")),
+            server_address=address,
+            server_port=port,
             session_id=as_str(meta.get("mcp_session_id")),
             arguments_json=(
                 _json_or_none(meta.get("arguments")) if capture_content and meta.get("arguments") is not None else None

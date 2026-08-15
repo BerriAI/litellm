@@ -56,7 +56,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
     ) -> dict:
         return {"Authorization": f"Bearer {api_key}"}
 
-    async def transform_response(  # type: ignore
+    async def transform_response(
         self,
         model: str,
         raw_response: ClientResponse,

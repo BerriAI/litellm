@@ -19,7 +19,7 @@ Vertex Documentation for using the OpenAI /chat/completions endpoint: https://gi
 from collections.abc import Callable
 from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse

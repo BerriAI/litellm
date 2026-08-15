@@ -237,7 +237,7 @@ class NomaV2Guardrail(CustomGuardrail):
             for field in _INTERVENED_INPUT_FIELDS:
                 value = response_json.get(field)
                 if isinstance(value, list):
-                    updated_inputs[field] = value  # type: ignore[literal-required]
+                    updated_inputs[field] = value
             return updated_inputs
 
         return inputs

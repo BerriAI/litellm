@@ -137,7 +137,7 @@ class OCRHandler(BaseTranslation):
             if user_metadata:
                 # Preserve original behavior: inject metadata into inputs for
                 # third-party guardrail providers that read it from there
-                inputs.update(user_metadata)  # type: ignore
+                inputs.update(user_metadata)
                 # Also store in request_data for the logging pipeline
                 if "litellm_metadata" not in request_data:
                     request_data["litellm_metadata"] = user_metadata

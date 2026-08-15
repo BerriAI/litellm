@@ -37,4 +37,18 @@ describe("CollapsibleMessage", () => {
     await user.click(screen.getByText("SYSTEM"));
     expect(screen.getByText("Toggle me")).toBeInTheDocument();
   });
+
+  it("should expand with Enter and collapse with Space from the keyboard", async () => {
+    const user = userEvent.setup();
+    render(<CollapsibleMessage label="SYSTEM" content="Toggle me" defaultExpanded={false} />);
+
+    expect(screen.getByText("Toggle me")).not.toBeVisible();
+
+    await user.tab();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("Toggle me")).toBeVisible();
+
+    await user.keyboard(" ");
+    expect(screen.getByText("Toggle me")).not.toBeVisible();
+  });
 });

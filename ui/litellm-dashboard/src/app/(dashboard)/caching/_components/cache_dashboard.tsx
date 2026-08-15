@@ -1,4 +1,4 @@
-import { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import UsageDatePicker from "@/components/shared/usage_date_picker";
@@ -65,32 +65,7 @@ interface CachePageProps {
   premiumUser: boolean;
 }
 
-interface CacheHealthResponse {
-  status?: string;
-  cache_type?: string;
-  ping_response?: boolean;
-  set_cache_response?: string;
-  litellm_cache_params?: string;
-  error?: {
-    message: string;
-    type: string;
-    param: string;
-    code: string;
-  };
-}
-
 // Helper function to deep-parse a JSON string if possible
-const deepParse = (input: any) => {
-  let parsed = input;
-  if (typeof parsed === "string") {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {
-      return parsed;
-    }
-  }
-  return parsed;
-};
 
 const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole, userID, premiumUser }) => {
   const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);

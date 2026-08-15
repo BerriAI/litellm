@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, Final, List, Literal, Optional
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -8,30 +8,30 @@ class BulkUpdateKeyRequestItem(BaseModel):
     """Individual key update request item"""
 
     key: str  # Key identifier (token)
-    budget_id: Optional[str] = None  # Budget ID associated with the key
-    max_budget: Optional[float] = None  # Max budget for key
-    team_id: Optional[str] = None  # Team ID associated with key
-    tags: Optional[List[str]] = None  # Tags for organizing keys
+    budget_id: str | None = None  # Budget ID associated with the key
+    max_budget: float | None = None  # Max budget for key
+    team_id: str | None = None  # Team ID associated with key
+    tags: list[str] | None = None  # Tags for organizing keys
 
 
 class BulkUpdateKeyRequest(BaseModel):
     """Request for bulk key updates"""
 
-    keys: List[BulkUpdateKeyRequestItem]
+    keys: list[BulkUpdateKeyRequestItem]
 
 
 class SuccessfulKeyUpdate(BaseModel):
     """Successfully updated key with its updated information"""
 
     key: str
-    key_info: Dict[str, Any]
+    key_info: dict[str, Any]
 
 
 class FailedKeyUpdate(BaseModel):
     """Failed key update with reason"""
 
     key: str
-    key_info: Optional[Dict[str, Any]] = None
+    key_info: dict[str, Any] | None = None
     failed_reason: str
 
 
@@ -39,8 +39,8 @@ class BulkUpdateKeyResponse(BaseModel):
     """Response for bulk key update operations"""
 
     total_requested: int
-    successful_updates: List[SuccessfulKeyUpdate]
-    failed_updates: List[FailedKeyUpdate]
+    successful_updates: list[SuccessfulKeyUpdate]
+    failed_updates: list[FailedKeyUpdate]
 
 
 class KeyUpdateFields(BaseModel):
@@ -49,31 +49,31 @@ class KeyUpdateFields(BaseModel):
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     # Budgets
-    max_budget: Optional[float] = None
-    budget_id: Optional[str] = None
-    budget_duration: Optional[str] = None
-    budget_limits: Optional[List[Any]] = None
-    model_max_budget: Optional[Dict[str, Any]] = None
+    max_budget: float | None = None
+    budget_id: str | None = None
+    budget_duration: str | None = None
+    budget_limits: list[Any] | None = None
+    model_max_budget: dict[str, Any] | None = None
 
     # Rate limits
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    model_tpm_limit: Optional[Dict[str, Any]] = None
-    model_rpm_limit: Optional[Dict[str, Any]] = None
-    max_parallel_requests: Optional[int] = None
-    rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]] = None
-    tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]] = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    model_tpm_limit: dict[str, Any] | None = None
+    model_rpm_limit: dict[str, Any] | None = None
+    max_parallel_requests: int | None = None
+    rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = None
+    tpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = None
 
     # Temporary budget grants (auto-expire). `spend` deliberately omitted — bulk-zeroing it bypasses budget enforcement; admin-only via /key/update.
-    temp_budget_increase: Optional[float] = None
-    temp_budget_expiry: Optional[datetime] = None
+    temp_budget_increase: float | None = None
+    temp_budget_expiry: datetime | None = None
 
     # Expiry
-    duration: Optional[str] = None
+    duration: str | None = None
 
     # Operational metadata
-    tags: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = None
+    tags: list[str] | None = None
+    metadata: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "KeyUpdateFields":
@@ -94,7 +94,7 @@ class BulkUpdateTeamKeysRequest(BaseModel):
     """Apply one update payload to many keys inside a team; provide either `key_ids` or `all_keys_in_team=True`."""
 
     team_id: str
-    key_ids: Optional[List[str]] = None
+    key_ids: list[str] | None = None
     all_keys_in_team: bool = False
     update_fields: KeyUpdateFields
 

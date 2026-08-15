@@ -537,6 +537,37 @@ async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_exposes_sanitized_client_headers_to_logging(monkeypatch):
+    """The Responses API MCP bridge used to log an empty header dict, hiding the caller's
+    headers from logging callbacks and hooks."""
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    tool_name = "deepwiki-read_wiki_structure"
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+        raw_headers={"x-nuid": "nuid-1", "x-litellm-api-key": "sk-proxy", "cookie": "s=1"},
+    )
+
+    expected = {"x-nuid": "nuid-1", "cookie": "***REDACTED***"}
+    assert captured["metadata"]["headers"] == expected
+    assert captured["proxy_server_request"]["headers"] == expected
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monkeypatch):
     _setup_proxy_logging(monkeypatch)
     _setup_mcp_call_environment(monkeypatch)

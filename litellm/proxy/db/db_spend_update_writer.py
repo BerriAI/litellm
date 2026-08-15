@@ -12,9 +12,7 @@ import os
 import random
 import time
 import traceback
-from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import litellm
@@ -23,6 +21,7 @@ from litellm.caching import RedisCache
 from litellm.constants import (
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
     DB_SPEND_UPDATE_JOB_NAME,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
@@ -41,6 +40,11 @@ from litellm.proxy._types import (
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
 )
+from litellm.proxy.db.daily_spend_bulk_upsert import (
+    DAILY_SPEND_TABLES,
+    build_bulk_upsert,
+    merge_by_conflict_key,
+)
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
@@ -54,7 +58,11 @@ from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
-from litellm.proxy.spend_tracking.savings import compute_savings_spend
+from litellm.proxy.spend_tracking.savings import (
+    compute_savings_spend,
+    extract_cache_creation_tokens,
+    extract_cache_read_tokens,
+)
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 
 if TYPE_CHECKING:
@@ -62,12 +70,6 @@ if TYPE_CHECKING:
 else:
     PrismaClient = Any
     ProxyLogging = Any
-
-
-# Only tag rows carry a request_id, so the other entity types spread nothing. Built
-# once here rather than as an empty literal per transaction, and read-only so it cannot
-# be filled in by accident from one of the call sites that spreads it.
-_NO_TAG_REQUEST_ID: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
 def _get_llm_router():
@@ -82,31 +84,6 @@ def _get_llm_router():
         return llm_router
     except Exception:  # noqa: BLE001  # no proxy in scope; savings degrade to zero
         return None
-
-
-def _extract_cache_read_tokens(usage_obj: dict) -> int:
-    """
-    Anthropic: top-level cache_read_input_tokens field.
-    OpenAI-compatible (moonshotai, openai, deepseek, etc.): prompt_tokens_details.cached_tokens.
-    """
-    explicit: Final = usage_obj.get("cache_read_input_tokens", 0) or 0
-    if explicit:
-        return int(explicit)
-    details: Final = usage_obj.get("prompt_tokens_details") or {}
-    return int(details.get("cached_tokens", 0) or 0)
-
-
-def _extract_cache_creation_tokens(usage_obj: dict) -> int:
-    """
-    Anthropic: top-level cache_creation_input_tokens field.
-    OpenAI-compatible (kimi-k2 etc.): prompt_tokens_details.cache_write_tokens
-    or prompt_tokens_details.cache_creation_tokens.
-    """
-    explicit: Final = usage_obj.get("cache_creation_input_tokens", 0) or 0
-    if explicit:
-        return int(explicit)
-    details: Final = usage_obj.get("prompt_tokens_details") or {}
-    return int(details.get("cache_write_tokens", 0) or details.get("cache_creation_tokens", 0) or 0)
 
 
 class DBSpendUpdateWriter:
@@ -204,6 +181,10 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                     kwargs=kwargs,
                 )
+                await self._enqueue_autorouter_turn_transaction(
+                    payload=payload,
+                    prisma_client=prisma_client,
+                )
             else:
                 verbose_proxy_logger.debug(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
@@ -274,6 +255,47 @@ class DBSpendUpdateWriter:
                 prisma_client.tool_usage_transactions.append(transaction)
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_usage_transaction error (non-blocking): %s", e)
+
+    async def _enqueue_autorouter_turn_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: "PrismaClient | None",
+    ) -> None:
+        try:
+            if prisma_client is None:
+                return
+            metadata_raw: Final = payload.get("metadata")
+            if not metadata_raw:
+                return
+            metadata: Final = json.loads(metadata_raw)
+            if not isinstance(metadata, dict) or not metadata.get("routing_decision"):
+                return
+            from litellm.proxy.db.autorouter_session_rollup import (
+                build_autorouter_turn_transaction,
+            )
+
+            usage_object_raw: Final = metadata.get("usage_object")
+            savings_spend: Final = compute_savings_spend(
+                model=payload.get("model"),
+                custom_llm_provider=payload.get("custom_llm_provider"),
+                compression_saved_tokens=0,
+                routing_decision=metadata.get("routing_decision"),
+                usage_object=usage_object_raw if isinstance(usage_object_raw, dict) else None,
+                model_id=payload.get("model_id"),
+                llm_router=_get_llm_router,
+                cost_breakdown=metadata.get("cost_breakdown"),
+            )
+            transaction: Final = build_autorouter_turn_transaction(
+                payload=payload,
+                metadata=metadata,
+                saved_spend=savings_spend.autorouter,
+            )
+            if transaction is None:
+                return
+            async with prisma_client._autorouter_turn_transactions_lock:
+                prisma_client.autorouter_turn_transactions.append(transaction)
+        except Exception as e:  # noqa: BLE001  # a metrics enqueue must never fail the spend write
+            verbose_proxy_logger.debug("_enqueue_autorouter_turn_transaction error (non-blocking): %s", e)
 
     def _enqueue_tool_registry_upsert(
         self,
@@ -1230,7 +1252,7 @@ class DBSpendUpdateWriter:
         if team_member_list_transactions is not None and len(team_member_list_transactions.keys()) > 0:
             # Track which team memberships will be updated for cache invalidation
             team_memberships_to_invalidate: Final[list[tuple[str, str]]] = []
-            for key in team_member_list_transactions.keys():
+            for key in team_member_list_transactions:
                 # key is "team_id::<value>::user_id::<value>"
                 team_id = key.split("::")[1]
                 user_id = key.split("::")[3]
@@ -1413,8 +1435,6 @@ class DBSpendUpdateWriter:
         daily_spend_transactions: dict[str, DailyUserSpendTransaction],
         entity_type: Literal["user"],
         entity_id_field: str,
-        table_name: str,
-        unique_constraint_name: str,
     ) -> None: 
         ...
 
@@ -1427,8 +1447,6 @@ class DBSpendUpdateWriter:
         daily_spend_transactions: dict[str, DailyTeamSpendTransaction],
         entity_type: Literal["team"],
         entity_id_field: str,
-        table_name: str,
-        unique_constraint_name: str,
     ) -> None:
         ...
 
@@ -1441,8 +1459,6 @@ class DBSpendUpdateWriter:
         daily_spend_transactions: dict[str, DailyOrganizationSpendTransaction],
         entity_type: Literal["org"],
         entity_id_field: str,
-        table_name: str,
-        unique_constraint_name: str,
     ) -> None:
         ...
 
@@ -1455,8 +1471,6 @@ class DBSpendUpdateWriter:
         daily_spend_transactions: dict[str, DailyEndUserSpendTransaction],
         entity_type: Literal["end_user"],
         entity_id_field: str,
-        table_name: str,
-        unique_constraint_name: str,
     ) -> None:
         ...
 
@@ -1469,8 +1483,6 @@ class DBSpendUpdateWriter:
         daily_spend_transactions: dict[str, DailyAgentSpendTransaction],
         entity_type: Literal["agent"],
         entity_id_field: str,
-        table_name: str,
-        unique_constraint_name: str,
     ) -> None:
         ...
 
@@ -1483,8 +1495,6 @@ class DBSpendUpdateWriter:
         daily_spend_transactions: dict[str, DailyTagSpendTransaction],
         entity_type: Literal["tag"],
         entity_id_field: str,
-        table_name: str,
-        unique_constraint_name: str,
     ) -> None: 
         ...
     # fmt: on
@@ -1502,8 +1512,6 @@ class DBSpendUpdateWriter:
         | dict[str, DailyAgentSpendTransaction],
         entity_type: Literal["user", "team", "org", "tag", "end_user", "agent"],
         entity_id_field: str,
-        table_name: str,
-        unique_constraint_name: str,
     ) -> None:
         """
         Generic function to update daily spend for any entity type (user, team, org, tag, end_user, agent)
@@ -1549,111 +1557,23 @@ class DBSpendUpdateWriter:
                             )
                             return
 
+                        table = DAILY_SPEND_TABLES[entity_type]
                         try:
-                            async with prisma_client.db.batch_() as batcher:
-                                for _, transaction in transactions_to_process.items():
-                                    entity_id = transaction.get(entity_id_field)
-
-                                    # Construct the where clause dynamically
-                                    where_clause = {
-                                        unique_constraint_name: {
-                                            entity_id_field: entity_id,
-                                            "date": transaction["date"],
-                                            "api_key": transaction["api_key"],
-                                            "model": transaction["model"],
-                                            "custom_llm_provider": transaction.get("custom_llm_provider") or "",
-                                            "mcp_namespaced_tool_name": transaction.get("mcp_namespaced_tool_name")
-                                            or "",
-                                            "endpoint": transaction.get("endpoint") or "",
-                                        }
-                                    }
-
-                                    # Get the table dynamically
-                                    table = getattr(batcher, table_name)
-
-                                    # Additive metrics that older queued rows may omit; one
-                                    # enumeration feeds both the create and the increment below
-                                    optional_metrics = {
-                                        field: value
-                                        for field, value in (
-                                            ("cache_read_input_tokens", transaction.get("cache_read_input_tokens")),
-                                            (
-                                                "cache_creation_input_tokens",
-                                                transaction.get("cache_creation_input_tokens"),
-                                            ),
-                                            ("compression_saved_tokens", transaction.get("compression_saved_tokens")),
-                                            (
-                                                "compression_savings_spend",
-                                                transaction.get("compression_savings_spend"),
-                                            ),
-                                            (
-                                                "prompt_caching_savings_spend",
-                                                transaction.get("prompt_caching_savings_spend"),
-                                            ),
-                                            ("autorouter_savings_spend", transaction.get("autorouter_savings_spend")),
-                                        )
-                                        if value is not None
-                                    }
-
-                                    # Only tag rows carry a request_id. Resolved to a spreadable
-                                    # value here so both payloads are built in one shot: a dict
-                                    # appended to after construction is one nobody can reason about
-                                    # by reading its literal.
-                                    tag_request_id: Mapping[str, Any] = (
-                                        MappingProxyType({"request_id": transaction["request_id"]})
-                                        if entity_type == "tag" and "request_id" in transaction
-                                        else _NO_TAG_REQUEST_ID
-                                    )
-
-                                    # Common data structure for both create and update
-                                    common_data = {
-                                        entity_id_field: entity_id,
-                                        "date": transaction["date"],
-                                        "api_key": transaction["api_key"],
-                                        "model": transaction.get("model"),
-                                        "model_group": transaction.get("model_group"),
-                                        "mcp_namespaced_tool_name": transaction.get("mcp_namespaced_tool_name") or "",
-                                        "custom_llm_provider": transaction.get("custom_llm_provider"),
-                                        "endpoint": transaction.get("endpoint") or "",
-                                        "prompt_tokens": transaction["prompt_tokens"],
-                                        "completion_tokens": transaction["completion_tokens"],
-                                        "spend": transaction["spend"],
-                                        "api_requests": transaction["api_requests"],
-                                        "successful_requests": transaction["successful_requests"],
-                                        "failed_requests": transaction["failed_requests"],
-                                        **optional_metrics,
-                                        **tag_request_id,
-                                    }
-
-                                    update_data = {
-                                        "prompt_tokens": {"increment": transaction["prompt_tokens"]},
-                                        "completion_tokens": {"increment": transaction["completion_tokens"]},
-                                        "spend": {"increment": transaction["spend"]},
-                                        "api_requests": {"increment": transaction["api_requests"]},
-                                        "successful_requests": {"increment": transaction["successful_requests"]},
-                                        "failed_requests": {"increment": transaction["failed_requests"]},
-                                        **{field: {"increment": value} for field, value in optional_metrics.items()},
-                                        # An existing row predating the endpoint column gets it filled in here
-                                        "endpoint": transaction.get("endpoint") or "",
-                                        **tag_request_id,
-                                    }
-
-                                    table.upsert(
-                                        where=where_clause,
-                                        data={
-                                            "create": common_data,
-                                            "update": update_data,
-                                        },
-                                    )
+                            # One statement per batch rather than per key: the same rows are
+                            # aggregated, but concurrent writers no longer hold a batch's worth
+                            # of row locks across a hundred round trips.
+                            merged_batch = merge_by_conflict_key(
+                                table=table, transactions=tuple(transactions_to_process.values())
+                            )
+                            sql, params = build_bulk_upsert(table=table, batch=merged_batch)
+                            await prisma_client.db.execute_raw(sql, *params)
                         except Exception as batch_error:
                             # Log detailed error information for debugging batch upsert failures
                             # This helps diagnose issues like unique constraint violations
                             spend_log_error(
-                                "Daily %s spend batch upsert failed. "
-                                "Table: %s, Constraint: %s, Batch size: %d, Error: %s",
+                                "Daily %s spend batch upsert failed. Table: %s, Rows: %d, Error: %s",
                                 entity_type,
-                                table_name,
-                                unique_constraint_name,
+                                table.name,
                                 len(transactions_to_process),
                                 str(batch_error),
                                 exc=batch_error,
@@ -1688,7 +1608,7 @@ class DBSpendUpdateWriter:
 
         except Exception as e:
             if "transactions_to_process" in locals():
-                for key in transactions_to_process:  # type: ignore
+                for key in transactions_to_process:
                     daily_spend_transactions.pop(key, None)
             _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
 
@@ -1709,8 +1629,6 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_spend_transactions,
             entity_type="user",
             entity_id_field="user_id",
-            table_name="litellm_dailyuserspend",
-            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1730,8 +1648,6 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_spend_transactions,
             entity_type="team",
             entity_id_field="team_id",
-            table_name="litellm_dailyteamspend",
-            unique_constraint_name="team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1751,8 +1667,6 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_spend_transactions,
             entity_type="org",
             entity_id_field="organization_id",
-            table_name="litellm_dailyorganizationspend",
-            unique_constraint_name="organization_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1772,8 +1686,6 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_spend_transactions,
             entity_type="end_user",
             entity_id_field="end_user_id",
-            table_name="litellm_dailyenduserspend",
-            unique_constraint_name="end_user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1793,8 +1705,6 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_spend_transactions,
             entity_type="agent",
             entity_id_field="agent_id",
-            table_name="litellm_dailyagentspend",
-            unique_constraint_name="agent_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     @staticmethod
@@ -1814,8 +1724,6 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_spend_transactions,
             entity_type="tag",
             entity_id_field="tag",
-            table_name="litellm_dailytagspend",
-            unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     async def _common_add_spend_log_transaction_to_daily_transaction(
@@ -1860,6 +1768,12 @@ class DBSpendUpdateWriter:
             )
             return None
 
+        # TODO: remove the successful_requests/failed_requests counters below once the
+        # admin UI has fully migrated to LiteLLM_DailyGatewayRequests, which is now the
+        # source of truth for SGR. This path derives the counts from spend-log metadata
+        # rather than from what the gateway answered, so the two intentionally disagree
+        # (see litellm/proxy/middleware/billable_request_metrics_middleware.py). The
+        # spend, token and per-entity columns written here stay either way.
         request_status: Final = prisma_client.get_request_status(payload)
         verbose_proxy_logger.debug("Logged request status: %s", request_status)
         _metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])
@@ -1881,13 +1795,13 @@ class DBSpendUpdateWriter:
             if call_type:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
 
-            cache_read_input_tokens: Final = _extract_cache_read_tokens(usage_obj)
+            is_internal_call: Final = bool(_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
+            cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
             savings_spend: Final = compute_savings_spend(
                 model=payload.get("model", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
                 compression_saved_tokens=compression_saved_tokens,
-                cache_read_input_tokens=cache_read_input_tokens,
                 routing_decision=_metadata.get("routing_decision"),
                 model_id=payload.get("model_id"),
                 llm_router=_get_llm_router,
@@ -1906,15 +1820,20 @@ class DBSpendUpdateWriter:
                 prompt_tokens=payload["prompt_tokens"],
                 completion_tokens=payload["completion_tokens"],
                 spend=payload["spend"],
-                api_requests=1,
-                successful_requests=1 if request_status == "success" else 0,
-                failed_requests=1 if request_status != "success" else 0,
+                # Internal sub-calls (auto-router classifier, shadow eval's shadow and
+                # judge) bill real spend and tokens to the key, but they are not
+                # requests the caller made: counting them inflates request-volume
+                # readers, and an auto-router savings figure computed on a shadow
+                # duplicate credits savings for traffic no user sent.
+                api_requests=0 if is_internal_call else 1,
+                successful_requests=1 if not is_internal_call and request_status == "success" else 0,
+                failed_requests=1 if not is_internal_call and request_status != "success" else 0,
                 cache_read_input_tokens=cache_read_input_tokens,
-                cache_creation_input_tokens=_extract_cache_creation_tokens(usage_obj),
+                cache_creation_input_tokens=extract_cache_creation_tokens(usage_obj),
                 compression_saved_tokens=compression_saved_tokens,
                 compression_savings_spend=savings_spend.compression,
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
-                autorouter_savings_spend=savings_spend.autorouter,
+                autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
             )
             return daily_transaction
         except Exception as e:
