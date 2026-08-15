@@ -846,7 +846,7 @@ def _normalize_tuple_items(schema: dict[str, Any], depth: int = 0) -> None:
     tuple_items: Final = schema.get("items", None)
     if isinstance(tuple_items, list):
         if tuple_items:
-            schema["items"] = {"anyOf": tuple_items}
+            schema["items"] = {"anyOf": tuple_items}  # mutable-ok: the walkers below rewrite this subtree in place
         else:
             schema.pop("items")
 
