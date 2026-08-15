@@ -10004,6 +10004,7 @@
         "supports_vision": true
     },
     "babbage-002": {
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "text-completion-openai",
         "max_input_tokens": 16384,
@@ -12012,6 +12013,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_computer_use": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -12258,6 +12260,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_native_structured_output": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -12276,8 +12279,8 @@
         "input_cost_per_token": 3e-06,
         "litellm_provider": "anthropic",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 64000,
-        "max_tokens": 64000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "search_context_cost_per_query": {
@@ -12645,6 +12648,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_native_structured_output": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -14798,6 +14802,7 @@
         "mode": "search"
     },
     "davinci-002": {
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "text-completion-openai",
         "max_input_tokens": 16384,
@@ -19804,6 +19809,7 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-robotics-er-1.6-preview": {
+        "deprecation_date": "2026-08-31",
         "input_cost_per_audio_token": 2e-06,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "gemini",
@@ -22998,6 +23004,7 @@
         "supports_tool_choice": true
     },
     "gpt-3.5-turbo-instruct": {
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "text-completion-openai",
         "max_input_tokens": 8192,
@@ -24954,6 +24961,150 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
+    },
+    "gpt-5.6-cyber": {
+        "cache_creation_input_token_cost": 1.5625e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 3.125e-05,
+        "cache_read_input_token_cost": 1.25e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2.5e-06,
+        "input_cost_per_token": 1.25e-05,
+        "input_cost_per_token_above_272k_tokens": 2.5e-05,
+        "litellm_provider": "openai",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-05,
+        "output_cost_per_token_above_272k_tokens": 0.0001125,
+        "source": "https://platform.openai.com/docs/models/gpt-5.6-cyber",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "daybreak-red-latest": {
+        "cache_creation_input_token_cost": 1.5625e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 3.125e-05,
+        "cache_read_input_token_cost": 1.25e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2.5e-06,
+        "input_cost_per_token": 1.25e-05,
+        "input_cost_per_token_above_272k_tokens": 2.5e-05,
+        "litellm_provider": "openai",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-05,
+        "output_cost_per_token_above_272k_tokens": 0.0001125,
+        "source": "https://platform.openai.com/docs/models/daybreak-red-latest",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "daybreak-blue-latest": {
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.25e-05,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 1e-06,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_above_272k_tokens": 1e-05,
+        "litellm_provider": "openai",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-05,
+        "output_cost_per_token_above_272k_tokens": 4.5e-05,
+        "source": "https://platform.openai.com/docs/models/daybreak-blue-latest",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "chat-latest": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-05,
+        "source": "https://platform.openai.com/docs/models/chat-latest",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "gpt-5.6-sol": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -47769,8 +47920,8 @@
         "input_cost_per_token_cache_hit": 2.8e-09,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
@@ -47795,8 +47946,8 @@
         "input_cost_per_token_cache_hit": 3.625e-09,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
         "mode": "chat",
         "output_cost_per_token": 8.7e-07,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
@@ -48116,6 +48267,7 @@
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
+        "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -48149,6 +48301,7 @@
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
+        "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
