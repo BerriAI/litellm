@@ -12,6 +12,7 @@ This test suite verifies:
 """
 
 from base_llm_unit_tests import BaseLLMChatTest
+import httpx
 import pytest
 import sys
 import os
@@ -213,8 +214,6 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
         ``base_invoke_transformation`` so we observe the exact kwargs it is
         called with at stream-wrapper construction time.
         """
-        import httpx
-
         from litellm.utils import CustomStreamWrapper
 
         captured: dict = {}

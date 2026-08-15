@@ -15,7 +15,7 @@ from litellm.llms.bedrock.chat.invoke_handler import (
     make_call,
     make_sync_call,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -298,7 +298,6 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
 
 
 def test_invoke_streaming_forwards_bedrock_response_headers():
-    """Streaming callers need `x-amzn-requestid` to correlate a LiteLLM request with AWS support."""
     response = MagicMock()
     response.status_code = 200
     response.iter_bytes = MagicMock(return_value=iter([]))
@@ -317,4 +316,30 @@ def test_invoke_streaming_forwards_bedrock_response_headers():
     )
 
     assert stream._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-789"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_forwards_bedrock_response_headers():
+    async def _no_bytes(chunk_size=None):
+        return
+        yield b""
+
+    response = MagicMock()
+    response.status_code = 200
+    response.aiter_bytes = _no_bytes
+    response.headers = httpx.Headers({"x-amzn-requestid": "req-987"})
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=response)
+
+    stream = await litellm.acompletion(
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert stream._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-987"
 

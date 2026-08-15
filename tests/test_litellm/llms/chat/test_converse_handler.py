@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -10,7 +10,7 @@ import litellm
 from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_handler import make_sync_call
 from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -213,9 +213,6 @@ def _converse_response_body() -> dict:
 
 
 def test_converse_completion_forwards_bedrock_response_headers():
-    """Bedrock returns x-amzn-requestid on every converse call, which customers need to
-    correlate proxy requests with AWS support cases, so it must reach the caller as
-    llm_provider-x-amzn-requestid."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json = MagicMock(return_value=_converse_response_body())
@@ -255,6 +252,54 @@ def test_converse_streaming_forwards_bedrock_response_headers():
     )
 
     assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-456"
+
+
+@pytest.mark.asyncio
+async def test_async_converse_completion_forwards_bedrock_response_headers():
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json = MagicMock(return_value=_converse_response_body())
+    mock_response.text = json.dumps(_converse_response_body())
+    mock_response.headers = httpx.Headers({"x-amzn-requestid": "req-abc"})
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=mock_response)
+
+    response = await litellm.acompletion(
+        model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-abc"
+
+
+@pytest.mark.asyncio
+async def test_async_converse_streaming_forwards_bedrock_response_headers():
+    async def _no_bytes(chunk_size=None):
+        return
+        yield b""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.aiter_bytes = _no_bytes
+    mock_response.headers = httpx.Headers({"x-amzn-requestid": "req-def"})
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=mock_response)
+
+    response = await litellm.acompletion(
+        model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-def"
 
 
 def test_completion_plumbs_stream_chunk_size_through_converse():
