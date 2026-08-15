@@ -342,14 +342,17 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
         )
 
 
-# The six mirrored pricing fields plus the three remaining fields
+# The mirrored per-token pricing fields plus the three remaining fields
 # Router._inherit_builtin_cache_pricing back-fills from the public cost map. An unset field is
 # what that back-fill targets, so a field left out here is one a PTU deployment still bills.
-_PTU_ZEROED_PRICING_FIELDS: Final = SPECIAL_MODEL_INFO_PARAMS + (
+# tiered_pricing is the one mirrored field that is a list, not a rate, so it is dropped from a
+# PTU deployment (see _PTU_CLEARED_PRICING_FIELDS) rather than stored as zero.
+_PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in SPECIAL_MODEL_INFO_PARAMS if f != "tiered_pricing") + (
     "cache_creation_input_token_cost_above_1hr",
     "cache_creation_input_token_cost_above_200k_tokens",
     "cache_read_input_token_cost_above_200k_tokens",
 )
+_PTU_CLEARED_PRICING_FIELDS: Final = frozenset({"tiered_pricing"})
 _PTU_ZEROED_PRICING: Final[Mapping[str, float]] = MappingProxyType(dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0))
 _NO_PRICING_OVERRIDE: Final[Mapping[str, float]] = MappingProxyType({})
 _EMPTY_MODEL_INFO: Final[Mapping[str, object]] = _NO_PRICING_OVERRIDE
@@ -378,7 +381,12 @@ def _raise_if_ptu_deployment_is_priced(*, model_info: Mapping[str, object], supp
         return
     if model_info.get("ptu_count") is None or model_info.get("cost_per_ptu_per_hour") is None:
         return
-    priced: Final = tuple(sorted(field for field in _CUSTOM_PRICING_FIELDS if _is_nonzero_price(supplied.get(field))))
+    priced: Final = tuple(
+        sorted(
+            tuple(field for field in _CUSTOM_PRICING_FIELDS if _is_nonzero_price(supplied.get(field)))
+            + tuple(field for field in _PTU_CLEARED_PRICING_FIELDS if supplied.get(field))
+        )
+    )
     if not priced:
         return
     raise HTTPException(
@@ -448,7 +456,7 @@ def _ptu_pricing_delta(
     supplied: Final = patch.litellm_params.model_dump(exclude_none=True) if patch.litellm_params else _EMPTY_MODEL_INFO
     zeroed: Final = _ptu_zeroed_pricing(model_info=model_info, litellm_params=litellm_params, supplied=supplied)
     if zeroed:
-        return zeroed, frozenset()
+        return zeroed, _PTU_CLEARED_PRICING_FIELDS
     was_ptu: Final = any(stored_model_info.get(field) is not None for field in _PTU_PRICED_PAIR)
     if not was_ptu or not _explicitly_cleared_ptu_fields(patch.model_info) & _PTU_PRICED_PAIR:
         return _NO_PRICING_OVERRIDE, frozenset()
@@ -466,11 +474,13 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     override: Final = _ptu_zeroed_pricing(model_info=model_info, litellm_params=litellm_params, supplied=litellm_params)
     if not override:
         return model_params
+    cleared: Final = dict.fromkeys(_PTU_CLEARED_PRICING_FIELDS, None)
+    pricing_update: Final = MappingProxyType(dict(override, **cleared))
     return model_params.model_copy(
         update=MappingProxyType(
             {
-                "litellm_params": model_params.litellm_params.model_copy(update=override),
-                "model_info": model_params.model_info.model_copy(update=override),
+                "litellm_params": model_params.litellm_params.model_copy(update=pricing_update),
+                "model_info": model_params.model_info.model_copy(update=pricing_update),
             }
         )
     )
