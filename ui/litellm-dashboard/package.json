@@ -77,6 +77,8 @@
     "eslint": "9.39.2",
     "eslint-config-next": "16.2.11",
     "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-jest-dom": "5.10.1",
+    "eslint-plugin-testing-library": "7.16.2",
     "eslint-plugin-unused-imports": "4.3.0",
     "jsdom": "27.4.0",
     "knip": "5.83.1",
