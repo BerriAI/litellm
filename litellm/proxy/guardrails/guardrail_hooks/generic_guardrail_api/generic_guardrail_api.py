@@ -605,7 +605,17 @@ class GenericGuardrailAPI(CustomGuardrail):
             input_type=input_type,
             logging_obj=logging_obj,
         )
-        if self._record_scope.should_suppress(get_session_id_from_request_data(request_data or {})):
+        # The session id is caller-supplied, so the dedup key is namespaced by the
+        # authenticated caller: the key hash is unique per virtual key, with the
+        # team id as the fallback. Both come from auth, not from the body.
+        identity: Final = (
+            self._extract_user_api_key_metadata(request_data) if request_data else GenericGuardrailAPIMetadata()
+        )
+        session_id: Final = get_session_id_from_request_data(request_data) if request_data else None
+        if self._record_scope.should_suppress(
+            session_id,
+            tenant=identity.get("user_api_key_hash") or identity.get("user_api_key_team_id"),
+        ):
             suppress_guardrail_information_record()
         return result
 

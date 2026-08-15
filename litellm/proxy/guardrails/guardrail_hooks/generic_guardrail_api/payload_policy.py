@@ -21,6 +21,7 @@ from pydantic import JsonValue
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.guardrails._content_utils import (
+    iter_messages_text,
     map_messages_image_urls,
     map_messages_text,
 )
@@ -121,7 +122,39 @@ def _shape_text(text: str, policy: PayloadPolicy) -> str:
     return stripped[: policy.max_text_chars] if policy.max_text_chars is not None else stripped
 
 
-def _shape_texts(texts: Sequence[str], policy: PayloadPolicy) -> tuple[JsonValue, frozenset[int]]:
+def _retained_messages(messages: JsonValue, policy: PayloadPolicy) -> list[JsonValue] | None:
+    """The message window ``max_messages`` keeps, or None when there is nothing to window."""
+    if not isinstance(messages, list) or not messages:
+        return None
+    if policy.max_messages is None:
+        return messages
+    return messages[-policy.max_messages :]
+
+
+def _text_window_size(retained: list[JsonValue] | None, policy: PayloadPolicy, total_texts: int) -> int:
+    """How many trailing ``texts`` entries belong to the retained messages.
+
+    ``texts`` is fragment-based (a multimodal turn contributes several entries, a
+    tool-call-only turn contributes none) while ``max_messages`` counts messages,
+    so applying the same number to both would leave the two views of the payload
+    covering different parts of the conversation. Counting the fragments inside
+    the retained messages keeps them aligned. Without structured messages to
+    count (a response payload, an embedding call) the message count is the only
+    bound available, so it is applied to the fragments directly.
+    """
+    if policy.max_messages is None:
+        return total_texts
+    if retained is None:
+        return min(policy.max_messages, total_texts)
+    fragments: Final = sum(1 for _ in iter_messages_text(retained))
+    return min(fragments, total_texts)
+
+
+def _shape_texts(
+    texts: Sequence[str],
+    policy: PayloadPolicy,
+    window_size: int,
+) -> tuple[JsonValue, frozenset[int]]:
     """Window and rewrite the flat text list, and report which indices changed.
 
     ``max_messages`` has to bound ``texts`` as well as ``structured_messages``:
@@ -131,19 +164,18 @@ def _shape_texts(texts: Sequence[str], policy: PayloadPolicy) -> tuple[JsonValue
     shifts every position, so the caller treats the whole list as unusable for
     write-back (see ``merge_guardrailed_texts``).
     """
-    windowed: Final = texts[-policy.max_messages :] if policy.max_messages is not None else texts
+    windowed: Final = texts[len(texts) - window_size :] if window_size < len(texts) else texts
     shaped: Final = [_shape_text(text, policy) for text in windowed]  # mutable-ok: JSON texts is an array
     if len(windowed) != len(texts):
         return shaped, frozenset(range(len(texts)))
     return shaped, frozenset(index for index, text in enumerate(texts) if text != shaped[index])
 
 
-def _shape_messages(messages: JsonValue, policy: PayloadPolicy) -> JsonValue:
-    if not isinstance(messages, list) or not messages:
+def _shape_messages(retained: list[JsonValue] | None, policy: PayloadPolicy) -> JsonValue:
+    if retained is None:
         return None
-    windowed: Final = messages[-policy.max_messages :] if policy.max_messages is not None else messages
     texted: Final = (
-        map_messages_text(windowed, lambda text: _shape_text(text, policy)) if policy.shapes_text else windowed
+        map_messages_text(retained, lambda text: _shape_text(text, policy)) if policy.shapes_text else retained
     )
     # send_images=False has to cover the inline image parts too, otherwise the
     # base64 payload still leaves LiteLLM inside structured_messages. The part is
@@ -170,8 +202,12 @@ def shape_payload(
 
     texts: Final = request.texts
     texts_sent: Final = bool(texts) and "texts" not in exclude
-    shaped_texts, altered_indices = _shape_texts(texts or (), policy) if texts_sent else (None, frozenset[int]())
-    shaped_messages: Final = _shape_messages(dumped.get("structured_messages"), policy)
+    retained: Final = _retained_messages(dumped.get("structured_messages"), policy)
+    window_size: Final = _text_window_size(retained, policy, len(texts or ()))
+    shaped_texts, altered_indices = (
+        _shape_texts(texts or (), policy, window_size) if texts_sent else (None, frozenset[int]())
+    )
+    shaped_messages: Final = _shape_messages(retained, policy)
 
     payload: Final = {  # mutable-ok: the POST body is a JSON object
         **dumped,

@@ -3190,3 +3190,116 @@ class TestConfigValidationWarnings:
 
         assert "tools" not in handler.payloads[0]
         assert result["tools"] == original_tools
+
+
+class TestMaxMessagesWindowAlignment:
+    """The texts window must cover the same turns as the message window.
+
+    `texts` is fragment-based and `max_messages` counts messages, so applying the
+    same number to both would let the two views of the payload describe different
+    parts of the conversation.
+    """
+
+    @pytest.mark.asyncio
+    async def test_multipart_turn_does_not_leak_earlier_messages(self):
+        """A retained turn with two text parts must not push an omitted turn's text in."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, max_messages=1)
+        messages = [
+            {"role": "user", "content": "old turn that must not be sent"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "kept part one"},
+                    {"type": "text", "text": "kept part two"},
+                ],
+            },
+        ]
+
+        await guardrail.apply_guardrail(
+            inputs={
+                "texts": ["old turn that must not be sent", "kept part one", "kept part two"],
+                "structured_messages": messages,
+            },
+            request_data={},
+            input_type="request",
+        )
+
+        payload = handler.payloads[0]
+        assert payload["texts"] == ["kept part one", "kept part two"]
+        assert [m["role"] for m in payload["structured_messages"]] == ["assistant"]
+
+    @pytest.mark.asyncio
+    async def test_textless_turn_does_not_drop_retained_text(self):
+        """A retained tool-call-only turn contributes no fragment, so the window shrinks."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, max_messages=2)
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "run", "arguments": "{}"}}],
+            },
+        ]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["first", "second"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+        )
+
+        payload = handler.payloads[0]
+        # The window keeps the last two messages, which carry exactly one fragment.
+        assert payload["texts"] == ["second"]
+        assert [m["role"] for m in payload["structured_messages"]] == ["user", "assistant"]
+
+    @pytest.mark.asyncio
+    async def test_response_payload_without_messages_still_bounded(self):
+        """Nothing to align against, so the message count bounds the fragments."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, max_messages=2)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["a", "b", "c", "d"]},
+            request_data={},
+            input_type="response",
+        )
+
+        assert handler.payloads[0]["texts"] == ["c", "d"]
+
+
+class TestSessionScopeIsolation:
+    """per_session dedup must not let one caller suppress another's telemetry."""
+
+    @staticmethod
+    def _request_data(session_id: str, key_hash: str) -> dict:
+        return {
+            "litellm_session_id": session_id,
+            "metadata": {"user_api_key_hash": key_hash},
+        }
+
+    @pytest.mark.asyncio
+    async def test_same_session_id_from_another_key_still_records(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, guardrail_information_scope="per_session")
+        first = self._request_data("shared-id", "hash-tenant-a")
+        second = self._request_data("shared-id", "hash-tenant-b")
+
+        await guardrail.apply_guardrail(inputs={"texts": ["a"]}, request_data=first, input_type="request")
+        await guardrail.apply_guardrail(inputs={"texts": ["b"]}, request_data=second, input_type="request")
+
+        assert len(_recorded_entries(first)) == 1
+        assert len(_recorded_entries(second)) == 1
+
+    @pytest.mark.asyncio
+    async def test_same_key_and_session_still_dedups(self):
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, guardrail_information_scope="per_session")
+        data = self._request_data("shared-id", "hash-tenant-a")
+
+        for _ in range(3):
+            await guardrail.apply_guardrail(inputs={"texts": ["a"]}, request_data=data, input_type="request")
+
+        assert len(_recorded_entries(data)) == 1

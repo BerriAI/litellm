@@ -1552,11 +1552,41 @@ async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["What are tax loopholes?"]},
-        request_data={"metadata": {"forbidden_topics": ["tax"]}},
-        input_type="request",
+    call = mock_guardrail.apply_guardrail.await_args.kwargs
+    assert call["inputs"] == {"texts": ["What are tax loopholes?"]}
+    assert call["input_type"] == "request"
+    assert call["request_data"]["metadata"]["forbidden_topics"] == ["tax"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_authenticated_identity_overrides_client_metadata(mocker):
+    """A caller must not be able to claim another identity in the request body.
+
+    Guardrails key exemptions and per-tenant behavior off user_api_key_* metadata,
+    so the authenticated values have to win over whatever the body says.
+    """
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        metadata={
+            "user_api_key_alias": "exempt-batch-worker",
+            "user_api_key_team_id": "exempt-team",
+            "forbidden_topics": ["tax"],
+        },
     )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(key_alias="real-caller", team_id="real-team"),
+    )
+
+    metadata = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]["metadata"]
+    assert metadata["user_api_key_alias"] == "real-caller"
+    assert metadata["user_api_key_team_id"] == "real-team"
+    # Non-identity metadata the caller sent is still forwarded untouched.
+    assert metadata["forbidden_topics"] == ["tax"]
 
 
 @pytest.mark.asyncio
@@ -1578,33 +1608,28 @@ async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["What are tax loopholes?"]},
-        request_data={
-            "messages": messages,
-            "metadata": {"forbidden_topics": ["tax"]},
-        },
-        input_type="request",
-    )
+    call = mock_guardrail.apply_guardrail.await_args.kwargs
+    assert call["request_data"]["messages"] == messages
+    assert call["request_data"]["metadata"]["forbidden_topics"] == ["tax"]
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
-    """Without metadata, request_data stays empty (backward-compatible)."""
+async def test_apply_guardrail_carries_authenticated_metadata_when_none_sent(mocker):
+    """request_data always carries the authenticated identity, even with no client
+    metadata, so a guardrail sees the same caller information it sees in-line."""
     mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
 
     request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
     await apply_guardrail(
         fastapi_request=mocker.Mock(),
         request=request,
-        user_api_key_dict=UserAPIKeyAuth(),
+        user_api_key_dict=UserAPIKeyAuth(key_alias="known-caller"),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["hello"]},
-        request_data={},
-        input_type="request",
-    )
+    call = mock_guardrail.apply_guardrail.await_args.kwargs
+    assert call["inputs"] == {"texts": ["hello"]}
+    assert "messages" not in call["request_data"]
+    assert call["request_data"]["metadata"]["user_api_key_alias"] == "known-caller"
 
 
 @pytest.mark.asyncio
@@ -1625,11 +1650,10 @@ async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(moc
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["hello"]},
-        request_data={"messages": [], "metadata": {}},
-        input_type="request",
-    )
+    call = mock_guardrail.apply_guardrail.await_args.kwargs
+    assert call["request_data"]["messages"] == []
+    # The explicitly-empty metadata is still forwarded, now carrying identity.
+    assert "metadata" in call["request_data"]
 
 
 @pytest.mark.asyncio

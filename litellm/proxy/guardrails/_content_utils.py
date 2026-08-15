@@ -112,6 +112,20 @@ def iter_message_text(data: dict[str, Any]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
+def iter_messages_text(messages: Sequence[Mapping[str, object]]) -> Iterator[str]:
+    """Yield every text fragment carried by a message list, whatever the role.
+
+    Role-agnostic on purpose: a caller counting what a set of messages
+    contributes (payload windowing, size accounting) must not miss a turn whose
+    role it did not think to enumerate.
+    """
+    for message in messages:
+        # The annotation is the contract; the values arrive from provider
+        # translation handlers, so a stray non-message entry must not raise.
+        if isinstance(message, Mapping):  # pyright: ignore[reportUnnecessaryIsInstance]  # untyped upstream data
+            yield from _iter_text_parts_in_content(message.get("content"))
+
+
 def iter_role_text(messages: Sequence[Mapping[str, object]], roles: Collection[str]) -> Iterator[str]:
     """Yield every text fragment carried by messages whose role is in ``roles``.
 

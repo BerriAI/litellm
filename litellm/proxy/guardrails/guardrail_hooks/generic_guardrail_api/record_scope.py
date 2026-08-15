@@ -44,13 +44,17 @@ class RecordScope:
     def scope(self) -> GuardrailInformationScope:
         return self._scope
 
-    def should_suppress(self, session_id: str | None) -> bool:
+    def should_suppress(self, session_id: str | None, *, tenant: str | None = None) -> bool:
         """Whether this successful call should skip its logging entry.
 
         ``per_session`` claims the session on its first call, so the calls that
         follow it suppress. A session id is required: without one there is
         nothing to dedup against, so the call records as it would under
         ``per_call`` rather than silently dropping every entry.
+
+        The session id is caller-supplied, so the key is namespaced by the
+        authenticated caller: otherwise whoever claims an id first would
+        suppress another tenant's telemetry for the same id.
         """
         if self._scope == "per_call":
             return False
@@ -58,7 +62,8 @@ class RecordScope:
             return True
         if session_id is None:
             return False
-        if self._recorded_sessions.get_cache(session_id) is True:
+        key: Final = f"{tenant or ''}::{session_id}"
+        if self._recorded_sessions.get_cache(key) is True:
             return True
-        self._recorded_sessions.set_cache(session_id, True, ttl=_SESSION_CACHE_TTL_SECONDS)
+        self._recorded_sessions.set_cache(key, True, ttl=_SESSION_CACHE_TTL_SECONDS)
         return False
