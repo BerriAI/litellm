@@ -178,14 +178,17 @@ const buildComplexityRouterTestTargets = (
     REASONING: normalizeTierModels(config.tiers?.REASONING),
   };
 
-  // litellm_params overrides the config blob at init (complexity_router.py), so it wins here too.
-  const pinned = modelData?.litellm_params?.complexity_router_default_model || config.default_model;
+  // Mirrors init_complexity_router_deployment (litellm/router.py): litellm_params wins, otherwise
+  // pure tier-derivation. complexity_router_config.default_model is a UI-only marker the backend
+  // never reads — folding it in here could point Test Connection at a model the router never
+  // calls (see PR #36615 discussion).
+  const effectiveDefaultModel = modelData?.litellm_params?.complexity_router_default_model || undefined;
 
   const testTargetParams = {
     tiers,
     semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
     embeddingModel: config.embedding_model,
-    defaultModel: resolveComplexityDefaultModel(tiers, pinned),
+    defaultModel: resolveComplexityDefaultModel(tiers, effectiveDefaultModel),
   };
   return buildAutoRouterTestTargets(testTargetParams);
 };

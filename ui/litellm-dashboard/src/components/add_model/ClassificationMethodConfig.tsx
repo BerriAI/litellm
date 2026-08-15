@@ -230,7 +230,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                   <Tooltip
                     title={
                       hasDefaultModel
-                        ? "Change it in the Default Model row above the advanced sections."
+                        ? "Change it from the Default Model select."
                         : "Set a default model on this router to use this option"
                     }
                   >

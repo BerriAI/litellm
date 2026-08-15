@@ -365,6 +365,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     form
       .validateFields(requiresTeamScope ? ["auto_router_name", "team_id"] : ["auto_router_name"])
       .then((values) => {
+        // auto_router_default_model (-> litellm_params, read by the backend at init) and
+        // complexity_router_config.default_model (-> the pin marker read back on edit, see
+        // hydratePinnedDefaultModel in edit_auto_router_modal.tsx) must both come from the same
+        // `defaultModel`, or the two fields diverge and hydration's divergence check misfires.
         const submitValues = {
           ...values,
           auto_router_name: name,

@@ -577,6 +577,27 @@ describe("EditAutoRouterModal default model", () => {
       />,
     );
 
+  // No config blob marker — only litellm_params.complexity_router_default_model, as an untouched
+  // router looked before this PR's marker existed, or one an external API call wrote directly to.
+  const renderWithLitellmParamsDefaultOnly = (complexityRouterDefaultModel: string) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: STORED_CONFIG,
+            complexity_router_default_model: complexityRouterDefaultModel,
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
   it("preserves a stored pin through an untouched open-and-save", async () => {
     const user = userEvent.setup();
     renderWithStoredPin("out-of-band-default");
@@ -609,6 +630,71 @@ describe("EditAutoRouterModal default model", () => {
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig()).toMatchObject({ default_model: STORED_CONFIG.tiers.MEDIUM[0] });
+  });
+
+  // Greptile P1 on #36615: with no config blob marker, a litellm_params default that merely
+  // matches what the tiers derive is indistinguishable from the pre-PR auto-derive-and-write
+  // behavior (main always wrote a tier-derived value there on every save). Treating it as a pin
+  // would freeze every pre-existing router's default away from its tiers, so it stays unpinned.
+  it("treats a litellm_params default matching tier-derivation as unpinned, not a frozen-in pin", async () => {
+    const user = userEvent.setup();
+    renderWithLitellmParamsDefaultOnly(STORED_CONFIG.tiers.MEDIUM[0]);
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(select.closest(".ant-select")?.querySelector(".ant-select-selection-item")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("default_model");
+    expect(savedDefaultModel()).toBe(STORED_CONFIG.tiers.MEDIUM[0]);
+  });
+
+  // Greptile P1 on #36615: a litellm_params default that diverges from tier-derivation could only
+  // have gotten there via an explicit override — set by the API directly, since this UI's own
+  // save path keeps it in sync with tiers whenever there's no pin. That divergence must survive
+  // the next save instead of being silently recomputed away.
+  it("treats a diverging litellm_params default as an external pin and preserves it", async () => {
+    const user = userEvent.setup();
+    renderWithLitellmParamsDefaultOnly("claude-sonnet-4");
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(within(select.closest(".ant-select") as HTMLElement).getByTitle("claude-sonnet-4")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ default_model: "claude-sonnet-4" });
+    expect(savedDefaultModel()).toBe("claude-sonnet-4");
+  });
+
+  // The config blob marker is this UI's own authoritative record of intent (see
+  // hydratePinnedDefaultModel), so it wins even over a litellm_params value that disagrees —
+  // e.g. a stale value from before the operator most recently changed the pin.
+  it("prefers the config blob marker over a diverging litellm_params value", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_CONFIG, default_model: "blob-pin" },
+            complexity_router_default_model: "stale-litellm-params-value",
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(within(select.closest(".ant-select") as HTMLElement).getByTitle("blob-pin")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ default_model: "blob-pin" });
   });
 
   // This modal only requires one non-empty tier, so a COMPLEX-only router is reachable here even

@@ -19,6 +19,7 @@ import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
 import { hydrateKeywordTierRules, serializeKeywordTierRules } from "../add_model/complexity_router_keywords";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
+  ComplexityTiers,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -82,8 +83,23 @@ const toRecord = (value: unknown): Record<string, unknown> => {
     : {};
 };
 
-export const hydratePinnedDefaultModel = (stored: unknown): string | undefined =>
-  typeof stored === "string" && stored.trim() ? stored : undefined;
+// A pin lives in two places: complexity_router_config.default_model (this UI's own marker, added
+// by PR #36615) and litellm_params.complexity_router_default_model (what the backend reads). Only
+// the marker proves an operator picked it, because before #36615 every save wrote a tier-derived
+// value into litellm_params. So with no marker, a litellm_params value counts as a pin only when
+// it diverges from what the tiers alone derive; a match stays unpinned and keeps tracking tiers.
+export const hydratePinnedDefaultModel = (
+  storedConfigDefaultModel: unknown,
+  litellmParamsDefaultModel: string | null | undefined,
+  tiers: ComplexityTiers,
+): string | undefined => {
+  if (typeof storedConfigDefaultModel === "string" && storedConfigDefaultModel.trim()) {
+    return storedConfigDefaultModel;
+  }
+  const tierDerived = resolveComplexityDefaultModel(tiers);
+  const externalOverride = litellmParamsDefaultModel?.trim();
+  return externalOverride && externalOverride !== tierDerived ? externalOverride : undefined;
+};
 
 export interface KeywordMatchingState {
   keywordTierRules: KeywordTierRule[];
@@ -241,14 +257,20 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           parsedConfig = JSON.parse(parsedConfig);
         }
 
+        const hydratedTiers: ComplexityTiers = {
+          SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
+          MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
+          COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
+          REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
+        };
+
         const hydratedComplexityRouterConfig: ComplexityRouterConfigValue = {
-          tiers: {
-            SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
-            MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
-            COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
-            REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
-          },
-          default_model: hydratePinnedDefaultModel(parsedConfig.default_model),
+          tiers: hydratedTiers,
+          default_model: hydratePinnedDefaultModel(
+            parsedConfig.default_model,
+            modelData.litellm_params?.complexity_router_default_model,
+            hydratedTiers,
+          ),
           tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,
@@ -369,7 +391,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         }
 
         // Unlike the create form, this modal only requires one non-empty tier, so a router can reach
-        // here with nothing the backend would pick as a default. init_complexity_router_deployment
+        // here with nothing the backend would pick as a default (see getMissingTiersError in
+        // build_complexity_router_config.ts for why create never can). init_complexity_router_deployment
         // raises in that case (litellm/router.py), so block it rather than saving a router that
         // fails at init.
         const defaultModel = resolveComplexityDefaultModel(tiers, complexityRouterConfig.default_model);
@@ -381,6 +404,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           return;
         }
 
+        // Dual write: complexity_router_config.default_model (the pin marker hydratePinnedDefaultModel
+        // reads back) and complexity_router_default_model (what the backend routes on) must always be
+        // written together from the same value. Same pairing in add_auto_router_tab.tsx.
         const updatedLitellmParams = {
           ...modelData.litellm_params,
           complexity_router_config: buildUpdatedComplexityRouterConfig(

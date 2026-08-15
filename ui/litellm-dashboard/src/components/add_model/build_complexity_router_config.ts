@@ -106,6 +106,12 @@ export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined)
   return null;
 };
 
+// Requires all 4 tiers non-empty, so the create form can never reach the
+// resolveComplexityDefaultModel(tiers, ...) === undefined case — MEDIUM (or SIMPLE) is always
+// populated. The edit modal has no equivalent of this check (it allows saving with only some
+// tiers filled), which is why it needs its own explicit `!defaultModel` guard after deriving —
+// see edit_auto_router_modal.tsx's save handler. A future contributor copying this form's submit
+// handler elsewhere should not assume the same guarantee holds without this check.
 export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
   const missing = TIER_KEYS.filter((tier) => tiers[tier].length === 0);
   if (missing.length === 0) return null;
