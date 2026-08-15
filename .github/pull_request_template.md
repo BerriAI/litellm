@@ -66,7 +66,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 <!-- Include screenshots, screen recordings, or command (e.g., curl) + output demonstrating that your changes work as expected
      The proof must be completely e2e with no mocks, using actual LLM calls costing real $$$ if applicable. `pytest` commands are not enough
      Show ONLY the latest run: capture Before at the merge base and After at the PR's current tip, and when new commits change behavior, replace this whole section with the fresh run instead of stacking it on top of older ones. The run must be up to date. As soon as a new commit is made and it makes this PR description's after sha stale (it's no longer tip of PR), you must re-run the QA
-     Structure the section exactly as below: Before and After one heading level below this section, each naming the commit hash it was captured at, one lower-level heading per case inside each, the same case names in the same order on both sides; shared setup (config, payloads) goes above Before, and with a single case, drop the case headings and number the steps directly
+     Structure the section exactly as below: Before and After one heading level below this section, each naming the commit hash it was captured at, one lower-level heading per case inside each, the same case names in the same order on both sides, and numbered steps (command, observed output) under every case, never loose prose; shared setup (config, payloads) goes above Before, and with a single case, drop the case headings and number the steps directly
 
 ### Before (<hash>)
 
