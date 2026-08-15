@@ -32,7 +32,9 @@ _EMPTY_MAPPING: Final = MappingProxyType({})
 DEFAULT_POLICIES: Final = (
     MappingProxyType({"type": "pii", "action": "REDACT", "patterns": "all"}),
     MappingProxyType({"type": "cost", "action": "ENFORCE", "daily_limit_usd": 50.0}),
-    MappingProxyType({"type": "tool_auth", "action": "ENFORCE", "allowlist": None}),  # None = allow all
+    MappingProxyType(
+        {"type": "tool_auth", "action": "ENFORCE", "allowlist": None}
+    ),  # None = allow all
 )
 
 
@@ -41,7 +43,7 @@ class TealTigerGuardrail(CustomGuardrail):
         self,
         policies: Sequence[Mapping[str, object]] | None = None,
         policy_mode: str = "ENFORCE",
-        **kwargs: object,  # kwargs-ok: forwards unknown/future CustomGuardrail.__init__ params (guardrail_name, event_hook, default_on, ...) to the base class
+        **kwargs,  # kwargs-ok: forwards unknown/future CustomGuardrail.__init__ params (guardrail_name, event_hook, default_on, ...) to the base class
     ) -> None:
         self.engine: Final = TealEngine(
             policies=policies or DEFAULT_POLICIES,
@@ -71,19 +73,29 @@ class TealTigerGuardrail(CustomGuardrail):
             self._check_tool_calls(inputs)
             self._check_budget(request_data)
 
-        checked_texts: Final = tuple(self._check_text_or_raise(text) for text in inputs.get("texts") or ())
+        checked_texts: Final = tuple(
+            self._check_text_or_raise(text) for text in inputs.get("texts") or ()
+        )
         return {**inputs, "texts": list(checked_texts)}  # mutable-ok: dict interop
 
     def _check_tool_calls(self, inputs: GenericGuardrailAPIInputs) -> None:
         for tool_call in inputs.get("tool_calls") or ():
-            tool_name = tool_call.get("name") or tool_call.get("function", _EMPTY_MAPPING).get("name")
+            tool_name = tool_call.get("name") or tool_call.get(
+                "function", _EMPTY_MAPPING
+            ).get("name")
             if tool_name and not self.engine.check_tool(tool_name):
-                raise ValueError(f"TealTiger: blocked — TOOL_NOT_ALLOWLISTED ({tool_name})")
+                raise ValueError(
+                    f"TealTiger: blocked — TOOL_NOT_ALLOWLISTED ({tool_name})"
+                )
 
     def _check_budget(self, request_data: Mapping[str, object]) -> None:
-        over_budget, spent, limit = self.engine.check_budget(session_id=request_data.get("user") or "default")
+        raw_user: Final = request_data.get("user")
+        session_id: Final[str] = raw_user if isinstance(raw_user, str) else "default"
+        over_budget, spent, limit = self.engine.check_budget(session_id=session_id)
         if over_budget:
-            raise ValueError(f"TealTiger: blocked — DAILY_BUDGET_EXCEEDED (${spent:.2f} / ${limit:.2f})")
+            raise ValueError(
+                f"TealTiger: blocked — DAILY_BUDGET_EXCEEDED (${spent:.2f} / ${limit:.2f})"
+            )
 
     def _check_text_or_raise(self, text: str) -> str:
         decision: Final = self.engine.evaluate_text(text)

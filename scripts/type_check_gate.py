@@ -66,6 +66,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Final, NamedTuple
+import sys
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUDGET_PATH = REPO_ROOT / "basedpyright-code-budget.json"
@@ -172,11 +173,18 @@ def typecheck_env_commands(env_dir: Path = TYPECHECK_ENV_DIR) -> tuple[tuple[str
         *(("--python", python_pin) if python_pin else ()),
         *(flag for group in TYPECHECK_DEP_GROUPS for flag in ("--group", group)),
     )
-    generate: Final = (str(env_dir / "bin" / "python"), str(PRISMA_GENERATE_SCRIPT))
+    if sys.platform == "win32":
+        python_executable = env_dir / "Scripts" / "python.exe"
+    else:
+        python_executable = env_dir / "bin" / "python"
+
+    generate: Final = (str(python_executable), str(PRISMA_GENERATE_SCRIPT))
     return (sync, generate)
 
 
 def _run_provision_step(cmd: tuple[str, ...], env: Mapping[str, str]) -> int:
+    print("TYPECHECK DEBUG CMD:", list(cmd))
+    print("TYPECHECK DEBUG CWD:", REPO_ROOT)
     proc = subprocess.run(
         list(cmd), cwd=REPO_ROOT, env=dict(env), capture_output=True, text=True
     )
@@ -220,7 +228,13 @@ def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -
     diagnostics) whenever the repo has one. Exit 0 (clean) and 1 (errors
     found) are both output-bearing runs; anything else is a crash and fails
     loudly instead of reading as zero errors."""
-    bin_dir: Final = env_dir / "bin"
+    if sys.platform == "win32":
+        bin_dir = env_dir / "Scripts"
+        python_executable = bin_dir / "python.exe"
+    else:
+        bin_dir = env_dir / "bin"
+        python_executable = bin_dir / "python"
+    str(python_executable)
     proc = subprocess.run(
         [
             str(bin_dir / "basedpyright"),
