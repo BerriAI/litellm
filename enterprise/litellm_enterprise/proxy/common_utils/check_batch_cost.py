@@ -52,6 +52,33 @@ class CheckBatchCost:
         # Cached after the first poll cycle. Once we know the column is absent we skip
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
+        self.batch_processed_support_confirmed: bool = False
+
+    @staticmethod
+    def _is_missing_batch_processed_column_error(err: Exception) -> bool:
+        message: Final = str(err).lower()
+        return "batch_processed" in message or "unknown column" in message or "does not exist" in message
+
+    async def confirm_batch_processed_support(self) -> None:
+        """
+        Probe the batch_processed column before the proxy serves traffic, so the retrieve
+        path never sees an unconfirmed poller on a schema that has the column and accounts
+        inline for a batch the first poll cycle then accounts again.
+        """
+        try:
+            await self.prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"file_purpose": "batch", "batch_processed": False}
+            )
+        except Exception as probe_err:
+            if not self._is_missing_batch_processed_column_error(probe_err):
+                verbose_proxy_logger.debug(
+                    f"CheckBatchCost: batch_processed probe failed, the poll cycle will confirm support: {probe_err}"
+                )
+                return
+            self._has_batch_processed_column = False
+            verbose_proxy_logger.warning("CheckBatchCost: batch_processed column not found, querying without it")
+            return
+        self.batch_processed_support_confirmed = True
 
     async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> Dict[str, Any]:
         """
@@ -724,8 +751,9 @@ class CheckBatchCost:
                     take=MAX_OBJECTS_PER_POLL_CYCLE,
                     order={"created_at": "asc"},
                 )
+                self.batch_processed_support_confirmed = True
             except Exception as query_err:
-                if "batch_processed" not in str(query_err).lower() and "unknown column" not in str(query_err).lower() and "does not exist" not in str(query_err).lower():
+                if not self._is_missing_batch_processed_column_error(query_err):
                     raise
                 # Permanent schema gap — cache the result so future cycles skip straight to fallback
                 self._has_batch_processed_column = False

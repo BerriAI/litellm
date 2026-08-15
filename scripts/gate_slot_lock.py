@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Machine-wide slot lock for this repo's heavy entrypoints.
 
-`make check`, `make bootstrap`, `make lint`, and the standalone budget gates
+`make check`, `make lint`, and the standalone budget gates
 (scripts/ruff_strict_gate.py, scripts/type_discipline_gate.py,
 scripts/type_check_gate.py) each hold one of N machine-wide slots while they
 run, so however many sessions and worktrees share one machine, at most N of

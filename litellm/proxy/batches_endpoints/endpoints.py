@@ -25,6 +25,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     add_internal_model_credentials,
     apply_team_provider_credentials,
+    batch_cost_poller_is_active,
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
@@ -497,6 +498,14 @@ async def retrieve_batch(
                 "Batch %s is in non-terminal state %s, syncing with provider", batch_id, response.status
             )
 
+        poller_owns_accounting: Final = bool(unified_batch_id) and batch_cost_poller_is_active()
+        if poller_owns_accounting:
+            litellm_metadata = data.get("litellm_metadata")
+            if not isinstance(litellm_metadata, dict):
+                litellm_metadata = {}  # mutable-ok: the suppression flag must live inside litellm_metadata for the success handler to read it, and this request carried no mapping to extend
+                data["litellm_metadata"] = litellm_metadata
+            litellm_metadata["batch_ignore_default_logging"] = True
+
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
@@ -581,6 +590,7 @@ async def retrieve_batch(
             verbose_proxy_logger=verbose_proxy_logger,
             db_batch_object=db_batch_object,
             operation="retrieve",
+            poller_owns_accounting=poller_owns_accounting,
         )
 
         ### CALL HOOKS ### - modify outgoing data
