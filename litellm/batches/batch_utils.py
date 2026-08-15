@@ -5,6 +5,7 @@ from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import _parse_prompt_tokens_details
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, ModelInfo, Usage
@@ -295,7 +296,7 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
 
     if litellm_params:
         # List of credential keys that should be passed to file operations
-        credential_keys: Final = [
+        credential_keys: Final = (
             "api_key",
             "api_base",
             "api_version",
@@ -310,7 +311,8 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "timeout",
             "max_retries",
             "_litellm_internal_model_credentials",
-        ]
+            *AWS_CREDENTIAL_KWARGS_KEYS,
+        )
         for key in credential_keys:
             if key in litellm_params:
                 credentials[key] = litellm_params[key]
