@@ -1,3 +1,4 @@
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -20,9 +21,15 @@ CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
 
 _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
+_SSE_EVENT_BOUNDARY: Final = re.compile(r"(?<=\n\n)")
+
 
 def _decode(chunk: bytes | str) -> str:
     return chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+
+
+def _split_sse_events(stream_text: str) -> tuple[str, ...]:
+    return tuple(event for event in _SSE_EVENT_BOUNDARY.split(stream_text) if event)
 
 
 class AnthropicMessagesStreamCacheWriter:
@@ -33,9 +40,7 @@ class AnthropicMessagesStreamCacheWriter:
     ) -> None:
         self.stream = stream
         self.caching_handler = caching_handler
-        self.collected_events: list[str] = []  # mutable-ok: rebuilding a tuple per SSE chunk is quadratic
-        self.saw_message_stop = False
-        self.saw_provider_error = False
+        self.collected_chunks: list[bytes] = []  # mutable-ok: rebuilding a tuple per SSE chunk is quadratic
         self.persisted = False
         self._hidden_params: dict[str, object] = dict(  # mutable-ok: callers stamp cache_key in here
             stream._hidden_params if isinstance(stream, AnthropicMessagesStreamingResponse) else _EMPTY_MAPPING
@@ -50,10 +55,7 @@ class AnthropicMessagesStreamCacheWriter:
         except StopAsyncIteration:
             await self._persist()
             raise
-        chunk_bytes: Final = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
-        self.saw_message_stop = self.saw_message_stop or _is_message_stop_chunk(chunk_bytes)
-        self.saw_provider_error = self.saw_provider_error or _is_provider_error_chunk(chunk_bytes)
-        self.collected_events.append(_decode(chunk))
+        self.collected_chunks.append(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
         return chunk
 
     async def aclose(self) -> None:
@@ -62,7 +64,8 @@ class AnthropicMessagesStreamCacheWriter:
     async def _persist(self) -> None:
         if self.persisted or litellm.cache is None:
             return
-        if not self.saw_message_stop or self.saw_provider_error:
+        collected_stream: Final = b"".join(self.collected_chunks)
+        if not _is_message_stop_chunk(collected_stream) or _is_provider_error_chunk(collected_stream):
             return
         self.persisted = True
 
@@ -78,10 +81,12 @@ class AnthropicMessagesStreamCacheWriter:
         request_kwargs: Final[Mapping[str, object]] = MappingProxyType(
             {**self.caching_handler.request_kwargs, **cache_key_override}
         )
-        events: Final = tuple(self.collected_events)
-        cached_payload: Final = {CACHED_STREAM_EVENTS_KEY: events}  # mutable-ok: cache backends serialize plain dicts
 
         try:
+            events: Final = _split_sse_events(collected_stream.decode("utf-8"))
+            cached_payload: Final = {
+                CACHED_STREAM_EVENTS_KEY: events
+            }  # mutable-ok: cache backends serialize plain dicts
             await litellm.cache.async_add_cache(
                 cached_payload,
                 dynamic_cache_object=self.caching_handler.dual_cache,

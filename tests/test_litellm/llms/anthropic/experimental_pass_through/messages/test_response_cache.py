@@ -165,6 +165,61 @@ async def test_failed_stream_is_not_cached(local_cache, request_kwargs, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_multibyte_utf8_split_across_chunks_streams_and_caches(local_cache, request_kwargs, monkeypatch):
+    """aiter_bytes() can split a multi-byte character across chunks; per-chunk
+    strict decoding raised UnicodeDecodeError mid-stream and broke the client."""
+    multibyte_delta = (
+        'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+        '"delta": {"type": "text_delta", "text": "ALPHA €"}}\n\n'
+    ).encode("utf-8")
+    split_at = multibyte_delta.index("€".encode("utf-8")) + 1
+    chunks = STREAM_EVENTS[:2] + [multibyte_delta[:split_at], multibyte_delta[split_at:]] + STREAM_EVENTS[3:]
+    fake_handler = _CountingHandler([_byte_stream(chunks), _byte_stream([b"event: never_used\n\n"])])
+    monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
+
+    first = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    second = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+
+    assert len(fake_handler.calls) == 1
+    assert first == chunks
+    assert b"".join(second) == b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_message_stop_split_across_chunks_still_caches(local_cache, request_kwargs, monkeypatch):
+    """The terminal `event: message_stop` line can arrive split across two
+    chunks; per-chunk line matching missed it, so the stream was never stored."""
+    stop_event = STREAM_EVENTS[-1]
+    chunks = STREAM_EVENTS[:-1] + [stop_event[:10], stop_event[10:]]
+    fake_handler = _CountingHandler([_byte_stream(chunks), _byte_stream([b"event: never_used\n\n"])])
+    monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
+
+    first = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    second = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+
+    assert len(fake_handler.calls) == 1
+    assert first == chunks
+    assert b"".join(second) == b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_error_event_split_across_chunks_is_not_cached(local_cache, request_kwargs, monkeypatch):
+    error_event = (
+        b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "overloaded"}}\n\n'
+    )
+    chunks = STREAM_EVENTS[:4] + [error_event[:8], error_event[8:]] + STREAM_EVENTS[4:]
+    fake_handler = _CountingHandler([_byte_stream(chunks), _byte_stream(STREAM_EVENTS)])
+    monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
+
+    failed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+
+    assert failed == chunks
+    assert len(fake_handler.calls) == 2
+    assert replayed == STREAM_EVENTS
+
+
+@pytest.mark.asyncio
 async def test_abandoned_stream_is_not_cached(local_cache, request_kwargs, monkeypatch):
     fake_handler = _CountingHandler([_byte_stream(STREAM_EVENTS), _byte_stream(STREAM_EVENTS)])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
@@ -177,6 +232,7 @@ async def test_abandoned_stream_is_not_cached(local_cache, request_kwargs, monke
 
     assert len(fake_handler.calls) == 2
     assert replayed == STREAM_EVENTS
+
 
 @pytest.mark.asyncio
 async def test_cached_stream_replay_logs_once_when_polled_after_exhaustion():
