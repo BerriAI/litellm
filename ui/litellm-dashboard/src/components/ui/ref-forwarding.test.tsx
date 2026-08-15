@@ -2,6 +2,7 @@ import { render } from "@testing-library/react";
 import * as React from "react";
 import { describe, expect, it } from "vitest";
 
+import { Badge } from "./badge";
 import { Button } from "./button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "./card";
 import { ChartContainer } from "./chart";
@@ -13,6 +14,12 @@ import { Table, TableBody, TableCaption, TableCell, TableFooter, TableHead, Tabl
 import { UiLoadingSpinner } from "./ui-loading-spinner";
 
 describe("ui primitives forward refs to their DOM node", () => {
+  it("Badge", () => {
+    const ref = React.createRef<HTMLSpanElement>();
+    render(<Badge ref={ref}>ok</Badge>);
+    expect(ref.current).toBeInstanceOf(HTMLSpanElement);
+  });
+
   it("Button", () => {
     const ref = React.createRef<HTMLButtonElement>();
     render(<Button ref={ref}>ok</Button>);

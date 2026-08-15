@@ -19,6 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.caching import DualCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
     PanwPrismaAirsHandler,
@@ -5661,6 +5662,392 @@ class TestPanwAirsTimeoutCoercion:
         handler = initialize_panw_prisma_airs(params, guardrail_config)
         # Default fallback applied, not crashed on float(None)
         assert handler.timeout == 10.0
+
+
+class TestPanwAirsScanIdExposure:
+    """Allowed scans must expose the AIRS scan id to the caller (LIT-5278)."""
+
+    ALLOW_SCAN_RESULT = {
+        "action": "allow",
+        "category": "benign",
+        "scan_id": "scan-abc-123",
+        "report_id": "report-abc-123",
+        "profile_name": "test_profile",
+        "profile_id": "profile-1",
+        "tr_id": "tr-9",
+    }
+
+    @staticmethod
+    def _handler(*scan_results) -> PanwPrismaAirsHandler:
+        """Handler wired to a stubbed AIRS endpoint, one queued scan result per call."""
+        pending = list(scan_results)
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            payload = pending.pop(0) if len(pending) > 1 else pending[0]
+            return httpx.Response(200, json=payload)
+
+        http_client = AsyncHTTPHandler()
+        http_client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        return make_handler(http_client=http_client)
+
+    @staticmethod
+    def _recorded_scan_ids(request_data):
+        metadata = {**request_data.get("metadata", {}), **request_data.get("litellm_metadata", {})}
+        return metadata.get("guardrail_scan_ids", ())
+
+    @staticmethod
+    def _response() -> ModelResponse:
+        return ModelResponse(
+            id="test_id",
+            choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
+            model="gpt-4",
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_call_allow_records_scan_id(self, user_api_key_dict):
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+
+        assert self._recorded_scan_ids(data) == ("scan-abc-123",)
+
+    @pytest.mark.asyncio
+    async def test_post_call_allow_records_response_scan_id(self, user_api_key_dict):
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
+        data = {"model": "gpt-4", "litellm_call_id": "test-call-id", "metadata": {}}
+
+        await handler.async_post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=self._response()
+        )
+
+        assert self._recorded_scan_ids(data) == ("scan-abc-123",)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_allow_records_scan_id(self):
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Hello world"]}
+        request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4", "metadata": {}}
+
+        await handler.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+
+        assert self._recorded_scan_ids(request_data) == ("scan-abc-123",)
+
+    @pytest.mark.asyncio
+    async def test_allowed_scan_id_becomes_response_header(self, user_api_key_dict):
+        from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+
+        headers = get_logging_caching_headers(data)
+        assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123"
+        assert "x-litellm-guardrail-scan-metadata" not in headers
+
+    @pytest.mark.asyncio
+    async def test_request_and_response_scan_ids_are_both_exposed(self, user_api_key_dict):
+        from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+        handler = self._handler(
+            self.ALLOW_SCAN_RESULT,
+            {**self.ALLOW_SCAN_RESULT, "scan_id": "scan-response-456"},
+        )
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        await handler.async_post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=self._response()
+        )
+
+        headers = get_logging_caching_headers(data)
+        assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123,scan-response-456"
+
+    @pytest.mark.asyncio
+    async def test_repeated_scan_id_is_not_duplicated(self, user_api_key_dict):
+        handler = self._handler(self.ALLOW_SCAN_RESULT)
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        await handler.async_post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=self._response()
+        )
+
+        assert self._recorded_scan_ids(data) == ("scan-abc-123",)
+
+    @pytest.mark.asyncio
+    async def test_blocked_scan_still_returns_scan_id_in_error(self, user_api_key_dict):
+        handler = self._handler({**self.ALLOW_SCAN_RESULT, "action": "block", "category": "malicious"})
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        assert exc_info.value.detail["error"]["scan_id"] == "scan-abc-123"
+
+    def test_client_supplied_scan_ids_are_stripped(self):
+        from litellm.proxy.litellm_pre_call_utils import (
+            _UNTRUSTED_METADATA_CONTROL_FIELDS,
+            _UNTRUSTED_ROOT_CONTROL_FIELDS,
+        )
+
+        assert "guardrail_scan_ids" in _UNTRUSTED_METADATA_CONTROL_FIELDS
+        assert "guardrail_scan_ids" in _UNTRUSTED_ROOT_CONTROL_FIELDS
+class TestPanwAirsBlockedErrorDetailPassthrough:
+    """Regression tests for the full AIRS scan response on blocks.
+
+    Before the fix, the error detail was built from a hardcoded allowlist
+    (scan_id, report_id, profile_name, profile_id, tr_id, prompt/response_detected),
+    so audit-relevant fields such as prompt_detection_details, prompt_masked_data,
+    source, transaction_id and session_id never reached the client.
+    """
+
+    _FULL_BLOCK_RESPONSE = {
+        "action": "block",
+        "category": "malicious",
+        "scan_id": "b2f0a4be-1f6f-4f9a-9f3d-4b6a9d8b1c0e",
+        "report_id": "R0000000000000000000",
+        "tr_id": "test-call-id",
+        "profile_id": "6f5c9f6e-2d0b-4d3f-8a1e-9b7c5d4e3f2a",
+        "profile_name": "test_profile",
+        "source": "prisma_airs",
+        "transaction_id": "4b8c1e2f-5a6d-4c3b-9e8f-1a2b3c4d5e6f",
+        "session_id": "3a2b1c0d-9e8f-4a7b-8c6d-5e4f3a2b1c0d",
+        "timeout": False,
+        "errors": [],
+        "prompt_detected": {"dlp": True, "injection": False, "url_cats": False},
+        "prompt_detection_details": {
+            "dlp_report": {
+                "dlp_report_id": "1234567890",
+                "dlp_profile_name": "Sensitive Content",
+                "data_pattern_rule1_verdict": "MATCHED",
+            }
+        },
+        "prompt_masked_data": {"data": "my ssn is XXX-XX-XXXX"},
+        "response_detected": {"dlp": False, "url_cats": False},
+        "response_detection_details": {},
+        "response_masked_data": {},
+    }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("is_response", [False, True])
+    async def test_block_returns_every_airs_field(
+        self, base_handler, user_api_key_dict, safe_prompt_data, is_response
+    ):
+        response = ModelResponse(
+            id="test_id",
+            choices=[
+                Choices(index=0, message=Message(role="assistant", content="Test response")),
+            ],
+            model="gpt-3.5-turbo",
+        )
+
+        with patch.object(
+            base_handler, "_call_panw_api", return_value=copy.deepcopy(self._FULL_BLOCK_RESPONSE)
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                if is_response:
+                    await base_handler.async_post_call_success_hook(
+                        data=safe_prompt_data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                    )
+                else:
+                    await base_handler.async_pre_call_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        cache=None,
+                        data=safe_prompt_data,
+                        call_type="completion",
+                    )
+
+        error = exc_info.value.detail["error"]
+        for field, value in self._FULL_BLOCK_RESPONSE.items():
+            if field == "category":
+                continue
+            if field in PanwPrismaAirsHandler._CLIENT_HIDDEN_SCAN_FIELDS:
+                # Withheld on purpose, covered by TestPanwAirsErrorDetailWithheldFields
+                continue
+            assert error[field] == value, f"{field} missing or altered in blocked-request error"
+
+        assert error["category"] == "malicious"
+        assert error["type"] == "guardrail_violation"
+        assert error["guardrail"] == "test_panw_airs"
+        assert error["code"] == ("panw_prisma_airs_response_blocked" if is_response else "panw_prisma_airs_blocked")
+        assert "PANW Prisma AI Security policy" in error["message"]
+
+    def test_internal_control_flags_are_not_leaked(self, base_handler):
+        detail = base_handler._build_error_detail(
+            {
+                "action": "block",
+                "category": "malicious",
+                "scan_id": "scan-1",
+                "_always_block": True,
+                "_is_transient": True,
+            }
+        )
+
+        assert "_always_block" not in detail["error"]
+        assert "_is_transient" not in detail["error"]
+        assert detail["error"]["scan_id"] == "scan-1"
+
+
+class TestPanwAirsErrorDetailWithheldFields:
+    """The blocked-request passthrough must not become a content channel.
+
+    ``response_masked_data`` is the model's own generation. The block branch is only
+    reached when ``mask_response_content`` is False, so echoing it back would hand the
+    caller exactly the text the operator declined to deliver. ``error`` is AIRS's own
+    message about the operator's Strata Cloud Manager profile configuration.
+
+    ``prompt_masked_data`` is deliberately NOT withheld by default: it is the caller's
+    own input, and it is one of the fields LIT-5638 asks for. The one exception is the
+    response-side tool-call path, covered by
+    ``TestPanwAirsToolCallBlockWithholdsGeneratedArgs`` below — tool_event scans are
+    request-side in the AIRS schema, so there the key holds model output instead.
+    """
+
+    @pytest.mark.parametrize("is_response", [False, True])
+    def test_response_masked_data_never_reaches_client(self, base_handler, is_response):
+        detail = base_handler._build_error_detail(
+            {
+                "action": "block",
+                "category": "sensitive_data",
+                "scan_id": "scan-1",
+                "response_detected": {"dlp": True},
+                "response_masked_data": {"data": "routing number XXXXXXXXXX"},
+                "prompt_masked_data": {"data": "my ssn is XXX-XX-XXXX"},
+                "prompt_detection_details": {"dlp_report": {"dlp_report_id": "1"}},
+            },
+            is_response=is_response,
+        )
+        error = detail["error"]
+
+        assert "response_masked_data" not in error
+        assert "routing number" not in str(error)
+
+        # The audit fields LIT-5638 asks for still come through untouched.
+        assert error["scan_id"] == "scan-1"
+        assert error["response_detected"] == {"dlp": True}
+        assert error["prompt_masked_data"] == {"data": "my ssn is XXX-XX-XXXX"}
+        assert error["prompt_detection_details"] == {"dlp_report": {"dlp_report_id": "1"}}
+
+    def test_upstream_airs_error_field_still_passes_through(self, base_handler):
+        """A 2xx AIRS body can carry its own ``error`` (see _call_panw_api's
+        profile-misconfiguration branch, which only logs and then blocks). It is
+        diagnostic rather than content, so it stays in the passthrough."""
+        detail = base_handler._build_error_detail(
+            {
+                "action": "block",
+                "category": "malicious",
+                "scan_id": "scan-2",
+                "error": "profile not found",
+            }
+        )
+
+        assert detail["error"]["error"] == "profile not found"
+        assert detail["error"]["scan_id"] == "scan-2"
+
+
+class TestPanwAirsToolCallBlockWithholdsGeneratedArgs:
+    """A response-side tool-call block must not ship the model's tool arguments.
+
+    ``_scan_tool_calls_for_guardrail`` calls AIRS with ``is_response=False`` because
+    tool_event is request-side in the AIRS schema, so AIRS returns the scanned tool
+    arguments under ``prompt_masked_data``. When the tool calls being scanned are the
+    model's own output, that key holds generated content, and the class-level
+    ``_CLIENT_HIDDEN_SCAN_FIELDS`` default (``response_masked_data``, empty on this
+    path) does not cover it.
+    """
+
+    MASKED_ARGS = '{"to_account": "XXXXXXXXXX", "amount": 5000}'
+
+    SCAN_RESULT = {
+        "action": "block",
+        "category": "sensitive_data",
+        "scan_id": "scan-tool-1",
+        "prompt_detected": {"dlp": True},
+        "prompt_masked_data": {"data": MASKED_ARGS},
+        "response_masked_data": {},
+    }
+
+    @staticmethod
+    def _tool_call():
+        return ChatCompletionMessageToolCall(
+            id="call_1",
+            type="function",
+            function=Function(
+                name="transfer_funds",
+                arguments='{"to_account": "ACME-VENDOR-001", "amount": 5000}',
+            ),
+        )
+
+    async def _block(self, handler, is_response):
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = dict(self.SCAN_RESULT)
+            with pytest.raises(HTTPException) as exc_info:
+                await handler._scan_tool_calls_for_guardrail(
+                    tool_calls=[self._tool_call()],
+                    is_response=is_response,
+                    metadata={},
+                    call_id="test-call-id",
+                    request_data={"metadata": {}},
+                    start_time=datetime.now(),
+                )
+        return exc_info.value
+
+    @pytest.mark.asyncio
+    async def test_response_side_block_withholds_generated_tool_args(self):
+        handler = make_handler(mask_response_content=False)
+        # The block branch is only reached with masking off; guard the premise.
+        assert handler.mask_response_content is False
+
+        exc = await self._block(handler, is_response=True)
+        error = exc.detail["error"]
+
+        assert exc.status_code == 400
+        assert "prompt_masked_data" not in error
+        assert self.MASKED_ARGS not in str(error)
+
+        # The audit fields LIT-5638 asks for are unaffected.
+        assert error["scan_id"] == "scan-tool-1"
+        assert error["prompt_detected"] == {"dlp": True}
+
+    @pytest.mark.asyncio
+    async def test_request_side_block_still_returns_masked_tool_args(self):
+        """Caller-supplied tool arguments stay in the verdict — that is the ticket's ask."""
+        handler = make_handler(mask_request_content=False)
+
+        exc = await self._block(handler, is_response=False)
+        error = exc.detail["error"]
+
+        assert error["prompt_masked_data"] == {"data": self.MASKED_ARGS}
+        assert error["scan_id"] == "scan-tool-1"
 
 
 if __name__ == "__main__":

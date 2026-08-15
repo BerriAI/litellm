@@ -465,6 +465,31 @@ def apply_team_provider_credentials(
     prepare_data_with_credentials(data=data, credentials=credentials)
 
 
+def add_internal_model_credentials(
+    data: dict,
+    llm_router: "Router",
+    model_id: str | None,
+) -> None:
+    """
+    Attach the deployment's immutable server-side credential snapshot to a router-routed
+    batch call (in-place).
+
+    Cost accounting for a completed batch reads the batch's output file, and the Bedrock
+    file config resolves its bucket only from this snapshot, never from a request param,
+    because the bucket is what managed file ids are validated against. Without it that
+    read fails and the batch's cost is never recorded.
+    """
+    if model_id is None:
+        return
+    try:
+        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
+        return
+    if credentials is None:
+        return
+    data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,

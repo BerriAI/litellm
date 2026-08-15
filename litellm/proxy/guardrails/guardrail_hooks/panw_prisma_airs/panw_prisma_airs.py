@@ -28,11 +28,13 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_scan_id,
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
@@ -111,6 +113,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     _PROVIDER_NAME = "panw_prisma_airs"
 
+    #: AIRS fields withheld from the client-visible error detail.
+    #: ``response_masked_data`` is the model's own generation. The block branch that builds
+    #: this detail is only reached when ``mask_response_content`` is False, so echoing it
+    #: back would hand the caller exactly the text the operator declined to deliver.
+    #: ``prompt_masked_data`` is deliberately NOT withheld: it is the caller's own input,
+    #: and it is one of the fields the ticket asks for.
+    _CLIENT_HIDDEN_SCAN_FIELDS: Final = frozenset({"response_masked_data"})
+
     def __init__(
         self,
         guardrail_name: str,
@@ -125,6 +135,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
         violation_message_template: str | None = None,
+        http_client: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         """Initialize PANW Prisma AIRS guardrail handler."""
@@ -172,6 +183,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_name,
             )
 
+        self.http_client = http_client
         self.fallback_on_error = fallback_on_error
         # Coerce defensively. The dashboard UI persists this field as a JSON
         # string, and Pydantic extras (the path that splats model_dump into
@@ -386,7 +398,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         try:
             # Use LiteLLM's async HTTP client
-            async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+            async_client: Final = self.http_client or get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.GuardrailCallback
+            )
 
             # Bypass wrapper to access follow_redirects parameter
             response: Final = await async_client.client.post(
@@ -668,12 +682,21 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         choice.message.function_call.arguments = masked_text
 
     def _build_error_detail(
-        self, scan_result: Mapping[str, object], is_response: bool = False
+        self,
+        scan_result: Mapping[str, object],
+        is_response: bool = False,
+        also_hide: str | None = None,
     ) -> Mapping[str, Mapping[str, object]]:
-        """Build enhanced error detail with scan information."""
+        """Build enhanced error detail with scan information.
+
+        ``also_hide`` names one more scan field to withhold, for the caller that knows
+        its AIRS verdict carries model-generated content under a key that is normally
+        caller input.
+        """
         action_type: Final = "Response" if is_response else "Prompt"
         code_suffix: Final = "_response_blocked" if is_response else "_blocked"
-        detection_key: Final = "response_detected" if is_response else "prompt_detected"
+
+        hidden_fields: Final = self._CLIENT_HIDDEN_SCAN_FIELDS.union(() if also_hide is None else (also_hide,))
 
         category: Final = scan_result.get("category", "unknown")
         default_msg: Final = f"{action_type} blocked by PANW Prisma AI Security policy (Category: {category})"
@@ -689,8 +712,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
-        error_detail: Final[dict[str, dict[str, object]]] = {
+        return {
             "error": {
+                **{
+                    key: value
+                    for key, value in scan_result.items()
+                    if not key.startswith("_") and key not in hidden_fields
+                },
                 "message": error_msg,
                 "type": "guardrail_violation",
                 "code": f"panw_prisma_airs{code_suffix}",
@@ -699,23 +727,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             }
         }
 
-        # Add optional fields if present
-        optional_fields: Final = [
-            "scan_id",
-            "report_id",
-            "profile_name",
-            "profile_id",
-            "tr_id",
-        ]
-        for field in optional_fields:
-            if scan_result.get(field):
-                error_detail["error"][field] = scan_result[field]
-
-        # Add detection details
-        if scan_result.get(detection_key):
-            error_detail["error"][detection_key] = scan_result[detection_key]
-
-        return error_detail
+    def _record_scan_id(self, request_data: dict[str, Any], scan_result: Mapping[str, object]) -> None:
+        """Surface the AIRS scan id on the response, so allowed calls are auditable too."""
+        scan_id: Final = scan_result.get("scan_id")
+        add_guardrail_scan_id(request_data=request_data, scan_id=str(scan_id) if scan_id else None)
 
     def _handle_api_error_with_logging(
         self,
@@ -939,6 +954,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             event_type=GuardrailEventHooks.post_call,
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+        self._record_scan_id(request_data, scan_result)
 
     def _check_and_mark_scanned(self, data: dict, scan_type: str) -> bool:
         """
@@ -1068,6 +1084,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.pre_call,
             )
+            self._record_scan_id(data, scan_result)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1188,6 +1205,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.post_call,
             )
+            self._record_scan_id(data, scan_result)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1389,6 +1407,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     duration=(end_time - start_time).total_seconds(),
                     event_type=GuardrailEventHooks.post_call,
                 )
+                self._record_scan_id(request_data, scan_result)
 
                 # Add guardrail to applied guardrails header for observability
                 add_guardrail_to_applied_guardrails_header(
@@ -1462,6 +1481,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 continue
 
+            self._record_scan_id(request_data, scan_result)
+
             action = scan_result.get("action", "block")
             masked_args = self._masked_tool_call_arguments(
                 self._get_masked_text(scan_result, is_response=is_response),
@@ -1477,7 +1498,17 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             ):
                 self._set_tool_call_arguments(tool_call, masked_args)
             else:
-                error_detail = self._build_error_detail(scan_result, is_response=is_response)
+                # tool_event scans are request-side in the AIRS schema, so AIRS returns
+                # the model's own tool arguments under prompt_masked_data. On a
+                # response-side block that is generated content, not caller input, and
+                # the class-level default only withholds response_masked_data — which is
+                # empty on this path. Withhold it explicitly so the 400 does not become
+                # the content channel this branch declined to deliver.
+                error_detail = self._build_error_detail(
+                    scan_result,
+                    is_response=is_response,
+                    also_hide="prompt_masked_data" if is_response else None,
+                )
                 raise HTTPException(status_code=400, detail=error_detail)
 
     @staticmethod
@@ -1809,6 +1840,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 new_texts.append(text)
                 continue
 
+            self._record_scan_id(request_data, scan_result)
+
             action = scan_result.get("action", "block")
             masked_text = self._get_masked_text(scan_result, is_response=is_response)
 
@@ -1879,6 +1912,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 # If we reach here, fallback_on_error="allow"
             else:
+                self._record_scan_id(request_data, mcp_scan_result)
                 action = mcp_scan_result.get("action", "block")
                 masked_text = self._get_masked_text(mcp_scan_result, is_response=False)
                 if action == "allow":
