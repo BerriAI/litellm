@@ -2056,11 +2056,14 @@ def test_create_anthropic_model_list_response_shape():
         # ISO 8601 with a Z suffix, as the Anthropic Models API returns.
         assert entry["created_at"].endswith("Z")
         assert "+00:00" not in entry["created_at"]
-        assert "max_input_tokens" not in entry
-        assert "max_tokens" not in entry
+        assert entry["max_input_tokens"] is None
+        assert entry["max_tokens"] is None
 
 
 def test_create_anthropic_model_list_response_carries_token_limits():
+    """max_input_tokens and max_tokens are nullable in the Anthropic Models shape,
+    not optional, so both keys are emitted for every entry and carry null when the
+    limit is unknown."""
     from litellm.llms.anthropic.common_utils import (
         create_anthropic_model_list_response,
     )
@@ -2091,9 +2094,12 @@ def test_create_anthropic_model_list_response_carries_token_limits():
     assert opus["max_tokens"] == 64000
     assert "max_output_tokens" not in opus
     assert input_only["max_input_tokens"] == 8192
-    assert "max_tokens" not in input_only
-    assert "max_input_tokens" not in unknown
-    assert "max_tokens" not in unknown
+    assert input_only["max_tokens"] is None
+    assert unknown["max_input_tokens"] is None
+    assert unknown["max_tokens"] is None
+    for entry in response["data"]:
+        assert "max_input_tokens" in entry
+        assert "max_tokens" in entry
 
 
 def test_create_anthropic_model_list_response_empty():
