@@ -2852,6 +2852,126 @@ class TestPanwAirsToolCallContentScan:
             assert call_kwargs["content"] == '{"query": "test"}'
             assert call_kwargs.get("tool_event") is None
 
+    @pytest.mark.asyncio
+    async def test_allow_with_masked_args_still_rewrites_args(self, handler):
+        """An allow verdict that carries masked data applies it regardless of masking config."""
+
+        tool_call = ChatCompletionMessageToolCall(
+            id="call_1",
+            type="function",
+            function=Function(
+                name="get_user",
+                arguments='{"ssn": "123-45-6789"}',
+            ),
+        )
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {
+                "action": "allow",
+                "category": "dlp",
+                "prompt_masked_data": {"data": '{"ssn": "XXXXXXXXXX"}'},
+            }
+
+            await handler._scan_tool_calls_for_guardrail(
+                tool_calls=[tool_call],
+                is_response=False,
+                metadata={"user": "test", "model": "gpt-4"},
+                call_id="test-call-id",
+                request_data={"litellm_call_id": "test-call-id"},
+                start_time=datetime.now(),
+            )
+
+            assert tool_call.function.arguments == '{"ssn": "XXXXXXXXXX"}'
+
+    @pytest.mark.asyncio
+    async def test_dict_tool_call_masked_args_applied(self, handler_mask_request):
+        """Masked args are written back into dict-style tool calls too."""
+
+        tool_call = {"function": {"name": "get_user", "arguments": '{"ssn": "123-45-6789"}'}}
+
+        with patch.object(handler_mask_request, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "dlp",
+                "prompt_masked_data": {"data": '{"ssn": "XXXXXXXXXX"}'},
+            }
+
+            await handler_mask_request._scan_tool_calls_for_guardrail(
+                tool_calls=[tool_call],
+                is_response=False,
+                metadata={"user": "test", "model": "gpt-4"},
+                call_id="test-call-id",
+                request_data={"litellm_call_id": "test-call-id"},
+                start_time=datetime.now(),
+            )
+
+            assert tool_call["function"]["arguments"] == '{"ssn": "XXXXXXXXXX"}'
+
+    @pytest.mark.asyncio
+    async def test_transient_error_with_fallback_allow_keeps_args(self):
+        """A transient AIRS failure under fallback_on_error=allow leaves the tool call untouched."""
+
+        handler = make_handler(fallback_on_error="allow")
+        tool_call = ChatCompletionMessageToolCall(
+            id="call_1",
+            type="function",
+            function=Function(
+                name="get_weather",
+                arguments='{"city": "San Francisco"}',
+            ),
+        )
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "api_error",
+                "_is_transient": True,
+            }
+
+            await handler._scan_tool_calls_for_guardrail(
+                tool_calls=[tool_call],
+                is_response=False,
+                metadata={"user": "test", "model": "gpt-4"},
+                call_id="test-call-id",
+                request_data={"litellm_call_id": "test-call-id"},
+                start_time=datetime.now(),
+            )
+
+            assert tool_call.function.arguments == '{"city": "San Francisco"}'
+
+    @pytest.mark.asyncio
+    async def test_permanent_error_blocks_response_side_scan(self):
+        """A permanent AIRS failure raises 500 even when it happens on the response side."""
+
+        handler = make_handler(fallback_on_error="allow")
+        tool_call = ChatCompletionMessageToolCall(
+            id="call_1",
+            type="function",
+            function=Function(
+                name="get_weather",
+                arguments='{"city": "San Francisco"}',
+            ),
+        )
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "http_400_error",
+                "_always_block": True,
+            }
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler._scan_tool_calls_for_guardrail(
+                    tool_calls=[tool_call],
+                    is_response=True,
+                    metadata={"user": "test", "model": "gpt-4"},
+                    call_id="test-call-id",
+                    request_data={"litellm_call_id": "test-call-id"},
+                    start_time=datetime.now(),
+                )
+
+            assert exc_info.value.status_code == 500
+
 
 class TestPanwAirsMcpToolEventScan:
     """Test MCP tool invocation scanning via apply_guardrail."""

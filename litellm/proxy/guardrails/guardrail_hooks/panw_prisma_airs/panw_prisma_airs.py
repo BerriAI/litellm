@@ -1416,7 +1416,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     event_type=event_type,
                     is_response=is_response,
                 )
-                continue  # fallback_on_error="allow" — leave args unchanged
+                continue
 
             action = scan_result.get("action", "block")
             masked_text = self._get_masked_text(scan_result, is_response=is_response)
