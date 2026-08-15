@@ -12,6 +12,7 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     ProxyWorkerHeartbeat,
     count_live_proxy_workers,
 )
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
 
 def _prisma():
@@ -65,6 +66,18 @@ async def test_count_reads_workers_within_the_liveness_window():
     prisma.db.query_raw.return_value = [{"live_workers": 3}]
     assert await count_live_proxy_workers(prisma) == 3
     assert prisma.db.query_raw.call_args.args == (COUNT_SQL, PROXY_WORKER_LIVENESS_WINDOW_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_count_reads_from_the_primary_when_reads_route_to_a_replica():
+    writer = MagicMock()
+    writer.query_raw = AsyncMock(return_value=[{"live_workers": 2}])
+    reader = MagicMock()
+    reader.query_raw = AsyncMock(return_value=[{"live_workers": 1}])
+    prisma = MagicMock()
+    prisma.db = RoutingPrismaWrapper(writer=writer, reader=reader)
+    assert await count_live_proxy_workers(prisma) == 2
+    reader.query_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -79,10 +80,13 @@ class ProxyWorkerHeartbeat:
 async def count_live_proxy_workers(prisma_client: PrismaClient) -> int | None:
     """
     The number of workers with a recent heartbeat, or None when the database
-    cannot answer. Callers must treat None as "unknown", not as zero.
+    cannot answer. Callers must treat None as "unknown", not as zero. Always
+    counts on the primary: a lagging read replica must never undercount.
     """
     try:
-        rows: Final = await prisma_client.db.query_raw(COUNT_SQL, PROXY_WORKER_LIVENESS_WINDOW_SECONDS)
+        db: Final = prisma_client.db
+        primary_db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) else db
+        rows: Final = await primary_db.query_raw(COUNT_SQL, PROXY_WORKER_LIVENESS_WINDOW_SECONDS)
         return _COUNT_ROWS_ADAPTER.validate_python(rows)[0]["live_workers"]
     except Exception as count_err:  # noqa: BLE001  # an unknown count must degrade to "warn", never to a 503
         verbose_proxy_logger.debug("Live proxy worker count unavailable: %s", count_err)
