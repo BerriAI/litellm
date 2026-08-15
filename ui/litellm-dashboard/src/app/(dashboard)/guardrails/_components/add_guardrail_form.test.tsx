@@ -53,6 +53,6 @@ describe("AddGuardrailForm provider options", () => {
     fireEvent.mouseDown(screen.getByLabelText("Guardrail Provider"));
 
     const logo = await screen.findByAltText("Presidio PII logo");
-    expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("microsoft_azure.svg"));
   });
 });

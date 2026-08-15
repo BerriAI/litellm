@@ -1214,8 +1214,9 @@ describe("MCPServerEdit (tool list fetch)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
-        "Authorize with the upstream (browser-only",
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-error",
+        expect.stringContaining("Authorize with the upstream (browser-only"),
       );
     });
     expect(networking.listMCPTools).not.toHaveBeenCalled();
@@ -1242,8 +1243,9 @@ describe("MCPServerEdit (tool list fetch)", () => {
     const { rerender } = render(<MCPServerEdit {...props} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
-        "Authenticate with this server in the Tools tab",
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-error",
+        expect.stringContaining("Authenticate with this server in the Tools tab"),
       );
     });
     expect(networking.listMCPTools).not.toHaveBeenCalled();
@@ -1277,8 +1279,9 @@ describe("MCPServerEdit (tool list fetch)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
-        "Authenticate with this server in the Tools tab",
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-error",
+        expect.stringContaining("Authenticate with this server in the Tools tab"),
       );
     });
     expect(networking.listMCPTools).not.toHaveBeenCalled();
@@ -1657,9 +1660,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
 
     // Check "remove saved app" on server A.
     fireEvent.click(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }));
-    expect(
-      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
-    ).toBe(true);
+    expect(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ })).toBeChecked();
 
     // Switch the panel to server B without unmounting.
     rerender(
@@ -1674,9 +1675,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     );
 
     // The checkbox must have reset, so saving server B does not send the explicit-null delete write.
-    expect(
-      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
-    ).toBe(false);
+    expect(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ })).not.toBeChecked();
 
     await act(async () => {
       fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);

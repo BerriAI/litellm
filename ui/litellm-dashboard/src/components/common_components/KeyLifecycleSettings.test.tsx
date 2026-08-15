@@ -144,7 +144,7 @@ describe("KeyLifecycleSettings", () => {
       expect(screen.queryByText("Rotation Interval")).not.toBeInTheDocument();
       await user.click(screen.getByRole("switch"));
 
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
     });
 
     it("propagates a selected predefined interval", async () => {
@@ -152,7 +152,7 @@ describe("KeyLifecycleSettings", () => {
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("90 days"));
@@ -166,7 +166,7 @@ describe("KeyLifecycleSettings", () => {
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("Custom interval"));
@@ -181,7 +181,7 @@ describe("KeyLifecycleSettings", () => {
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("Custom interval"));
@@ -198,7 +198,7 @@ describe("KeyLifecycleSettings", () => {
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("Custom interval"));

@@ -368,7 +368,7 @@ describe("TeamSSOSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
     const permissionComboboxes = screen.getAllByRole("combobox");
     const permissionCombobox = permissionComboboxes[permissionComboboxes.length - 1];
-    expect(permissionCombobox).toBeDefined();
+    expect(permissionCombobox).toBeInTheDocument();
     await userEvent.click(permissionCombobox!);
     const deletePermissionOptions = await screen.findAllByText("/key/delete");
     await userEvent.click(deletePermissionOptions[deletePermissionOptions.length - 1]);

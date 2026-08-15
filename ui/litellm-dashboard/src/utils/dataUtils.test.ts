@@ -225,9 +225,11 @@ describe("dataUtils", () => {
         await copyToClipboard("test text");
 
         expect(mockTextArea.value).toBe("test text");
+        /* eslint-disable jest-dom/prefer-to-have-style -- the subject is a plain mock object, not a DOM node, so toHaveStyle cannot read it */
         expect(mockTextArea.style.position).toBe("fixed");
         expect(mockTextArea.style.left).toBe("-999999px");
         expect(mockTextArea.style.top).toBe("-999999px");
+        /* eslint-enable jest-dom/prefer-to-have-style */
         expect(mockTextArea.setAttribute).toHaveBeenCalledWith("readonly", "");
         expect(mockTextArea.focus).toHaveBeenCalled();
         expect(mockTextArea.select).toHaveBeenCalled();

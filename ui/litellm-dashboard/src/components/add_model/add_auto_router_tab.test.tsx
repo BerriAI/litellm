@@ -455,7 +455,7 @@ describe("AddAutoRouterTab", () => {
 
       const anthropicOption = optionByLabel("Anthropic Family")!;
       expect(isOptionDisabled(anthropicOption)).toBe(true);
-      expect(anthropicOption.textContent).toContain("Checking model availability");
+      expect(anthropicOption).toHaveTextContent(/Checking model availability/);
 
       // The dropdown is already open from above; polling re-reads its options in place rather than
       // reopening (openTemplateDropdown toggles, so a second call here would close it instead).
@@ -474,7 +474,7 @@ describe("AddAutoRouterTab", () => {
       openTemplateDropdown();
       const anthropicOption = optionByLabel("Anthropic Family")!;
       expect(isOptionDisabled(anthropicOption)).toBe(true);
-      expect(anthropicOption.textContent).toContain("Cannot verify these models are available");
+      expect(anthropicOption).toHaveTextContent(/Cannot verify these models are available/);
     });
 
     it("keeps group-name presets selectable when only the deployment fetch fails", async () => {
@@ -496,7 +496,7 @@ describe("AddAutoRouterTab", () => {
       openTemplateDropdown();
 
       await waitFor(() => {
-        expect(optionByLabel("Anthropic Family")!.textContent).toContain(`Missing: ${ANTHROPIC_ONLY_MODEL}`);
+        expect(optionByLabel("Anthropic Family")!).toHaveTextContent(new RegExp(`Missing: ${ANTHROPIC_ONLY_MODEL}`));
       });
       expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
     });
@@ -695,7 +695,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      expect(optionByLabel("Anthropic Family")!.textContent).toContain("Matches your deployments");
+      expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Matches your deployments/);
     });
 
     it("keeps detailed configuration open and prefills the admin's group names on apply", async () => {
@@ -755,7 +755,7 @@ describe("AddAutoRouterTab", () => {
       openTemplateDropdown();
 
       await waitFor(() => {
-        expect(optionByLabel("OpenAI Family")!.textContent).toContain("Missing:");
+        expect(optionByLabel("OpenAI Family")!).toHaveTextContent(/Missing:/);
       });
       expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
     });
@@ -784,7 +784,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      expect(optionByLabel("Anthropic Family")!.textContent).toContain("Matches your deployments");
+      expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Matches your deployments/);
     });
 
     it("prefills the expanded group names and submits them", async () => {

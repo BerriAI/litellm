@@ -82,7 +82,7 @@ describe("SearchToolTester", () => {
     const input = screen.getByPlaceholderText("Enter your search query...");
     await user.type(input, "test query");
     const searchButton = screen.getByRole("button", { name: /search/i });
-    expect(searchButton).not.toBeDisabled();
+    expect(searchButton).toBeEnabled();
   });
 
   it("should call searchToolQueryCall when search button is clicked", async () => {
@@ -416,11 +416,9 @@ describe("SearchToolTester", () => {
     await user.type(input, "test query");
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
-    await waitFor(() => {
-      const link = screen.getByRole("link", { name: "Test Result 1" });
-      expect(link).toHaveAttribute("href", "https://example.com/result1");
-      expect(link).toHaveAttribute("target", "_blank");
-      expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    });
+    const link = await screen.findByRole("link", { name: "Test Result 1" });
+    expect(link).toHaveAttribute("href", "https://example.com/result1");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(link).toHaveAttribute("target", "_blank");
   });
 });
