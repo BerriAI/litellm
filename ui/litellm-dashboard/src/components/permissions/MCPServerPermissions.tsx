@@ -112,7 +112,7 @@ export function MCPServerPermissions({
       <div className="flex items-center gap-2">
         <ServerIcon className="h-4 w-4 text-blue-600" />
         <p className="text-sm font-semibold text-gray-900">MCP Servers</p>
-        <Badge variant={blocksAllMcpServers ? "destructive" : "default"}>
+        <Badge variant={blocksAllMcpServers ? "destructive" : "secondary"}>
           {blocksAllMcpServers ? "Blocked" : grantsAllProxyMcpServers ? "All" : totalCount}
         </Badge>
       </div>
