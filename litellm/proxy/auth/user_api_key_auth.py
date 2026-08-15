@@ -500,9 +500,7 @@ _GLOBAL_PROXY_SPEND_DB_FLOOR_TTL_SECONDS: Final = 5
 _GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX: Final = "global_proxy_spend_db_floor:"
 
 
-def invalidate_global_proxy_spend_db_floor_marker(
-    user_api_key_cache: UserApiKeyCache, cache_key: str
-) -> None:
+def invalidate_global_proxy_spend_db_floor_marker(user_api_key_cache: UserApiKeyCache, cache_key: str) -> None:
     """Drop the worker-local DB-floor marker for ``cache_key``.
 
     ResetBudgetJob calls this after zeroing the aggregate DB row so a stale
@@ -583,15 +581,11 @@ async def _fetch_global_spend_with_event_coordination(
             # pushed Redis above the DB value is not overwritten by a repair
             # carrying a slightly-stale DB total. Use the resulting Redis value
             # so the enforced total reflects any concurrent increment.
-            repaired_value: Final[float | None] = (
-                await user_api_key_cache.redis_cache.async_set_max(
-                    key=cache_key, value=db_spend
-                )
+            repaired_value: Final[float | None] = await user_api_key_cache.redis_cache.async_set_max(
+                key=cache_key, value=db_spend
             )
             numeric_value = repaired_value if repaired_value is not None else db_spend
-            user_api_key_cache.in_memory_cache.set_cache(
-                key=cache_key, value=numeric_value
-            )
+            user_api_key_cache.in_memory_cache.set_cache(key=cache_key, value=numeric_value)
 
     return numeric_value
 
