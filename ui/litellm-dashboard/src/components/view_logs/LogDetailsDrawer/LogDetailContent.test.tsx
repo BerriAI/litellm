@@ -289,7 +289,8 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("34,462")).toBeInTheDocument();
     expect(screen.getByText("Prompt Cache Creation Tokens")).toBeInTheDocument();
     expect(screen.getByText("83")).toBeInTheDocument();
-    expect(screen.getByText("Miss").className).not.toMatch(/red|destructive/);
+    expect(screen.getByText("Miss")).not.toHaveAttribute("data-variant", "destructive");
+    expect(screen.getByText("Miss").className).not.toMatch(/\b(bg|text|border)-red/);
     expect(screen.queryByText("Cache Hit")).not.toBeInTheDocument();
   });
 
