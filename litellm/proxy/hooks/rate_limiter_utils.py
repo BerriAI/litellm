@@ -2,19 +2,19 @@
 Shared utility functions for rate limiter hooks.
 """
 
-from typing import Optional, Tuple, Union
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import PriorityReservationDict
 
-PROXY_LLM_PROVIDER_FALLBACK = "litellm_proxy"
+PROXY_LLM_PROVIDER_FALLBACK: Final = "litellm_proxy"
 
 
 def resolve_llm_provider_for_rate_limit(
-    model: Optional[str],
-) -> Tuple[str, str]:
+    model: str | None,
+) -> tuple[str, str]:
     """
     Resolve ``(model, llm_provider)`` for a request being rejected by an
     internal proxy-side rate-limit hook.
@@ -53,7 +53,7 @@ def resolve_llm_provider_for_rate_limit(
             custom_llm_provider or PROXY_LLM_PROVIDER_FALLBACK,
         )
     except Exception as e:
-        alias_resolution = _resolve_provider_from_router_alias(model)
+        alias_resolution: Final = _resolve_provider_from_router_alias(model)
         if alias_resolution is not None:
             return alias_resolution
         verbose_proxy_logger.debug(
@@ -68,7 +68,7 @@ def resolve_llm_provider_for_rate_limit(
 
 def _resolve_provider_from_router_alias(
     model: str,
-) -> Optional[Tuple[str, str]]:
+) -> tuple[str, str] | None:
     """
     Resolve a router ``model_name`` alias to ``(underlying_model, provider)``
     by scanning the active router's ``model_list``.
@@ -86,7 +86,7 @@ def _resolve_provider_from_router_alias(
     if llm_router is None:
         return None
     try:
-        model_list = getattr(llm_router, "model_list", None)
+        model_list: Final = getattr(llm_router, "model_list", None)
         if not model_list:
             return None
         for deployment in model_list:
@@ -120,9 +120,7 @@ def _resolve_provider_from_router_alias(
         return None
 
 
-def convert_priority_to_percent(
-    value: Union[float, PriorityReservationDict], model_info: Optional[ModelGroupInfo]
-) -> float:
+def convert_priority_to_percent(value: float | PriorityReservationDict, model_info: ModelGroupInfo | None) -> float:
     """
     Convert priority reservation value to percentage (0.0-1.0).
 
@@ -143,8 +141,8 @@ def convert_priority_to_percent(
         return float(value)
 
     if isinstance(value, dict):
-        val_type = value.get("type", "percent")
-        val_num = value.get("value", 1.0)
+        val_type: Final = value.get("type", "percent")
+        val_num: Final = value.get("value", 1.0)
 
         if val_type == "percent":
             return float(val_num)

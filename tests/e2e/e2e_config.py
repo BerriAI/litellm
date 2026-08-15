@@ -7,6 +7,7 @@ environment so the same tests run against localhost or a deployed proxy.
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -37,6 +38,9 @@ UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
 
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
+
+LINEAR_MCP_URL = os.environ.get("E2E_LINEAR_MCP_URL", "https://mcp.linear.app/mcp")
+LINEAR_STORAGE_STATE = os.environ.get("E2E_LINEAR_STORAGE_STATE", "")
 
 # Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
 # service in docker-compose.yml maps it to host 16686). Trace-completeness tests
@@ -72,11 +76,39 @@ POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
 
-LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "750"))
-LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "50"))
+# How long a control-plane write (/model/new, /guardrails, /v1/agents) may take to
+# reach EVERY replica. Distinct from POLL_TIMEOUT, which is sized for spend-row
+# flush; this one is sized for the proxy's config reload
+# (`proxy_config_reload_interval_seconds`, 30s by default and 7s on the e2e stack)
+# plus margin.
+#
+# The barriers below wait this out instead of returning on first sight, because a
+# single successful read only proves ONE replica converged: every request opens a
+# fresh connection, so a load-balanced Service routes each one independently and
+# the next call re-rolls. See ProxyClient._await_model_servable.
+PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
+
+EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
+
+# Deliberately modest concurrency. The suite shares its proxy with every other
+# suite in the run, and 750 users at spawn rate 50 saturated the request path hard
+# enough to distort latency-sensitive neighbours (and to spend real provider money
+# fast).
+LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "200"))
+LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "20"))
 LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
-LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "355"))
 LOAD_MAX_FAILURE_RATIO = float(os.environ.get("E2E_LOAD_MAX_FAILURE_RATIO", "0.01"))
+
+# The throughput floor is derived per replica instead of being an absolute fleet
+# number, so the verdict does not depend on how many replicas happen to be warm.
+# One closed-loop user only ever occupies one replica at a time, so a short serial
+# pass measures a single replica's request path: its throughput is 1/latency, and
+# the concurrent phase then has to reach at least that much no matter how large
+# the fleet is. An absolute floor instead asserted replicas x per-replica rate,
+# which reactive autoscaling decides rather than the request path.
+LOAD_BASELINE_SECONDS = float(os.environ.get("E2E_LOAD_BASELINE_SECONDS", "15"))
+LOAD_MAX_SERIAL_LATENCY_SECONDS = float(os.environ.get("E2E_LOAD_MAX_SERIAL_LATENCY_SECONDS", "0.5"))
+LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY_EFFICIENCY", "0.8"))
 
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
@@ -95,22 +127,6 @@ ANOMALY_MAX_KEY_SPEND_USD = float(
 ANOMALY_SPEND_SETTLE_SECONDS = float(
     os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
 )
-
-
-def require_env(*names: str) -> tuple[str, ...]:
-    """Return the non-empty values for each env name, or hard-fail naming which are missing.
-
-    Live e2e never skips for missing credentials: a missing key is a red run so
-    ops knows the suite cannot prove the product path.
-    """
-    missing = tuple(name for name in names if not (os.environ.get(name) or "").strip())
-    if missing:
-        joined = ", ".join(missing)
-        raise AssertionError(
-            f"missing required env for e2e: {joined}. "
-            "Add them to tests/e2e/.env locally and to litellm ops for stage/CI."
-        )
-    return tuple((os.environ.get(name) or "").strip() for name in names)
 
 
 def datadog_mcp_url(*, toolsets: str = "core") -> str:
@@ -134,3 +150,16 @@ def unique_marker() -> str:
     """A short unique token per call/run, so concurrent runs and the shared
     response cache never collide on prompts, tags, or customer ids."""
     return uuid.uuid4().hex[:12]
+
+
+def settle_propagation(written_at: float) -> None:
+    """Block until PROPAGATION_TIMEOUT has elapsed since `written_at`, a
+    `time.monotonic()` stamp taken the moment a control-plane write returned.
+
+    Callers that already polled for the object still need this: the poll proves one
+    replica has it, not all of them. Waiting out the config-reload budget is what
+    makes the object safe to use on whichever replica the next request lands on.
+    """
+    remaining = PROPAGATION_TIMEOUT - (time.monotonic() - written_at)
+    if remaining > 0:
+        time.sleep(remaining)

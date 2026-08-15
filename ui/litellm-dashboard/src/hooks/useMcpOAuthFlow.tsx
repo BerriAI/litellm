@@ -157,6 +157,10 @@ export const useMcpOAuthFlow = ({
           response_types: ["code"],
           token_endpoint_auth_method:
             temporaryPayload.credentials && temporaryPayload.credentials.client_secret ? "client_secret_post" : "none",
+          // dcr_bridge servers relay this registration upstream and bind the
+          // minted client to the browser's own callback; without it the relay
+          // rejects the registration and the admin authorize dead-ends.
+          redirect_uris: [callbackUrl()],
         });
         registeredClient = {
           clientId: registration?.client_id,

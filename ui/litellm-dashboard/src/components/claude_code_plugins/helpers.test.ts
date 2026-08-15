@@ -17,8 +17,24 @@ import {
   formatKeywords,
   parseSkillSource,
   isValidSubPath,
+  buildMarketplaceSettingsSnippet,
 } from "./helpers";
 import { MarketplacePluginEntry, PluginSource } from "./types";
+
+describe("buildMarketplaceSettingsSnippet", () => {
+  it("nests the url under a source object so Claude Code accepts the marketplace", () => {
+    expect(JSON.parse(buildMarketplaceSettingsSnippet("https://proxy.example.com"))).toEqual({
+      extraKnownMarketplaces: {
+        "my-org": {
+          source: {
+            source: "url",
+            url: "https://proxy.example.com/claude-code/marketplace.json",
+          },
+        },
+      },
+    });
+  });
+});
 
 describe("formatInstallCommand", () => {
   it("formats github source with repo", () => {

@@ -117,9 +117,6 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             <div key={paramName} className="space-y-2">
               <label className="text-sm font-medium text-gray-700 capitalize flex items-center space-x-1">
                 <span>{paramName.replace(/_/g, " ")}</span>
-                <Tooltip title={`Environment variable reference recommended: os.environ/${paramName.toUpperCase()}`}>
-                  <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
-                </Tooltip>
                 {paramType === "password" && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium bg-yellow-100 text-yellow-800">
                     Sensitive

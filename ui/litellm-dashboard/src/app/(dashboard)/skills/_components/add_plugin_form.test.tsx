@@ -270,4 +270,19 @@ describe("AddPluginForm", () => {
       expect(mockMessageError).toHaveBeenCalledWith(expect.stringContaining("Plugin 'claude-code' already exists"));
     });
   });
+
+  it("surfaces the 409 name-conflict reason verbatim without burying it under a generic failure prefix", async () => {
+    const conflictMessage =
+      "A skill named 'gitlab' already exists. Update the existing skill instead of adding it again.";
+    mockRegister.mockRejectedValueOnce(new Error(conflictMessage));
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl("https://github.com/anthropics/claude-code");
+    await submit();
+
+    await waitFor(() => {
+      expect(mockMessageError).toHaveBeenCalledWith(conflictMessage);
+    });
+    expect(mockMessageError).toHaveBeenCalledTimes(1);
+  });
 });

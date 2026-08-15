@@ -14,9 +14,11 @@ the shared proxy, and the chat backend is a gemini deployment created for the te
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import unwrap
 from guardrails_client import BlockCodeExecutionParamsBody, GuardrailsClient
 from lifecycle import ResourceManager
@@ -46,7 +48,6 @@ class TestBlockCodeExecutionGuardrail:
     def test_blocks_execution_request_but_allows_explanation(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        require_env("GEMINI_API_KEY")
         model = client.create_backend_model(resources, prefix="e2e-blockcode-backend")
 
         name = f"e2e-block-code-{unique_marker()}"
@@ -55,7 +56,18 @@ class TestBlockCodeExecutionGuardrail:
         )
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
+        # This guardrail replaces the reply rather than erroring, so wait for the
+        # block marker to appear instead of for a non-success status. The data-plane
+        # worker only picks a new guardrail up on its next DB sync (~30s), so the
+        # first call after the create is served without it.
+        deadline = time.monotonic() + POLL_TIMEOUT
         blocked = unwrap(client.chat(scoped_key, model, EXECUTION_REQUEST, guardrails=[name]))
+        while time.monotonic() < deadline:
+            if _BLOCK_MARKER in _first_content(blocked).lower():
+                break
+            time.sleep(POLL_INTERVAL)
+            blocked = unwrap(client.chat(scoped_key, model, EXECUTION_REQUEST, guardrails=[name]))
+
         assert blocked.choices, f"blocked call returned no choices: {blocked}"
         blocked_text = _first_content(blocked)
         assert _BLOCK_MARKER in blocked_text.lower(), (

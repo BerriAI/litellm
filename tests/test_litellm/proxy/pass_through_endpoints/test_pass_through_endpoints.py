@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import sys
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Optional
@@ -31,6 +31,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -4617,3 +4618,378 @@ async def test_pass_through_relay_full_consumption_logs_no_partial_relay_warning
     finally:
         cleanup()
         await fake_client.aclose()
+
+
+class _StandardLoggingPayloadRecorder(CustomLogger):
+    """Stands in for a real logging integration so the assertions run against
+    the StandardLoggingPayload that spend tracking consumes, not an internal."""
+
+    def __init__(self):
+        super().__init__()
+        self.payloads = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payloads.append(kwargs.get("standard_logging_object"))
+
+
+@contextmanager
+def _recording_success_callback():
+    import litellm
+
+    recorder = _StandardLoggingPayloadRecorder()
+    original = litellm._async_success_callback
+    litellm._async_success_callback = [*original, recorder]
+    try:
+        yield recorder
+    finally:
+        litellm._async_success_callback = original
+
+
+def _enter_upstream_usage_mocks(stack, parsed_body):
+    """Same seams as _enter_relay_logging_mocks, but leaves the real
+    pass-through success handler in place and captures the coroutines the
+    logging worker would have run so the test can await them."""
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    mock_proxy_logging = stack.enter_context(
+        patch("litellm.proxy.proxy_server.proxy_logging_obj")
+    )
+    mock_proxy_logging.pre_call_hook = AsyncMock(return_value=parsed_body)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+    mock_proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+
+    enqueued = []
+    stack.enter_context(
+        patch.object(
+            GLOBAL_LOGGING_WORKER,
+            "ensure_initialized_and_enqueue",
+            new=MagicMock(side_effect=lambda async_coroutine: enqueued.append(async_coroutine)),
+        )
+    )
+    return mock_proxy_logging, enqueued
+
+
+async def _run_upstream_reporting_passthrough(
+    upstream_headers, status_code=200, cost_per_request=None
+):
+    """Drive a generic pass-through against an upstream that reports its own
+    cost/usage. Returns (recorded standard logging payloads, proxy logging mock)."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=status_code,
+            headers={"content-type": "application/json", **upstream_headers},
+            stream=_RecordingUpstreamByteStream((b'{"answer": "ok"}',)),
+        ),
+        timeout=None,
+    )
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, enqueued = _enter_upstream_usage_mocks(stack, {})
+            with _recording_success_callback() as recorder:
+                await pass_through_request(
+                    request=_relay_client_request(method="POST"),
+                    target="http://internal-api.test/v1/summarize",
+                    custom_headers={},
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="sk-upstream-usage", team_id="team-fil"
+                    ),
+                    cost_per_request=cost_per_request,
+                )
+                for coroutine in enqueued:
+                    await coroutine
+        return recorder.payloads, mock_proxy_logging
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_cost_and_tokens_reported_by_upstream():
+    """
+    A pass-through target that prices the request itself reports the totals in
+    x-litellm-response-cost / x-litellm-total-tokens. LiteLLM must record those
+    values verbatim; before this, a generic pass-through always logged 0 spend
+    and 0 tokens because there was nothing in the body to price.
+    """
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {
+            "x-litellm-response-cost": "0.000415",
+            "x-litellm-total-tokens": "1874",
+        }
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.000415
+    assert payloads[0]["total_tokens"] == 1874
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_zero_when_upstream_reports_zero():
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {"x-litellm-response-cost": "0", "x-litellm-total-tokens": "0"}
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.0
+    assert payloads[0]["total_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_zero_when_upstream_reports_nothing():
+    payloads, _ = await _run_upstream_reporting_passthrough({})
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.0
+    assert payloads[0]["total_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_upstream_reported_cost_on_error_response():
+    """
+    An upstream that already burned tokens before failing still reports them on
+    the error response, so the spend must land on the failure row rather than
+    being dropped because the status code was >= 400.
+    """
+    import litellm
+
+    _, mock_proxy_logging = await _run_upstream_reporting_passthrough(
+        {
+            "x-litellm-response-cost": "0.00021",
+            "x-litellm-total-tokens": "930",
+        },
+        status_code=500,
+    )
+
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    request_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs[
+        "request_data"
+    ]
+    assert request_data["response_cost"] == 0.00021
+    assert request_data["combined_usage_object"] == litellm.Usage(total_tokens=930)
+
+
+@pytest.mark.asyncio
+async def test_passthrough_error_response_without_usage_headers_records_no_spend():
+    _, mock_proxy_logging = await _run_upstream_reporting_passthrough(
+        {}, status_code=500
+    )
+
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    request_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs[
+        "request_data"
+    ]
+    assert "combined_usage_object" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_streaming_passthrough_records_cost_and_tokens_reported_by_upstream():
+    """
+    The totals are reported in the response headers, which are known before the
+    first byte of the stream, so a streamed pass-through must record the same
+    spend a buffered one does.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={
+                "content-type": "text/event-stream",
+                "x-litellm-response-cost": "0.00312",
+                "x-litellm-total-tokens": "4021",
+            },
+            stream=_RecordingUpstreamByteStream((b'data: {"delta": "hi"}\n\n',)),
+        ),
+        timeout=None,
+    )
+    try:
+        with ExitStack() as stack:
+            _, enqueued = _enter_upstream_usage_mocks(stack, {})
+            with _recording_success_callback() as recorder:
+                response = await pass_through_request(
+                    request=_relay_client_request(method="POST"),
+                    target="http://internal-api.test/v1/summarize",
+                    custom_headers={},
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="sk-upstream-usage", team_id="team-fil"
+                    ),
+                )
+                assert isinstance(response, StreamingResponse)
+                assert [chunk async for chunk in response.body_iterator] == [
+                    b'data: {"delta": "hi"}\n\n'
+                ]
+                for coroutine in enqueued:
+                    await coroutine
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert len(recorder.payloads) == 1
+    assert recorder.payloads[0]["response_cost"] == 0.00312
+    assert recorder.payloads[0]["total_tokens"] == 4021
+
+
+@pytest.mark.asyncio
+async def test_upstream_reported_cost_survives_default_cost_per_request():
+    """
+    PassThroughGenericEndpoint.cost_per_request defaults to 0.0, so every
+    config-defined endpoint forwards a 0.0 flat cost even when the operator
+    never configured one. That flat estimate must not overwrite the real cost
+    the upstream reported for the request.
+    """
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {
+            "x-litellm-response-cost": "0.000415",
+            "x-litellm-total-tokens": "1874",
+        },
+        cost_per_request=0.0,
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.000415
+
+
+@pytest.mark.asyncio
+async def test_configured_cost_per_request_still_applies_without_usage_headers():
+    payloads, _ = await _run_upstream_reporting_passthrough({}, cost_per_request=0.25)
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.25
+
+
+@pytest.mark.asyncio
+async def test_unusable_upstream_cost_records_zero_not_the_flat_estimate():
+    """
+    A target that speaks this contract owns the cost for the request. When the
+    value it sends is unusable the contract records 0, rather than falling back
+    to a flat cost_per_request the upstream just contradicted.
+    """
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {"x-litellm-response-cost": "not-a-number", "x-litellm-total-tokens": "1874"},
+        cost_per_request=0.05,
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.0
+    assert payloads[0]["total_tokens"] == 1874
+
+
+def _passthrough_kwargs_for_reservation(
+    user_api_key_dict: UserAPIKeyAuth, parsed_body: Optional[dict] = None
+) -> dict:
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = (
+        "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    )
+    mock_request.headers = Headers({})
+
+    return HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=user_api_key_dict,
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body=parsed_body if parsed_body is not None else {},
+        litellm_call_id="lit-5425-call-id",
+    )
+
+
+async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
+    from datetime import datetime
+
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
+    callback_kwargs = {
+        **kwargs,
+        "stream": False,
+        "standard_logging_object": {
+            "response_cost": 0.002,
+            "request_tags": None,
+        },
+    }
+
+    increment_spend_counters = AsyncMock()
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            increment_spend_counters,
+        ),
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await _ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=callback_kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    return increment_spend_counters
+
+
+@pytest.mark.asyncio
+async def test_passthrough_success_reconciles_budget_reservation():
+    """
+    A successful pass-through request must hand its pre-call budget reservation
+    to the spend-counter update so the reserved amount is reconciled down to the
+    actual cost. Without it the reservation stays in the shared Redis counter and
+    the actual cost is added on top, so the counter drifts above real spend until
+    the key falsely trips BudgetExceededError.
+    """
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:hashed-token", "reserved_cost": 0.5}],
+    }
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-token",
+        user_id="u1",
+        budget_reservation=budget_reservation,
+    )
+
+    reservation = user_api_key_dict.budget_reservation
+    kwargs = _passthrough_kwargs_for_reservation(user_api_key_dict)
+    assert (
+        kwargs["litellm_params"]["metadata"]["user_api_key_budget_reservation"]
+        is reservation
+    )
+
+    increment_spend_counters = await _track_cost_for_passthrough_kwargs(kwargs)
+
+    increment_spend_counters.assert_awaited_once()
+    assert increment_spend_counters.await_args.kwargs["budget_reservation"] is reservation
+    assert increment_spend_counters.await_args.kwargs["budget_reservation"] == budget_reservation
+
+
+@pytest.mark.asyncio
+async def test_passthrough_body_cannot_forge_budget_reservation():
+    """
+    The reservation is an internal counter handle: a client-supplied metadata
+    field naming arbitrary counter keys must never reach the spend-counter
+    update, or a caller could decrement another entity's Redis counter.
+    """
+    forged = {
+        "reserved_cost": 99.0,
+        "entries": [{"counter_key": "spend:team:victim", "reserved_cost": 99.0}],
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-token", user_id="u1")
+
+    kwargs = _passthrough_kwargs_for_reservation(
+        user_api_key_dict,
+        parsed_body={"litellm_metadata": {"user_api_key_budget_reservation": forged}},
+    )
+    assert (
+        kwargs["litellm_params"]["metadata"]["user_api_key_budget_reservation"] is None
+    )
+
+    increment_spend_counters = await _track_cost_for_passthrough_kwargs(kwargs)
+
+    increment_spend_counters.assert_awaited_once()
+    assert increment_spend_counters.await_args.kwargs["budget_reservation"] is None

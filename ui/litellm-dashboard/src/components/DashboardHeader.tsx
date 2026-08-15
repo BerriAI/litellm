@@ -8,7 +8,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { getBreadcrumb } from "@/components/leftnav";
 import { BlogDropdown } from "@/components/Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
@@ -58,7 +58,7 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
         {showWorkerSwitch && (
           <>
             <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
-            <Separator orientation="vertical" className="mx-1.5 h-5" />
+            <ToolbarSeparator />
           </>
         )}
         <Button
@@ -72,7 +72,7 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
         </Button>
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
-        <Separator orientation="vertical" className="mx-1.5 h-5" />
+        <ToolbarSeparator />
         <NotificationsBell />
       </div>
     </header>
