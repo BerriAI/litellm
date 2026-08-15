@@ -730,6 +730,60 @@ def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
     )
 
 
+def test_dated_search_preview_entries_carry_search_pricing(local_model_cost_map):
+    """
+    Regression for the live QA finding: OpenAI resolves gpt-4o-search-preview requests to the
+    dated id gpt-4o-search-preview-2025-03-11, whose cost map entry lacked
+    search_context_cost_per_query, so the default chat path silently billed the $0.035 search
+    fee as $0. Dated entries must price identically to their undated siblings.
+    """
+    from litellm.types.utils import Usage
+
+    for dated, undated in (
+        ("gpt-4o-search-preview-2025-03-11", "gpt-4o-search-preview"),
+        ("gpt-4o-mini-search-preview-2025-03-11", "gpt-4o-mini-search-preview"),
+    ):
+        assert (
+            litellm.get_model_info(dated)["search_context_cost_per_query"]
+            == litellm.get_model_info(undated)["search_context_cost_per_query"]
+        )
+
+    response = ModelResponse(
+        model="gpt-4o-search-preview-2025-03-11",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "headlines",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "url_citation": {
+                                "url": "https://example.com",
+                                "title": "t",
+                                "start_index": 0,
+                                "end_index": 1,
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-4o-search-preview-2025-03-11",
+        response_object=response,
+        usage=Usage(prompt_tokens=14, completion_tokens=825, total_tokens=839),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(0.035), (
+        f"dated search-preview id must bill the $0.035 search fee, got ${cost}"
+    )
+
+
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
 
