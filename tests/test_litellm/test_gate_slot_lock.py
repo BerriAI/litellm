@@ -115,12 +115,8 @@ def test_two_slots_admit_two_holders_at_once(tmp_path: Path) -> None:
     first_started = tmp_path / "first.started"
     second_started = tmp_path / "second.started"
     env = _env(lock_dir, "2")
-    first = subprocess.Popen(
-        _wrapped([START_THEN_WAIT_FOR, str(first_started), str(second_started)]), env=env
-    )
-    second = subprocess.Popen(
-        _wrapped([START_THEN_WAIT_FOR, str(second_started), str(first_started)]), env=env
-    )
+    first = subprocess.Popen(_wrapped([START_THEN_WAIT_FOR, str(first_started), str(second_started)]), env=env)
+    second = subprocess.Popen(_wrapped([START_THEN_WAIT_FOR, str(second_started), str(first_started)]), env=env)
     assert first.wait(timeout=30) == 0
     assert second.wait(timeout=30) == 0
 
@@ -131,9 +127,7 @@ def test_contender_beyond_capacity_queues_until_the_slot_frees(tmp_path: Path) -
     release = tmp_path / "release"
     done = tmp_path / "done"
     env = _env(lock_dir, "1")
-    holder = subprocess.Popen(
-        _wrapped([START_THEN_WAIT_FOR, str(holder_started), str(release)]), env=env
-    )
+    holder = subprocess.Popen(_wrapped([START_THEN_WAIT_FOR, str(holder_started), str(release)]), env=env)
     try:
         assert _wait_until(holder_started.exists, 10)
         contender = subprocess.Popen(
@@ -274,9 +268,7 @@ def test_killed_holder_releases_its_slot_for_the_next_contender(tmp_path: Path) 
     assert b"freed" in after.stdout
 
 
-def test_acquire_slot_holds_marks_and_releases_in_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_acquire_slot_holds_marks_and_releases_in_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lock_dir = tmp_path / "locks"
     monkeypatch.setenv("LITELLM_GATE_SLOT_HELD", "")
     monkeypatch.setenv("LITELLM_GATE_SLOT_DIR", str(lock_dir))
@@ -293,9 +285,7 @@ def test_acquire_slot_holds_marks_and_releases_in_process(
         fcntl.flock(probe, fcntl.LOCK_UN)
 
 
-def test_held_slot_context_manager_releases_on_exit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_held_slot_context_manager_releases_on_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lock_dir = tmp_path / "locks"
     monkeypatch.setenv("LITELLM_GATE_SLOT_HELD", "")
     monkeypatch.setenv("LITELLM_GATE_SLOT_DIR", str(lock_dir))
@@ -309,3 +299,35 @@ def test_held_slot_context_manager_releases_on_exit(
     with (lock_dir / "slot-0.lock").open("wb") as probe:
         fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
         fcntl.flock(probe, fcntl.LOCK_UN)
+
+
+def _make_rule(target: str) -> tuple[list[str], list[str]]:
+    database = subprocess.run(
+        ["make", "--dry-run", "--print-data-base", "info"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    lines = database.splitlines()
+    for index, line in enumerate(lines):
+        if line != f"{target}:" and not line.startswith(f"{target}: "):
+            continue
+        recipe: list[str] = []
+        for follower in lines[index + 1 :]:
+            if follower.startswith("#"):
+                continue
+            if not follower.startswith("\t"):
+                break
+            recipe.append(follower.strip())
+        return line.split(":", 1)[1].split(), recipe
+    raise AssertionError(f"target {target} not found in make database")
+
+
+def test_direct_make_lint_takes_a_slot_before_any_setup() -> None:
+    lint_prerequisites, lint_recipe = _make_rule("lint")
+    assert lint_prerequisites == []
+    assert any("$(GATE_SLOT_LOCK)" in line for line in lint_recipe)
+    inner_prerequisites, _ = _make_rule("lint-inner")
+    assert "lint-install" in inner_prerequisites
+    assert "lint-fetch-base" in inner_prerequisites
