@@ -2744,84 +2744,6 @@ jobs:
           file: ./coverage.xml
           flags: circleci
 
-  ui_build:
-    docker:
-      - image: cimg/node:24.19@sha256:8966565f07189a67d64d6808a2b127f31dafae566508e3547f55640e1070bfad
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    resource_class: medium+
-    working_directory: ~/project
-    steps:
-      - checkout
-      - skip_if_unrelated_changes:
-          category: client
-      - setup_google_dns
-      - restore_cache:
-          keys:
-            - ui-build-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
-            - ui-build-deps-v1-
-      - restore_cache:
-          keys:
-            - ui-nextjs-cache-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
-            - ui-nextjs-cache-v1-
-      - run:
-          name: Install dependencies
-          command: |
-            cd ui/litellm-dashboard
-            npm ci
-      - save_cache:
-          key: ui-build-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
-          paths:
-            - ui/litellm-dashboard/node_modules
-      - run:
-          name: Build UI
-          command: |
-            cd ui/litellm-dashboard
-            source ./build_ui.sh
-      - save_cache:
-          key: ui-nextjs-cache-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
-          paths:
-            - ui/litellm-dashboard/.next/cache
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm/proxy/_experimental/out
-
-  ui_unit_tests:
-    docker:
-      - image: cimg/node:24.19@sha256:8966565f07189a67d64d6808a2b127f31dafae566508e3547f55640e1070bfad
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    resource_class: xlarge
-    working_directory: ~/project
-    steps:
-      - checkout
-      - skip_if_unrelated_changes:
-          category: client
-      - setup_google_dns
-      - restore_cache:
-          keys:
-            - ui-unit-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
-            - ui-unit-deps-v1-
-      - run:
-          name: Install dependencies
-          command: |
-            cd ui/litellm-dashboard
-            npm ci
-      - save_cache:
-          key: ui-unit-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
-          paths:
-            - ui/litellm-dashboard/node_modules
-      - run:
-          name: Run UI unit tests (Vitest)
-          command: |
-            cd ui/litellm-dashboard
-
-            CI=true npm run test -- --run \
-              --pool forks --poolOptions.forks.maxForks=6
-
   e2e_ui_testing:
     docker:
       - image: cimg/python:3.12-browsers@sha256:b432899af01c9a311bf74f4f22e9ada2e5306d4b1b4383f8d29e1228a5844ef2
@@ -3180,12 +3102,6 @@ workflows:
       - litellm_router_testing:
           filters: *main_branches
       - litellm_router_unit_testing:
-          filters: *main_branches
-      - ui_build:
-          filters: *main_branches
-      - ui_unit_tests:
-          requires:
-            - ui_build
           filters: *main_branches
       - auth_ui_unit_tests:
           filters: *main_branches

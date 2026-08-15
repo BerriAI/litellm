@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Tooltip } from "antd";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   checkEuAiActCompliance,
   checkGdprCompliance,
@@ -66,9 +66,12 @@ const ComplianceCard = ({
           {loading ? (
             <SpinnerIcon />
           ) : error ? (
-            <Tooltip title={error}>
-              <span className="text-gray-400 text-sm">--</span>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger render={<span className="text-gray-400 text-sm" />}>--</TooltipTrigger>
+                <TooltipContent>{error}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           ) : data?.compliant ? (
             <CheckIcon />
           ) : (

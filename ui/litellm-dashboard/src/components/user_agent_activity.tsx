@@ -11,13 +11,14 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BarChart } from "@/components/shared/charts";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import PerUserUsage from "./per_user_usage";
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { ChartLoader } from "./shared/chart_loader";
 
 // New interfaces for the updated API response
@@ -59,6 +60,7 @@ interface UserAgentActivityProps {
 }
 
 const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, userRole, dateValue, onDateChange }) => {
+  const anchor = useComboboxAnchor();
   // Maximum number of categories to show in charts to prevent color palette overflow
   const MAX_CATEGORIES = 10;
 
@@ -385,7 +387,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                 value={selectedTags}
                 onValueChange={(next: string[]) => setSelectedTags(next)}
               >
-                <ComboboxChips className="w-full" aria-busy={tagsLoading}>
+                <ComboboxChips render={<div ref={anchor} />} className="w-full" aria-busy={tagsLoading}>
                   <ComboboxValue>
                     {(selected: string[]) =>
                       selected.map((tag) => (
@@ -402,7 +404,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                   />
                   {selectedTags.length > 0 && <ComboboxClear aria-label="Clear user agent filter" />}
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor}>
                   <ComboboxEmpty>No user agents found</ComboboxEmpty>
                   <ComboboxList>
                     {(tag: string) => {

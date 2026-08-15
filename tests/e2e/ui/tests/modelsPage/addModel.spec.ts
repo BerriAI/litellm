@@ -328,11 +328,11 @@ test.describe("Add Model", () => {
       const teamByokRow = page.locator(".ant-form-item", { hasText: "Team-BYOK Model" });
       await teamByokRow.getByRole("switch").click();
 
-      // TeamDropdown's options carry custom markup and no role="option", so match by text.
-      const teamDropdown = page.getByTestId("team-dropdown");
+      // TeamDropdown options show the alias above the team id, so match on the id line by text.
+      const teamDropdown = page.getByTestId("team-dropdown").getByRole("combobox");
       await expect(teamDropdown).toBeVisible({ timeout: 5_000 });
       await teamDropdown.click();
-      const teamOption = page.locator(".ant-select-dropdown:visible").getByText(E2E_TEAM_CRUD_ID).first();
+      const teamOption = page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ID).first();
       await expect(teamOption).toBeVisible({ timeout: 5_000 });
       await teamOption.click();
 
