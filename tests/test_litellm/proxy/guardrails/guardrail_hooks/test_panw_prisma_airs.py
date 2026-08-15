@@ -13,6 +13,7 @@ import copy
 import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import unquote
 
 import httpx
 import pytest
@@ -5489,6 +5490,180 @@ class TestPanwAirsTimeoutCoercion:
         handler = initialize_panw_prisma_airs(params, guardrail_config)
         # Default fallback applied, not crashed on float(None)
         assert handler.timeout == 10.0
+
+
+class TestPanwAirsScanMetadataExposure:
+    """Allowed scans must expose scan_id/scan metadata to the caller (LIT-5278)."""
+
+    ALLOW_SCAN_RESULT = {
+        "action": "allow",
+        "category": "benign",
+        "scan_id": "scan-abc-123",
+        "report_id": "report-abc-123",
+        "profile_name": "test_profile",
+        "profile_id": "profile-1",
+        "tr_id": "tr-9",
+    }
+
+    @staticmethod
+    def _recorded_scans(request_data):
+        metadata = {**request_data.get("metadata", {}), **request_data.get("litellm_metadata", {})}
+        return metadata.get("guardrail_scan_metadata", ())
+
+    @pytest.mark.asyncio
+    async def test_pre_call_allow_records_scan_metadata(self, base_handler, user_api_key_dict):
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+
+        with patch.object(base_handler, "_call_panw_api", return_value=self.ALLOW_SCAN_RESULT):
+            await base_handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        assert self._recorded_scans(data) == (
+            {
+                "guardrail": base_handler.guardrail_name,
+                "direction": "request",
+                "action": "allow",
+                "category": "benign",
+                "scan_id": "scan-abc-123",
+                "report_id": "report-abc-123",
+                "profile_name": "test_profile",
+                "profile_id": "profile-1",
+                "tr_id": "tr-9",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_call_allow_records_response_scan_metadata(self, base_handler, user_api_key_dict):
+        data = {"model": "gpt-4", "litellm_call_id": "test-call-id", "metadata": {}}
+        response = ModelResponse(
+            id="test_id",
+            choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
+            model="gpt-4",
+        )
+
+        with patch.object(base_handler, "_call_panw_api", return_value=self.ALLOW_SCAN_RESULT):
+            await base_handler.async_post_call_success_hook(
+                data=data, user_api_key_dict=user_api_key_dict, response=response
+            )
+
+        scans = self._recorded_scans(data)
+        assert len(scans) == 1
+        assert scans[0]["direction"] == "response"
+        assert scans[0]["scan_id"] == "scan-abc-123"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_allow_records_scan_metadata(self, base_handler):
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Hello world"]}
+        request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4", "metadata": {}}
+
+        with patch.object(base_handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = self.ALLOW_SCAN_RESULT
+            await base_handler.apply_guardrail(
+                inputs=inputs, request_data=request_data, input_type="request"
+            )
+
+        assert self._recorded_scans(request_data)[0]["scan_id"] == "scan-abc-123"
+
+    @pytest.mark.asyncio
+    async def test_allowed_scan_metadata_becomes_response_headers(self, base_handler, user_api_key_dict):
+        from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+
+        with patch.object(base_handler, "_call_panw_api", return_value=self.ALLOW_SCAN_RESULT):
+            await base_handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        headers = get_logging_caching_headers(data)
+        assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123"
+        decoded = json.loads(unquote(headers["x-litellm-guardrail-scan-metadata"]))
+        assert decoded[0]["scan_id"] == "scan-abc-123"
+        assert decoded[0]["guardrail"] == base_handler.guardrail_name
+
+    @pytest.mark.asyncio
+    async def test_request_and_response_scan_ids_are_both_exposed(self, base_handler, user_api_key_dict):
+        from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+        response = ModelResponse(
+            id="test_id",
+            choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
+            model="gpt-4",
+        )
+
+        with patch.object(base_handler, "_call_panw_api", return_value=self.ALLOW_SCAN_RESULT):
+            await base_handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+        with patch.object(
+            base_handler,
+            "_call_panw_api",
+            return_value={**self.ALLOW_SCAN_RESULT, "scan_id": "scan-response-456"},
+        ):
+            await base_handler.async_post_call_success_hook(
+                data=data, user_api_key_dict=user_api_key_dict, response=response
+            )
+
+        headers = get_logging_caching_headers(data)
+        assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123,scan-response-456"
+        directions = [entry["direction"] for entry in json.loads(unquote(headers["x-litellm-guardrail-scan-metadata"]))]
+        assert directions == ["request", "response"]
+
+    @pytest.mark.asyncio
+    async def test_blocked_scan_still_returns_scan_id_in_error(self, base_handler, user_api_key_dict):
+        data = _simple_data(litellm_call_id="test-call-id", metadata={})
+        blocked = {**self.ALLOW_SCAN_RESULT, "action": "block", "category": "malicious"}
+
+        with patch.object(base_handler, "_call_panw_api", return_value=blocked):
+            with pytest.raises(HTTPException) as exc_info:
+                await base_handler.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=DualCache(),
+                    data=data,
+                    call_type="completion",
+                )
+
+        assert exc_info.value.detail["error"]["scan_id"] == "scan-abc-123"
+
+    def test_oversized_scan_metadata_drops_metadata_header_but_keeps_scan_ids(self):
+        from litellm.proxy.common_utils.callback_utils import (
+            MAX_GUARDRAIL_SCAN_METADATA_HEADER_BYTES,
+            get_logging_caching_headers,
+        )
+
+        oversized_entries = [
+            {
+                "guardrail": "test_panw_airs",
+                "direction": "request",
+                "scan_id": f"scan-{index}",
+                "category": "x" * 512,
+            }
+            for index in range(MAX_GUARDRAIL_SCAN_METADATA_HEADER_BYTES // 256)
+        ]
+        headers = get_logging_caching_headers({"metadata": {"guardrail_scan_metadata": oversized_entries}})
+
+        assert "x-litellm-guardrail-scan-metadata" not in headers
+        assert headers["x-litellm-guardrail-scan-id"].startswith("scan-0,scan-1")
+
+    def test_client_supplied_scan_metadata_is_stripped(self):
+        from litellm.proxy.litellm_pre_call_utils import (
+            _UNTRUSTED_METADATA_CONTROL_FIELDS,
+            _UNTRUSTED_ROOT_CONTROL_FIELDS,
+        )
+
+        assert "guardrail_scan_metadata" in _UNTRUSTED_METADATA_CONTROL_FIELDS
+        assert "guardrail_scan_metadata" in _UNTRUSTED_ROOT_CONTROL_FIELDS
 
 
 if __name__ == "__main__":
