@@ -1,8 +1,20 @@
 import React from "react";
-import { Typography, Select, Modal, Space, Button } from "antd";
-
-const { Text } = Typography;
-const { Option } = Select;
+import { Button } from "@/components/ui/button";
+import {
+  Combobox,
+  ComboboxCollection,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+} from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ACTION_ITEMS } from "./action_options";
+import { ABOVE_ANTD_MODAL } from "./dialog_layering";
 
 interface PrebuiltPattern {
   name: string;
@@ -10,6 +22,16 @@ interface PrebuiltPattern {
   category: string;
   description: string;
 }
+
+interface PatternGroup {
+  category: string;
+  items: PrebuiltPattern[];
+}
+
+const matchesPatternQuery = (pattern: PrebuiltPattern, query: string) => {
+  const needle = query.toLowerCase();
+  return pattern.display_name.toLowerCase().includes(needle) || pattern.name.toLowerCase().includes(needle);
+};
 
 interface PatternModalProps {
   visible: boolean;
@@ -34,64 +56,84 @@ const PatternModal: React.FC<PatternModalProps> = ({
   onAdd,
   onCancel,
 }) => {
+  const selectedPattern = prebuiltPatterns.find((pattern) => pattern.name === selectedPatternName) ?? null;
+  const patternGroups = categories
+    .map((category) => ({
+      category,
+      items: prebuiltPatterns.filter((pattern) => pattern.category === category),
+    }))
+    .filter((group) => group.items.length > 0);
+
   return (
-    <Modal title="Add prebuilt pattern" open={visible} onCancel={onCancel} footer={null} width={800}>
-      <Space direction="vertical" style={{ width: "100%" }} size="large">
-        <div>
-          <Text strong>Pattern type</Text>
-          <Select
-            placeholder="Choose pattern type"
-            value={selectedPatternName}
-            onChange={onPatternNameChange}
-            style={{ width: "100%", marginTop: 8 }}
-            showSearch
-            filterOption={(input, option) => {
-              const pattern = prebuiltPatterns.find((p) => p.name === option?.value);
-              if (pattern) {
-                return (
-                  pattern.display_name.toLowerCase().includes(input.toLowerCase()) ||
-                  pattern.name.toLowerCase().includes(input.toLowerCase())
-                );
-              }
-              return false;
-            }}
-          >
-            {categories.map((category) => {
-              const categoryPatterns = prebuiltPatterns.filter((p) => p.category === category);
-              if (categoryPatterns.length === 0) return null;
+    <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className={`max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px] ${ABOVE_ANTD_MODAL}`}>
+        <DialogHeader>
+          <DialogTitle>Add prebuilt pattern</DialogTitle>
+        </DialogHeader>
 
-              return (
-                <Select.OptGroup key={category} label={category}>
-                  {categoryPatterns.map((pattern) => (
-                    <Option key={pattern.name} value={pattern.name}>
-                      {pattern.display_name}
-                    </Option>
-                  ))}
-                </Select.OptGroup>
-              );
-            })}
-          </Select>
+        <div className="space-y-6">
+          <div>
+            <p className="font-semibold">Pattern type</p>
+            <Combobox
+              items={patternGroups}
+              value={selectedPattern}
+              onValueChange={(pattern: PrebuiltPattern | null) => pattern && onPatternNameChange(pattern.name)}
+              itemToStringLabel={(pattern: PrebuiltPattern) => pattern.display_name}
+              filter={matchesPatternQuery}
+            >
+              <ComboboxInput className="mt-2 w-full" placeholder="Choose pattern type" />
+              <ComboboxContent>
+                <ComboboxEmpty>No matching patterns</ComboboxEmpty>
+                <ComboboxList>
+                  {(group: PatternGroup) => (
+                    <ComboboxGroup key={group.category} items={group.items}>
+                      <ComboboxLabel>{group.category}</ComboboxLabel>
+                      <ComboboxCollection>
+                        {(pattern: PrebuiltPattern) => (
+                          <ComboboxItem key={pattern.name} value={pattern}>
+                            {pattern.display_name}
+                          </ComboboxItem>
+                        )}
+                      </ComboboxCollection>
+                    </ComboboxGroup>
+                  )}
+                </ComboboxList>
+              </ComboboxContent>
+            </Combobox>
+          </div>
+
+          <div>
+            <p className="font-semibold">Action</p>
+            <p className="mt-1 mb-2 text-muted-foreground">
+              Choose what action the guardrail should take when this pattern is detected
+            </p>
+            <Select
+              items={ACTION_ITEMS}
+              value={patternAction}
+              onValueChange={(value: string | null) => value && onActionChange(value as "BLOCK" | "MASK")}
+            >
+              <SelectTrigger className="w-full" aria-label="Action">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                {ACTION_ITEMS.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-        <div>
-          <Text strong>Action</Text>
-          <Text type="secondary" style={{ display: "block", marginTop: 4, marginBottom: 8 }}>
-            Choose what action the guardrail should take when this pattern is detected
-          </Text>
-          <Select value={patternAction} onChange={onActionChange} style={{ width: "100%" }}>
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
-          </Select>
-        </div>
-      </Space>
-
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button onClick={onCancel}>Cancel</Button>
-        <Button type="primary" onClick={onAdd}>
-          Add
-        </Button>
-      </div>
-    </Modal>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={onAdd}>Add</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

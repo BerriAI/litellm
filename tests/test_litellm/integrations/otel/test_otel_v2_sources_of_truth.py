@@ -24,7 +24,11 @@ from litellm.integrations.otel import (
     resolve_provider,
 )
 from litellm.integrations.otel.model import spans as spans_mod
-from litellm.integrations.otel.model.payloads import LLMCallSpanData, RequestIdentity
+from litellm.integrations.otel.model.payloads import (
+    LLMCallSpanData,
+    RequestIdentity,
+    _upstream_address_port,
+)
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -177,6 +181,7 @@ def test_mcp_attribute_vocabulary_is_complete():
         "mcp.resource.uri",
         "jsonrpc.request.id",
         "jsonrpc.protocol.version",
+        "rpc.system",
         "rpc.response.status_code",
         "gen_ai.operation.name",
         "gen_ai.tool.name",
@@ -808,3 +813,34 @@ def test_promoted_baggage_is_bounded_allowlist():
     # http.* is never a promoted key
     assert HTTP.ROUTE not in promoted
     assert HTTP.REQUEST_METHOD not in promoted
+
+
+@pytest.mark.parametrize(
+    "resource, expected",
+    [
+        ("https://weather.example.com", ("weather.example.com", 443)),
+        ("http://weather.example.com", ("weather.example.com", 80)),
+        ("https://weather.example.com:8443", ("weather.example.com", 8443)),
+        ("mcp://weather.example.com", ("weather.example.com", None)),
+        ("http://::1:8080", (None, None)),
+        ("http://fe80::1%25eth0:80", (None, None)),
+        (None, (None, None)),
+        ("", (None, None)),
+    ],
+    ids=[
+        "https-default",
+        "http-default",
+        "explicit-port",
+        "no-default-port",
+        "ipv6-unbracketed",
+        "ipv6-zone-scoped",
+        "none",
+        "empty",
+    ],
+)
+def test_upstream_address_port(resource, expected):
+    """The redacted MCP origin resolves to the address and port a consumer names its
+    dependency from. A scheme outside the default-port map yields no port, and an IPv6
+    origin yields nothing at all because the redactor rebuilds it without its brackets;
+    both are why the mapper gates ``rpc.system`` on the complete pair."""
+    assert _upstream_address_port(resource) == expected

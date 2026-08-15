@@ -155,6 +155,55 @@ def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_value
     assert token_data["team_alias"] == "test-team"
 
 
+def test_get_cli_jwt_auth_token_carries_team_grants_not_user_allowlist(
+    valid_sso_user_defined_values,
+):
+    """A team-bound `lite login` session token must snapshot the team's grants.
+
+    Without team_models the /v1/models bail-out (`not key_models and not team_models`)
+    treats the session as unrestricted and lists the whole proxy; without
+    team_model_aliases a team alias never resolves on /chat/completions. The user's
+    personal allowlist must stay out of the key `models` slot, since a team-bound
+    credential is governed by the team grant, not by a per-user list.
+    """
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values,
+        team_id="team-123",
+        team_alias="test-team",
+        team_models=("claude-sonnet-4-5", "gpt-4.1"),
+        team_model_aliases={"team-fast": "gpt-4.1-mini"},
+    )
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["team_id"] == "team-123"
+    assert token_data["team_models"] == ["claude-sonnet-4-5", "gpt-4.1"]
+    assert token_data["team_model_aliases"] == {"team-fast": "gpt-4.1-mini"}
+    assert valid_sso_user_defined_values.models == ["gpt-3.5-turbo"]
+    assert token_data["models"] == []
+
+
+def test_get_cli_jwt_auth_token_keeps_user_allowlist_when_no_team(
+    valid_sso_user_defined_values,
+):
+    """A session token with no team bound still carries the user's own allowlist."""
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data.get("team_id") is None
+    assert token_data["models"] == ["gpt-3.5-turbo"]
+    assert token_data["team_models"] == []
+
+
 def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
     valid_sso_user_defined_values,
 ):
@@ -5105,6 +5154,80 @@ async def test_common_checks_personal_user_budget_skipped_for_team_key():
     assert result is True
 
 
+@pytest.mark.asyncio
+async def test_common_checks_personal_user_budget_enforced_on_team_key_when_flag_enabled():
+    """general_settings.apply_user_budget_to_team_keys opts a deployment into
+    charging the key owner's personal budget on team-scoped keys too.
+
+    Same fixture as the default-off test above, so a regression that ignores the
+    flag lets this call through instead of raising.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    user = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=100.0)
+    team = LiteLLM_TeamTable(team_id="t1", spend=0.0, max_budget=1000.0)
+    token = UserAPIKeyAuth(token="k1", user_id="u1", team_id="t1")
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 999.0 if counter_key == "spend:user:u1" else 0.0
+
+    async def _no_membership(*args, **kwargs):
+        return None
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+        "litellm.proxy.proxy_server.get_current_spend", _spend_by_counter
+    ), patch("litellm.proxy.auth.auth_checks.get_team_membership", _no_membership):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await common_checks(
+                request_body={"messages": [{"role": "user", "content": "hi"}]},
+                team_object=team,
+                user_object=user,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={"apply_user_budget_to_team_keys": True},
+                route="/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=token,
+                request=MagicMock(spec=Request),
+            )
+    assert "ExceededBudget: User=u1" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_common_checks_personal_user_budget_still_enforced_on_personal_key_with_flag_enabled():
+    """The flag only widens enforcement to team keys; personal keys keep blocking."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    user = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=100.0)
+    token = UserAPIKeyAuth(token="k1", user_id="u1")
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 999.0 if counter_key == "spend:user:u1" else 0.0
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+        "litellm.proxy.proxy_server.get_current_spend", _spend_by_counter
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await common_checks(
+                request_body={"messages": [{"role": "user", "content": "hi"}]},
+                team_object=None,
+                user_object=user,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={"apply_user_budget_to_team_keys": True},
+                route="/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=token,
+                request=MagicMock(spec=Request),
+            )
+
+
 @pytest.mark.parametrize(
     "scope, route, expect_blocked",
     [
@@ -5462,6 +5585,63 @@ async def test_get_project_object_db_fetch_returns_cached_obj():
     assert isinstance(result, LiteLLM_ProjectTableCachedObj)
     assert result.project_id == "p-1"
     assert result.project_alias == "proj"
+
+
+@pytest.mark.asyncio
+async def test_project_allowlist_enforced_when_key_models_empty():
+    """
+    LIT-3803: a project-bound key with models=[] has no key-level restriction,
+    but the project allowlist must still 403 team models outside it.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_ProjectTableCachedObj,
+        ProxyErrorTypes,
+        ProxyException,
+    )
+    from litellm.proxy.auth.auth_checks import _run_project_checks, can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="hashed-key",
+        project_id="p-1",
+        team_id="t-1",
+        models=[],
+    )
+    project = LiteLLM_ProjectTableCachedObj(
+        project_id="p-1",
+        team_id="t-1",
+        models=["gemini-2.5-flash-image", "gemini-3.1-flash-lite-preview"],
+    )
+
+    assert (
+        await can_key_call_model(
+            model="gemini-2.5-flash",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+    await _run_project_checks(
+        project_object=project,
+        _model="gemini-2.5-flash-image",
+        llm_router=None,
+        skip_budget_checks=True,
+        valid_token=valid_token,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_project_checks(
+            project_object=project,
+            _model="gemini-2.5-flash",
+            llm_router=None,
+            skip_budget_checks=True,
+            valid_token=valid_token,
+            proxy_logging_obj=MagicMock(),
+        )
+    assert exc_info.value.type == ProxyErrorTypes.project_model_access_denied
+    assert exc_info.value.code == "403"
 
 
 def test_is_user_proxy_admin_rejects_view_only_admin():
