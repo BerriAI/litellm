@@ -6264,6 +6264,71 @@ async def test_global_proxy_spend_marker_cached_db_value_used_without_db_query()
 
 
 @pytest.mark.asyncio
+async def test_global_proxy_spend_floor_falls_back_when_set_max_returns_none():
+    """If the monotonic Redis repair returns None (e.g. connection hiccup),
+    the enforced total must still fall back to the authoritative DB floor."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _fetch_global_spend_with_event_coordination,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value="2.0")
+    redis_cache.async_set_max = AsyncMock(return_value=None)
+    cache.redis_cache = redis_cache
+
+    proxy_budget_row = MagicMock()
+    proxy_budget_row.spend = 9.0
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=proxy_budget_row
+    )
+
+    result = await _fetch_global_spend_with_event_coordination(
+        cache_key="default_user_id:spend",
+        user_api_key_cache=cache,
+        prisma_client=prisma_client,
+    )
+
+    assert result == 9.0
+
+
+@pytest.mark.asyncio
+async def test_global_proxy_spend_treats_unparseable_redis_as_zero():
+    """A corrupted/non-numeric Redis value is treated as 0.0 and then floored
+    to the DB total so enforcement remains safe."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _fetch_global_spend_with_event_coordination,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value="not-a-number")
+    redis_cache.async_set_max = AsyncMock(side_effect=lambda key, value: value)
+    cache.redis_cache = redis_cache
+
+    proxy_budget_row = MagicMock()
+    proxy_budget_row.spend = 7.0
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=proxy_budget_row
+    )
+
+    result = await _fetch_global_spend_with_event_coordination(
+        cache_key="default_user_id:spend",
+        user_api_key_cache=cache,
+        prisma_client=prisma_client,
+    )
+
+    assert result == 7.0
+    redis_cache.async_set_max.assert_awaited_once_with(
+        key="default_user_id:spend", value=7.0
+    )
+
+
+@pytest.mark.asyncio
 async def test_temp_budget_increase_applied_for_cached_key():
     """
     Regression for https://github.com/BerriAI/litellm/issues/25760
