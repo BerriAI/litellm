@@ -212,7 +212,6 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import (
-    _ABOVE_THRESHOLD_COST_KEY,
     CustomStreamWrapper,
     EmbeddingResponse,
     ModelResponse,
@@ -281,8 +280,13 @@ def _cost_value_as_float(value: str | float | None) -> float | None:
         return None
 
 
+_CUSTOM_PRICING_THRESHOLD_COST_KEY: Final[re.Pattern[str]] = re.compile(r"_above_\d+k?_tokens$")
+
+
 def _is_custom_pricing_field(field: str) -> bool:
-    return field in CustomPricingLiteLLMParams.model_fields or _ABOVE_THRESHOLD_COST_KEY.search(field) is not None
+    return (
+        field in CustomPricingLiteLLMParams.model_fields or _CUSTOM_PRICING_THRESHOLD_COST_KEY.search(field) is not None
+    )
 
 
 def _copy_custom_pricing_fields(

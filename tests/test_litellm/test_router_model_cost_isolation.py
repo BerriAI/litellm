@@ -20,7 +20,10 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
-from litellm.router import _copy_custom_pricing_fields
+from litellm.router import (
+    _copy_custom_pricing_fields,
+    _is_custom_pricing_field,
+)
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
@@ -50,6 +53,13 @@ def _restore_model_cost_entries(original_entries):
         else:
             litellm.model_cost[key] = value
     _invalidate_model_cost_lowercase_map()
+
+
+def test_is_custom_pricing_field_recognizes_declared_and_arbitrary_threshold_fields():
+    assert _is_custom_pricing_field("input_cost_per_token")
+    assert _is_custom_pricing_field("input_cost_per_token_above_32k_tokens")
+    assert not _is_custom_pricing_field("api_key")
+    assert not _is_custom_pricing_field("input_cost_per_token_above_32k_tokens_extra")
 
 
 def test_copy_custom_pricing_fields_preserves_declared_and_arbitrary_threshold_fields():
