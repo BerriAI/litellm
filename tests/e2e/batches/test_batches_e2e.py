@@ -23,7 +23,7 @@ from typing import Callable
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 
 from batch_client import (
     UPLOAD_FILENAME,
@@ -397,6 +397,16 @@ def unattributed_rows(rows: list[SpendLogRow]) -> list[SpendLogRow]:
     return [row for row in rows if not row.api_key]
 
 
+@pytest.mark.skip(
+    reason=(
+        "LIT-5027: the path under test hangs. The batch rate limiter reads the input file "
+        "to count tokens by awaiting litellm.afile_content with no timeout, so a slow Files "
+        "API holds POST /v1/batches open past any client deadline (63.6s observed on stage "
+        "against a 60s read timeout). The unattributed-spend-row contract below is never "
+        "reached, so the test reports a timeout rather than the behavior it guards. Unskip "
+        "once the fetch is bounded."
+    )
+)
 def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
 ) -> None:
@@ -523,6 +533,17 @@ class TestOpenAIFiles:
     @pytest.mark.covers(
         "llm.files.openai.list.nonstream.works",
         exercised_on=["files"],
+    )
+    @pytest.mark.skip(
+        reason=(
+            "LIT-4820 (https://linear.app/litellm-ai/issue/LIT-4820): GET /v1/files omits "
+            "newly uploaded files. The upload succeeds and "
+            "GET /v1/files/{id} returns the file, but it never appears in the listing; the "
+            "returned set is stable with its newest entry ~10h old, on both the managed "
+            "(/v1/files?model=) and provider-scoped (/openai/v1/files) routes. Skipped rather "
+            "than weakened because the assertion below is the correct contract. Remove this "
+            "marker when LIT-4820 is fixed; do not relax the assertion to make it pass."
+        )
     )
     def test_uploaded_file_appears_in_list(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
@@ -702,14 +723,7 @@ class TestBedrockBatchAssumeRole:
     def test_unified_batch_create_with_assume_role(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
-        (role_arn,) = require_env("AWS_ROLE_NAME")
-        require_env(
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_REGION",
-            "AWS_BATCH_S3_BUCKET",
-            "AWS_BATCH_ROLE_ARN",
-        )
+        role_arn = os.environ["AWS_ROLE_NAME"]
         session_name = f"e2e-batch-sts-{unique_marker()}"[:64]
         model_name = batch_model_name("bedrock-sts-batch")
 
@@ -819,7 +833,7 @@ class TestHostedVllmBatch:
     def test_unified_file_and_batch_create(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
-        (api_base,) = require_env("HOSTED_VLLM_API_BASE")
+        api_base = os.environ["HOSTED_VLLM_API_BASE"]
         api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
         model_id = (
             os.environ.get("HOSTED_VLLM_MODEL") or "meta-llama/Llama-3.2-3B-Instruct"

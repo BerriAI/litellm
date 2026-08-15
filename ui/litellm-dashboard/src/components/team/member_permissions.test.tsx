@@ -1,5 +1,5 @@
 import * as networking from "@/components/networking";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import MemberPermissions from "./member_permissions";
@@ -8,6 +8,9 @@ vi.mock("@/components/networking", () => ({
   getTeamPermissionsCall: vi.fn(),
   teamPermissionsUpdateCall: vi.fn(),
 }));
+
+const checkboxFor = (endpoint: string) =>
+  within(screen.getByText(endpoint).closest("tr") as HTMLElement).getByRole("checkbox");
 
 describe("MemberPermissions", () => {
   afterEach(() => {
@@ -69,32 +72,27 @@ describe("MemberPermissions", () => {
       expect(screen.getByText("Member Permissions")).toBeInTheDocument();
     });
 
-    const checkboxes = screen.getAllByRole("checkbox");
-    const unselectedCheckbox = checkboxes.find((cb) => !(cb as HTMLInputElement).checked);
+    expect(checkboxFor("/key/generate")).toBeChecked();
+    expect(checkboxFor("/key/list")).not.toBeChecked();
 
-    if (unselectedCheckbox) {
-      await act(async () => {
-        fireEvent.click(unselectedCheckbox);
-      });
+    await act(async () => {
+      fireEvent.click(checkboxFor("/key/list"));
+    });
 
-      await waitFor(() => {
-        const saveButton = screen.getByRole("button", { name: /save changes/i });
-        expect(saveButton).toBeInTheDocument();
-      });
+    expect(checkboxFor("/key/list")).toBeChecked();
 
-      const saveButton = screen.getByRole("button", { name: /save changes/i });
-      await act(async () => {
-        fireEvent.click(saveButton);
-      });
+    const saveButton = await screen.findByRole("button", { name: /save changes/i });
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
 
-      await waitFor(() => {
-        expect(networking.teamPermissionsUpdateCall).toHaveBeenCalledWith(
-          "token-123",
-          "team-123",
-          expect.arrayContaining(["/key/generate", "/key/list"]),
-        );
-      });
-    }
+    await waitFor(() => {
+      expect(networking.teamPermissionsUpdateCall).toHaveBeenCalledWith(
+        "token-123",
+        "team-123",
+        expect.arrayContaining(["/key/generate", "/key/list"]),
+      );
+    });
   });
 
   it("should render team daily activity permission with correct method and description", async () => {
@@ -123,11 +121,13 @@ describe("MemberPermissions", () => {
       expect(screen.getByText("Member Permissions")).toBeInTheDocument();
     });
 
-    const checkboxes = screen.getAllByRole("checkbox");
-    checkboxes.forEach((checkbox) => {
-      expect(checkbox).toBeDisabled();
+    expect(checkboxFor("/key/list")).not.toBeChecked();
+
+    await act(async () => {
+      fireEvent.click(checkboxFor("/key/list"));
     });
 
+    expect(checkboxFor("/key/list")).not.toBeChecked();
     expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
   });
 
@@ -143,32 +143,27 @@ describe("MemberPermissions", () => {
       expect(screen.getByText("Member Permissions")).toBeInTheDocument();
     });
 
-    const checkboxes = screen.getAllByRole("checkbox");
-    const unselectedCheckbox = checkboxes.find((cb) => !(cb as HTMLInputElement).checked);
+    await act(async () => {
+      fireEvent.click(checkboxFor("/key/list"));
+    });
 
-    if (unselectedCheckbox) {
-      await act(async () => {
-        fireEvent.click(unselectedCheckbox);
-      });
+    expect(checkboxFor("/key/list")).toBeChecked();
 
-      await waitFor(() => {
-        const resetButton = screen.getByRole("button", { name: /reset/i });
-        expect(resetButton).toBeInTheDocument();
-      });
+    vi.mocked(networking.getTeamPermissionsCall).mockResolvedValueOnce({
+      all_available_permissions: ["/key/generate", "/key/list"],
+      team_member_permissions: ["/key/generate"],
+    });
 
-      vi.mocked(networking.getTeamPermissionsCall).mockResolvedValueOnce({
-        all_available_permissions: ["/key/generate", "/key/list"],
-        team_member_permissions: ["/key/generate"],
-      });
+    const resetButton = await screen.findByRole("button", { name: /reset/i });
+    await act(async () => {
+      fireEvent.click(resetButton);
+    });
 
-      const resetButton = screen.getByRole("button", { name: /reset/i });
-      await act(async () => {
-        fireEvent.click(resetButton);
-      });
+    await waitFor(() => {
+      expect(networking.getTeamPermissionsCall).toHaveBeenCalledTimes(2);
+    });
 
-      await waitFor(() => {
-        expect(networking.getTeamPermissionsCall).toHaveBeenCalledTimes(2);
-      });
-    }
+    expect(checkboxFor("/key/list")).not.toBeChecked();
+    expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
   });
 });

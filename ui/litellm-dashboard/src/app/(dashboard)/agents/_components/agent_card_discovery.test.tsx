@@ -126,10 +126,7 @@ describe("AgentCardDiscovery", () => {
     expect(initialSelection.upstream_url).toBe("https://upstream.example.com");
     expect(initialSelection.selected_card.skills).toHaveLength(2);
 
-    const summarizeLabel = screen.getByText("Summarize").closest("label");
-    expect(summarizeLabel).toBeTruthy();
-    const summarizeCheckbox = summarizeLabel!.querySelector("input[type='checkbox']") as HTMLInputElement;
-    await user.click(summarizeCheckbox);
+    await user.click(screen.getByRole("checkbox", { name: /Summarize/i }));
 
     await waitFor(() => {
       const latest = onApply.mock.calls.at(-1)?.[0];

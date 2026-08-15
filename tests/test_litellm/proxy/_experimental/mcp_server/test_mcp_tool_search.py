@@ -237,7 +237,7 @@ class TestListToolRestApiWithToolSearch:
                 return_value={},
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_oauth2_server_ids",
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._v1_resolved_oauth2_server_ids",
                 return_value=[],
             ),
             patch(
@@ -316,7 +316,7 @@ class TestListToolRestApiWithToolSearch:
                 return_value={},
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_oauth2_server_ids",
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._v1_resolved_oauth2_server_ids",
                 return_value=[],
             ),
             patch(
