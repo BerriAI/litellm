@@ -2438,9 +2438,7 @@ def anthropic_messages_pt(
                                     anthropic_content_element=_document_content_element,
                                     original_content_element=m,
                                 )
-                                user_content.append(
-                                    cast(AnthropicMessagesDocumentParam, _document_content_element)
-                                )  # cast-ok: same union narrowing as above
+                                user_content.append(_document_content_element)
                                 continue
                             # Bedrock invoke models have format: invoke/...
                             # Vertex AI Anthropic also doesn't support URL sources for images
