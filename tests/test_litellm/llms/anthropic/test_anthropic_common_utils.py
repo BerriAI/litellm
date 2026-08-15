@@ -1245,6 +1245,62 @@ class TestPassthroughAuthToken:
 
         assert url == "https://custom.example.com/v1/messages"
 
+    @pytest.mark.parametrize(
+        ("api_base", "expected"),
+        [
+            ("https://api.anthropic.com", "https://api.anthropic.com/v1/messages"),
+            ("https://proxy.example.com", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/v1", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/v1/", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/v1/messages", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/v1/messages/", "https://proxy.example.com/v1/messages"),
+        ],
+    )
+    def test_passthrough_get_complete_url_dedupes_trailing_v1(self, api_base, expected):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        url = config.get_complete_url(
+            api_base=api_base,
+            api_key=FAKE_REGULAR_KEY,
+            model="claude-sonnet-4-5-20250929",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == expected
+
+    @pytest.mark.parametrize(
+        ("api_base", "expected"),
+        [
+            ("https://api.anthropic.com", "https://api.anthropic.com/v1/messages"),
+            ("https://proxy.example.com", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/v1", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/v1/", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/v1/messages", "https://proxy.example.com/v1/messages"),
+            ("https://proxy.example.com/v1/messages/", "https://proxy.example.com/v1/messages"),
+        ],
+    )
+    def test_passthrough_get_complete_url_dedupes_trailing_v1(self, api_base, expected):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        url = config.get_complete_url(
+            api_base=api_base,
+            api_key=FAKE_REGULAR_KEY,
+            model="claude-sonnet-4-5-20250929",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == expected
+
 
 class TestAnthropicThinkingSignatureSelfHeal:
     """Helpers for retrying after invalid encrypted thinking signatures."""
