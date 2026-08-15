@@ -152,9 +152,9 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
                 return [input], {}  # mutable-ok: fresh list returned to caller
             return [input], cls._auto_chunk_params(optional_params)  # mutable-ok: fresh list returned to caller
 
-        if isinstance(input, list) and all(isinstance(i, str) for i in input):
+        if all(isinstance(i, str) for i in input):
             if optional_params.get("input_type") == "query":
-                return input, {}  # pyright: ignore[reportReturnType]  # narrowed to list[str] by isinstance+all check
+                return input, {}  # pyright: ignore[reportReturnType]  # narrowed to list[str] by all(isinstance) check
             return input, cls._auto_chunk_params(optional_params)  # pyright: ignore[reportReturnType]  # narrowed to list[str]
 
         return input, {}  # pyright: ignore[reportReturnType]  # list[list[str]] branch
