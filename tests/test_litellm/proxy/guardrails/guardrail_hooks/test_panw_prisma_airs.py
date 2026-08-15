@@ -5647,6 +5647,99 @@ class TestPanwAirsScanIdExposure:
 
         assert "guardrail_scan_ids" in _UNTRUSTED_METADATA_CONTROL_FIELDS
         assert "guardrail_scan_ids" in _UNTRUSTED_ROOT_CONTROL_FIELDS
+class TestPanwAirsBlockedErrorDetailPassthrough:
+    """Regression tests for the full AIRS scan response on blocks.
+
+    Before the fix, the error detail was built from a hardcoded allowlist
+    (scan_id, report_id, profile_name, profile_id, tr_id, prompt/response_detected),
+    so audit-relevant fields such as prompt_detection_details, prompt_masked_data,
+    source, transaction_id and session_id never reached the client.
+    """
+
+    _FULL_BLOCK_RESPONSE = {
+        "action": "block",
+        "category": "malicious",
+        "scan_id": "b2f0a4be-1f6f-4f9a-9f3d-4b6a9d8b1c0e",
+        "report_id": "R0000000000000000000",
+        "tr_id": "test-call-id",
+        "profile_id": "6f5c9f6e-2d0b-4d3f-8a1e-9b7c5d4e3f2a",
+        "profile_name": "test_profile",
+        "source": "prisma_airs",
+        "transaction_id": "4b8c1e2f-5a6d-4c3b-9e8f-1a2b3c4d5e6f",
+        "session_id": "3a2b1c0d-9e8f-4a7b-8c6d-5e4f3a2b1c0d",
+        "timeout": False,
+        "errors": [],
+        "prompt_detected": {"dlp": True, "injection": False, "url_cats": False},
+        "prompt_detection_details": {
+            "dlp_report": {
+                "dlp_report_id": "1234567890",
+                "dlp_profile_name": "Sensitive Content",
+                "data_pattern_rule1_verdict": "MATCHED",
+            }
+        },
+        "prompt_masked_data": {"data": "my ssn is XXX-XX-XXXX"},
+        "response_detected": {"dlp": False, "url_cats": False},
+        "response_detection_details": {},
+        "response_masked_data": {},
+    }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("is_response", [False, True])
+    async def test_block_returns_every_airs_field(
+        self, base_handler, user_api_key_dict, safe_prompt_data, is_response
+    ):
+        response = ModelResponse(
+            id="test_id",
+            choices=[
+                Choices(index=0, message=Message(role="assistant", content="Test response")),
+            ],
+            model="gpt-3.5-turbo",
+        )
+
+        with patch.object(
+            base_handler, "_call_panw_api", return_value=copy.deepcopy(self._FULL_BLOCK_RESPONSE)
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                if is_response:
+                    await base_handler.async_post_call_success_hook(
+                        data=safe_prompt_data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                    )
+                else:
+                    await base_handler.async_pre_call_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        cache=None,
+                        data=safe_prompt_data,
+                        call_type="completion",
+                    )
+
+        error = exc_info.value.detail["error"]
+        for field, value in self._FULL_BLOCK_RESPONSE.items():
+            if field == "category":
+                continue
+            assert error[field] == value, f"{field} missing or altered in blocked-request error"
+
+        assert error["category"] == "malicious"
+        assert error["type"] == "guardrail_violation"
+        assert error["guardrail"] == "test_panw_airs"
+        assert error["code"] == ("panw_prisma_airs_response_blocked" if is_response else "panw_prisma_airs_blocked")
+        assert "PANW Prisma AI Security policy" in error["message"]
+
+    def test_internal_control_flags_are_not_leaked(self, base_handler):
+        detail = base_handler._build_error_detail(
+            {
+                "action": "block",
+                "category": "malicious",
+                "scan_id": "scan-1",
+                "_always_block": True,
+                "_is_transient": True,
+            }
+        )
+
+        assert "_always_block" not in detail["error"]
+        assert "_is_transient" not in detail["error"]
+        assert detail["error"]["scan_id"] == "scan-1"
 
 
 if __name__ == "__main__":

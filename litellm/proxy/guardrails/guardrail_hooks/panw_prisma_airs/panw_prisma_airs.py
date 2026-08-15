@@ -637,7 +637,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         """Build enhanced error detail with scan information."""
         action_type: Final = "Response" if is_response else "Prompt"
         code_suffix: Final = "_response_blocked" if is_response else "_blocked"
-        detection_key: Final = "response_detected" if is_response else "prompt_detected"
 
         category: Final = scan_result.get("category", "unknown")
         default_msg: Final = f"{action_type} blocked by PANW Prisma AI Security policy (Category: {category})"
@@ -653,8 +652,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
-        error_detail: Final[dict[str, dict[str, object]]] = {
+        return {
             "error": {
+                # Pass the raw AIRS scan response through for audit/compliance logging,
+                # minus the internal underscore-prefixed control flags.
+                **{key: value for key, value in scan_result.items() if not key.startswith("_")},
                 "message": error_msg,
                 "type": "guardrail_violation",
                 "code": f"panw_prisma_airs{code_suffix}",
@@ -662,24 +664,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 "category": category,
             }
         }
-
-        # Add optional fields if present
-        optional_fields: Final = [
-            "scan_id",
-            "report_id",
-            "profile_name",
-            "profile_id",
-            "tr_id",
-        ]
-        for field in optional_fields:
-            if scan_result.get(field):
-                error_detail["error"][field] = scan_result[field]
-
-        # Add detection details
-        if scan_result.get(detection_key):
-            error_detail["error"][detection_key] = scan_result[detection_key]
-
-        return error_detail
 
     def _record_scan_id(self, request_data: dict[str, Any], scan_result: Mapping[str, object]) -> None:
         """Surface the AIRS scan id on the response, so allowed calls are auditable too."""
