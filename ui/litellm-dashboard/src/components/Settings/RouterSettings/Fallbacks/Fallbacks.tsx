@@ -1,7 +1,7 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
-import { ArrowRightIcon, PencilAltIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
-import { Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
-import { Tooltip, Typography } from "antd";
+import { ArrowRight, Pencil, Play, Trash2 } from "lucide-react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import openai from "openai";
 import React, { useEffect, useState } from "react";
 import DeleteResourceModal from "../../../common_components/DeleteResourceModal";
@@ -18,12 +18,14 @@ type Fallbacks = FallbackEntry[];
 const modelCardClass =
   "inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-gray-200 bg-gray-50 text-sm font-medium text-gray-800 shrink-0";
 
+const iconWrapperClass = "inline-flex shrink-0 items-center justify-center px-1.5 py-1.5";
+
 function renderModelNameCell(modelName: string, getProviderFromModel?: (modelName: string) => string): React.ReactNode {
   const provider = getProviderFromModel?.(modelName) ?? modelName;
   return (
     <span className={modelCardClass}>
       <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
-      <span>{modelName}</span>
+      <span className="break-words">{modelName}</span>
     </span>
   );
 }
@@ -41,19 +43,23 @@ function renderFallbacksChain(
     return (
       <span className={modelCardClass}>
         <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
-        <span>{modelName}</span>
+        <span className="break-words">{modelName}</span>
       </span>
     );
   };
   return (
     <span className="grid grid-cols-[auto_1fr] items-start gap-x-2 w-full min-w-0">
       <span className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-blue-600" aria-hidden>
-        <ArrowRightIcon className="w-5 h-5 stroke-[2.5]" />
+        <ArrowRight className="w-5 h-5 stroke-[2.5]" />
       </span>
       <span className="flex flex-wrap items-start gap-1 min-w-0">
         {list.map((model, i) => (
           <React.Fragment key={model}>
-            {i > 0 && <Icon icon={ArrowRightIcon} size="xs" className="shrink-0 text-gray-400" />}
+            {i > 0 && (
+              <span className={`${iconWrapperClass} text-gray-400`}>
+                <ArrowRight className="h-3 w-3 shrink-0" />
+              </span>
+            )}
             <ChainCard modelName={model} />
           </React.Fragment>
         ))}
@@ -248,7 +254,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   const canModify = isProxyAdminRole(userRole ?? "");
 
   return (
-    <>
+    <TooltipProvider>
       {canModify && (
         <AddFallbacks
           accessToken={accessToken || ""}
@@ -258,62 +264,79 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
       )}
       {!hasFallbacks ? (
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-6 text-center">
-          <Typography.Text type="secondary">
+          <span className="text-muted-foreground">
             No fallbacks configured. Add fallbacks to automatically try another model when the primary fails.
-          </Typography.Text>
+          </span>
         </div>
       ) : (
         <Table>
-          <TableHead>
+          <TableHeader>
             <TableRow>
-              <TableHeaderCell>Model Name</TableHeaderCell>
-              <TableHeaderCell>Fallbacks</TableHeaderCell>
-              <TableHeaderCell>Actions</TableHeaderCell>
+              <TableHead>Model Name</TableHead>
+              <TableHead>Fallbacks</TableHead>
+              <TableHead>Actions</TableHead>
             </TableRow>
-          </TableHead>
+          </TableHeader>
 
           <TableBody>
             {routerSettings["fallbacks"].map((item: FallbackEntry, index: number) =>
               Object.entries(item).map(([key, value]) => (
                 <TableRow key={index.toString() + key}>
-                  <TableCell className="align-top">{renderModelNameCell(key, getProviderFromModel)}</TableCell>
-                  <TableCell className="align-top">
+                  <TableCell className="align-top whitespace-normal">
+                    {renderModelNameCell(key, getProviderFromModel)}
+                  </TableCell>
+                  <TableCell className="align-top whitespace-normal">
                     {renderFallbacksChain(key, Array.isArray(value) ? value : [], getProviderFromModel)}
                   </TableCell>
                   <TableCell className="align-top">
                     {canModify && (
                       <>
-                        <Tooltip title="Test fallback">
-                          <Icon
-                            icon={PlayIcon}
-                            size="sm"
-                            onClick={() => testFallbackModelResponse(Object.keys(item)[0], accessToken || "")}
-                            className="cursor-pointer hover:text-blue-600"
-                          />
-                        </Tooltip>
-                        <Tooltip title="Edit fallback">
-                          <span
-                            data-testid="edit-fallback-button"
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => handleEditClick(item)}
-                            onKeyDown={(e) => e.key === "Enter" && handleEditClick(item)}
-                            className="cursor-pointer inline-flex"
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <span
+                                onClick={() => testFallbackModelResponse(Object.keys(item)[0], accessToken || "")}
+                                className={`${iconWrapperClass} cursor-pointer hover:text-blue-600`}
+                              />
+                            }
                           >
-                            <Icon icon={PencilAltIcon} size="sm" className="hover:text-blue-600" />
-                          </span>
+                            <Play className="h-5 w-5 shrink-0" />
+                          </TooltipTrigger>
+                          <TooltipContent>Test fallback</TooltipContent>
                         </Tooltip>
-                        <Tooltip title="Delete fallback">
-                          <span
-                            data-testid="delete-fallback-button"
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => handleDeleteClick(item)}
-                            onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
-                            className="cursor-pointer inline-flex"
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <span
+                                data-testid="edit-fallback-button"
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => handleEditClick(item)}
+                                onKeyDown={(e) => e.key === "Enter" && handleEditClick(item)}
+                                className={`${iconWrapperClass} cursor-pointer hover:text-blue-600`}
+                              />
+                            }
                           >
-                            <Icon icon={TrashIcon} size="sm" className="hover:text-red-600" />
-                          </span>
+                            <Pencil className="h-5 w-5 shrink-0" />
+                          </TooltipTrigger>
+                          <TooltipContent>Edit fallback</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <span
+                                data-testid="delete-fallback-button"
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => handleDeleteClick(item)}
+                                onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
+                                className={`${iconWrapperClass} cursor-pointer hover:text-red-600`}
+                              />
+                            }
+                          >
+                            <Trash2 className="h-5 w-5 shrink-0" />
+                          </TooltipTrigger>
+                          <TooltipContent>Delete fallback</TooltipContent>
                         </Tooltip>
                       </>
                     )}
@@ -350,7 +373,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
         onOk={handleDeleteConfirm}
         confirmLoading={isDeleting}
       />
-    </>
+    </TooltipProvider>
   );
 };
 

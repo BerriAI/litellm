@@ -1,5 +1,6 @@
 """Shadow Eval Logger: samples a shadowed key's successful chat requests, duplicates each
-through the auto-router in a detached task, blind-judges real vs shadow, and appends one
+against the job's other arm in a detached task (the auto-router for a forward job, the
+fixed baseline model for a reverse one), blind-judges real vs shadow, and appends one
 ``LiteLLM_ShadowEvalAttempt`` row (verdict or error) as the feature's only hot-path write.
 Counts, status, and spend derive from those rows at read time, so nothing can disagree
 across pods or stop races; the hook reads active jobs through a short-TTL cache."""
@@ -10,10 +11,12 @@ import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import groupby
+from operator import itemgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -28,6 +31,7 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
 if TYPE_CHECKING:
@@ -161,13 +165,26 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     return False
 
 
+def _routing_decision(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    """The routing decision a pre-routing strategy wrote to a call's metadata, empty when
+    a plain model served it. Read off the sampled request for the control arm, and off the
+    shadow call's own write-back for the shadow arm."""
+    decision: Final = metadata.get("routing_decision")
+    return decision if isinstance(decision, Mapping) else _EMPTY_METADATA
+
+
+def _routed_tier(metadata: Mapping[str, object]) -> str | None:
+    decision: Final = _routing_decision(metadata)
+    raw: Final = decision.get("tier_label") or decision.get("tier")
+    return str(raw) if raw is not None else None
+
+
 def _request_was_routed_by(request_metadata: Mapping[str, object], router_name: str) -> bool:
-    """Duplicating a request the shadowed router already served compares the router to
-    itself: guaranteed ties, judge spend for zero information."""
-    decision: Final = request_metadata.get("routing_decision")
-    if not isinstance(decision, Mapping):
-        return False
-    return decision.get("router_model_name") == router_name
+    """Whether the router under evaluation served this request, which is what decides
+    the direction it belongs to. A forward job skips its own router's traffic, since
+    duplicating it would compare the router to itself: guaranteed ties, judge spend for
+    zero information. A reverse job samples exactly that traffic and nothing else."""
+    return _routing_decision(request_metadata).get("router_model_name") == router_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,22 +214,53 @@ class _JudgeVerdict:
     cost: float
 
 
-@dataclass(frozen=True, slots=True)
-class ActiveShadowEvalJob:
-    """One active job as the sampling path needs it: immutable config plus the attempt
-    count as of the cache fill (the turn budget's staleness is bounded by the cache TTL)."""
+class ActiveShadowEvalJob(BaseModel):
+    """One active job as the sampling path needs it, validated straight off the untyped
+    job row: immutable config plus the attempt count as of the cache fill (the turn
+    budget's staleness is bounded by the cache TTL). Every way a row can be unsamplable
+    is a validation error here, so a bad row is skipped rather than sampled wrongly."""
+
+    model_config = ConfigDict(frozen=True, from_attributes=True)
 
     id: str
     router_name: str
+    direction: ShadowEvalDirection = "forward"
+    baseline_model: str | None = None
     shadow_percentage: float
     judge_model: str
     max_turns: int
     ends_at: datetime
-    attempts: int
+    attempts: int = 0
+
+    @field_validator("ends_at")
+    @classmethod
+    def _as_utc(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+    @model_validator(mode="after")
+    def _baseline_model_matches_direction(self) -> "ActiveShadowEvalJob":
+        if (self.baseline_model is not None) != (self.direction == "reverse"):
+            raise ValueError("baseline_model is set for exactly the reverse jobs")
+        return self
+
+    @property
+    def shadow_target(self) -> str:
+        """The model the duplicated arm calls: the router itself for a forward job, the
+        fixed baseline for a reverse one. Total because the validator above pins
+        baseline_model to reverse jobs and only those."""
+        return self.baseline_model or self.router_name
 
 
-def _as_utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+def _as_active_job(record: object, attempts: int) -> ActiveShadowEvalJob | None:
+    """The sampling path's view of one job row, or None for a row it cannot sample: an
+    unknown direction, or a reverse job with no baseline model to duplicate against.
+    Failing closed here is what keeps the dispatch path total."""
+    try:
+        job: Final = ActiveShadowEvalJob.model_validate(record)
+    except ValidationError as e:
+        verbose_logger.debug("shadow_eval: skipping unsamplable job row: %s", e)
+        return None
+    return job.model_copy(update={"attempts": attempts})
 
 
 _jobs_cache: Final = InMemoryCache(max_size_in_memory=4, default_ttl=_JOBS_CACHE_TTL_SECONDS)
@@ -238,8 +286,9 @@ class ShadowEvalLogger(CustomLogger):
         # generation; the refill absorbs written rows and resets.
         self._job_starts: dict[str, int] = {}  # mutable-ok: per-generation counter
 
-    async def _active_jobs(self) -> Mapping[str, ActiveShadowEvalJob]:
-        """Active jobs by api_key_id, cache-first. A DB fault returns empty without
+    async def _active_jobs(self) -> Mapping[str, tuple[ActiveShadowEvalJob, ...]]:
+        """Active jobs by api_key_id, cache-first. A key holds at most one job per
+        direction, so the value is a collection. A DB fault returns empty without
         caching, so sampling pauses for that request and the next one retries."""
         cached: Final = await self._jobs_cache.async_get_cache(_JOBS_CACHE_KEY)
         if cached is not None:
@@ -264,18 +313,19 @@ class ShadowEvalLogger(CustomLogger):
                 else ()
             )
             attempt_counts: Final = {str(row["job_id"]): int(row["_count"]["_all"]) for row in grouped or []}
-            jobs: Final = {
-                str(record.api_key_id): ActiveShadowEvalJob(
-                    id=str(record.id),
-                    router_name=str(record.router_name),
-                    shadow_percentage=float(record.shadow_percentage),
-                    judge_model=str(record.judge_model),
-                    max_turns=int(record.max_turns),
-                    ends_at=_as_utc(record.ends_at),
-                    attempts=attempt_counts.get(str(record.id), 0),
+            by_key: Final = tuple(
+                sorted(
+                    (
+                        (str(record.api_key_id), job)
+                        for record in records or []
+                        if (job := _as_active_job(record, attempt_counts.get(str(record.id), 0))) is not None
+                    ),
+                    key=itemgetter(0),
                 )
-                for record in records or []
-            }
+            )
+            jobs: Final = MappingProxyType(
+                {key: tuple(job for _, job in group) for key, group in groupby(by_key, key=itemgetter(0))}
+            )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
             self._job_starts = {}  # rebind-ok: new generation, counts absorbed into the fill
             return jobs
@@ -308,43 +358,46 @@ class ShadowEvalLogger(CustomLogger):
             api_key_hash: Final = metadata.get("user_api_key_hash")
             if not api_key_hash:
                 return
-            job: Final = (await self._active_jobs()).get(str(api_key_hash))
-            if job is None:
-                return
-            if datetime.now(timezone.utc) >= job.ends_at:
-                return
-            if job.attempts + self._job_starts.get(job.id, 0) >= job.max_turns:
-                return
             request_id: Final = payload.get("id") or ""
             if not request_id:
                 return
-            if not _sample_hits(request_id, job.id, job.shadow_percentage):
-                return
             if payload.get("call_type") not in _SAMPLED_CALL_TYPES:
                 return  # only known chat-shaped traffic is comparable; unknown or missing types fail closed
-            if _request_was_routed_by(request_metadata, job.router_name):
-                return
-            if self._inflight_shadow_tasks >= _MAX_CONCURRENT_SHADOW_TASKS:
-                return
             raw_messages: Final = kwargs.get("messages")
-            self._job_starts[job.id] = self._job_starts.get(job.id, 0) + 1
-            self._inflight_shadow_tasks += 1
-            task: Final = asyncio.create_task(
-                self._run_shadow_eval(
-                    job=job,
-                    request_id=request_id,
-                    messages=tuple(m for m in raw_messages if isinstance(m, Mapping))
-                    if isinstance(raw_messages, Sequence)
-                    else (),
-                    response_obj=response_obj,
-                    real_model=payload.get("model") or "",
-                    model_parameters=MappingProxyType(
-                        dict(payload.get("model_parameters") or {})  # mutable-ok: frozen snapshot
-                    ),
-                    parent_metadata=MappingProxyType(dict(request_metadata)),  # mutable-ok: frozen snapshot
-                )
+            messages: Final = (
+                tuple(m for m in raw_messages if isinstance(m, Mapping)) if isinstance(raw_messages, Sequence) else ()
             )
-            task.add_done_callback(self._release_shadow_slot)
+            control_tier: Final = _routed_tier(request_metadata)
+            # A key can hold one job per direction, and a request routed by one job's
+            # router while bypassing the other's qualifies for both. Each is separately
+            # budgeted, so both fire.
+            for job in (await self._active_jobs()).get(str(api_key_hash), ()):
+                if datetime.now(timezone.utc) >= job.ends_at:
+                    continue
+                if job.attempts + self._job_starts.get(job.id, 0) >= job.max_turns:
+                    continue
+                if not _sample_hits(request_id, job.id, job.shadow_percentage):
+                    continue
+                if _request_was_routed_by(request_metadata, job.router_name) != (job.direction == "reverse"):
+                    continue
+                if self._inflight_shadow_tasks >= _MAX_CONCURRENT_SHADOW_TASKS:
+                    return
+                self._job_starts[job.id] = self._job_starts.get(job.id, 0) + 1
+                self._inflight_shadow_tasks += 1
+                asyncio.create_task(
+                    self._run_shadow_eval(
+                        job=job,
+                        request_id=request_id,
+                        messages=messages,
+                        response_obj=response_obj,
+                        real_model=payload.get("model") or "",
+                        control_tier=control_tier,
+                        model_parameters=MappingProxyType(
+                            dict(payload.get("model_parameters") or {})  # mutable-ok: frozen snapshot
+                        ),
+                        parent_metadata=MappingProxyType(dict(request_metadata)),  # mutable-ok: frozen snapshot
+                    )
+                ).add_done_callback(self._release_shadow_slot)
         except Exception as e:  # noqa: BLE001  # logging hooks must never fail the request
             verbose_logger.debug("shadow_eval: failed to schedule task: %s", e)
 
@@ -360,6 +413,7 @@ class ShadowEvalLogger(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         response_obj: object,
         real_model: str,
+        control_tier: str | None,
         model_parameters: Mapping[str, object],
         parent_metadata: Mapping[str, object],
     ) -> None:
@@ -376,9 +430,11 @@ class ShadowEvalLogger(CustomLogger):
             if await _key_or_team_is_over_budget(parent_metadata):
                 return
 
-            shadow: Final = await self._call_router_shadow(job.router_name, messages, model_parameters, parent_metadata)
+            shadow: Final = await self._call_router_shadow(
+                job.shadow_target, messages, model_parameters, parent_metadata
+            )
             if isinstance(shadow, _CallFailure):
-                await self._record_attempt(prisma, job, request_id, outcome="error", error=shadow.error)
+                await self._record_attempt(prisma, job, request_id, control_tier, outcome="error", error=shadow.error)
                 return
 
             verdict: Final = await self._call_judge(
@@ -393,6 +449,7 @@ class ShadowEvalLogger(CustomLogger):
                     prisma,
                     job,
                     request_id,
+                    control_tier,
                     outcome="error",
                     error=verdict.error,
                     shadow=shadow,
@@ -403,6 +460,7 @@ class ShadowEvalLogger(CustomLogger):
                 prisma,
                 job,
                 request_id,
+                control_tier,
                 outcome=verdict.preference,
                 shadow=shadow,
                 real_model=real_model,
@@ -411,13 +469,16 @@ class ShadowEvalLogger(CustomLogger):
             )
         except Exception as e:  # noqa: BLE001  # detached task: record what happened, never raise
             verbose_logger.debug("shadow_eval: pipeline failed for %s: %s", request_id, e)
-            await self._record_attempt(prisma, job, request_id, outcome="error", error=f"pipeline error: {e}")
+            await self._record_attempt(
+                prisma, job, request_id, control_tier, outcome="error", error=f"pipeline error: {e}"
+            )
 
     @staticmethod
     async def _record_attempt(
         prisma: "PrismaClient | None",
         job: ActiveShadowEvalJob,
         request_id: str,
+        control_tier: str | None,
         *,
         outcome: str,
         shadow: _ShadowResponse | None = None,
@@ -434,7 +495,7 @@ class ShadowEvalLogger(CustomLogger):
                     "job_id": job.id,
                     "request_id": request_id,
                     "outcome": outcome,
-                    "tier": shadow.tier if shadow else None,
+                    "tier": control_tier if job.direction == "reverse" else (shadow.tier if shadow else None),
                     "real_model": real_model or None,
                     "shadow_model": shadow.model if shadow else None,
                     "confidence": confidence,
@@ -447,14 +508,15 @@ class ShadowEvalLogger(CustomLogger):
 
     async def _call_router_shadow(
         self,
-        router_name: str,
+        target_model: str,
         messages: Sequence[Mapping[str, object]],
         model_parameters: Mapping[str, object],
         parent_metadata: Mapping[str, object],
     ) -> "_ShadowResponse | _CallFailure":
-        """Send the prompt through the auto-router being evaluated. The metadata carries
-        the shadowed key's identity (spend attribution) and receives the router's routing
-        decision write-back, read back for tier attribution."""
+        """Send the prompt through the arm nobody was served: the auto-router under
+        evaluation, or a reverse job's fixed baseline model. The metadata carries the
+        shadowed key's identity (spend attribution) and receives a routing decision
+        write-back, which a plain baseline model simply never makes."""
         router: Final = self._router_provider()
         if router is None:
             return _CallFailure("no router configured on this pod")
@@ -466,7 +528,7 @@ class ShadowEvalLogger(CustomLogger):
         }
         try:
             response: Final = await router.acompletion(
-                model=router_name,
+                model=target_model,
                 messages=messages,  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
                 metadata=shadow_metadata,
                 num_retries=0,
@@ -479,13 +541,10 @@ class ShadowEvalLogger(CustomLogger):
         text: Final = self._extract_response_text(response)
         if not text:
             return _CallFailure("shadow router returned an empty response")
-        raw_decision: Final = shadow_metadata.get("routing_decision")
-        routing_decision: Final = raw_decision if isinstance(raw_decision, Mapping) else _EMPTY_METADATA
-        raw_tier: Final = routing_decision.get("tier_label") or routing_decision.get("tier")
         return _ShadowResponse(
             text=text,
-            model=str(getattr(response, "model", None) or routing_decision.get("routed_model") or ""),
-            tier=str(raw_tier) if raw_tier is not None else None,
+            model=str(getattr(response, "model", None) or _routing_decision(shadow_metadata).get("routed_model") or ""),
+            tier=_routed_tier(shadow_metadata),
         )
 
     async def _call_judge(
@@ -552,7 +611,7 @@ class ShadowEvalLogger(CustomLogger):
         return extract_text_from_content(content)
 
 
-_EMPTY_JOBS: Final[Mapping[str, ActiveShadowEvalJob]] = MappingProxyType({})
+_EMPTY_JOBS: Final[Mapping[str, tuple[ActiveShadowEvalJob, ...]]] = MappingProxyType({})
 
 
 def _default_prisma_provider() -> "PrismaClient | None":

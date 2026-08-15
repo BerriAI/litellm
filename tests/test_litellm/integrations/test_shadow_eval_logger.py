@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
@@ -19,7 +20,7 @@ from litellm.integrations.shadow_eval_logger import (
     _sample_hits,
     _unmask_preference,
 )
-from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
+from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN, ModelResponse
 
 
 def _job(**overrides) -> ActiveShadowEvalJob:
@@ -51,6 +52,8 @@ def _job_record(job: ActiveShadowEvalJob, api_key_id="key-hash") -> MagicMock:
         id=job.id,
         api_key_id=api_key_id,
         router_name=job.router_name,
+        direction=job.direction,
+        baseline_model=job.baseline_model,
         shadow_percentage=job.shadow_percentage,
         judge_model=job.judge_model,
         max_turns=job.max_turns,
@@ -61,40 +64,55 @@ def _job_record(job: ActiveShadowEvalJob, api_key_id="key-hash") -> MagicMock:
 
 
 def _router(shadow_text="shadow answer", judge_json='{"preference": "A", "confidence": 0.9, "reasoning": "x"}'):
-    """One mock router serving the shadow call first, the judge call second. The shadow
-    call's metadata receives the routing decision write-back, like the real router."""
+    """One mock router serving the shadow call first, the judge call second, told apart by
+    the internal-origin stamp rather than the model, since a reverse job's shadow arm names
+    a plain model. Only the auto-router writes a routing decision back, and only a plain
+    model reports the model it served on the response, which is how each direction learns
+    which model answered."""
     router = MagicMock()
     router.model_group_alias = {}
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
+        if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+            return {"choices": [{"message": {"content": judge_json}}]}
         if kwargs["model"] == "my-router":
             kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": "cheap-model"}
             return {"choices": [{"message": {"content": shadow_text}}], "usage": {"completion_tokens": 5}}
-        return {"choices": [{"message": {"content": judge_json}}]}
+        return ModelResponse(
+            model=kwargs["model"],
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": shadow_text}}],
+        )
 
     router.acompletion = MagicMock(side_effect=acompletion)
     return router
 
 
-def _logger(router=None, prisma=None, job=None) -> ShadowEvalLogger:
+def _logger(router=None, prisma=None, jobs=()) -> ShadowEvalLogger:
     cache = InMemoryCache(max_size_in_memory=4, default_ttl=60)
     logger = ShadowEvalLogger(
         router_provider=lambda: router,
         prisma_provider=lambda: prisma,
         jobs_cache=cache,
     )
-    if job is not None:
-        cache.set_cache("shadow_eval:active_jobs", {"key-hash": job})
+    if jobs:
+        cache.set_cache("shadow_eval:active_jobs", {"key-hash": tuple(jobs)})
     return logger
 
 
-def _success_kwargs(request_id="req-1", api_key_hash="key-hash", request_metadata=None, call_type="acompletion"):
+def _routed_by(router_name="my-router", tier="COMPLEX"):
+    """Metadata as a pre-routing strategy leaves it on the request it served."""
+    return {"routing_decision": {"router_model_name": router_name, "tier_label": tier, "routed_model": "router-pick"}}
+
+
+def _success_kwargs(
+    request_id="req-1", api_key_hash="key-hash", request_metadata=None, call_type="acompletion", model="claude-opus"
+):
     return {
         "standard_logging_object": {
             "id": request_id,
             "call_type": call_type,
-            "model": "claude-opus",
+            "model": model,
             "metadata": {"user_api_key_hash": api_key_hash},
             "model_parameters": {"temperature": 0.5, "stream": True},
         },
@@ -164,7 +182,7 @@ class TestSuccessHookSkipChain:
         monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
         prisma = _prisma()
         router = _router()
-        logger = _logger(router=router, prisma=prisma, job=_job())
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
 
         await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
         await _drain(logger)
@@ -209,7 +227,7 @@ class TestSuccessHookSkipChain:
     async def test_skip_paths_store_nothing(self, kwargs_mutation, job_mutation):
         starts = job_mutation.pop("_starts", 0)
         prisma = _prisma()
-        logger = _logger(router=_router(), prisma=prisma, job=_job(**job_mutation))
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(**job_mutation),))
         logger._job_starts = {"job-1": starts}
 
         await logger.async_log_success_event(_success_kwargs(**kwargs_mutation), RESPONSE, None, None)
@@ -222,7 +240,7 @@ class TestSuccessHookSkipChain:
         """A finished pipeline frees its concurrency slot but not its slice of the turn
         budget; the budget only reopens when a cache refill absorbs the written rows."""
         prisma = _prisma()
-        logger = _logger(router=_router(), prisma=prisma, job=_job(attempts=199, max_turns=200))
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(attempts=199, max_turns=200),))
 
         await logger.async_log_success_event(_success_kwargs(request_id="req-1"), RESPONSE, None, None)
         await _drain(logger)
@@ -237,7 +255,7 @@ class TestSuccessHookSkipChain:
         identity to the shadow and judge calls."""
         prisma = _prisma()
         router = _router()
-        logger = _logger(router=router, prisma=prisma, job=_job())
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
 
         hook_kwargs = _success_kwargs()
         hook_kwargs["litellm_params"] = {
@@ -256,7 +274,7 @@ class TestSuccessHookSkipChain:
         predicate, so every redaction source counts."""
         prisma = _prisma()
         router = _router()
-        logger = _logger(router=router, prisma=prisma, job=_job())
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
 
         hook_kwargs = _success_kwargs()
         hook_kwargs["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
@@ -268,7 +286,7 @@ class TestSuccessHookSkipChain:
 
     async def test_inflight_cap_sheds_instead_of_queueing(self):
         prisma = _prisma()
-        logger = _logger(router=_router(), prisma=prisma, job=_job())
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(),))
         logger._inflight_shadow_tasks = _MAX_CONCURRENT_SHADOW_TASKS
 
         await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
@@ -291,8 +309,8 @@ class TestActiveJobsCache:
         first = await logger._active_jobs()
         second = await logger._active_jobs()
 
-        assert first["key-hash"].id == "job-1"
-        assert second["key-hash"].attempts == 7
+        assert [job.id for job in first["key-hash"]] == ["job-1"]
+        assert second["key-hash"][0].attempts == 7
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
         where = prisma.db.litellm_shadowevaljob.find_many.call_args.kwargs["where"]
         assert where["stopped_at"] is None
@@ -353,6 +371,7 @@ class TestShadowPipeline:
             messages=({"role": "user", "content": "hi"},),
             response_obj=RESPONSE,
             real_model="claude-opus",
+            control_tier=None,
             model_parameters={},
             parent_metadata={},
         )
@@ -381,6 +400,7 @@ class TestShadowPipeline:
             messages=({"role": "user", "content": "hi"},),
             response_obj=RESPONSE,
             real_model="claude-opus",
+            control_tier=None,
             model_parameters={},
             parent_metadata={"user_api_key_auth": UserAPIKeyAuth(api_key="sk-abc", max_budget=10.0)},
         )
@@ -411,6 +431,7 @@ class TestShadowPipeline:
             messages=({"role": "user", "content": "hi"},),
             response_obj=RESPONSE,
             real_model="claude-opus",
+            control_tier=None,
             model_parameters={},
             parent_metadata={},
         )
@@ -438,6 +459,7 @@ class TestShadowPipeline:
             messages=({"role": "user", "content": "hi"},),
             response_obj=RESPONSE,
             real_model="claude-opus",
+            control_tier=None,
             model_parameters={"stream": True, "temperature": 0.2, "metadata": {"x": 1}},
             parent_metadata=parent_metadata,
         )
@@ -456,6 +478,164 @@ class TestShadowPipeline:
         assert "stream" not in shadow_call
         assert shadow_call["temperature"] == 0.2
         assert judge_call["max_tokens"] == JUDGE_MAX_OUTPUT_TOKENS
+
+
+def _reverse_job(**overrides) -> ActiveShadowEvalJob:
+    return _job(**{"direction": "reverse", "baseline_model": "baseline-model", **overrides})
+
+
+class TestJobValidation:
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"direction": "reverse"},
+            {"baseline_model": "baseline-model"},
+            {"direction": "sideways", "baseline_model": "baseline-model"},
+        ],
+        ids=["reverse-without-baseline", "forward-with-baseline", "unknown-direction"],
+    )
+    def test_unsamplable_shapes_are_rejected(self, overrides):
+        with pytest.raises(ValidationError):
+            _job(**overrides)
+
+    def test_shadow_target_follows_direction(self):
+        assert _job().shadow_target == "my-router"
+        assert _reverse_job().shadow_target == "baseline-model"
+
+
+@pytest.mark.asyncio
+class TestDirection:
+    @pytest.mark.parametrize(
+        "job,routed_by,sampled",
+        [
+            (_job(), None, True),
+            (_job(), "my-router", False),
+            (_job(), "other-router", True),
+            (_reverse_job(), "my-router", True),
+            (_reverse_job(), None, False),
+            (_reverse_job(), "other-router", False),
+        ],
+        ids=[
+            "forward-samples-unrouted",
+            "forward-skips-its-own-router",
+            "forward-samples-another-router",
+            "reverse-samples-its-own-router",
+            "reverse-skips-unrouted",
+            "reverse-skips-another-router",
+        ],
+    )
+    async def test_direction_decides_which_traffic_is_sampled(self, job, routed_by, sampled):
+        """The two directions partition the key's traffic: whatever one samples, the other
+        skips, so a key running both never judges the same turn twice for the same reason."""
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(job,))
+
+        await logger.async_log_success_event(
+            _success_kwargs(request_metadata=_routed_by(routed_by) if routed_by else {}), RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == int(sampled)
+
+    async def test_reverse_duplicates_against_the_baseline_model(self):
+        prisma = _prisma()
+        router = _router()
+        logger = _logger(router=router, prisma=prisma, jobs=(_reverse_job(),))
+
+        await logger.async_log_success_event(
+            _success_kwargs(request_metadata=_routed_by()), RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        assert router.acompletion.call_args_list[0].kwargs["model"] == "baseline-model"
+
+    async def test_reverse_row_orients_arms_and_reads_tier_off_the_served_request(self):
+        """real is what the caller received, so in reverse it is the router's own pick and
+        the tier that produced it; only the shadow arm moves to the baseline."""
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_reverse_job(),))
+
+        await logger.async_log_success_event(
+            _success_kwargs(request_metadata=_routed_by(tier="COMPLEX"), model="router-pick"), RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["real_model"] == "router-pick"
+        assert row["shadow_model"] == "baseline-model"
+        assert row["tier"] == "COMPLEX"
+
+    async def test_forward_row_still_reads_tier_off_the_shadow_call(self):
+        """A forward job's tier describes the arm being evaluated, which is the shadow one,
+        so a routing decision on the incumbent request must not leak into it."""
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(
+            _success_kwargs(request_metadata=_routed_by("other-router", tier="CONTROL_TIER")), RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["tier"] == "SIMPLE"
+        assert row["shadow_model"] == "cheap-model"
+
+    async def test_a_key_running_both_directions_dispatches_both(self):
+        """One request can qualify for a forward job on a router that did not serve it and a
+        reverse job on the router that did. The two are separately budgeted experiments, so
+        both fire rather than one silently losing the turn."""
+        prisma = _prisma()
+        logger = _logger(
+            router=_router(),
+            prisma=prisma,
+            jobs=(_job(id="forward-job", router_name="other-router"), _reverse_job(id="reverse-job")),
+        )
+
+        await logger.async_log_success_event(
+            _success_kwargs(request_metadata=_routed_by()), RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.call_args_list]
+        assert sorted(row["job_id"] for row in rows) == ["forward-job", "reverse-job"]
+        assert logger._job_starts == {"forward-job": 1, "reverse-job": 1}
+
+
+@pytest.mark.asyncio
+class TestActiveJobsFailClosed:
+    async def test_a_row_the_sampler_cannot_read_is_dropped_not_guessed(self):
+        """A reverse row with no baseline model has no second arm to call, so it is skipped
+        rather than silently dispatched at the router it is supposed to be judging."""
+        broken = _job_record(_job(id="job-broken"))
+        broken.direction = "reverse"
+        broken.baseline_model = None
+        prisma = _prisma(jobs=[broken, _job_record(_job(id="job-ok"))], attempt_counts=[("job-ok", 1)])
+        logger = ShadowEvalLogger(
+            router_provider=lambda: None,
+            prisma_provider=lambda: prisma,
+            jobs_cache=InMemoryCache(max_size_in_memory=4, default_ttl=60),
+        )
+
+        assert [job.id for job in (await logger._active_jobs())["key-hash"]] == ["job-ok"]
+
+    async def test_both_of_a_key_s_jobs_survive_the_lookup(self):
+        records = [
+            _job_record(_job(id="job-forward")),
+            _job_record(_reverse_job(id="job-reverse")),
+            _job_record(_job(id="job-other"), api_key_id="other-key"),
+        ]
+        prisma = _prisma(jobs=records, attempt_counts=[("job-reverse", 3)])
+        logger = ShadowEvalLogger(
+            router_provider=lambda: None,
+            prisma_provider=lambda: prisma,
+            jobs_cache=InMemoryCache(max_size_in_memory=4, default_ttl=60),
+        )
+
+        jobs = await logger._active_jobs()
+
+        assert sorted(job.id for job in jobs["key-hash"]) == ["job-forward", "job-reverse"]
+        assert [job.id for job in jobs["other-key"]] == ["job-other"]
+        assert {job.id: job.attempts for job in jobs["key-hash"]}["job-reverse"] == 3
 
 
 def _failing_router():
