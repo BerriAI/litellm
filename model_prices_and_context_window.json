@@ -16295,6 +16295,14 @@
             "notes": "TinyFish Search API"
         }
     },
+    "nimble/search": {
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "nimble",
+        "mode": "search",
+        "metadata": {
+            "notes": "Nimble Search API pay-as-you-go list price: $5 per 1,000 searches, up to 100 results per search. Volume plans price differently."
+        }
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
