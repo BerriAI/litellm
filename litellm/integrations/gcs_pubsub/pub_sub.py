@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.types.utils import StandardLoggingPayload
 
@@ -31,9 +31,9 @@ from litellm.llms.custom_httpx.http_handler import (
 class GcsPubSubLogger(CustomBatchLogger):
     def __init__(
         self,
-        project_id: Optional[str] = None,
-        topic_id: Optional[str] = None,
-        credentials_path: Optional[str] = None,
+        project_id: str | None = None,
+        topic_id: str | None = None,
+        credentials_path: str | None = None,
         **kwargs,
     ):
         """
@@ -60,9 +60,9 @@ class GcsPubSubLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[Union[SpendLogsPayload, StandardLoggingPayload]] = []
+        self.log_queue: list[SpendLogsPayload | StandardLoggingPayload] = []
 
-    async def construct_request_headers(self) -> Dict[str, str]:
+    async def construct_request_headers(self) -> dict[str, str]:
         """Construct authorization headers using Vertex AI auth"""
         from litellm import vertex_chat_completion
 
@@ -87,7 +87,7 @@ class GcsPubSubLogger(CustomBatchLogger):
             api_base=None,
         )
 
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {auth_header}",
             "Content-Type": "application/json",
         }
@@ -113,11 +113,11 @@ class GcsPubSubLogger(CustomBatchLogger):
 
         try:
             verbose_logger.debug("PubSub: Logging - Enters logging function for model %s", kwargs)
-            standard_logging_payload = kwargs.get("standard_logging_object", None)
+            standard_logging_payload: Final = kwargs.get("standard_logging_object", None)
 
             # Backwards compatibility with old logging payload
             if litellm.gcs_pub_sub_use_v1 is True:
-                spend_logs_payload = get_logging_payload(
+                spend_logs_payload: Final = get_logging_payload(
                     kwargs=kwargs,
                     response_obj=response_obj,
                     start_time=start_time,
@@ -132,8 +132,7 @@ class GcsPubSubLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"PubSub Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
+            verbose_logger.exception("PubSub Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_send_batch(self):
         """
@@ -143,19 +142,17 @@ class GcsPubSubLogger(CustomBatchLogger):
             if not self.log_queue:
                 return
 
-            verbose_logger.debug(f"PubSub - about to flush {len(self.log_queue)} events")
+            verbose_logger.debug("PubSub - about to flush %s events", len(self.log_queue))
 
             for message in self.log_queue:
                 await self.publish_message(message)
 
         except Exception as e:
-            verbose_logger.exception(f"PubSub Error sending batch - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.exception("PubSub Error sending batch - %s\n%s", e, traceback.format_exc())
         finally:
             self.log_queue.clear()
 
-    async def publish_message(
-        self, message: Union[SpendLogsPayload, StandardLoggingPayload]
-    ) -> Optional[Dict[str, Any]]:
+    async def publish_message(self, message: SpendLogsPayload | StandardLoggingPayload) -> dict[str, Any] | None:
         """
         Publish message to Google Cloud Pub/Sub using REST API
 
@@ -166,7 +163,7 @@ class GcsPubSubLogger(CustomBatchLogger):
             dict: Published message response
         """
         try:
-            headers = await self.construct_request_headers()
+            headers: Final = await self.construct_request_headers()
 
             # Prepare message data
             if isinstance(message, str):
@@ -177,14 +174,14 @@ class GcsPubSubLogger(CustomBatchLogger):
             # Base64 encode the message
             import base64
 
-            encoded_message = base64.b64encode(message_data.encode("utf-8")).decode("utf-8")
+            encoded_message: Final = base64.b64encode(message_data.encode("utf-8")).decode("utf-8")
 
             # Construct request body
-            request_body = {"messages": [{"data": encoded_message}]}
+            request_body: Final = {"messages": [{"data": encoded_message}]}
 
-            url = f"https://pubsub.googleapis.com/v1/projects/{self.project_id}/topics/{self.topic_id}:publish"
+            url: Final = f"https://pubsub.googleapis.com/v1/projects/{self.project_id}/topics/{self.topic_id}:publish"
 
-            response = await self.async_httpx_client.post(url=url, headers=headers, json=request_body)
+            response: Final = await self.async_httpx_client.post(url=url, headers=headers, json=request_body)
 
             if response.status_code not in [200, 202]:
                 verbose_logger.error("Pub/Sub publish error: %s", str(response.text))
