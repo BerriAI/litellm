@@ -93,6 +93,16 @@ def test_map_extra_body_params_top_level_reasoning_effort_moves_into_extra_body(
         _REASONING_MODEL,
     )
     assert result == {"extra_body": {"reasoning_effort": "high"}}
+
+
+def test_map_extra_body_params_top_level_thinking_moves_into_extra_body():
+    config = FireworksAITextCompletionConfig()
+    thinking = {"type": "enabled", "budget_tokens": 1024}
+    result = config.map_extra_body_params(
+        {"thinking": thinking, "max_tokens": 300},
+        _REASONING_MODEL,
+    )
+    assert result == {"max_tokens": 300, "extra_body": {"thinking": thinking}}
     assert "reasoning_effort" not in {
         k for k in result if k != "extra_body"
     }
