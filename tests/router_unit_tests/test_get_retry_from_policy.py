@@ -16,6 +16,7 @@ from litellm.exceptions import (
     RateLimitError,
     Timeout,
 )
+from litellm.router_utils.get_retry_from_policy import get_num_retries_from_retry_policy
 
 
 @pytest.mark.parametrize(
@@ -37,29 +38,17 @@ from litellm.exceptions import (
 def test_get_num_retries_from_retry_policy_direct(
     exception_type, retry_policy, expected
 ):
-    from litellm.router_utils.get_retry_from_policy import (
-        get_num_retries_from_retry_policy,
-    )
-
     exception = exception_type(message="test", llm_provider="openai", model="gpt-5-mini")
     assert get_num_retries_from_retry_policy(exception, retry_policy) == expected
 
 
 def test_get_num_retries_from_retry_policy_notfound_none_direct():
-    from litellm.router_utils.get_retry_from_policy import (
-        get_num_retries_from_retry_policy,
-    )
-
     retry_policy = RetryPolicy()
     exception = NotFoundError(message="test", llm_provider="openai", model="gpt-5-mini")
     assert get_num_retries_from_retry_policy(exception, retry_policy) is None
 
 
 def test_get_num_retries_from_retry_policy_unknown_exception_direct():
-    from litellm.router_utils.get_retry_from_policy import (
-        get_num_retries_from_retry_policy,
-    )
-
     retry_policy = RetryPolicy(BadRequestErrorRetries=3)
     exception = Exception("unknown")
     assert get_num_retries_from_retry_policy(exception, retry_policy) is None
