@@ -25,6 +25,10 @@ from litellm.integrations.custom_guardrail import (
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.policy_engine.pipeline_types import (
+    GuardrailPipeline,
+    PipelineStep,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -356,36 +360,30 @@ async def test_maybe_execute_pipelines_reads_litellm_metadata_when_caller_sends_
 ):
     """On /v1/messages the proxy stores policy state in ``litellm_metadata``, while the
     caller's provider-facing ``metadata`` (Claude Code sends ``metadata.user_id``) stays
-    untouched. The pipeline must still run."""
-    pipeline = MagicMock()
-    pipeline.mode = "pre_call"
-    pipeline.steps = []
-    fake_result = MagicMock()
-    fake_result.terminal_action = "allow"
-    fake_result.modified_data = None
-    fake_result.step_results = []
+    untouched. The pipeline must still run and block."""
+
+    class BlockingGuardrail(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise HTTPException(status_code=400, detail={"error": "blocked by pipeline"})
+
+    monkeypatch.setattr(litellm, "callbacks", [BlockingGuardrail(guardrail_name="gr-1")])
+    pipeline = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="gr-1", on_fail="block")])
     data = {
         "metadata": {"user_id": "user_abc"},
         "litellm_metadata": {"_guardrail_pipelines": [("policy-1", pipeline)]},
         "messages": [],
         "model": "m",
     }
-    executed = MagicMock(return_value=fake_result)
 
-    async def fake_execute_steps(**kwargs):
-        return executed(**kwargs)
-
-    monkeypatch.setattr(
-        "litellm.proxy.policy_engine.pipeline_executor.PipelineExecutor.execute_steps",
-        fake_execute_steps,
-    )
-    await proxy_logging._maybe_execute_pipelines(
-        data=data,
-        user_api_key_dict=make_user_api_key_auth(),
-        call_type="anthropic_messages",
-        event_hook="pre_call",
-    )
-    executed.assert_called_once()
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_logging._maybe_execute_pipelines(
+            data=data,
+            user_api_key_dict=make_user_api_key_auth(),
+            call_type="anthropic_messages",
+            event_hook="pre_call",
+        )
+    assert exc_info.value.detail["error"] == "blocked by pipeline"
+    assert exc_info.value.detail["guardrail_name"] == "gr-1"
 
 
 @pytest.mark.asyncio
