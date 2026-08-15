@@ -581,14 +581,17 @@ async def _fetch_global_spend_with_event_coordination(
         if db_spend is not None and db_spend > numeric_value:
             # Use a monotonic write so a concurrent increment that already
             # pushed Redis above the DB value is not overwritten by a repair
-            # carrying a slightly-stale DB total.
+            # carrying a slightly-stale DB total. Use the resulting Redis value
+            # so the enforced total reflects any concurrent increment.
+            repaired_value: Final[float | None] = (
+                await user_api_key_cache.redis_cache.async_set_max(
+                    key=cache_key, value=db_spend
+                )
+            )
+            numeric_value = repaired_value if repaired_value is not None else db_spend
             user_api_key_cache.in_memory_cache.set_cache(
-                key=cache_key, value=db_spend
+                key=cache_key, value=numeric_value
             )
-            await user_api_key_cache.redis_cache.async_set_max(
-                key=cache_key, value=db_spend
-            )
-            numeric_value = db_spend
 
     return numeric_value
 

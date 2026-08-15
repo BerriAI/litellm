@@ -1335,9 +1335,12 @@ async def test_update_cache_global_proxy_spend_concurrent_increments_after_reset
 
 
 @pytest.mark.asyncio
-async def test_update_cache_global_proxy_spend_mirrors_authoritative_value(monkeypatch):
-    """In-memory mirrors the authoritative Redis result instead of accruing a
-    stale pre-reset value, so budget checks do not reject off stale memory."""
+async def test_update_cache_global_proxy_spend_does_not_mirror_to_in_memory(
+    monkeypatch,
+):
+    """Authorization reads the shared Redis scalar directly, so the increment
+    path must not maintain a per-worker in-memory copy that could go stale
+    across resets and confuse budget checks."""
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.caching.caching import DualCache
@@ -1348,12 +1351,12 @@ async def test_update_cache_global_proxy_spend_mirrors_authoritative_value(monke
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
 
     await cache.async_set_cache(
-        key="user-mirror",
-        value={"user_id": "user-mirror", "spend": 0.0},
+        key="user-no-mirror",
+        value={"user_id": "user-no-mirror", "spend": 0.0},
     )
     await ps.update_cache(
         token=None,
-        user_id="user-mirror",
+        user_id="user-no-mirror",
         end_user_id=None,
         team_id=None,
         response_cost=1.5,
@@ -1366,7 +1369,7 @@ async def test_update_cache_global_proxy_spend_mirrors_authoritative_value(monke
         ttl=ps.get_management_object_ttl(cache),
         refresh_ttl=True,
     )
-    assert await cache.async_get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY) == 3.5
+    assert cache.in_memory_cache.get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY) is None
 
 
 @pytest.mark.asyncio

@@ -3127,19 +3127,14 @@ async def update_cache(
             return
         try:
             # Atomically accumulate the shared global-proxy scalar in Redis.
-            # The returned value is authoritative across workers, so mirror it
-            # into this worker's in-memory tier to avoid accumulating a stale
-            # pre-reset local value.
+            # Authorization reads this Redis scalar directly, so there is no
+            # per-worker in-memory copy that can go stale across resets.
             if user_api_key_cache.redis_cache is not None:
-                current = await user_api_key_cache.redis_cache.async_increment(
+                await user_api_key_cache.redis_cache.async_increment(
                     key=GLOBAL_PROXY_SPEND_CACHE_KEY,
                     value=response_cost,
                     ttl=get_management_object_ttl(user_api_key_cache),
                     refresh_ttl=True,
-                )
-                await user_api_key_cache.in_memory_cache.async_set_cache(
-                    key=GLOBAL_PROXY_SPEND_CACHE_KEY,
-                    value=current,
                 )
             else:
                 # No Redis: single-process, so an in-memory increment is coherent.

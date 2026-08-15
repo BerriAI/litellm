@@ -6168,7 +6168,7 @@ async def test_global_proxy_spend_floors_stale_low_redis_to_db():
     cache = UserApiKeyCache()
     redis_cache = MagicMock()
     redis_cache.async_get_cache = AsyncMock(return_value="2.0")
-    redis_cache.async_set_max = AsyncMock()
+    redis_cache.async_set_max = AsyncMock(side_effect=lambda key, value: value)
     cache.redis_cache = redis_cache
 
     proxy_budget_row = MagicMock()
@@ -6204,7 +6204,7 @@ async def test_global_proxy_spend_floor_does_not_overwrite_concurrent_increment(
     cache = UserApiKeyCache()
     redis_cache = MagicMock()
     redis_cache.async_get_cache = AsyncMock(return_value="2.0")
-    redis_cache.async_set_max = AsyncMock()
+    redis_cache.async_set_max = AsyncMock(side_effect=lambda key, value: value)
     cache.redis_cache = redis_cache
 
     proxy_budget_row = MagicMock()
@@ -6238,7 +6238,7 @@ async def test_global_proxy_spend_marker_cached_db_value_used_without_db_query()
     cache = UserApiKeyCache()
     redis_cache = MagicMock()
     redis_cache.async_get_cache = AsyncMock(return_value="2.0")
-    redis_cache.async_set_max = AsyncMock()
+    redis_cache.async_set_max = AsyncMock(side_effect=lambda key, value: value)
     cache.redis_cache = redis_cache
 
     # Seed the marker cache with a DB value greater than Redis.
