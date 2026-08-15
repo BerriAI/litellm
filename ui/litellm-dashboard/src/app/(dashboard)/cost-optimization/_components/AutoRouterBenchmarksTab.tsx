@@ -64,7 +64,7 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
               variant="secondary"
               className={cheaper ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-destructive"}
             >
-              {cheaper ? "-" : "+"}
+              {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
               {Math.abs(stats.saved_pct).toFixed(0)}%
             </Badge>
           </div>
@@ -95,7 +95,7 @@ const StackedTurnBar: React.FC<{ buckets: BucketRow[] }> = ({ buckets }) => {
   return (
     <div className="flex flex-col gap-1">
       <div
-        className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-sm"
+        className={`flex h-2.5 w-full gap-0.5 overflow-hidden rounded-sm ${segments.length === 0 ? "bg-muted" : ""}`}
         role="img"
         aria-label="Share of turns by bucket"
       >
@@ -230,7 +230,6 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
     return <Message>Auto-router usage is visible to proxy admin roles only</Message>;
   }
   if (error || !data) return <Message>Auto-router usage is unavailable right now</Message>;
-  if (data.groups.length === 0) return <Message>No auto-router sessions in this window yet</Message>;
 
   const view = viewFor(data, selectedKey);
   const stats = view.stats;
