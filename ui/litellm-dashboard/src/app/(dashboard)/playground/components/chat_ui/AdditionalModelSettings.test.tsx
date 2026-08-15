@@ -129,6 +129,26 @@ describe("AdditionalModelSettings", () => {
     });
   });
 
+  it.each([
+    ["Help: Stream responses", /Streams the answer token by token/],
+    ["Help: Simulate failure to test fallbacks", /Causes the first request to fail/],
+    ["Help: Temperature", /Controls randomness/],
+    ["Help: Max Tokens", /Maximum number of tokens to generate/],
+  ])("should open the %s help on click and not on hover", async (triggerLabel, helpText) => {
+    const user = userEvent.setup();
+
+    render(<AdditionalModelSettings onStreamingChange={vi.fn()} onMockTestFallbacksChange={vi.fn()} />);
+
+    const trigger = screen.getByLabelText(triggerLabel);
+
+    await user.hover(trigger);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(screen.queryByText(helpText)).not.toBeInTheDocument();
+
+    await user.click(trigger);
+    await waitFor(() => expect(screen.getByText(helpText)).toBeInTheDocument());
+  });
+
   it("should keep a half-typed decimal temperature instead of rewriting it", async () => {
     const onTemperatureChange = vi.fn();
 

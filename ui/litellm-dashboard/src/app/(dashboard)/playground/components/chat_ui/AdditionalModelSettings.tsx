@@ -3,7 +3,6 @@ import React, { useEffect, useId, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
 
 interface AdditionalModelSettingsProps {
@@ -19,6 +18,8 @@ interface AdditionalModelSettingsProps {
   onStreamingChange?: (value: boolean) => void;
   showAdvancedParams?: boolean;
 }
+
+const helpPopoverClassName = "max-w-[340px] gap-2 p-3 text-sm";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -116,15 +117,17 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
           <label htmlFor={streamingId} className="cursor-pointer text-sm font-medium">
             Stream responses
           </label>
-          <Tooltip>
-            <TooltipTrigger aria-label="Help: Stream responses">
+          <Popover>
+            <PopoverTrigger aria-label="Help: Stream responses">
               <Info className="size-3 shrink-0 cursor-pointer text-gray-400 hover:text-gray-600" />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-xs">
-              Streams the answer token by token. Uncheck to send a non-streaming request and render the full response at
-              once.
-            </TooltipContent>
-          </Tooltip>
+            </PopoverTrigger>
+            <PopoverContent side="right" className={helpPopoverClassName}>
+              <p>
+                Streams the answer token by token. Uncheck to send a non-streaming request and render the full response
+                at once.
+              </p>
+            </PopoverContent>
+          </Popover>
         </div>
       )}
 
@@ -157,7 +160,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
             <PopoverTrigger aria-label="Help: Simulate failure to test fallbacks">
               <Info className="size-3 shrink-0 cursor-pointer text-gray-400 hover:text-gray-600" />
             </PopoverTrigger>
-            <PopoverContent side="right" className="max-w-[340px] gap-2 p-3 text-sm">
+            <PopoverContent side="right" className={helpPopoverClassName}>
               <p>
                 Causes the first request to fail so the router tries fallbacks (if configured). Use this to verify your
                 fallback setup.
@@ -188,14 +191,16 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
                 <label htmlFor={temperatureId} className={cn("text-sm", disabledTextColor)}>
                   Temperature
                 </label>
-                <Tooltip>
-                  <TooltipTrigger aria-label="Help: Temperature">
-                    <Info className={cn("size-3 cursor-help", disabledTextColor)} />
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-xs">
-                    Controls randomness. Lower values make output more deterministic, higher values more creative.
-                  </TooltipContent>
-                </Tooltip>
+                <Popover>
+                  <PopoverTrigger aria-label="Help: Temperature">
+                    <Info className={cn("size-3 cursor-pointer", disabledTextColor)} />
+                  </PopoverTrigger>
+                  <PopoverContent side="right" className={helpPopoverClassName}>
+                    <p>
+                      Controls randomness. Lower values make output more deterministic, higher values more creative.
+                    </p>
+                  </PopoverContent>
+                </Popover>
               </div>
               <Input
                 id={`${temperatureId}-number`}
@@ -234,14 +239,14 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
                 <label htmlFor={maxTokensId} className={cn("text-sm", disabledTextColor)}>
                   Max Tokens
                 </label>
-                <Tooltip>
-                  <TooltipTrigger aria-label="Help: Max Tokens">
-                    <Info className={cn("size-3 cursor-help", disabledTextColor)} />
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-xs">
-                    Maximum number of tokens to generate in the response.
-                  </TooltipContent>
-                </Tooltip>
+                <Popover>
+                  <PopoverTrigger aria-label="Help: Max Tokens">
+                    <Info className={cn("size-3 cursor-pointer", disabledTextColor)} />
+                  </PopoverTrigger>
+                  <PopoverContent side="right" className={helpPopoverClassName}>
+                    <p>Maximum number of tokens to generate in the response.</p>
+                  </PopoverContent>
+                </Popover>
               </div>
               <Input
                 id={`${maxTokensId}-number`}
