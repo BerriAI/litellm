@@ -49,18 +49,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
 
-        # Handle thinking parameter - only accept {"type": "enabled"}
+        # Handle thinking parameter - DeepSeek accepts explicit enabled/disabled mode.
         if thinking_value is not None:
-            if (
-                isinstance(thinking_value, dict)
-                and thinking_value.get("type") == "enabled"
+            if isinstance(thinking_value, dict) and thinking_value.get("type") in (
+                "enabled",
+                "disabled",
             ):
-                # DeepSeek only accepts {"type": "enabled"}, ignore budget_tokens
-                optional_params["thinking"] = {"type": "enabled"}
+                # DeepSeek does not support budget_tokens; pass only the mode.
+                optional_params["thinking"] = {"type": thinking_value["type"]}
 
-        # Handle reasoning_effort - map to thinking enabled
-        elif reasoning_effort is not None and reasoning_effort != "none":
-            optional_params["thinking"] = {"type": "enabled"}
+        # Handle reasoning_effort - map none to explicit disabled thinking.
+        elif reasoning_effort is not None:
+            optional_params["thinking"] = {
+                "type": "disabled" if reasoning_effort == "none" else "enabled"
+            }
 
         return optional_params
 
