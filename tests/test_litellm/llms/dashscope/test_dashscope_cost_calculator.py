@@ -324,6 +324,26 @@ class TestDashscopeCostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
 
+    def test_dashscope_tier_without_an_output_rate_bills_the_model_rate(self):
+        """
+        Regression: a tier declaring only an input rate served every completion for free,
+        since a missing tier output rate had no tier-level fallback to stand in for it.
+        """
+        litellm.model_cost["dashscope/qwen-input-only-tier-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "output_cost_per_token": 1.6e-06,
+            "tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 4e-07}],
+        }
+
+        usage = Usage(prompt_tokens=500, completion_tokens=200)
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen-input-only-tier-test", usage=usage
+        )
+
+        assert math.isclose(prompt_cost, 500 * 4e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 1.6e-06, rel_tol=1e-10)
+
     def test_dashscope_tiered_pricing_zero_input_falls_back_to_flat_rates(self):
         """
         No tier can be selected without input tokens, so an empty-prompt request must
