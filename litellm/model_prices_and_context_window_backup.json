@@ -18472,6 +18472,7 @@
     "gemini-live-2.5-flash": {
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_image_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
@@ -18519,6 +18520,7 @@
     "vertex_ai/gemini-live-2.5-flash": {
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_image_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
@@ -18566,6 +18568,7 @@
     "gemini-live-2.5-flash-native-audio": {
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_image_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
@@ -18623,6 +18626,7 @@
     "vertex_ai/gemini-live-2.5-flash-native-audio": {
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_image_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
