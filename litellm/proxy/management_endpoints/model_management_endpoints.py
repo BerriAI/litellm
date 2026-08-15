@@ -368,15 +368,20 @@ _EMPTY_MODEL_INFO: Final[Mapping[str, object]] = _NO_PRICING_OVERRIDE
 _CUSTOM_PRICING_FIELDS: Final = frozenset(f for f in CustomPricingLiteLLMParams.model_fields if "cost" in f)
 # search_context_cost_per_query holds its rates in a table keyed by context size, and an absent
 # table means the provider's own default rate rather than free (litellm/llms/gemini/cost_calculator
-# falls back to $0.035), so it is zeroed in place rather than emptied like tiered_pricing.
+# falls back to $0.035), so it is zeroed in place rather than emptied like tiered_pricing, and
+# written on every PTU deployment rather than only where a table is already stored.
 _PTU_ZEROED_TABLE_FIELDS: Final = frozenset({"search_context_cost_per_query"})
 _SEARCH_CONTEXT_SIZES: Final = ("search_context_size_low", "search_context_size_medium", "search_context_size_high")
 
 
+def _is_nonzero_rate(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0
+
+
 def _is_nonzero_price(value: object) -> bool:
     if isinstance(value, dict):  # an all-zero table is how a rate is expressed as free
-        return any(_is_nonzero_price(rate) for rate in value.values())
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0
+        return any(_is_nonzero_rate(rate) for rate in value.values())
+    return _is_nonzero_rate(value)
 
 
 def _is_zero_price(value: object) -> bool:
@@ -446,14 +451,11 @@ def _ptu_zeroed_pricing(
         for field in _CUSTOM_PRICING_FIELDS
         if _is_nonzero_price(model_info.get(field)) or _is_nonzero_price(litellm_params.get(field))
     )
-    if not stored:
-        return _PTU_ZEROED_PRICING
-    tables: Final = stored & _PTU_ZEROED_TABLE_FIELDS
     return MappingProxyType(
         {
             **_PTU_ZEROED_PRICING,
-            **dict.fromkeys(stored - tables, 0.0),
-            **dict.fromkeys(tables, dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)),
+            **dict.fromkeys(_PTU_ZEROED_TABLE_FIELDS, dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)),
+            **dict.fromkeys(stored - _PTU_ZEROED_TABLE_FIELDS, 0.0),
         }
     )
 

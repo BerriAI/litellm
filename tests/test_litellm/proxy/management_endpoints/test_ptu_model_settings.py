@@ -21,6 +21,7 @@ from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _PTU_ZEROED_PRICING_FIELDS,
     _SEARCH_CONTEXT_SIZES,
+    _is_nonzero_price,
     _merged_ptu_model_info,
     _update_team_model_in_db,
     _ptu_priced_deployment,
@@ -770,6 +771,7 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         assert self._zeroed(model_info=self.PTU) == {
             **dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0),
             "tiered_pricing": (),
+            "search_context_cost_per_query": dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0),
         }
 
     def test_nothing_is_zeroed_while_the_feature_is_disabled(self, monkeypatch):
@@ -1033,7 +1035,11 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             )
         )
         registered = Router._deployment_model_cost_payload(priced)
-        charged = {k: v for k, v in registered.items() if "cost" in k and k != "cost_per_ptu_per_hour" and v}
+        charged = {
+            k: v
+            for k, v in registered.items()
+            if "cost" in k and k != "cost_per_ptu_per_hour" and _is_nonzero_price(v)
+        }
         assert charged == {}
 
     def test_the_cost_map_tiers_contribute_no_price_to_a_priced_ptu_deployment(self):
