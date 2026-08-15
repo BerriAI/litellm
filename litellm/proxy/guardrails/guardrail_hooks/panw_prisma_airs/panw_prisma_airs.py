@@ -38,6 +38,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
+    ChatCompletionMessageToolCall,
+    ChatCompletionToolCallChunk,
     Choices,
     GenericGuardrailAPIInputs,
     ModelResponse,
@@ -1431,15 +1433,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 raise HTTPException(status_code=400, detail=error_detail)
 
     @staticmethod
-    def _get_tool_call_arguments(tool_call) -> str | None:
+    def _get_tool_call_arguments(
+        tool_call: ChatCompletionMessageToolCall | ChatCompletionToolCallChunk,
+    ) -> str | None:
         """Read a tool call's function arguments, handling both object and dict forms."""
-        if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
-            return tool_call.function.arguments
         if isinstance(tool_call, dict):
             func: Final = tool_call.get("function")
-            if isinstance(func, dict):
-                return func.get("arguments")
-        return None
+            return func.get("arguments") if isinstance(func, dict) else None
+        return tool_call.function.arguments
 
     @staticmethod
     def _set_tool_call_arguments(tool_call, masked_text: str) -> None:
