@@ -115,6 +115,45 @@ class TestCheckBatchCost:
         assert "created_at" in where
 
     @pytest.mark.asyncio
+    async def test_startup_probe_confirms_batch_processed_support(
+        self, check_batch_cost_instance, mock_prisma_client
+    ):
+        mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+
+        await check_batch_cost_instance.confirm_batch_processed_support()
+
+        probe_where = mock_prisma_client.db.litellm_managedobjecttable.find_first.call_args[1]["where"]
+        assert probe_where["batch_processed"] is False
+        assert check_batch_cost_instance.batch_processed_support_confirmed is True
+        assert check_batch_cost_instance._has_batch_processed_column is True
+
+    @pytest.mark.asyncio
+    async def test_startup_probe_marks_column_absent(
+        self, check_batch_cost_instance, mock_prisma_client
+    ):
+        mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+            side_effect=Exception("column batch_processed does not exist")
+        )
+
+        await check_batch_cost_instance.confirm_batch_processed_support()
+
+        assert check_batch_cost_instance.batch_processed_support_confirmed is False
+        assert check_batch_cost_instance._has_batch_processed_column is False
+
+    @pytest.mark.asyncio
+    async def test_startup_probe_transient_error_defers_to_poll_cycle(
+        self, check_batch_cost_instance, mock_prisma_client
+    ):
+        mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+            side_effect=Exception("connection reset by peer")
+        )
+
+        await check_batch_cost_instance.confirm_batch_processed_support()
+
+        assert check_batch_cost_instance.batch_processed_support_confirmed is False
+        assert check_batch_cost_instance._has_batch_processed_column is True
+
+    @pytest.mark.asyncio
     async def test_find_many_uses_pagination_and_excludes_stale(
         self, check_batch_cost_instance, mock_prisma_client
     ):
@@ -143,10 +182,6 @@ class TestCheckBatchCost:
         assert "complete" not in not_in
         assert "completed" not in not_in
         assert find_call[1]["where"]["batch_processed"] is False
-        # A successful filtered query is the only proof the column exists. The retrieve
-        # path reads this to decide whether handing accounting to the poller is safe:
-        # without the column the poller's fallback query excludes complete/completed, so
-        # a batch already marked complete would never be accounted by anyone.
         assert check_batch_cost_instance.batch_processed_support_confirmed is True
 
     @pytest.mark.asyncio
