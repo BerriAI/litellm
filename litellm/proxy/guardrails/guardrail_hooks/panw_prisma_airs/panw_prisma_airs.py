@@ -654,9 +654,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         action_type: Final = "Response" if is_response else "Prompt"
         code_suffix: Final = "_response_blocked" if is_response else "_blocked"
 
-        hidden_fields: Final = self._CLIENT_HIDDEN_SCAN_FIELDS.union(
-            () if also_hide is None else (also_hide,)
-        )
+        hidden_fields: Final = self._CLIENT_HIDDEN_SCAN_FIELDS.union(() if also_hide is None else (also_hide,))
 
         category: Final = scan_result.get("category", "unknown")
         default_msg: Final = f"{action_type} blocked by PANW Prisma AI Security policy (Category: {category})"
