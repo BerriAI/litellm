@@ -15,6 +15,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -68,6 +69,8 @@ interface CachePageProps {
 // Helper function to deep-parse a JSON string if possible
 
 const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole, userID, premiumUser }) => {
+  const anchor1 = useComboboxAnchor();
+  const anchor2 = useComboboxAnchor();
   const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
 
@@ -194,7 +197,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 value={selectedApiKeys}
                 onValueChange={(keys: string[]) => setSelectedApiKeys(keys)}
               >
-                <ComboboxChips>
+                <ComboboxChips render={<div ref={anchor1} />}>
                   <ComboboxValue>
                     {(keys: string[]) =>
                       keys.map((key) => (
@@ -206,7 +209,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                   </ComboboxValue>
                   <ComboboxChipsInput placeholder="Select Virtual Keys" className="border-0 bg-transparent" />
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor1}>
                   <ComboboxEmpty>No virtual keys found</ComboboxEmpty>
                   <ComboboxList>
                     {(key: string) => (
@@ -224,7 +227,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 value={selectedModels}
                 onValueChange={(models: string[]) => setSelectedModels(models)}
               >
-                <ComboboxChips>
+                <ComboboxChips render={<div ref={anchor2} />}>
                   <ComboboxValue>
                     {(models: string[]) =>
                       models.map((model) => (
@@ -236,7 +239,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                   </ComboboxValue>
                   <ComboboxChipsInput placeholder="Select Models" className="border-0 bg-transparent" />
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor2}>
                   <ComboboxEmpty>No models found</ComboboxEmpty>
                   <ComboboxList>
                     {(model: string) => (
