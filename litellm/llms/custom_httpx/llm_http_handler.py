@@ -55,7 +55,10 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
-from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.vector_store.transformation import (
+    BaseDirectVectorStoreConfig,
+    BaseVectorStoreConfig,
+)
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
@@ -9411,6 +9414,23 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
     ) -> VectorStoreSearchResponse:
+        if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
+                    "query": query,
+                    "vector_store_id": vector_store_id,
+                },
+            )
+            return await vector_store_provider_config.aexecute_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+            )
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -9522,6 +9542,23 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
+            )
+
+        if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
+                    "query": query,
+                    "vector_store_id": vector_store_id,
+                },
+            )
+            return vector_store_provider_config.execute_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
             )
 
         if client is None or not isinstance(client, HTTPHandler):

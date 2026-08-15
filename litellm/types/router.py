@@ -349,6 +349,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     milvus_text_field: str | None = None
     milvus_db_name: str | None = None
     milvus_partition_names: list[str] | None = None
+    valkey_host: str | None = None
+    valkey_port: int | None = None
+    valkey_password: str | None = None
+    valkey_ssl: bool | None = None
+    valkey_text_field: str | None = None
+    valkey_embedding_field: str | None = None
 
     @model_validator(mode="before")
     @classmethod

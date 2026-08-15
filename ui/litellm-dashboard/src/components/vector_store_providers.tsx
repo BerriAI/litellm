@@ -2,6 +2,7 @@ import { getProviderLogoAndName, Providers, providerLogoMap } from "@/components
 import milvusLogo from "../../public/assets/logos/milvus.svg";
 import postgresqlLogo from "../../public/assets/logos/postgresql.svg";
 import s3VectorLogo from "../../public/assets/logos/s3_vector.png";
+import valkeyLogo from "../../public/assets/logos/valkey.svg";
 
 export enum VectorStoreProviders {
   Bedrock = "Amazon Bedrock",
@@ -12,6 +13,7 @@ export enum VectorStoreProviders {
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
   Milvus = "Milvus",
+  Valkey = "Valkey",
 }
 
 export const vectorStoreProviderMap: Record<string, string> = {
@@ -23,6 +25,7 @@ export const vectorStoreProviderMap: Record<string, string> = {
   Azure: "azure",
   Milvus: "milvus",
   S3Vectors: "s3_vectors",
+  Valkey: "valkey",
 };
 
 export const vectorStoreProviderLogoMap: Record<string, string> = {
@@ -34,6 +37,7 @@ export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.Azure]: providerLogoMap[Providers.Azure] ?? "",
   [VectorStoreProviders.Milvus]: milvusLogo.src,
   [VectorStoreProviders.S3Vectors]: s3VectorLogo.src,
+  [VectorStoreProviders.Valkey]: valkeyLogo.src,
 };
 
 // Define field types for provider-specific configurations
@@ -163,6 +167,71 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       placeholder: "text-embedding-3-small",
       required: true,
       type: "select",
+    },
+  ],
+  valkey: [
+    {
+      name: "valkey_host",
+      label: "Valkey Host",
+      tooltip: "Hostname of your Valkey server with the valkey-search module loaded (no scheme or port)",
+      placeholder: "my-valkey.example.com",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "valkey_port",
+      label: "Valkey Port",
+      tooltip: "Port of your Valkey server",
+      placeholder: "6379",
+      required: false,
+      type: "text",
+      initialValue: "6379",
+    },
+    {
+      name: "valkey_password",
+      label: "Valkey Password",
+      tooltip: "Password for your Valkey server (leave blank if authentication is disabled)",
+      required: false,
+      type: "password",
+    },
+    {
+      name: "valkey_ssl",
+      label: "Use TLS",
+      tooltip:
+        "Connect over TLS with rediss:// instead of redis://. Required for AWS ElastiCache clusters that have in-transit encryption enabled.",
+      required: false,
+      type: "select",
+      options: [
+        { value: "false", label: "false" },
+        { value: "true", label: "true" },
+      ],
+      initialValue: "false",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip: "Embedding model used to embed queries before searching the Valkey index",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "valkey_text_field",
+      label: "Text Field",
+      tooltip: "Name of the hash field that stores the document text",
+      placeholder: "text",
+      required: false,
+      type: "text",
+      initialValue: "text",
+    },
+    {
+      name: "valkey_embedding_field",
+      label: "Vector Field Name",
+      tooltip: "Name of the HASH field in your FT index that stores the document vector",
+      placeholder: "embedding",
+      required: false,
+      type: "text",
+      initialValue: "embedding",
     },
   ],
   s3_vectors: [

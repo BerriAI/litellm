@@ -20,6 +20,8 @@ import S3VectorsConfig from "./S3VectorsConfig";
 
 const { Dragger } = Upload;
 
+const RAG_INGEST_UNSUPPORTED_PROVIDERS = new Set(["valkey"]);
+
 interface CreateVectorStoreProps {
   accessToken: string | null;
   onSuccess?: (vectorStoreId: string) => void;
@@ -290,20 +292,24 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                 size="large"
                 style={{ width: "100%" }}
               >
-                {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => {
-                  return (
-                    <Select.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
-                      <div className="flex items-center space-x-2">
-                        <Logo
-                          src={vectorStoreProviderLogoMap[providerDisplayName]}
-                          label={providerDisplayName}
-                          className="w-5 h-5"
-                        />
-                        <span>{providerDisplayName}</span>
-                      </div>
-                    </Select.Option>
-                  );
-                })}
+                {Object.entries(VectorStoreProviders)
+                  .filter(
+                    ([providerEnum]) => !RAG_INGEST_UNSUPPORTED_PROVIDERS.has(vectorStoreProviderMap[providerEnum]),
+                  )
+                  .map(([providerEnum, providerDisplayName]) => {
+                    return (
+                      <Select.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
+                        <div className="flex items-center space-x-2">
+                          <Logo
+                            src={vectorStoreProviderLogoMap[providerDisplayName]}
+                            label={providerDisplayName}
+                            className="w-5 h-5"
+                          />
+                          <span>{providerDisplayName}</span>
+                        </div>
+                      </Select.Option>
+                    );
+                  })}
               </Select>
             </Form.Item>
 

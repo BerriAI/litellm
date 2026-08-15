@@ -14,6 +14,21 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 
+const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey"]);
+
+export const buildVectorStoreLitellmParams = (
+  provider: string,
+  formValues: Record<string, unknown>,
+): Record<string, unknown> =>
+  Object.fromEntries(
+    getProviderSpecificFields(provider).map((field) => [
+      EMBEDDING_MODEL_RENAME_PROVIDERS.has(provider) && field.name === "embedding_model"
+        ? "litellm_embedding_model"
+        : field.name,
+      formValues[field.name],
+    ]),
+  );
+
 interface VectorStoreFormProps {
   isVisible: boolean;
   onCancel: () => void;
@@ -74,22 +89,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         litellm_credential_name: formValues.litellm_credential_name,
       };
 
-      // pass all provider fields as litellm params dict
-      const providerFields = getProviderSpecificFields(formValues.custom_llm_provider);
-      const litellmParams = providerFields.reduce(
-        (acc, field) => {
-          // Special handling for Milvus: rename embedding_model to litellm_embedding_model
-          if (formValues.custom_llm_provider === "milvus" && field.name === "embedding_model") {
-            acc["litellm_embedding_model"] = formValues[field.name];
-          } else {
-            acc[field.name] = formValues[field.name];
-          }
-          return acc;
-        },
-        {} as Record<string, any>,
-      );
-
-      payload["litellm_params"] = litellmParams;
+      payload["litellm_params"] = buildVectorStoreLitellmParams(formValues.custom_llm_provider, formValues);
 
       await vectorStoreCreateCall(accessToken, payload);
       NotificationsManager.success("Vector store created successfully");
@@ -161,6 +161,26 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   <li>Start the server and note the API base URL and API key</li>
                   <li>Enter those details in the fields below</li>
                 </ol>
+              </div>
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: "16px" }}
+          />
+        )}
+
+        {/* Valkey Setup Instructions */}
+        {selectedProvider === "valkey" && (
+          <Alert
+            message="Valkey Setup Required"
+            description={
+              <div>
+                <p>
+                  Your Valkey instance must have the valkey-search module loaded, with an FT index already created over
+                  HASH documents that includes a vector field whose name matches the Vector Field Name setting below
+                  (defaults to &quot;embedding&quot;). LiteLLM embeds your query with the embedding model below and runs
+                  a KNN search against that index.
+                </p>
               </div>
             }
             type="info"
@@ -269,7 +289,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   ? vertexEngineId
                     ? "Any identifier you'll use to reference this in LiteLLM"
                     : 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)'
-                  : "Enter vector store ID from your provider"
+                  : selectedProvider === "valkey"
+                    ? "my-search-index (FT index name in Valkey)"
+                    : "Enter vector store ID from your provider"
             }
           />
         </Form.Item>
@@ -326,6 +348,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                 </span>
               }
               name={field.name}
+              initialValue={field.initialValue}
               rules={
                 field.required ? [{ required: true, message: `Please input the ${field.label.toLowerCase()}` }] : []
               }
