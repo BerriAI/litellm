@@ -61,18 +61,14 @@ class TealEngine:
 
         self._pii_policy = next((p for p in policies if p["type"] == "pii"), None)
         self._cost_policy = next((p for p in policies if p["type"] == "cost"), None)
-        self._tool_policy = next(
-            (p for p in policies if p["type"] == "tool_auth"), None
-        )
+        self._tool_policy = next((p for p in policies if p["type"] == "tool_auth"), None)
 
     def evaluate_text(self, text: str) -> Decision:
         correlation_id: Final = str(uuid.uuid4())
         if not text or not self._pii_policy:
             return Decision(Action.ALLOW.value, "NO_VIOLATIONS", correlation_id)
 
-        findings: Final = tuple(
-            name for name, pat in self.patterns.items() if pat.search(text)
-        )
+        findings: Final = tuple(name for name, pat in self.patterns.items() if pat.search(text))
         if not findings:
             return Decision(Action.ALLOW.value, "NO_VIOLATIONS", correlation_id)
 
@@ -112,16 +108,12 @@ class TealEngine:
         if not self._tool_policy:
             return True
         raw_blocklist: Final = self._tool_policy.get("blocklist")
-        blocklist: Final = (
-            raw_blocklist if isinstance(raw_blocklist, (list, tuple)) else ()
-        )
+        blocklist: Final = raw_blocklist if isinstance(raw_blocklist, (list, tuple)) else ()
         if tool_name in blocklist:
             return False
         raw_allowlist: Final = self._tool_policy.get("allowlist")
         if raw_allowlist is not None:
-            allowlist: Final = (
-                raw_allowlist if isinstance(raw_allowlist, (list, tuple)) else ()
-            )
+            allowlist: Final = raw_allowlist if isinstance(raw_allowlist, (list, tuple)) else ()
             return tool_name in allowlist
         return True
 
