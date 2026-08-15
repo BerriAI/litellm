@@ -307,7 +307,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 # Fallback for non-dict objects (shouldn't happen in practice)
                 cast(dict[str, Any], target)["cache_control"] = cache_control
 
-    def translatable_anthropic_params(self) -> list:
+    def translatable_anthropic_params(self) -> list[str]:
         """
         Which anthropic params, we need to translate to the openai format.
         """
