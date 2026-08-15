@@ -670,9 +670,10 @@ async def route_request(
     # identity-attested only, and runs here -- after every configured route,
     # including wildcards and default_deployment, has declined -- so it can only
     # turn a hard failure into a success, never re-point working traffic.
-    if llm_router is not None and isinstance(data.get("model"), str):
+    requested_model: Final[object] = data.get("model")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType] - data is an untyped request dict
+    if llm_router is not None and isinstance(requested_model, str):
         canonical_target: Final = llm_router.resolve_canonical_model_name(
-            model=data["model"],
+            model=requested_model,
             request_team_id=team_id,
         )
         if canonical_target is not None:
@@ -686,7 +687,9 @@ async def route_request(
             # the same 400 it gets today, revealing nothing about the target.
             target_allowed = True
             if user_api_key_dict is not None:
-                from litellm.proxy.auth.auth_checks import can_key_call_model
+                from litellm.proxy.auth.auth_checks import (
+                    can_key_call_model,  # pyright: ignore[reportUnknownVariableType] - auth_checks is partially typed
+                )
 
                 try:
                     await can_key_call_model(
@@ -701,11 +704,11 @@ async def route_request(
                 # Preserve the client's spelling for spend logs / debugging --
                 # after the rewrite it is otherwise invisible downstream.
                 metadata_field: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
-                existing_metadata = data.get(metadata_field)
+                existing_metadata: object = data.get(metadata_field)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType] - data is an untyped request dict
                 if isinstance(existing_metadata, dict):
-                    existing_metadata.setdefault("requested_model", data["model"])
+                    existing_metadata.setdefault("requested_model", requested_model)  # pyright: ignore[reportUnknownMemberType] - metadata dict is untyped
                 else:
-                    data[metadata_field] = {"requested_model": data["model"]}
+                    data[metadata_field] = {"requested_model": requested_model}
                 data["model"] = canonical_target
                 return getattr(llm_router, f"{route_type}")(**data)
 

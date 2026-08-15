@@ -104,16 +104,16 @@ from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
-from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
-from litellm.router_utils.clientside_credential_handler import (
-    get_dynamic_litellm_params,
-    is_clientside_credential,
-)
 from litellm.router_utils.canonical_model_resolution import (
     build_canonical_index,
 )
 from litellm.router_utils.canonical_model_resolution import (
     lookup as canonical_lookup,
+)
+from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
+from litellm.router_utils.clientside_credential_handler import (
+    get_dynamic_litellm_params,
+    is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
@@ -10716,7 +10716,9 @@ class Router:
         cost_generation: Final = get_model_cost_mutation_generation()
         if self._canonical_model_index is None or self._canonical_model_index_cost_generation != cost_generation:
             try:
-                self._canonical_model_index = build_canonical_index(self.model_list)
+                self._canonical_model_index = build_canonical_index(
+                    cast("list[DeploymentTypedDict]", self.model_list)
+                )
             except Exception as exc:
                 # Never let index construction brick a router: degrade to
                 # 'strict' behaviour instead.

@@ -1,3 +1,8 @@
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportAny=false
+# litellm.model_cost is loaded dynamically from a JSON price map (see
+# litellm.litellm_core_utils.get_model_cost_map) and is untyped at that
+# boundary, same as every other reader of it in litellm/utils.py. Every value
+# pulled from it here is re-validated with isinstance before use.
 """Same-provider canonical model-name resolution.
 
 Harnesses hardcode concrete model IDs. A client that asks for
@@ -31,13 +36,11 @@ See also ``Router.resolve_canonical_model_name``.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_router_logger
-
-if TYPE_CHECKING:
-    from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict
 
 # Cost-map fields that must match exactly for two names to be called the same
 # model. Pricing equality is a tripwire against false identity, not the
@@ -59,7 +62,7 @@ _AMBIGUOUS: Final = None
 
 def _cost_map_entry(model: str) -> Mapping[str, object] | None:
     """The cost-map entry for ``model``, or None when absent."""
-    entry: Final = litellm.model_cost.get(model)
+    entry = litellm.model_cost.get(model)
     return entry if isinstance(entry, Mapping) else None
 
 
@@ -135,7 +138,7 @@ def _undated_variants(model: str) -> tuple[str, ...]:
 
 
 def build_canonical_index(
-    deployments: list["DeploymentTypedDict"],
+    deployments: list[DeploymentTypedDict],
 ) -> dict[tuple[str, str], str | None]:
     """Map ``(provider, canonical_name) -> model group`` for ``deployments``.
 
@@ -151,10 +154,15 @@ def build_canonical_index(
 
     for deployment in deployments:
         try:
-            model_group = deployment.get("model_name")
+            # ``model_name``/``model`` are typed Required[str], but this index is
+            # built from operator config and DB rows that can violate the type,
+            # so both are validated at runtime rather than trusted.
+            model_group: object = deployment.get("model_name")
             litellm_params = deployment.get("litellm_params") or {}
-            underlying = litellm_params.get("model") if isinstance(litellm_params, Mapping) else None
-            if not isinstance(model_group, str) or not isinstance(underlying, str):
+            underlying: object = litellm_params.get("model")
+            if not isinstance(model_group, str) or not isinstance(  # pyright: ignore[reportUnnecessaryIsInstance] - config/DB rows can violate the TypedDict
+                underlying, str
+            ):
                 continue
 
             identity = canonicalize(underlying)
@@ -179,7 +187,7 @@ def build_canonical_index(
             if _same_model_per_cost_map(canonical_name, candidate):
                 spellings.append(candidate)
         for dated, entry in litellm.model_cost.items():
-            if not isinstance(entry, Mapping) or dated in spellings:
+            if not isinstance(dated, str) or not isinstance(entry, Mapping) or dated in spellings:
                 continue
             if _undated_variants(dated) == (canonical_name,) and _same_model_per_cost_map(canonical_name, dated):
                 spellings.append(dated)
