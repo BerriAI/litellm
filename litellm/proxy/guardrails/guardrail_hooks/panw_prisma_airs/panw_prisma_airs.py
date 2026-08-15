@@ -1390,53 +1390,19 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     ) -> None:
         """Scan tool call arguments with allow/block/mask treatment (in-place modification).
 
-        Each tool call is sent as a ``tool_event`` using the canonical PANW
-        AIRS schema::
-
-            {
-                "metadata": {
-                    "ecosystem": "openai",
-                    "method": "tools/call",
-                    "server_name": "litellm",
-                    "tool_invoked": "<function_name>",
-                },
-                "input": "<args_json>",   # optional, omitted for empty args
-            }
-
-        Empty-arg invocations are still reported (without ``input``) so AIRS
-        can enforce tool-name-based policies.
+        Arguments go out as plain prompt/response text: the AIRS ``tool_event`` schema
+        only accepts ``ecosystem: "mcp"``, which OpenAI-format tool calls are not.
         """
         for tool_call in tool_calls:
-            # --- extract tool_name and args_text --------------------------
-            tool_name: str | None = None
-            args_text: str | None = None
-
-            if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
-                args_text = tool_call.function.arguments
-                tool_name = getattr(tool_call.function, "name", None)
-            elif isinstance(tool_call, dict):
-                func = tool_call.get("function", {})
-                if isinstance(func, dict):
-                    args_text = func.get("arguments")
-                    tool_name = func.get("name")
-
-            # --- build tool_event payload (canonical PANW schema) -----------
-            tool_event: dict[str, object] = {
-                "metadata": {
-                    "ecosystem": "openai",
-                    "method": "tools/call",
-                    "server_name": "litellm",
-                    "tool_invoked": tool_name or "unknown",
-                },
-            }
-            if args_text and args_text.strip():
-                tool_event["input"] = args_text
+            args_text = self._get_tool_call_arguments(tool_call)
+            if not args_text or not args_text.strip():
+                continue
 
             scan_result = await self._call_panw_api(
-                is_response=False,  # tool_event is always request-side in AIRS schema
+                content=args_text,
+                is_response=is_response,
                 metadata=metadata,
                 call_id=call_id,
-                tool_event=tool_event,
             )
 
             if scan_result.get("_is_transient") or scan_result.get("_always_block"):
@@ -1451,10 +1417,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 continue  # fallback_on_error="allow" — leave args unchanged
 
             action = scan_result.get("action", "block")
-            # Always is_response=False for masked data lookup because
-            # tool_event scans are request-side in AIRS schema and
-            # AIRS returns prompt_masked_data for them.
-            masked_text = self._get_masked_text(scan_result, is_response=False)
+            masked_text = self._get_masked_text(scan_result, is_response=is_response)
 
             if action == "allow":
                 if masked_text:
@@ -1466,6 +1429,17 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             else:
                 error_detail = self._build_error_detail(scan_result, is_response=is_response)
                 raise HTTPException(status_code=400, detail=error_detail)
+
+    @staticmethod
+    def _get_tool_call_arguments(tool_call) -> str | None:
+        """Read a tool call's function arguments, handling both object and dict forms."""
+        if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
+            return tool_call.function.arguments
+        if isinstance(tool_call, dict):
+            func: Final = tool_call.get("function")
+            if isinstance(func, dict):
+                return func.get("arguments")
+        return None
 
     @staticmethod
     def _set_tool_call_arguments(tool_call, masked_text: str) -> None:
