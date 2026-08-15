@@ -1426,6 +1426,52 @@ async def test_update_daily_spend_re_raises_exception_after_logging():
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_keeps_failed_transactions_for_retry():
+    """
+    A failed batch must stay in the caller's transaction dict, otherwise the
+    Redis re-queue in _commit_spend_updates_to_db_with_redis has nothing left to
+    push back and the spend is lost permanently.
+    """
+
+    def raise_outage():
+        raise ValueError("simulated database outage")
+
+    prisma_client = _RecordingPrisma(execute_raw=raise_outage)
+
+    daily_spend_transactions = {
+        "test_key": {
+            "user_id": "test-user",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+    }
+    expected = dict(daily_spend_transactions)
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(ValueError, match="simulated database outage"):
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=0,
+            prisma_client=prisma_client,
+            proxy_logging_obj=mock_proxy_logging,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="user",
+            entity_id_field="user_id",
+        )
+
+    assert daily_spend_transactions == expected
+
+
+@pytest.mark.asyncio
 async def test_commit_key_spend_updates_includes_last_active():
     """
     Test that _commit_spend_updates_to_db sets last_active alongside spend
@@ -1685,9 +1731,9 @@ async def test_commit_spend_updates_uses_pipeline():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
-    # Return all-None tuple (no data to commit)
+    # Return all-None tuple (no data to commit); the pipeline yields 6 slots
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
-        AsyncMock(return_value=(None, None, None, None, None, None, None))
+        AsyncMock(return_value=(None, None, None, None, None, None))
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
@@ -1716,6 +1762,225 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_commit_with_redis_requeues_all_on_db_failure():
+    """
+    Regression for #33872: if the DB commit fails after the leader has already
+    popped transactions from Redis, the popped transactions must be re-queued to
+    Redis so a later tick can retry them, instead of being silently lost.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    db_spend = {
+        "user_list_transactions": {"user1": 1.5},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {"key1": 1.5},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+    daily_user = {"user_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(db_spend, daily_user, None, None, None, None)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    # Every DB write raises -> simulates a full database outage
+    db_writer._commit_spend_updates_to_db = AsyncMock(side_effect=Exception("db down"))
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_user_spend",
+        new=AsyncMock(side_effect=Exception("db down")),
+    ):
+        await db_writer._commit_spend_updates_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    # Both failed categories must be re-queued to Redis, nothing lost
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
+    _, kwargs = mock_redis_update_buffer.restore_transactions_to_redis.call_args
+    assert kwargs["db_spend_update_transactions"] == db_spend
+    assert kwargs["daily_spend_update_transactions"] == daily_user
+    # The lock must still be released
+    mock_pod_lock_manager.release_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_commit_with_redis_only_requeues_failed_category():
+    """
+    A partial DB failure must not re-queue categories that already committed,
+    otherwise their spend would be double-counted on the next tick.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    db_spend = {
+        "user_list_transactions": {"user1": 1.5},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+    daily_user = {"user_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(db_spend, daily_user, None, None, None, None)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    # db_spend commits fine; only the daily user commit fails
+    db_writer._commit_spend_updates_to_db = AsyncMock()
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_user_spend",
+        new=AsyncMock(side_effect=Exception("db down")),
+    ):
+        await db_writer._commit_spend_updates_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
+    _, kwargs = mock_redis_update_buffer.restore_transactions_to_redis.call_args
+    # Only the failed daily category is requeued; the committed db_spend is not
+    assert kwargs == {"daily_spend_update_transactions": daily_user}
+
+
+@pytest.mark.asyncio
+async def test_commit_with_redis_no_requeue_on_success():
+    """When all commits succeed, nothing should be re-queued to Redis."""
+    db_writer = DBSpendUpdateWriter()
+
+    db_spend = {
+        "user_list_transactions": {"user1": 1.5},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(db_spend, None, None, None, None, None)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    db_writer._commit_spend_updates_to_db = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=MagicMock(),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_commit_daily_tag_spend_requeues_on_db_failure():
+    """A failed daily tag commit must re-queue the popped tag transactions and release the lock."""
+    db_writer = DBSpendUpdateWriter()
+
+    daily_tag = {"tag_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis = AsyncMock()
+    mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer = AsyncMock(
+        return_value=daily_tag
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_tag_spend",
+        new=AsyncMock(side_effect=Exception("db down")),
+    ):
+        await db_writer._commit_daily_tag_spend_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once_with(
+        daily_tag_spend_update_transactions=daily_tag,
+    )
+    mock_pod_lock_manager.release_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_commit_daily_tag_spend_no_requeue_on_success():
+    """A successful daily tag commit must not re-queue anything."""
+    db_writer = DBSpendUpdateWriter()
+
+    daily_tag = {"tag_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis = AsyncMock()
+    mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer = AsyncMock(
+        return_value=daily_tag
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_tag_spend",
+        new=AsyncMock(),
+    ):
+        await db_writer._commit_daily_tag_spend_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_not_awaited()
+    mock_pod_lock_manager.release_lock.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -2221,3 +2486,50 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
     assert call_kwargs["where"] == {"token": token}
     assert set(call_kwargs["data"]) == {"spend", "last_active"}
     assert call_kwargs["data"]["spend"] == {"increment": response_cost}
+
+
+@pytest.mark.asyncio
+async def test_daily_transaction_internal_call_keeps_spend_but_not_request_counts():
+    """Internal sub-calls (auto-router classifier, shadow eval's shadow and judge) bill
+    spend and tokens to the key but are not requests the caller made: api_requests,
+    successful_requests, and autorouter_savings_spend must all stay zero for them."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    def _payload(metadata: dict) -> dict:
+        return {
+            "request_id": "req-internal-1",
+            "user": "test-user",
+            "startTime": "2026-08-11T00:00:00",
+            "api_key": "test-key",
+            "model": "claude-sonnet-5",
+            "custom_llm_provider": "anthropic",
+            "model_group": "claude-sonnet-5",
+            "call_type": "acompletion",
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "spend": 0.05,
+            "metadata": json.dumps(metadata),
+        }
+
+    internal = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=_payload({"internal_call_origin": "shadow_eval_judge"}),
+        prisma_client=mock_prisma,
+        type="user",
+    )
+    user_sent = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=_payload({}),
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert internal is not None and user_sent is not None
+    assert internal["spend"] == 0.05
+    assert internal["prompt_tokens"] == 100
+    assert internal["api_requests"] == 0
+    assert internal["successful_requests"] == 0
+    assert internal["failed_requests"] == 0
+    assert internal["autorouter_savings_spend"] == 0.0
+    assert user_sent["api_requests"] == 1
+    assert user_sent["successful_requests"] == 1

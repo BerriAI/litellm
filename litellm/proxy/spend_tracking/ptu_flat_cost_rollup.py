@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    PTU_LAPSED_ALERT_LIMIT,
     PTU_PRUNE_SKEW_GRACE_SECONDS,
     PTU_ROLLUP_JOB_ID,
     PTU_ROLLUP_LOCK_TTL_SECONDS,
@@ -45,6 +46,7 @@ class RollupResult:
     models_processed: int
     rows_written: int
     rows_failed: int = 0
+    lapsed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,6 +389,34 @@ async def run_ptu_flat_cost_rollup(
         models_processed=len(ptu_models),
         rows_written=rows_written,
         rows_failed=rows_failed,
+        lapsed=_lapsed_models(ptu_models, run_started),
+    )
+
+
+def _slack_safe(model_name: str) -> str:
+    """``model_name`` with the characters Slack reads as markup escaped.
+
+    A model name is operator-supplied and this alert is delivered to an operator channel, so an
+    unescaped name could post a channel-wide mention or a disguised link.
+    """
+    return model_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _lapsed_models(ptu_models: tuple[PTUModel, ...], now: datetime) -> tuple[str, ...]:
+    """PTU deployments whose window has closed, newest bound first.
+
+    The provider bills reserved capacity until the deployment is deleted, so a closed window
+    stops this attribution without stopping the charge. The deployment is left alone: the
+    window is what the operator asked to be attributed, and per-token pricing would invent a
+    charge the provider does not make for reserved capacity.
+    """
+    return tuple(
+        _slack_safe(model.model_name)
+        for model in sorted(
+            (m for m in ptu_models if m.effective_to is not None and m.effective_to <= now),
+            key=lambda m: m.effective_to,
+            reverse=True,
+        )
     )
 
 
@@ -584,6 +614,14 @@ async def _run_and_alert(
             f"PTU flat-cost rollup for {result.day.isoformat()}: {result.rows_failed} of "
             f"{result.rows_written + result.rows_failed} team charges failed to write. Those teams show no PTU "
             f"cost for that date until the rollup is rerun for it.",
+        )
+    if result.lapsed:
+        await _deliver_alert(
+            alert,
+            f"PTU flat-cost attribution has stopped for {len(result.lapsed)} deployment(s) whose effective "
+            f"window has closed: {', '.join(result.lapsed[:PTU_LAPSED_ALERT_LIMIT])}. Reserved capacity is billed "
+            "until the deployment is deleted, so a deployment still serving traffic is still being charged for "
+            "by the provider with nothing attributing it here. Extend the window, or retire the deployment.",
         )
     if target_date is None:
         await _backfill_and_alert(prisma_client, alert=alert)

@@ -1,4 +1,4 @@
-import { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import UsageDatePicker from "@/components/shared/usage_date_picker";

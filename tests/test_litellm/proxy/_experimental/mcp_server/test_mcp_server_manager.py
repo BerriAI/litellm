@@ -480,6 +480,35 @@ class TestMCPServerManager:
         assert server.needs_user_oauth_token is True
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_keeps_configured_endpoints_for_management_view(self):
+        """A yaml server with a pinned issuer still reports its configured endpoints to the management
+        view, even though the runtime fields are empty because the anchored issuer is the sole endpoint
+        source. The dashboard edits that view, so emptied values there load as blank fields and the next
+        save writes the blanks over the config."""
+        manager = MCPServerManager()
+
+        config = self._oauth2_config(
+            oauth2_flow="authorization_code",
+            issuer="https://idp.example.com",
+            authorization_url="https://example.com/oauth/authorize",
+            token_url="https://example.com/oauth/token",
+            registration_url="https://example.com/oauth/register",
+        )
+        with patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.authorization_url is None
+        assert server.token_url is None
+        assert server.registration_url is None
+
+        view = manager._build_mcp_server_table(server)
+
+        assert view.authorization_url == "https://example.com/oauth/authorize"
+        assert view.token_url == "https://example.com/oauth/token"
+        assert view.registration_url == "https://example.com/oauth/register"
+
+    @pytest.mark.asyncio
     async def test_load_servers_from_config_rejects_uncorroborated_endpoints_but_keeps_resource_scopes(self):
         """A yaml server with a manual authorization_url has the same config-time mix-up exposure as a
         DB row: a document advertising a different authorize endpoint has its token_url rejected. The
@@ -1610,6 +1639,43 @@ class TestMCPServerManager:
         assert built.authorization_url == "https://idp.example.com/authorize"
         assert built.token_url == "https://idp.example.com/token"
         assert built.token_url != "https://attacker.example.com/steal"
+
+    @pytest.mark.asyncio
+    async def test_management_view_keeps_stored_endpoints_when_issuer_is_pinned(self):
+        """A pinned issuer empties the endpoints the runtime uses, but the management view must still
+        report what the admin stored. Serving the emptied values made the dashboard edit form load the
+        three endpoint fields blank, so saving with no edits sent them back as explicit nulls and wiped
+        the row, and re-entering them looked like it never saved."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="issuer-anchored-management-view",
+            alias="issuer_anchored_management_view",
+            description="issuer pinned with admin-entered endpoints",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            issuer="https://idp.example.com",
+            authorization_url="https://up.example.com/oauth/authorize",
+            token_url="https://up.example.com/oauth/token",
+            registration_url="https://up.example.com/oauth/register",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        with patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=None)):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        assert built.authorization_url is None
+        assert built.token_url is None
+        assert built.registration_url is None
+
+        view = manager._build_mcp_server_table(built)
+
+        assert view.issuer == "https://idp.example.com"
+        assert view.authorization_url == "https://up.example.com/oauth/authorize"
+        assert view.token_url == "https://up.example.com/oauth/token"
+        assert view.registration_url == "https://up.example.com/oauth/register"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

@@ -243,6 +243,61 @@ def test_bedrock_mantle_provider_fields():
     assert fields_by_key["api_base"]["field_type"] == "text"
 
 
+def test_vllm_provider_display_names_are_distinct():
+    """Hosted and local vLLM must not share a dropdown label.
+
+    The Add Model provider dropdown is driven by /public/providers/fields.
+    Both entries previously rendered as near-identical "vllm"/"Vllm" rows
+    with the same logo, so admins could not tell them apart.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    hosted = next((p for p in providers if p["provider"] == "Hosted_Vllm"), None)
+    local = next((p for p in providers if p["provider"] == "VLLM"), None)
+    assert hosted is not None, "Hosted vLLM provider entry not found"
+    assert local is not None, "Local vLLM provider entry not found"
+
+    assert hosted["provider_display_name"] == "Hosted vLLM"
+    assert local["provider_display_name"] == "Local vLLM"
+    assert hosted["provider_display_name"].casefold() != local["provider_display_name"].casefold()
+    assert hosted["litellm_provider"] == "hosted_vllm"
+    assert local["litellm_provider"] == "vllm"
+
+
+def test_nvidia_riva_provider_fields():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    riva = next((p for p in providers if p["provider"] == "NVIDIA_RIVA"), None)
+    assert riva is not None, "NVIDIA Riva provider entry not found"
+
+    assert riva["provider_display_name"] == "Nvidia Riva"
+    assert riva["litellm_provider"] == LlmProviders.NVIDIA_RIVA.value
+    assert riva["default_model_placeholder"].startswith("nvidia_riva/")
+
+    fields_by_key = {f["key"]: f for f in riva["credential_fields"]}
+
+    assert fields_by_key["api_base"]["required"] is True
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+    assert fields_by_key["api_key"]["required"] is False
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert "nvcf_function_id" in fields_by_key
+    assert fields_by_key["nvcf_function_id"]["required"] is False
+
+
 def test_google_ai_studio_provider_fields_expose_api_base():
     """The Google AI Studio (gemini) credential form must let admins set a custom
     api_base so they can point at a Gemini-compatible gateway (e.g. a self-hosted

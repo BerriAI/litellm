@@ -10,6 +10,7 @@ from openai import (
     AsyncAzureOpenAI,
     AsyncOpenAI,
     AzureOpenAI,
+    BadRequestError,
     OpenAI,
 )
 
@@ -37,6 +38,10 @@ from litellm.utils import (
 
 from ...types.llms.openai import HttpxBinaryResponseContent
 from ..base import BaseLLM
+from ..openai.common_utils import (
+    build_output_token_limit_response,
+    is_output_token_limit_error,
+)
 from .common_utils import (
     AzureOpenAIError,
     BaseAzureLLM,
@@ -147,6 +152,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
             return headers, response
+        except BadRequestError as e:
+            if not is_output_token_limit_error(e):
+                raise
+            return build_output_token_limit_response(e=e, data=data, is_async=False)
         except Exception as e:
             raise e
 
@@ -175,6 +184,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             time_delta: Final = round(end_time - start_time, 2)
             e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
             raise e
+        except BadRequestError as e:
+            if not is_output_token_limit_error(e):
+                raise
+            return build_output_token_limit_response(e=e, data=data, is_async=True)
         except Exception as e:
             raise e
 
