@@ -67,15 +67,17 @@ class _ToolCallFunctionSlice(BaseModel):
     name: str | None = None
     arguments: str | None = None
 
-    @field_validator("arguments", mode="before")
+    @field_validator("name", "arguments", mode="before")
     @classmethod
-    def _coerce_arguments(cls, value: object) -> str | None:
-        """Accept arguments that are already-parsed JSON.
+    def _coerce_to_scannable_text(cls, value: object) -> str | None:
+        """Accept any shape a client can put here and render it scannable.
 
         The OpenAI request path forwards client-supplied ``tool_calls`` verbatim, so a
-        client can post a dict here. Rejecting it would make the whole tool call read as
-        unscannable and skip it silently, which is the one outcome a scanner must never
-        have.
+        client can post a dict for ``arguments`` or a non-string for ``name``. Rejecting
+        either would fail validation for the whole slice, which reads as an unscannable
+        tool call and skips it silently -- the one outcome a scanner must never have.
+        A caller could otherwise suppress the scan on a tool call just by sending
+        ``"name": 123``.
         """
         if value is None or isinstance(value, str):
             return value

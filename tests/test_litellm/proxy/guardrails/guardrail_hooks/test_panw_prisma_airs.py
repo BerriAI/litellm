@@ -2794,6 +2794,37 @@ class TestPanwAirsToolCallContentScan:
             assert "exfiltrate" in mock_api.call_args.kwargs["content"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_name", [123, {"x": 1}, ["a"], True])
+    async def test_non_string_tool_name_does_not_suppress_the_scan(self, handler, bad_name):
+        """A wrong-typed ``name`` must not make the whole tool call unscannable.
+
+        ``name`` reaches us straight off the client body, same as ``arguments``. If a
+        non-string fails validation, the slice is unreadable, the call is skipped, and
+        the arguments never reach AIRS -- a scanner bypass any caller can trigger with
+        ``"name": 123``.
+        """
+
+        tool_call = {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": bad_name, "arguments": '{"ssn": "123-45-6789"}'},
+        }
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+            await handler._scan_tool_calls_for_guardrail(
+                tool_calls=[tool_call],
+                is_response=False,
+                metadata={"user": "test", "model": "gpt-4"},
+                call_id="test-call-id",
+                request_data={"litellm_call_id": "test-call-id"},
+                start_time=datetime.now(),
+            )
+
+            mock_api.assert_called_once()
+            assert "123-45-6789" in mock_api.call_args.kwargs["content"]
+
+    @pytest.mark.asyncio
     async def test_custom_tool_call_is_skipped(self, handler):
         """Custom tool calls carry no function payload, so they are skipped instead of crashing."""
 
