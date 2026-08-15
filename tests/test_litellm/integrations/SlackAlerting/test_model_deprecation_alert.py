@@ -146,7 +146,7 @@ async def test_should_alert_once_the_alert_type_and_router_arrive_after_startup(
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        await alerting._run_scheduled_deprecation_check(get_llm_router=lambda: router)
+        await alerting.run_scheduled_deprecation_check(get_llm_router=lambda: router)
 
     assert slept == [
         DEPRECATION_IDLE_POLL_SECONDS,
@@ -193,7 +193,7 @@ async def test_should_wait_for_the_router_instead_of_sleeping_a_full_day(monkeyp
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        await alerting._run_scheduled_deprecation_check(
+        await alerting.run_scheduled_deprecation_check(
             get_llm_router=lambda: next(routers)
         )
 
