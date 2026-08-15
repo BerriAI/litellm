@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
-
 import pytest
 from fastapi import status
 
@@ -13,26 +12,26 @@ import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
-    LiteLLMRoutes,
-    LiteLLM_JWTAuth,
+    JWTRoutingOverride,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    LiteLLM_JWTAuth,
     LiteLLM_UserTable,
+    LiteLLMRoutes,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
-    JWTRoutingOverride,
 )
+from litellm.proxy.auth.auth_checks import _cache_key_object, get_key_object
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
     _ensure_litellm_received_at_on_request_state,
     _ensure_parent_otel_span_on_request_state,
-    _PendingAutoRegister,
     _matches_routing_override,
+    _PendingAutoRegister,
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
@@ -3481,9 +3480,9 @@ async def test_auth_flow_never_persists_fallback_team_object_lit_4391():
     Pins: the auth flow completes on the fallback path WITHOUT writing any
     "team_id:*" cache entry.
     """
+    from fastapi import HTTPException
     from starlette.datastructures import URL
     from starlette.requests import Request
-    from fastapi import HTTPException
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
@@ -3580,9 +3579,9 @@ async def test_auth_flow_never_persists_fallback_team_object_lit_4391():
 @pytest.mark.asyncio
 async def test_auth_flow_fallback_team_resolves_object_permission_by_id():
     """The unresolvable-team fallback resolves team_object_permission by its own id instead of leaving it unset."""
+    from fastapi import HTTPException
     from starlette.datastructures import URL
     from starlette.requests import Request
-    from fastapi import HTTPException
 
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionTable,
@@ -3685,9 +3684,9 @@ async def test_auth_flow_fallback_team_resolves_object_permission_by_id():
 async def test_auth_flow_fallback_team_object_permission_none_when_unreadable():
     """When the object_permission row is also unreadable, the fallback leaves team_object_permission as None
     instead of raising or fabricating a grant."""
+    from fastapi import HTTPException
     from starlette.datastructures import URL
     from starlette.requests import Request
-    from fastapi import HTTPException
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
@@ -3805,9 +3804,10 @@ async def test_centralized_common_checks_runs_for_standard_auth():
     """Regardless of which _user_api_key_auth_builder path returned, the
     wrapper must run common_checks. This is the structural fix: no
     early-return path can skip authorization."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
     request = Request(scope={"type": "http"})
@@ -3850,9 +3850,10 @@ async def test_centralized_common_checks_routes_header_tags_to_litellm_metadata(
     pre-seed call site in _run_centralized_common_checks; dropping it routes header
     tags back into metadata.
     """
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
     request = Request(
@@ -3901,9 +3902,10 @@ async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
     custom_auth_run_common_checks must not pay the centralized gate.
     Custom-auth paths don't use OAuth2/DB-fallback so this skip does
     not widen any bypass."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
     request = Request(scope={"type": "http"})
@@ -3954,7 +3956,6 @@ def _custom_auth_end_user_world(mock_prisma):
     spend counters. Real caches, so the end user's spend reaches the counter the way it does in
     production: through the cache entry get_end_user_object writes."""
     import litellm.proxy.proxy_server as _proxy_server_mod
-
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
@@ -4070,9 +4071,10 @@ async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
 async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
     """Custom-auth deployments that opt in via custom_auth_run_common_checks
     get the centralized gate."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
     request = Request(scope={"type": "http"})
@@ -4103,26 +4105,28 @@ async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
 @pytest.mark.parametrize(
     "endpoint, route, expect_common_checks",
     [
-        # #36280: an include_subpath endpoint without auth forwards its
-        # sub-paths without proxy authz, exactly like its exact path — so a
-        # virtual key is accepted instead of 401'd as an admin-only route.
         ({"path": "/orx", "include_subpath": True}, "/orx/rerank", False),
         ({"path": "/orx", "include_subpath": True}, "/orx", False),
-        # No include_subpath: the sub-path is not a registered route, so authz
-        # must still run — the bypass must not widen to arbitrary prefixes.
         ({"path": "/orx"}, "/orx/rerank", True),
-        # A path that only shares a prefix is not a sub-path.
         ({"path": "/orx", "include_subpath": True}, "/orxfoo", True),
-        # auth enforced (any spelling) keeps authz on sub-paths.
         ({"path": "/orx", "include_subpath": True, "auth": "true"}, "/orx/rerank", True),
         ({"path": "/orx", "include_subpath": True, "auth": True}, "/orx/rerank", True),
-        # auth enforced also keeps authz on the exact path (any spelling).
         ({"path": "/orx", "auth": "true"}, "/orx", True),
         ({"path": "/orx", "auth": True}, "/orx", True),
     ],
+    ids=[
+        "subpath_no_auth_forwards",
+        "exact_path_no_auth_forwards",
+        "subpath_without_include_subpath_enforces",
+        "prefix_only_collision_enforces",
+        "subpath_auth_str_true_enforces",
+        "subpath_auth_bool_true_enforces",
+        "exact_path_auth_str_true_enforces",
+        "exact_path_auth_bool_true_enforces",
+    ],
 )
 async def test_centralized_common_checks_include_subpath_pass_through_authz(
-    endpoint, route, expect_common_checks
+    endpoint: dict[str, object], route: str, expect_common_checks: bool
 ):
     """#36280: pass-through sub-paths registered via include_subpath must be
     treated like the exact path for auth — the auth:false forward bypasses the
@@ -4135,24 +4139,31 @@ async def test_centralized_common_checks_include_subpath_pass_through_authz(
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
     request = Request(scope={"type": "http", "method": "POST", "headers": [], "query_string": b""})
     request._url = URL(url=route)
+    common_checks_calls: list[str] = []
 
-    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    attrs["general_settings"] = {"pass_through_endpoints": [endpoint]}
+    async def _capturing_common_checks(*_args, **_kwargs) -> bool:
+        common_checks_calls.append(route)
+        return True
+
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
+        "general_settings": {"pass_through_endpoints": [endpoint]},
+    }
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     try:
         for k, v in attrs.items():
             setattr(_proxy_server_mod, k, v)
-        with patch(
+        with patch(  # test-quality-ok: capture the central auth gate decision without booting the proxy
             "litellm.proxy.auth.user_api_key_auth.common_checks",
-            new_callable=AsyncMock,
-        ) as mock_checks:
+            _capturing_common_checks,
+        ):
             await _run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
                 route=route,
             )
-        assert bool(mock_checks.await_count) is expect_common_checks
+        assert bool(common_checks_calls) is expect_common_checks
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
@@ -4163,9 +4174,10 @@ async def test_centralized_common_checks_runs_for_oauth2_fallback_token():
     """VERIA-18 regression: an OAuth2 token that would previously early-
     return without common_checks is now subject to it. If common_checks
     raises, the gate propagates the failure."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="oauth2-token", user_id="oauth-user")
     request = Request(scope={"type": "http"})
@@ -4205,10 +4217,10 @@ async def test_centralized_common_checks_tolerates_db_errors_when_fetching_conte
     DB is down, then the gate tries to fetch team/user/etc. Those fetches
     fail — the gate must swallow and still call common_checks with None
     objects so enforcement runs against whatever the token recorded."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy.auth.auth_exception_handler import (
         DB_UNAVAILABLE_FALLBACK_USER_ID,
     )
@@ -4259,10 +4271,11 @@ async def test_centralized_common_checks_propagates_end_user_budget_error():
     re-raise it so the wrapper surfaces the budget violation, rather
     than swallowing it and letting ``common_checks`` see
     ``end_user_object=None`` and skip enforcement."""
-    import litellm
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u", end_user_id="alice")
     request = Request(scope={"type": "http"})
@@ -4310,9 +4323,10 @@ async def test_centralized_common_checks_reserves_request_end_user_budget():
     """Regression: reservation runs before user_api_key_auth() copies the
     request end-user onto the token, so centralized checks must pass the
     locally extracted end_user_id/end_user_object into reservation."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u")
     request = Request(scope={"type": "http", "headers": []})
@@ -4386,10 +4400,10 @@ async def test_centralized_common_checks_short_circuits_when_master_key_unset():
     common_checks must not run. Deployments in this mode have no proxy-
     level authentication, so applying authz would block every admin
     route for a test/dev setup that was previously wide-open."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LitellmUserRoles
 
     token = UserAPIKeyAuth(
@@ -4426,9 +4440,10 @@ async def test_centralized_common_checks_skips_public_routes():
     common_checks on top — the synthetic INTERNAL_USER_VIEW_ONLY token
     has no user_id, so common_checks would reject the request as
     admin-only."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
     request = Request(scope={"type": "http"})
@@ -4463,9 +4478,10 @@ async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_fa
     common_checks on that empty token would reject the request as
     admin-only. The "auth" flag on the endpoint config is the contract
     — when it's anything other than True, skip the gate."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth()
     request = Request(scope={"type": "http"})
@@ -4507,9 +4523,10 @@ async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth
     has ``auth: true``, the builder runs full authentication and the
     centralized gate must run too. Skipping based on path-match alone
     would re-open every ``auth: true`` pass-through endpoint."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
     request = Request(scope={"type": "http"})
@@ -4555,9 +4572,10 @@ async def test_centralized_common_checks_master_key_admin_overrides_db_user_role
     common_checks demotes the master_key request to internal_user and
     blocks /team/update. The token is the source of truth for admin
     status; the DB row must not override it."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(
         api_key="sk-master",
@@ -4615,9 +4633,10 @@ async def test_centralized_common_checks_http_exception_without_team_id():
     _team_obj_from_token reconstruction when the token has no team_id —
     the helper asserts team_id is not None. This is the Greptile P1
     finding: the ``except HTTPException`` arm was team-fetch-biased."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import HTTPException, Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u", team_id=None)
     request = Request(scope={"type": "http"})
@@ -4664,10 +4683,10 @@ async def test_centralized_common_checks_team_404_does_not_zero_other_contexts()
     Pre-fix a bare ``except HTTPException`` over ``asyncio.gather`` zeroed
     every context, silently skipping user-budget, end-user-budget, and
     project enforcement whenever the token's team_id was stale."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import HTTPException, Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import (
         LiteLLM_EndUserTable,
         LiteLLM_ProjectTableCachedObj,
@@ -4760,9 +4779,10 @@ async def test_centralized_common_checks_unresolvable_team_without_grant_is_refu
     only surviving team record is the token's own, which carries ``team_models=[]``
     and reads as every model. The request must be refused with the original lookup
     error. Pre-fix it was served."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import HTTPException, Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(
         api_key="sk-test",
@@ -4814,10 +4834,10 @@ async def test_centralized_common_checks_absent_team_refused_despite_db_unavaila
     Imported from the module under test rather than from ``auth_checks``: other
     tests in this suite ``importlib.reload`` that module, which rebinds the class
     and would leave this raising a type the guard has never seen."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import HTTPException, Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy.auth.user_api_key_auth import TeamNotFoundError
 
     token = UserAPIKeyAuth(
@@ -4862,11 +4882,11 @@ async def test_centralized_common_checks_unreadable_team_keeps_db_unavailable_op
     answered, so an operator who has accepted degraded authorization during a
     database fault still gets the fallback. Without this the fix would trade the
     widening for a lockout with no way out."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import HTTPException as _HTTPException
     from fastapi import Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     token = UserAPIKeyAuth(api_key="sk-test", team_id="unreadable-team", models=[], team_models=[])
@@ -4921,10 +4941,10 @@ async def test_centralized_common_checks_unresolvable_team_with_grant_enforces_i
     """Mirror of the refusal above: a token that does carry a team model grant keeps
     the fallback, and the reconstructed team must still enforce that grant rather
     than wave the request through."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import HTTPException, Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
     token = UserAPIKeyAuth(
@@ -4976,10 +4996,10 @@ async def test_centralized_common_checks_ui_sentinel_team_vouches_despite_absent
     provably gone, refuse" the way it is for a real team_id: PR #36837 made that
     exact mistake and PR #36982 reverted it because every dashboard request
     404'd. The sentinel must keep vouching from the token unconditionally."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.user_api_key_auth import TeamNotFoundError
 
@@ -5039,10 +5059,10 @@ async def test_centralized_common_checks_ui_sentinel_team_skips_db_lookup():
     log on every dashboard request. The gate must not call ``get_team_object``
     for the sentinel at all, while the token-derived team object still reaches
     ``common_checks``."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTableCachedObj
 
     token = UserAPIKeyAuth(
@@ -5099,10 +5119,10 @@ async def test_builder_ui_sentinel_team_never_hits_get_team_object():  # test-qu
     UI session token's team refresh and the post-validation team fetch must
     both skip ``get_team_object`` for ``UI_TEAM_ID`` instead of 404ing on
     every request."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import UI_TEAM_ID
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
@@ -5174,10 +5194,10 @@ async def test_centralized_common_checks_user_http_exception_isolates_to_user_on
     from get_user_object must zero only ``user_object``. The successfully
     fetched team / end_user / project / global_spend must reach
     common_checks intact so their enforcement still runs."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import HTTPException, Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import (
         LiteLLM_EndUserTable,
         LiteLLM_ProjectTableCachedObj,
@@ -5272,10 +5292,10 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
     spend writer (which reads user_api_key_dict.org_id, no team fallback)
     credits the org and the org budget cap can actually trip. A key with an
     explicitly pinned org_id must win over the team's org."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u", team_id="t1", org_id=key_org_id)
@@ -5324,10 +5344,10 @@ async def test_cli_session_token_org_backfilled_from_team(monkeypatch):
     without the combined_view team join, so their spend never reached the org.
     The centralized-checks backfill must complete the credential from the team
     the same way the SQL view does for DB keys."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
     from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
@@ -5380,9 +5400,10 @@ async def test_centralized_common_checks_org_backfill_survives_team_fetch_failur
     """When the team DB fetch fails, the token-derived fallback team carries no
     organization_id, so the backfill must leave org_id as None rather than
     crash or mis-attribute."""
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u", team_id="t1")
     request = Request(scope={"type": "http"})
@@ -5430,11 +5451,10 @@ async def test_master_key_auth_substitutes_alias_for_api_key():
     from fastapi import Request
     from starlette.datastructures import URL
 
+    import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
     from litellm.proxy.utils import hash_token
-
-    import litellm.proxy.proxy_server as _proxy_server_mod
 
     attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
     master_key = attrs["master_key"]
@@ -6085,9 +6105,10 @@ async def test_non_admin_cli_session_token_reaches_production_auth_path(monkeypa
         user_info, team_id="team-abc", team_alias="my-team"
     )
 
-    import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
 
     assembled = UserAPIKeyAuth(
         user_id="internal-user-1",
