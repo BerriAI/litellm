@@ -1376,6 +1376,41 @@ def test_get_num_retries_from_retry_policy(
     assert calc_num_retries == num_retries
 
 
+def test_get_num_retries_from_retry_policy_notfound_override(model_list):
+    """Test NotFoundError retries override default num_retries when explicitly set"""
+    from litellm.router import RetryPolicy
+
+    router = Router(
+        model_list=model_list,
+        retry_policy=RetryPolicy(NotFoundErrorRetries=2),
+        num_retries=5,
+    )
+    calc_num_retries = router.get_num_retries_from_retry_policy(
+        exception=litellm.exceptions.NotFoundError(
+            message="not found", llm_provider="openai", model="gpt-5-mini"
+        )
+    )
+    assert calc_num_retries == 2
+
+
+def test_get_num_retries_from_retry_policy_notfound_none_when_unset(
+    model_list,
+):
+    """Test NotFoundError falls back to None when NotFoundErrorRetries is unset"""
+    from litellm.router import RetryPolicy
+
+    router = Router(
+        model_list=model_list,
+        retry_policy=RetryPolicy(),
+    )
+    calc_num_retries = router.get_num_retries_from_retry_policy(
+        exception=litellm.exceptions.NotFoundError(
+            message="not found", llm_provider="openai", model="gpt-5-mini"
+        )
+    )
+    assert calc_num_retries is None
+
+
 @pytest.mark.parametrize(
     "exception_type, exception_name, allowed_fails",
     [
