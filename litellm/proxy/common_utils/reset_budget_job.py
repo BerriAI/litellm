@@ -269,9 +269,16 @@ class ResetBudgetJob:
         cannot clobber a concurrent increment the way a plain SET to zero could.
         """
         try:
+            from litellm.proxy.auth.user_api_key_auth import (
+                invalidate_global_proxy_spend_db_floor_marker,
+            )
             from litellm.proxy.proxy_server import user_api_key_cache
 
             await user_api_key_cache.async_delete_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
+            invalidate_global_proxy_spend_db_floor_marker(
+                user_api_key_cache=user_api_key_cache,
+                cache_key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+            )
         except Exception as e:  # noqa: BLE001  # cache invalidation failure must not break budget reset
             verbose_proxy_logger.warning(
                 "Failed to invalidate global proxy spend cache after budget reset: %s",

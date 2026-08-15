@@ -497,6 +497,20 @@ _global_spend_coordinator: Final = EventDrivenCacheCoordinator(log_prefix="[GLOB
 # Cache the authoritative DB spend read for a few seconds per worker so the
 # global-proxy budget floor check does not query the DB on every request.
 _GLOBAL_PROXY_SPEND_DB_FLOOR_TTL_SECONDS: Final = 5
+_GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX: Final = "global_proxy_spend_db_floor:"
+
+
+def invalidate_global_proxy_spend_db_floor_marker(
+    user_api_key_cache: UserApiKeyCache, cache_key: str
+) -> None:
+    """Drop the worker-local DB-floor marker for ``cache_key``.
+
+    ResetBudgetJob calls this after zeroing the aggregate DB row so a stale
+    pre-reset marker is not used to write previous-window spend back into
+    Redis during the next auth-time floor check.
+    """
+    marker_key: Final = f"{_GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX}{cache_key}"
+    user_api_key_cache.in_memory_cache.delete_cache(key=marker_key)
 
 
 async def _fetch_global_spend_with_event_coordination(
@@ -528,7 +542,7 @@ async def _fetch_global_spend_with_event_coordination(
 
     async def _authoritative_db_spend() -> float | None:
         # Cached per-worker for a few seconds to avoid a DB query per request.
-        marker_key: Final = f"global_proxy_spend_db_floor:{cache_key}"
+        marker_key: Final = f"{_GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX}{cache_key}"
         cached = user_api_key_cache.in_memory_cache.get_cache(key=marker_key)
         if cached is not None:
             return float(cached)
@@ -565,7 +579,15 @@ async def _fetch_global_spend_with_event_coordination(
     if user_api_key_cache.redis_cache is not None:
         db_spend = await _authoritative_db_spend()
         if db_spend is not None and db_spend > numeric_value:
-            await spend_cache.async_set_cache(key=cache_key, value=db_spend)
+            # Use a monotonic write so a concurrent increment that already
+            # pushed Redis above the DB value is not overwritten by a repair
+            # carrying a slightly-stale DB total.
+            user_api_key_cache.in_memory_cache.set_cache(
+                key=cache_key, value=db_spend
+            )
+            await user_api_key_cache.redis_cache.async_set_max(
+                key=cache_key, value=db_spend
+            )
             numeric_value = db_spend
 
     return numeric_value

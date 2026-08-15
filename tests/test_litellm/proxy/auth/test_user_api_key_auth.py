@@ -6168,7 +6168,7 @@ async def test_global_proxy_spend_floors_stale_low_redis_to_db():
     cache = UserApiKeyCache()
     redis_cache = MagicMock()
     redis_cache.async_get_cache = AsyncMock(return_value="2.0")
-    redis_cache.async_set_cache = AsyncMock()
+    redis_cache.async_set_max = AsyncMock()
     cache.redis_cache = redis_cache
 
     proxy_budget_row = MagicMock()
@@ -6186,7 +6186,79 @@ async def test_global_proxy_spend_floors_stale_low_redis_to_db():
 
     assert result == 9.0
     redis_cache.async_get_cache.assert_awaited_once_with(key="default_user_id:spend")
-    redis_cache.async_set_cache.assert_awaited_once_with(
+    redis_cache.async_set_max.assert_awaited_once_with(
+        key="default_user_id:spend", value=9.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_global_proxy_spend_floor_does_not_overwrite_concurrent_increment():
+    """When Redis already holds a higher value than the DB floor (because a
+    concurrent request incremented it after our read), the repair must use a
+    monotonic write so the concurrent increment is not discarded."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _fetch_global_spend_with_event_coordination,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value="2.0")
+    redis_cache.async_set_max = AsyncMock()
+    cache.redis_cache = redis_cache
+
+    proxy_budget_row = MagicMock()
+    proxy_budget_row.spend = 1.0
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=proxy_budget_row
+    )
+
+    result = await _fetch_global_spend_with_event_coordination(
+        cache_key="default_user_id:spend",
+        user_api_key_cache=cache,
+        prisma_client=prisma_client,
+    )
+
+    # DB (1.0) is not greater than Redis (2.0), so no repair is attempted.
+    assert result == 2.0
+    redis_cache.async_set_max.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_global_proxy_spend_marker_cached_db_value_used_without_db_query():
+    """The DB-floor marker should be reused for subsequent reads so we do not
+    query Postgres on every request."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _fetch_global_spend_with_event_coordination,
+        _GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value="2.0")
+    redis_cache.async_set_max = AsyncMock()
+    cache.redis_cache = redis_cache
+
+    # Seed the marker cache with a DB value greater than Redis.
+    marker_key = f"{_GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX}default_user_id:spend"
+    cache.in_memory_cache.set_cache(key=marker_key, value=9.0)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=AssertionError("DB must not be queried when marker is present")
+    )
+
+    result = await _fetch_global_spend_with_event_coordination(
+        cache_key="default_user_id:spend",
+        user_api_key_cache=cache,
+        prisma_client=prisma_client,
+    )
+
+    assert result == 9.0
+    prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+    redis_cache.async_set_max.assert_awaited_once_with(
         key="default_user_id:spend", value=9.0
     )
 
