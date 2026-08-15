@@ -2,17 +2,20 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
     make_call,
     make_sync_call,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -292,4 +295,26 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
     )
 
     response.iter_bytes.assert_called_once_with(chunk_size=2048)
+
+
+def test_invoke_streaming_forwards_bedrock_response_headers():
+    """Streaming callers need `x-amzn-requestid` to correlate a LiteLLM request with AWS support."""
+    response = MagicMock()
+    response.status_code = 200
+    response.iter_bytes = MagicMock(return_value=iter([]))
+    response.headers = httpx.Headers({"x-amzn-requestid": "req-789"})
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=response)
+
+    stream = litellm.completion(
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert stream._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-789"
 

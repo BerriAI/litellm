@@ -164,7 +164,7 @@ class CustomStreamWrapper:
         custom_llm_provider: str | None = None,
         stream_options=None,
         make_call: Callable | None = None,
-        _response_headers: dict | None = None,
+        _response_headers: dict | httpx.Headers | None = None,
     ):
         self.model = model
         self.make_call = make_call
