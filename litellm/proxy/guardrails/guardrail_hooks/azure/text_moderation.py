@@ -123,7 +123,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         for chunk in chunks:
             request_body = AzureTextModerationGuardrailRequestBody(
                 text=chunk,
-                **self.optional_params_request_body,  # type: ignore[misc]
+                **self.optional_params_request_body,
             )
             response_json = await self._post_to_content_safety("text:analyze", cast(dict, request_body))
 

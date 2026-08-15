@@ -2,7 +2,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
-import httpx  # type: ignore
+import httpx
 from aiohttp import ClientSession, FormData
 
 import litellm
@@ -221,7 +221,7 @@ class BaseLLMAIOHTTPHandler:
                     timeout=timeout,
                     stream=stream,
                     files=files,
-                    content=content,
+                    content=content if content is not None else None,
                     params=params,
                 )
             except httpx.HTTPStatusError as e:
@@ -275,9 +275,9 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             stream=False,
         )
-        _transformed_response: Final = await provider_config.transform_response(  # type: ignore
+        _transformed_response: Final = await provider_config.transform_response(
             model=model,
-            raw_response=_response,  # type: ignore
+            raw_response=_response,
             model_response=model_response,
             logging_obj=logging_obj,
             api_key=api_key,
@@ -377,7 +377,7 @@ class BaseLLMAIOHTTPHandler:
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
-                headers=headers,  # type: ignore
+                headers=headers,
                 data=data,
                 model=model,
                 messages=messages,
@@ -616,7 +616,7 @@ class BaseLLMAIOHTTPHandler:
                 litellm_params=litellm_params,
                 image=image,
                 provider_config=provider_config,
-            )  # type: ignore
+            )
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()

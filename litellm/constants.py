@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_non
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 ROUTER_MAX_FALLBACKS: Final = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
+ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS: Final = 2000
 DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
@@ -90,6 +91,8 @@ DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD: Final = float(
     os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
 )
 MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH: Final = int(os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150))
+
+DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS: Final = 2000
 
 # Semantic Guard Defaults
 DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL: Final = str(
@@ -197,6 +200,16 @@ RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS: Final = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
+# The earliest an evicted, litellm-created client may be closed. A request handed the
+# client just before eviction is still using it, so nothing is closed inside this window;
+# past it, the client is closed once it reports no connection in flight.
+EVICTED_LLM_CLIENT_CLOSE_GRACE_SECONDS: Final = 900
+
+# How many evicted clients may be queued for closing at once. Past this, an evicted client
+# is left to the collector rather than letting a cache-churning workload grow the queue
+# without bound. Each queued entry is ~100 bytes and comes due within one grace window.
+EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING: Final = 10_000
+
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT: Final = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
@@ -267,6 +280,7 @@ TOOL_POLICY_CACHE_TTL_SECONDS: Final = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECO
 GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS: Final = int(
     os.getenv("GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS", 24 * 60 * 60)
 )
+BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS: Final = 25_000
 # Aggregation threshold: default to 80% of the asyncio queue maxsize so the check can always trigger.
 # Must be < LITELLM_ASYNCIO_QUEUE_MAXSIZE; if set higher the aggregation logic will never fire.
 MAX_SIZE_IN_MEMORY_QUEUE: Final = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8)))
@@ -458,6 +472,8 @@ EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = float(
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv("ANTHROPIC_TOKEN_COUNTING_BETA_VERSION", "token-counting-2024-11-01")
 ANTHROPIC_SKILLS_API_BETA_VERSION: Final = "skills-2025-10-02"
+ANTHROPIC_BATCHES_ROUTE: Final = "/v1/messages/batches"
+VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,
     "medium": 5,
@@ -1308,6 +1324,8 @@ X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
+SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
+CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
@@ -1463,12 +1481,19 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS: Final = int(os.getenv("CLOUDZERO_MAX_FETCHED
 SPEND_LOG_CLEANUP_JOB_NAME: Final = "spend_log_cleanup"
 KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
+WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
+MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
+PROMETHEUS_FALLBACK_STATS_JOB_ID: Final = "prometheus_fallback_stats_job"
+SLACK_DAILY_REPORT_LOCK_ID: Final = "slack_daily_report"
 SPEND_LOG_RUN_LOOPS: Final = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE: Final = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(os.getenv("SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3))
 SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS: Final = float(
     os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
 )
+SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS: Final = float(os.getenv("SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS", "300"))
+SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = float(os.getenv("SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS", "30"))
+SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = int(os.getenv("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", "100000"))
 TOOL_SPEND_TOP_TOOLS: Final = 100
 SPEND_LOG_PARTITION_INTERVAL: Final = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
 SPEND_LOG_PARTITION_PRECREATE_AHEAD: Final = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
@@ -1478,6 +1503,8 @@ SPEND_LOG_QUEUE_POLL_INTERVAL: Final = float(os.getenv("SPEND_LOG_QUEUE_POLL_INT
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = int(os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = int(os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60))  # 1 minute
 PROXY_BUDGET_RESCHEDULER_MIN_TIME: Final = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597))
+RESET_BUDGET_JOB_BATCH_SIZE: Final = max(1, int(os.getenv("RESET_BUDGET_JOB_BATCH_SIZE", "500")))
+RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN: Final = max(1, int(os.getenv("RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN", "100")))
 PROXY_BATCH_POLLING_INTERVAL: Final = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
 MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7)))
@@ -1505,6 +1532,10 @@ APSCHEDULER_REPLACE_EXISTING: Final = os.getenv("APSCHEDULER_REPLACE_EXISTING", 
     "true",
     "1",
 ]  # always replace existing jobs
+
+# Width of the window scheduled background jobs are spread across, so they do not all fire
+# on one instant on every replica. Tunable per deployment via general_settings.
+DEFAULT_STAGGER_WINDOW_SECONDS: Final = 300
 
 # The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
 # This will run tag spcific tasks at a later time to smooth QPS
@@ -1704,3 +1735,21 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
 )
 
 UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
+
+# PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
+# sentinel api_key so PTU flat cost stays distinguishable from real per-request
+# spend under the table's composite unique constraint.
+PTU_SENTINEL_API_KEY: Final[str] = "__ptu_flat_cost__"
+PTU_ROLLUP_JOB_ID: Final[str] = "ptu_flat_cost_rollup_job"
+PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
+# Furthest back the catch-up pass looks for unpriced PTU days when a deployment
+# declares no ptu_effective_from, bounding the scan for an open-ended window.
+PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
+# Deployments named in the lapsed-window alert before it is truncated, so a fleet-wide
+# expiry cannot produce an alert too large for the channel delivering it.
+PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
+# Slack allowed when deciding a sentinel row is stale. The row's updated_at and the
+# run's cutoff are stamped by different hosts, so clock skew between them must not let
+# one run delete a charge another just wrote. A stale row is hours old and a concurrent
+# one is seconds old, so a few minutes separates them.
+PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300

@@ -80,9 +80,9 @@ class LunaryLogger:
         try:
             import lunary
 
-            version: Final = importlib.metadata.version("lunary")  # type: ignore
+            version: Final = importlib.metadata.version("lunary")
             # if version < 0.1.43 then raise ImportError
-            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):  # type: ignore
+            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
                 print(  # noqa: T201
                     "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
@@ -151,7 +151,7 @@ class LunaryLogger:
             else:
                 error_obj = None
 
-            self.lunary_client.track_event(  # type: ignore
+            self.lunary_client.track_event(
                 type,
                 "start",
                 run_id,
@@ -167,7 +167,7 @@ class LunaryLogger:
                 params=extra,
             )
 
-            self.lunary_client.track_event(  # type: ignore
+            self.lunary_client.track_event(
                 type,
                 event,
                 run_id,

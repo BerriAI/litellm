@@ -174,9 +174,7 @@ class ArizePhoenixTemplateManager:
             # Combine rendered content
             final_content = " ".join(rendered_content_parts)
 
-            rendered_messages.append(
-                {"role": role, "content": final_content}  # type: ignore
-            )
+            rendered_messages.append({"role": role, "content": final_content})
 
         return rendered_messages
 

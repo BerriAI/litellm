@@ -60,7 +60,7 @@ def make_sync_call(
             data=data,
             messages=messages,
             encoding=litellm.encoding,
-        )  # type: ignore
+        )
         completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
@@ -89,7 +89,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         model_response: ModelResponse,
         timeout: float | httpx.Timeout | None,
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObject,
         stream,
         optional_params: dict,
         litellm_params: dict,
@@ -209,7 +209,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 _params["timeout"] = timeout
             client = get_async_httpx_client(params=_params, llm_provider=litellm.LlmProviders.BEDROCK)
         else:
-            client = client  # type: ignore
+            client = client
 
         try:
             response: Final = await client.post(
@@ -217,7 +217,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 headers=headers,
                 data=data,
                 logging_obj=logging_obj,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
@@ -378,7 +378,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     credentials=credentials,
                     api_key=api_key,
                     stream_chunk_size=stream_chunk_size,
-                )  # type: ignore
+                )
             ### ASYNC COMPLETION
             return self.async_completion(
                 model=model,
@@ -388,7 +388,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 encoding=encoding,
                 logging_obj=logging_obj,
                 optional_params=optional_params,
-                stream=stream,  # type: ignore
+                stream=stream,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 headers=headers,
@@ -396,7 +396,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 client=client,
                 credentials=credentials,
                 api_key=api_key,
-            )  # type: ignore
+            )
 
         ## TRANSFORMATION ##
 
@@ -435,7 +435,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_httpx_client(_params)  # type: ignore
+            client = _get_httpx_client(_params)
         else:
             client = client
 
@@ -443,7 +443,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             completion_stream: Final = make_sync_call(
                 client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                 api_base=proxy_endpoint_url,
-                headers=prepped.headers,  # type: ignore
+                headers=prepped.headers,
                 data=data,
                 model=model,
                 messages=messages,
@@ -469,7 +469,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 headers=prepped.headers,
                 data=data,
                 logging_obj=logging_obj,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code

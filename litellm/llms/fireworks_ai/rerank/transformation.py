@@ -96,7 +96,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
 
         return params
 
-    def validate_environment(  # type: ignore[override]
+    def validate_environment(
         self,
         headers: dict,
         model: str,

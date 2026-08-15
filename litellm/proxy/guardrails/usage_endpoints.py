@@ -6,7 +6,7 @@ GET /guardrails/usage/overview, /guardrails/usage/detail/:id, /guardrails/usage/
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, Union, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, overload
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -31,8 +31,8 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
     from litellm.types.guardrails import Guardrail
 
-    _DbOrConfigGuardrail = Union[prisma_models.LiteLLM_GuardrailsTable, Guardrail]
-    _DailyMetricsRow = Union[prisma_models.LiteLLM_DailyGuardrailMetrics, prisma_models.LiteLLM_DailyPolicyMetrics]
+    _DbOrConfigGuardrail = prisma_models.LiteLLM_GuardrailsTable | Guardrail
+    _DailyMetricsRow = prisma_models.LiteLLM_DailyGuardrailMetrics | prisma_models.LiteLLM_DailyPolicyMetrics
 
 router: Final = APIRouter()
 

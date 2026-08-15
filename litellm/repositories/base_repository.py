@@ -4,7 +4,7 @@ Base repository class with common functionality.
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Final, Generic, Protocol, TypeVar, Union, runtime_checkable
+from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -21,12 +21,7 @@ class SupportsDict(Protocol):
     def dict(self) -> dict[str, object]: ...
 
 
-DbRecord = Union[
-    Mapping[str, object],
-    SupportsModelDump,
-    SupportsDict,
-    Sequence[tuple[str, object]],
-]
+DbRecord = Mapping[str, object] | SupportsModelDump | SupportsDict | Sequence[tuple[str, object]]
 
 
 def record_to_dict(record: DbRecord) -> Mapping[str, object]:

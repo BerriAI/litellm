@@ -8,6 +8,7 @@ This module has no dependencies on proxy code and can be safely imported at the 
 import json
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -71,7 +72,7 @@ def get_litellm_gateway_api_key(
     return token_data["key"]
 
 
-def is_cli_token_fresh(token_data: dict, buffer_hours: float = 0.1) -> bool:
+def is_cli_token_fresh(token_data: Mapping[str, object], buffer_hours: float = 0.1) -> bool:
     """Check whether a cached CLI token (as stored in token.json) is still
     within its expiration window. Used by `lite auth print-token` to fail
     fast, without a network round trip, once the cached token is past

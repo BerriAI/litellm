@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import ViewUserDashboard from "./view_users";
 
 const userListCall = vi.fn();
@@ -33,6 +34,20 @@ vi.mock("@/components/networking", () => ({
 vi.mock("./view_users/user_info_view", () => ({
   default: function UserInfoViewMock({ userId, startInEditMode }: { userId: string; startInEditMode?: boolean }) {
     return <div data-testid="user-info-view">{`detail:${userId}:${String(Boolean(startInEditMode))}`}</div>;
+  },
+}));
+
+vi.mock("./default-user-settings/DefaultUserSettingsForm", () => ({
+  DefaultUserSettingsForm: function DefaultUserSettingsFormMock() {
+    const [value, setValue] = React.useState("");
+    return (
+      <section aria-label="Default user settings panel">
+        <label>
+          Default setting
+          <input value={value} onChange={(event) => setValue(event.target.value)} />
+        </label>
+      </section>
+    );
   },
 }));
 
@@ -77,10 +92,10 @@ const defaultProps = {
   teams: [],
 };
 
-const renderDashboard = () =>
-  render(
+const renderDashboard = (overrides: Partial<typeof defaultProps> = {}) =>
+  renderWithProviders(
     <QueryClientProvider client={createQueryClient()}>
-      <ViewUserDashboard {...defaultProps} />
+      <ViewUserDashboard {...defaultProps} {...overrides} />
     </QueryClientProvider>,
   );
 
@@ -104,6 +119,51 @@ describe("ViewUserDashboard", () => {
     });
 
     expect(screen.getAllByText("Default User Settings").length).toBeGreaterThan(0);
+  });
+
+  it("switches between the users table and default settings tabs for proxy admins", async () => {
+    const user = userEvent.setup();
+    renderDashboard();
+
+    expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+
+    const usersTab = screen.getByRole("tab", { name: "Users" });
+    const settingsTab = screen.getByRole("tab", { name: "Default User Settings" });
+    expect(usersTab).toHaveAttribute("aria-selected", "true");
+
+    await user.click(settingsTab);
+
+    expect(settingsTab).toHaveAttribute("aria-selected", "true");
+    expect(usersTab).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("region", { name: "Default user settings panel" })).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Default setting" }), "unsaved change");
+
+    await user.click(usersTab);
+
+    expect(usersTab).toHaveAttribute("aria-selected", "true");
+    expect(settingsTab).toHaveAttribute("aria-selected", "false");
+
+    await user.click(settingsTab);
+
+    expect(screen.getByRole("textbox", { name: "Default setting" })).toHaveValue("unsaved change");
+  });
+
+  it("shows the users table without admin controls for non-proxy admins", async () => {
+    renderDashboard({ userRole: "Internal User" });
+
+    expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("toggle-user-selection")).not.toBeInTheDocument();
+  });
+
+  it("keeps actions unavailable while the user list is loading", () => {
+    userListCall.mockReturnValue(new Promise(() => undefined));
+
+    renderDashboard();
+
+    expect(screen.getByText("Loading users…")).toBeInTheDocument();
+    expect(screen.queryByTestId("toggle-user-selection")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bulk-edit-users")).not.toBeInTheDocument();
   });
 
   it("should show delete modal after choosing delete from the row actions menu", async () => {

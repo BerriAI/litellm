@@ -6,12 +6,19 @@ import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../te
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import EditAutoRouterModal from "./edit_auto_router_modal";
 
-const { modelPatchUpdateCall, modelAvailableCall } = vi.hoisted(() => ({
+const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall } = vi.hoisted(() => ({
   modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
 }));
 
-vi.mock("../networking", () => ({ modelPatchUpdateCall, modelAvailableCall }));
+vi.mock("../networking", () => ({
+  modelPatchUpdateCall,
+  modelAvailableCall,
+  getAutoRouterClassifierDefaultPromptCall,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "sk-test" }) }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([{ model_group: "gpt-4o-mini" }]),
@@ -243,6 +250,22 @@ describe("EditAutoRouterModal classifier context window", () => {
     expect(config.classifier_context_per_turn_chars).toBe(300);
   });
 
+  // The prompt editor is a base-ui Dialog at z-index 50. Housing this form in an antd Modal put a
+  // z-index 1000 overlay between the operator and it, so the editor opened underneath and could
+  // not be read or typed into. jsdom does not paint, so the assertion is the invariant behind the
+  // stacking: both overlays come from the one Dialog primitive the create form already uses.
+  it("opens the classifier prompt editor in the same overlay layer as the form", async () => {
+    const user = userEvent.setup();
+    const { baseElement } = renderLlmModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("button", { name: /prompt/i }));
+
+    expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
+    expect(baseElement.querySelectorAll('[data-slot="dialog-content"]')).toHaveLength(2);
+    expect(baseElement.querySelector(".ant-modal")).toBeNull();
+  });
+
   it("persists an edited classifier context window size", async () => {
     const user = userEvent.setup();
     renderLlmModal();
@@ -342,7 +365,7 @@ describe("EditAutoRouterModal session affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByText("Advanced: Affinity"));
     expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -355,7 +378,7 @@ describe("EditAutoRouterModal session affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByText("Advanced: Affinity"));
     expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -368,7 +391,7 @@ describe("EditAutoRouterModal session affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByText("Advanced: Affinity"));
     await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -381,12 +404,147 @@ describe("EditAutoRouterModal session affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByText("Advanced: Affinity"));
     await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().session_affinity).toBe(false);
+  });
+});
+
+describe("EditAutoRouterModal deployment affinity", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const renderWithStoredConfig = (complexity_router_config: Record<string, unknown>) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{ ...MODEL_DATA, litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config } }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  it("shows a stored config with no deployment_affinity key as on, matching the backend default", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    expect(
+      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
+    ).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().deployment_affinity).toBe(true);
+  });
+
+  it("shows a stored deployment_affinity=false as off and preserves it through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, deployment_affinity: false });
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    expect(
+      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
+    ).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().deployment_affinity).toBe(false);
+  });
+
+  it("persists turning deployment affinity off", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().deployment_affinity).toBe(false);
+  });
+});
+
+describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const STORED_CUSTOM_CONFIG = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o-mini"], COMPLEX: ["gpt-4o-mini"], REASONING: ["gpt-4o-mini"] },
+    classifier_type: "llm",
+    classifier_llm_config: {
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      system_prompt: "Grade data sensitivity, not difficulty.",
+    },
+    classifier_fallback: "default_model",
+  };
+
+  const renderCustomModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: STORED_CUSTOM_CONFIG },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // Both keys are rewritten from form state on save, so a missing hydration line would silently
+  // wipe an operator's custom prompt the first time they opened this modal for anything else.
+  it("preserves a stored custom prompt and fallback through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toHaveAttribute("checked");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    const config = savedConfig();
+    expect(config.classifier_llm_config.system_prompt).toBe("Grade data sensitivity, not difficulty.");
+    expect(config.classifier_fallback).toBe("default_model");
+  });
+
+  it("persists a switch back to the heuristic fallback", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Score with the heuristic/ }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_fallback).toBe("heuristic");
+  });
+
+  it("drops the override when the prompt is reset to the default", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("button", { name: "Reset to default" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_llm_config).not.toHaveProperty("system_prompt");
   });
 });

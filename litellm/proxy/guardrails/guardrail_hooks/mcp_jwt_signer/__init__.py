@@ -26,7 +26,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
     optional_params: Final = getattr(litellm_params, "optional_params", None)
 
-    def _get(key):  # type: ignore[no-untyped-def]
+    def _get(key):
         if optional_params is not None:
             v: Final = getattr(optional_params, key, None)
             if v is not None:

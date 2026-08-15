@@ -62,7 +62,7 @@ class LoggingCallbackManager:
         """
         self._safe_add_callback_to_list(
             callback=callback,
-            parent_list=litellm.callbacks,  # type: ignore
+            parent_list=litellm.callbacks,
         )
 
     def add_litellm_success_callback(self, callback: CustomLogger | str | Callable):

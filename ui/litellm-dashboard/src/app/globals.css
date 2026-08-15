@@ -235,3 +235,20 @@
 .custom-border {
   border: 1px solid var(--neutral-border);
 }
+
+/* A dialog opened from inside another dialog reads as a drill-down, not a stack: base-ui stamps
+   this attribute on the parent while a child is open, so the parent steps aside instead of
+   showing its own edges around a differently sized child. */
+[data-slot="dialog-content"][data-nested-dialog-open] {
+  visibility: hidden;
+}
+
+/* Base UI portals a popup into an `isolate z-50` positioner, which an antd Modal at z-index 1000
+   then paints over, so options on a half-migrated page are visible but not clickable. The
+   positioner is not reachable from the call site, hence the parent selector. Delete this once no
+   route renders an antd Modal. */
+body:has(.ant-modal-wrap) div:has(> [data-slot="select-content"]),
+body:has(.ant-modal-wrap) div:has(> [data-slot="combobox-content"]),
+body:has(.ant-modal-wrap) div:has(> [data-slot="tooltip-content"]) {
+  z-index: 1100;
+}

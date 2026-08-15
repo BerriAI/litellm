@@ -8,7 +8,12 @@ from collections.abc import AsyncIterator, Coroutine
 from typing import Any, Final
 
 import litellm
-from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.anthropic import (
+    AllAnthropicToolsValues,
+    AnthropicMessagesRequest,
+    AnthropicOutputConfig,
+    AnthropicOutputSchema,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -27,24 +32,24 @@ def _build_responses_kwargs(
     model: str,
     context_management: dict | None = None,
     metadata: dict | None = None,
-    output_config: dict | None = None,
+    output_config: AnthropicOutputConfig | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | None = None,
     temperature: float | None = None,
     thinking: dict | None = None,
     tool_choice: dict | None = None,
-    tools: list[dict] | None = None,
+    tools: list[AllAnthropicToolsValues | dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
-    output_format: dict | None = None,
+    output_format: AnthropicOutputSchema | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     # Build a typed AnthropicMessagesRequest for the adapter
-    request_data: Final[dict[str, Any]] = {
+    request_data: Final[AnthropicMessagesRequest] = {
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
@@ -70,7 +75,7 @@ def _build_responses_kwargs(
     if output_format:
         request_data["output_format"] = output_format
 
-    anthropic_request: Final = AnthropicMessagesRequest(**request_data)  # type: ignore[typeddict-item]
+    anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     responses_kwargs: Final = _ADAPTER.translate_request(anthropic_request)
 
     # Normalize reasoning effort based on model capabilities
@@ -128,19 +133,19 @@ class LiteLLMMessagesToResponsesAPIHandler:
         model: str,
         context_management: dict | None = None,
         metadata: dict | None = None,
-        output_config: dict | None = None,
+        output_config: AnthropicOutputConfig | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
         thinking: dict | None = None,
         tool_choice: dict | None = None,
-        tools: list[dict] | None = None,
+        tools: list[AllAnthropicToolsValues | dict] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
+        output_format: AnthropicOutputSchema | None = None,
         **kwargs,
-    ) -> AnthropicMessagesResponse | AsyncIterator:
+    ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
         responses_kwargs: Final = _build_responses_kwargs(
             max_tokens=max_tokens,
             messages=messages,
@@ -179,23 +184,23 @@ class LiteLLMMessagesToResponsesAPIHandler:
         model: str,
         context_management: dict | None = None,
         metadata: dict | None = None,
-        output_config: dict | None = None,
+        output_config: AnthropicOutputConfig | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
         thinking: dict | None = None,
         tool_choice: dict | None = None,
-        tools: list[dict] | None = None,
+        tools: list[AllAnthropicToolsValues | dict] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
+        output_format: AnthropicOutputSchema | None = None,
         _is_async: bool = False,
         **kwargs,
     ) -> (
         AnthropicMessagesResponse
-        | AsyncIterator[Any]
-        | Coroutine[Any, Any, AnthropicMessagesResponse | AsyncIterator[Any]]
+        | AsyncIterator[bytes]
+        | Coroutine[None, None, AnthropicMessagesResponse | AsyncIterator[bytes]]
     ):
         if _is_async:
             return LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(

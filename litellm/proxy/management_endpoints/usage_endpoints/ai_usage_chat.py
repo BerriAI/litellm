@@ -4,11 +4,11 @@ usage/spend data by querying the aggregated daily activity endpoints.
 """
 
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, Protocol, cast, overload
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -73,9 +73,36 @@ class SSEErrorEvent(TypedDict):
 SSEEvent = SSEStatusEvent | SSEToolCallEvent | SSEChunkEvent | SSEDoneEvent | SSEErrorEvent
 
 
+class _EntityEntry(TypedDict, total=False):
+    metrics: ReadOnly[Mapping[str, float]]
+    metadata: ReadOnly[Mapping[str, str]]
+
+
+class _DayDump(TypedDict, total=False):
+    breakdown: ReadOnly[Mapping[str, Mapping[str, _EntityEntry]]]
+
+
+class _UsageDump(Protocol):
+    @overload
+    def get(self, key: Literal["metadata"], default: Mapping[str, float], /) -> Mapping[str, float]: ...
+    @overload
+    def get(self, key: Literal["results"], default: Sequence[_DayDump], /) -> Sequence[_DayDump]: ...
+
+
+class _ToolFunctionDef(TypedDict):
+    name: ReadOnly[str]
+    description: ReadOnly[str]
+    parameters: ReadOnly[Mapping[str, object]]
+
+
+class _ToolDef(TypedDict):
+    type: ReadOnly[str]
+    function: ReadOnly[_ToolFunctionDef]
+
+
 class ToolHandler(TypedDict):
-    fetch: Callable[..., Any]
-    summarise: Callable[[dict[str, Any]], str]
+    fetch: Callable[..., Awaitable[_UsageDump]]
+    summarise: Callable[[_UsageDump], str]
     label: str
 
 
@@ -88,7 +115,7 @@ _DATE_PARAMS: Final = {
     "end_date": {"type": "string", "description": "End date in YYYY-MM-DD format"},
 }
 
-_TOOL_USAGE: Final = {
+_TOOL_USAGE: Final[_ToolDef] = {
     "type": "function",
     "function": {
         "name": "get_usage_data",
@@ -111,7 +138,7 @@ _TOOL_USAGE: Final = {
     },
 }
 
-_TOOL_TEAM: Final = {
+_TOOL_TEAM: Final[_ToolDef] = {
     "type": "function",
     "function": {
         "name": "get_team_usage_data",
@@ -133,7 +160,7 @@ _TOOL_TEAM: Final = {
     },
 }
 
-_TOOL_TAG: Final = {
+_TOOL_TAG: Final[_ToolDef] = {
     "type": "function",
     "function": {
         "name": "get_tag_usage_data",
@@ -159,7 +186,7 @@ TOOLS_BASE: Final = [_TOOL_USAGE]
 TOOLS_ADMIN: Final = [_TOOL_USAGE, _TOOL_TEAM, _TOOL_TAG]
 
 
-def get_tools_for_role(is_admin: bool) -> list[dict[str, Any]]:
+def get_tools_for_role(is_admin: bool) -> list[_ToolDef]:
     """Return the tool list appropriate for the user's role."""
     return TOOLS_ADMIN if is_admin else TOOLS_BASE
 
@@ -254,7 +281,7 @@ async def _query_activity(
     )
 
 
-async def _fetch_usage_data(start_date: str, end_date: str, user_id: str | None = None) -> dict[str, Any]:
+async def _fetch_usage_data(start_date: str, end_date: str, user_id: str | None = None) -> _UsageDump:
     resp: Final = await _query_activity(
         TABLE_DAILY_USER_SPEND,
         ENTITY_FIELD_USER,
@@ -266,7 +293,7 @@ async def _fetch_usage_data(start_date: str, end_date: str, user_id: str | None 
     return resp.model_dump(mode="json")
 
 
-async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: str | None = None) -> dict[str, Any]:
+async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: str | None = None) -> _UsageDump:
     resp: Final = await _query_activity(
         TABLE_DAILY_TEAM_SPEND,
         ENTITY_FIELD_TEAM,
@@ -277,7 +304,7 @@ async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: str |
     return resp.model_dump(mode="json")
 
 
-async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: str | None = None) -> dict[str, Any]:
+async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: str | None = None) -> _UsageDump:
     resp: Final = await _query_activity(
         TABLE_DAILY_TAG_SPEND,
         ENTITY_FIELD_TAG,
@@ -294,7 +321,7 @@ async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: str | None
 
 
 def _accumulate_breakdown(
-    results: list[dict[str, Any]], dimension: str, fields: list[str]
+    results: Sequence[_DayDump], dimension: str, fields: Sequence[str]
 ) -> dict[str, dict[str, float]]:
     """Aggregate a single breakdown dimension across days."""
     totals: Final[dict[str, dict[str, float]]] = {}
@@ -317,7 +344,7 @@ def _ranked_lines(
     return [fmt(name, vals) for name, vals in sorted(totals.items(), key=lambda x: -x[1].get("spend", 0))[:limit]]
 
 
-def _summarise_usage_data(data: dict[str, Any]) -> str:
+def _summarise_usage_data(data: _UsageDump) -> str:
     meta: Final = data.get("metadata", {})
     results: Final = data.get("results", [])
 
@@ -349,7 +376,7 @@ def _summarise_usage_data(data: dict[str, Any]) -> str:
     return "\n".join(sections)
 
 
-def _summarise_entity_data(data: dict[str, Any], entity_label: str) -> str:
+def _summarise_entity_data(data: _UsageDump, entity_label: str) -> str:
     """Summarise team/tag entity usage data."""
     results: Final = data.get("results", [])
     if not results:
@@ -409,16 +436,16 @@ def _sse(event: SSEEvent) -> str:
 
 def _resolve_fetch_kwargs(
     fn_name: str,
-    fn_args: dict[str, str],
+    fn_args: Mapping[str, str],
     user_id: str | None,
     is_admin: bool,
-) -> dict[str, Any]:
+) -> dict[str, str]:
     """Build keyword arguments for a tool's fetch function."""
     start_date: Final = fn_args.get("start_date", "")
     end_date: Final = fn_args.get("end_date", "")
     if not start_date or not end_date:
         raise ValueError("Missing required start_date or end_date from tool arguments")
-    kwargs: Final[dict[str, Any]] = {"start_date": start_date, "end_date": end_date}
+    kwargs: Final[dict[str, str]] = {"start_date": start_date, "end_date": end_date}
     if fn_name == "get_usage_data":
         if not is_admin:
             if user_id is None:
@@ -443,7 +470,7 @@ def _resolve_fetch_kwargs(
 async def _execute_tool_call(
     handler: ToolHandler,
     fn_name: str,
-    fn_args: dict[str, str],
+    fn_args: Mapping[str, str],
     user_id: str | None,
     is_admin: bool,
 ) -> str:
@@ -455,13 +482,13 @@ async def _execute_tool_call(
 
 async def _process_tool_call(
     tc: Any,
-    chat_messages: list[dict[str, Any]],
+    chat_messages: list[Mapping[str, object]],
     user_id: str | None,
     is_admin: bool,
 ) -> AsyncIterator[str]:
     """Execute a single tool call, yielding SSE events for status."""
-    fn_name: Final = tc.function.name
-    fn_args: Final = json.loads(tc.function.arguments)
+    fn_name: Final[str] = tc.function.name
+    fn_args: Final[Mapping[str, str]] = json.loads(tc.function.arguments)
 
     allowed_names: Final = {t["function"]["name"] for t in get_tools_for_role(is_admin)}
     handler: Final = TOOL_HANDLERS.get(fn_name)
@@ -495,7 +522,7 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
-async def _stream_final_response(model: str, chat_messages: list[dict[str, Any]]) -> AsyncIterator[str]:
+async def _stream_final_response(model: str, chat_messages: list[Mapping[str, object]]) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
@@ -520,7 +547,7 @@ async def stream_usage_ai_chat(
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model: Final = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
     truncated: Final = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
-    chat_messages: Final[list[dict[str, Any]]] = [
+    chat_messages: Final[list[Mapping[str, object]]] = [
         {"role": "system", "content": _build_system_prompt(is_admin)},
         *truncated,
     ]
@@ -534,7 +561,7 @@ async def stream_usage_ai_chat(
             tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
         )
-        choice: Final = response.choices[0]  # type: ignore
+        choice: Final = response.choices[0]
 
         if not choice.message.tool_calls:
             if choice.message.content:

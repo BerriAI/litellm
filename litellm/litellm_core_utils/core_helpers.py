@@ -1,8 +1,8 @@
 # What is this?
 ## Helper utilities
 import copy
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Final, Literal, Union
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from litellm.types.utils import ModelResponseStream
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -131,6 +131,9 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "content_filter": "content_filter",
     # Anthropic Sonnet 4
     "content_filtered": "content_filter",
+    # Generic error passthrough (OpenRouter and other OpenAI-compatible providers
+    # emit lowercase "error" when a provider fails mid-stream)
+    "error": "stop",
 }
 
 
@@ -178,7 +181,7 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
 
 
 def get_metadata_variable_name_from_kwargs(
-    kwargs: dict,
+    kwargs: Mapping[str, object],
 ) -> Literal["metadata", "litellm_metadata"]:
     """
     Helper to return what the "metadata" field should be called in the request data

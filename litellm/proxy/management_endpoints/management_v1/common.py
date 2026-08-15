@@ -4,7 +4,8 @@ from typing import Final
 from urllib.parse import urlencode
 
 from fastapi import Request
-from fastapi.dependencies.utils import get_flat_dependant
+from fastapi.dependencies.utils import get_flat_params
+from fastapi.params import ParamTypes
 from fastapi.responses import JSONResponse
 
 from litellm.types.proxy.management_endpoints.management_v1 import (
@@ -42,7 +43,13 @@ def _declared_query_params(request: Request) -> frozenset[str]:
     dependant: Final = getattr(route, "dependant", None)
     if dependant is None:
         return frozenset()
-    return frozenset(field.alias for field in get_flat_dependant(dependant, skip_repeats=True).query_params)
+    # fastapi>=0.140.7 removed get_flat_dependant(); get_flat_params() returns the
+    # flattened (deduped) param list. Filter to query params to match the old behavior.
+    return frozenset(
+        field.alias
+        for field in get_flat_params(dependant)
+        if getattr(field.field_info, "in_", None) == ParamTypes.query
+    )
 
 
 def escape_like(value: str) -> str:

@@ -14,8 +14,8 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 
-PROMETHEUS_URL: Final[str | None] = get_secret("PROMETHEUS_URL")  # type: ignore
-PROMETHEUS_SELECTED_INSTANCE: Final[str | None] = get_secret("PROMETHEUS_SELECTED_INSTANCE")  # type: ignore
+PROMETHEUS_URL: Final[str | None] = get_secret("PROMETHEUS_URL")
+PROMETHEUS_SELECTED_INSTANCE: Final[str | None] = get_secret("PROMETHEUS_SELECTED_INSTANCE")
 async_http_handler: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
 

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     LitellmRouter = Any
     Span = Any
