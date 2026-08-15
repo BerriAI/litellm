@@ -35830,6 +35830,10 @@ export interface components {
             team_public_model_name?: string | null;
             /** Tier */
             tier?: ("free" | "paid") | null;
+            /** Tiered Pricing */
+            tiered_pricing?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Updated At */
             updated_at?: string | null;
             /** Updated By */
