@@ -211,6 +211,24 @@ def _parse_above_token_threshold(key: str) -> float:
     return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
 
 
+def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict | None:
+    tiered_pricing: Final = model_info.get("tiered_pricing")
+    if not isinstance(tiered_pricing, list) or not tiered_pricing:
+        return None
+
+    tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=usage.prompt_tokens)
+    if tier is None or "input_cost_per_token" not in tier:
+        return None
+    return tier
+
+
+def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | None:
+    tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
+    if tier is None:
+        return None
+    return tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
+
+
 def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, float, float, float, float] | None:
     """
     Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
@@ -219,12 +237,8 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, 
     and every token of the request is billed at that tier's rate. Rates the tier does not
     declare fall back to the tier's input rate, so a request never mixes tiers.
     """
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if not isinstance(tiered_pricing, list) or not tiered_pricing:
-        return None
-
-    tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=usage.prompt_tokens)
-    if tier is None or "input_cost_per_token" not in tier:
+    tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
+    if tier is None:
         return None
 
     cache_creation_cost: Final = tier_rate(tier, "cache_creation_input_token_cost", "input_cost_per_token")
@@ -887,10 +901,15 @@ def generic_cost_per_token(
 
     ## REASONING COST
     if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
-        _output_cost_per_reasoning_token = _resolve_reasoning_token_cost(
-            model_info=model_info,
-            service_tier=service_tier,
-            completion_base_cost=completion_base_cost,
+        tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
+        _output_cost_per_reasoning_token = (
+            tiered_reasoning_rate
+            if tiered_reasoning_rate is not None
+            else _resolve_reasoning_token_cost(
+                model_info=model_info,
+                service_tier=service_tier,
+                completion_base_cost=completion_base_cost,
+            )
         )
         completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
 
@@ -977,12 +996,17 @@ def get_token_type_cost_breakdown(
     if not reasoning_tokens:
         reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
 
-    # Reasoning is billed at the explicit per-reasoning-token rate when the model
-    # defines one, otherwise at the standard output-token rate - this mirrors how the
-    # total completion cost is computed, so the breakdown can never diverge from it.
-    reasoning_rate = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
-    if reasoning_rate is None:
-        reasoning_rate = completion_base_cost
+    # Reasoning is billed at the selected tier's reasoning rate for tiered models,
+    # else at the explicit per-reasoning-token rate when the model defines one,
+    # otherwise at the standard output-token rate - this mirrors how the total
+    # completion cost is computed, so the breakdown can never diverge from it.
+    tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
+    flat_reasoning_rate: Final = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
+    reasoning_rate: Final = (
+        tiered_reasoning_rate
+        if tiered_reasoning_rate is not None
+        else (flat_reasoning_rate if flat_reasoning_rate is not None else completion_base_cost)
+    )
     reasoning_cost = float(reasoning_tokens) * reasoning_rate
 
     cache_read_tokens = 0
