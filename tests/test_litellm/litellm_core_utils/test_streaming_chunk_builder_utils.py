@@ -994,6 +994,45 @@ def test_cost_field_in_usage_chunks():
     assert usage.completion_tokens == 5
 
 
+def test_anthropic_speed_and_geo_survive_stream_assembly():
+    """Anthropic prices fast mode and non-global regions with a multiplier read off
+    ``usage.speed`` / ``usage.inference_geo``. Dropping them while reassembling a stream
+    bills streamed fast-mode calls at the standard rate."""
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    def _usage(**extra):
+        usage = Usage(completion_tokens=100, prompt_tokens=1000, total_tokens=1100)
+        for key, value in extra.items():
+            setattr(usage, key, value)
+        return usage
+
+    def _chunk(usage):
+        return ModelResponseStream(
+            id="chatcmpl-1",
+            created=1745513206,
+            model="claude-opus-4-8",
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="Hi"))],
+            usage=usage,
+        )
+
+    fast_chunk = _chunk(_usage(speed="fast", inference_geo="global"))
+    fast_usage = ChunkProcessor(chunks=[fast_chunk]).calculate_usage(
+        chunks=[fast_chunk], model="claude-opus-4-8", completion_output="Hi"
+    )
+    standard_chunk = _chunk(_usage(inference_geo="global"))
+    standard_usage = ChunkProcessor(chunks=[standard_chunk]).calculate_usage(
+        chunks=[standard_chunk], model="claude-opus-4-8", completion_output="Hi"
+    )
+
+    assert fast_usage.speed == "fast"
+    assert fast_usage.inference_geo == "global"
+    assert getattr(standard_usage, "speed", None) is None
+
+    fast_cost = sum(cost_per_token(model="claude-opus-4-8", usage=fast_usage))
+    standard_cost = sum(cost_per_token(model="claude-opus-4-8", usage=standard_usage))
+    assert fast_cost == pytest.approx(standard_cost * 2.0)
+
+
 def test_prompt_tokens_details_survive_later_usage_chunk_without_details():
     """Regression for #34801: a trailing usage chunk that omits
     `prompt_tokens_details` must not wipe the OpenAI cache-read/cache-write split,

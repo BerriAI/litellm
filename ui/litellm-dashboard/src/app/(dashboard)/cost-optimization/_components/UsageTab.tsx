@@ -200,8 +200,8 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <SummaryCard
           label="Prompt caching savings"
           value={usd(cachingTotal)}
-          hint="Cache read discount"
-          info="Tokens the provider served from cache, priced at the discount between the input and cache-read rates."
+          hint="Cache reads, net of write premium"
+          info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. Can be negative on traffic that writes more cache than it reuses."
         />
         <SummaryCard
           label="Auto-router savings"

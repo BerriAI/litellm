@@ -59,6 +59,24 @@ vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
 }));
 
+const routerSettingsMocks = vi.hoisted(() => ({
+  receivedValue: undefined as { router_settings: Record<string, unknown> } | undefined,
+  editedValue: null as Record<string, unknown> | null,
+}));
+
+vi.mock("../common_components/RouterSettingsAccordion", async () => {
+  const { forwardRef, useImperativeHandle } = await import("react");
+  return {
+    default: forwardRef(({ value }: { value?: { router_settings: Record<string, unknown> } }, ref) => {
+      routerSettingsMocks.receivedValue = value;
+      useImperativeHandle(ref, () => ({
+        getValue: () => ({ router_settings: routerSettingsMocks.editedValue ?? value?.router_settings ?? {} }),
+      }));
+      return <div data-testid="router-settings-accordion" />;
+    }),
+  };
+});
+
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: vi.fn().mockReturnValue({
     data: [
@@ -160,6 +178,83 @@ describe("KeyEditView", () => {
     last_rotation_at: undefined,
     key_rotation_at: undefined,
   };
+  describe("router settings", () => {
+    const UNSUPPORTED_STORED_FIELD = { tag_routing_prefix: "team-" };
+    const STORED_ROUTER_SETTINGS = {
+      num_retries: 2,
+      fallbacks: [{ "gpt-4": ["gpt-4o"] }],
+      ...UNSUPPORTED_STORED_FIELD,
+    };
+
+    const renderWithRouterSettings = (onSubmit: (values: Record<string, unknown>) => Promise<void>) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, router_settings: STORED_ROUTER_SETTINGS }}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="proxy_admin"
+          premiumUser={true}
+        />,
+      );
+
+    beforeEach(() => {
+      routerSettingsMocks.receivedValue = undefined;
+      routerSettingsMocks.editedValue = null;
+    });
+
+    it("should load the fields it renders into the editor and withhold the ones it does not", async () => {
+      renderWithRouterSettings(async () => {});
+
+      await waitFor(() => {
+        expect(routerSettingsMocks.receivedValue).toStrictEqual({
+          router_settings: { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o"] }] },
+        });
+      });
+    });
+
+    it("should submit edited fallbacks alongside routing fields the editor cannot show", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithRouterSettings(onSubmit);
+      routerSettingsMocks.editedValue = { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }] };
+
+      fireEvent.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            router_settings: expect.objectContaining({
+              ...UNSUPPORTED_STORED_FIELD,
+              num_retries: 2,
+              fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }],
+            }),
+          }),
+        );
+      });
+    });
+
+    it("should submit cleared router settings so removing every fallback is persisted", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithRouterSettings(onSubmit);
+      routerSettingsMocks.editedValue = { num_retries: null, fallbacks: null };
+
+      fireEvent.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            router_settings: expect.objectContaining({
+              ...UNSUPPORTED_STORED_FIELD,
+              num_retries: null,
+              fallbacks: null,
+            }),
+          }),
+        );
+      });
+    });
+  });
+
   it("should render", async () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
@@ -407,6 +502,36 @@ describe("KeyEditView", () => {
 
     await waitFor(() => {
       expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ throttle_on_budget_exceeded: true }));
+    });
+  });
+
+  it("should initialize and submit enable_prompt_caching from key metadata", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithPromptCaching = {
+      ...MOCK_KEY_DATA,
+      metadata: { ...MOCK_KEY_DATA.metadata, enable_prompt_caching: true },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithPromptCaching}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Enable Prompt Caching")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ enable_prompt_caching: true }));
     });
   });
 
@@ -836,9 +961,8 @@ describe("KeyEditView", () => {
     );
 
     const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    const clearIcon = resetBudgetItem.querySelector(".ant-select-clear");
-    expect(clearIcon).not.toBeNull();
-    fireEvent.mouseDown(clearIcon as Element);
+    await userEvent.click(within(resetBudgetItem).getByRole("combobox"));
+    await userEvent.click(await screen.findByText("Never resets"));
 
     await waitFor(() => {
       expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
@@ -870,7 +994,8 @@ describe("KeyEditView", () => {
     );
 
     const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    fireEvent.mouseDown(resetBudgetItem.querySelector(".ant-select-clear") as Element);
+    await userEvent.click(within(resetBudgetItem).getByRole("combobox"));
+    await userEvent.click(await screen.findByText("Never resets"));
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1126,9 +1251,10 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeTruthy();
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item") as HTMLElement;
+      await userEvent.click(within(orgFormItem).getByRole("combobox"));
+
+      expect(screen.queryByText("Engineering")).not.toBeInTheDocument();
     });
 
     it("should not disable the organization dropdown for admin users", async () => {
@@ -1148,9 +1274,10 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeFalsy();
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item") as HTMLElement;
+      await userEvent.click(within(orgFormItem).getByRole("combobox"));
+
+      expect(await screen.findByText("Engineering")).toBeInTheDocument();
     });
 
     it("should initialize organization from keyData", async () => {
@@ -1171,8 +1298,9 @@ describe("KeyEditView", () => {
         />,
       );
 
+      const orgFormItem = (await screen.findByText("Organization")).closest(".ant-form-item") as HTMLElement;
       await waitFor(() => {
-        expect(screen.getByText("Engineering")).toBeInTheDocument();
+        expect(within(orgFormItem).getByRole("combobox")).toHaveValue("Engineering");
       });
     });
   });

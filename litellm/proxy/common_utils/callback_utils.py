@@ -1,12 +1,19 @@
 import copy
 import os
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Final, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
+
+from typing_extensions import assert_never
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY, SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY
+from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
@@ -44,6 +51,66 @@ TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY: Final = "_pillar_response_headers_
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+
+@dataclass(frozen=True, slots=True)
+class _CallbackResolvedToClass:
+    entry: str
+    loaded: type
+    tag: Literal["resolved_to_class"] = "resolved_to_class"
+
+
+@dataclass(frozen=True, slots=True)
+class _CallbackNotDispatchable:
+    entry: str
+    loaded: object
+    tag: Literal["not_dispatchable"] = "not_dispatchable"
+
+
+_CallbackLoadError: TypeAlias = _CallbackResolvedToClass | _CallbackNotDispatchable
+
+
+def _classify_loaded_callback(entry: str, loaded: object) -> CustomLogger | Callable[..., object] | _CallbackLoadError:
+    """
+    Decide whether what a ``litellm_settings.callbacks`` dotted path resolved to can be dispatched.
+
+    A dotted path only ever runs as a ``CustomLogger`` instance or as a callback function. Anything
+    else (most commonly a class instead of an instance) used to load without complaint and then be
+    skipped on every request, with no log line and no error.
+    """
+    if isinstance(loaded, CustomLogger) or (callable(loaded) and not isinstance(loaded, type)):
+        return loaded
+    if isinstance(loaded, type):
+        return _CallbackResolvedToClass(entry=entry, loaded=loaded)
+    return _CallbackNotDispatchable(entry=entry, loaded=loaded)
+
+
+def _raise_callback_load_error(error: _CallbackLoadError) -> NoReturn:
+    """The one edge that raises: map a load error onto config load's failure contract."""
+    match error:
+        case _CallbackResolvedToClass():
+            module_path: Final = error.entry.rsplit(".", 1)[0] if "." in error.entry else error.entry
+            raise ValueError(
+                f"litellm_settings.callbacks entry '{error.entry}' resolved to the class "
+                f"{error.loaded.__module__}.{error.loaded.__qualname__}, which is neither a "
+                "CustomLogger instance nor a callable, so the proxy would never run it."
+                f" Point it at an instance instead, e.g. add `proxy_handler_instance = {error.loaded.__name__}()` to "
+                f'{module_path} and set `callbacks: ["{module_path}.proxy_handler_instance"]`.'
+            )
+        case _CallbackNotDispatchable():
+            raise ValueError(
+                f"litellm_settings.callbacks entry '{error.entry}' resolved to "
+                f"{type(error.loaded).__name__} {error.loaded!r}, which is neither a "
+                "CustomLogger instance nor a callable, so the proxy would never run it."
+            )
+    assert_never(error)
+
+
+def _loaded_callback_or_raise(entry: str, loaded: object) -> CustomLogger | Callable[..., object]:
+    resolved: Final = _classify_loaded_callback(entry=entry, loaded=loaded)
+    if isinstance(resolved, _CallbackResolvedToClass | _CallbackNotDispatchable):
+        _raise_callback_load_error(resolved)
+    return resolved
 
 
 def initialize_callbacks_on_proxy(
@@ -301,9 +368,12 @@ def initialize_callbacks_on_proxy(
                     "%s attempting to import custom calback=%s %s", blue_color_code, callback, reset_color_code
                 )
                 imported_list.append(
-                    get_instance_fn(
-                        value=callback,
-                        config_file_path=config_file_path,
+                    _loaded_callback_or_raise(
+                        entry=callback,
+                        loaded=get_instance_fn(
+                            value=callback,
+                            config_file_path=config_file_path,
+                        ),
                     )
                 )
         if isinstance(litellm.callbacks, list):
@@ -317,9 +387,12 @@ def initialize_callbacks_on_proxy(
             PrometheusLogger._mount_metrics_endpoint()
     else:
         litellm.callbacks = [
-            get_instance_fn(
-                value=value,
-                config_file_path=config_file_path,
+            _loaded_callback_or_raise(
+                entry=value,
+                loaded=get_instance_fn(
+                    value=value,
+                    config_file_path=config_file_path,
+                ),
             )
         ]
     verbose_proxy_logger.debug("%s Initialized Callbacks - %s %s", blue_color_code, litellm.callbacks, reset_color_code)
@@ -426,6 +499,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         "_pipeline_managed_guardrails",
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        CONSUMED_REQUEST_TAGS_METADATA_KEY,
         "disable_global_guardrails",
         "disable_global_guardrail",
         "opted_out_global_guardrails",

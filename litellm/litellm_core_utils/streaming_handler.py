@@ -6,13 +6,14 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, NoReturn, TypeVar, cast
+from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
 from pydantic import BaseModel
+from typing_extensions import NotRequired, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -54,7 +55,7 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 
 
-def _next_sync_or_exhausted(it: Any) -> Any:
+def _next_sync_or_exhausted(it: Any) -> object:
     """
     Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
 
@@ -68,7 +69,7 @@ def _next_sync_or_exhausted(it: Any) -> Any:
         return _SYNC_ITER_EXHAUSTED
 
 
-def is_async_iterable(obj: Any) -> bool:
+def is_async_iterable(obj: object) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
 
@@ -81,7 +82,7 @@ def is_async_iterable(obj: Any) -> bool:
     return isinstance(obj, collections.abc.AsyncIterable)
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         if litellm.set_verbose:
             print(print_statement)  # noqa: T201
@@ -96,10 +97,62 @@ class _ProviderChunkParsed:
 
 @dataclass(frozen=True, slots=True)
 class _ProviderChunkEarlyReturn:
-    value: Any
+    value: "ModelResponseStream | None"
 
 
 _ProviderChunkResult = _ProviderChunkParsed | _ProviderChunkEarlyReturn
+
+
+class _PredibaseStreamData(TypedDict):
+    token: NotRequired[Mapping[str, str]]
+    details: Mapping[str, str]
+    generated_text: str | None
+    error: str | None
+
+
+class _Ai21StreamData(TypedDict):
+    completions: Sequence[Mapping[str, Mapping[str, str]]]
+
+
+class _MaritalkStreamData(TypedDict):
+    answer: str
+
+
+class _NlpCloudStreamData(TypedDict):
+    generated_text: str
+
+
+class _AlephAlphaStreamData(TypedDict):
+    completions: Sequence[Mapping[str, str]]
+
+
+class _AzureStreamChoice(TypedDict):
+    delta: Mapping[str, str] | None
+    finish_reason: str | None
+
+
+class _AzureStreamData(TypedDict):
+    choices: Sequence[_AzureStreamChoice]
+
+
+class _BasetenModelOutput(TypedDict):
+    data: NotRequired[Sequence[str]]
+
+
+class _BasetenStreamData(TypedDict):
+    token: NotRequired[Mapping[str, str]]
+    model_output: NotRequired["_BasetenModelOutput | str"]
+    completion: NotRequired[object]
+
+
+class _DeltaDumpDict(TypedDict):
+    role: NotRequired[str | None]
+    tool_calls: NotRequired[Sequence[Mapping[str, object]]]
+
+
+class _TextCompletionChoiceLike(Protocol):
+    text: str
+    finish_reason: str | None
 
 
 class CustomStreamWrapper:
@@ -107,7 +160,7 @@ class CustomStreamWrapper:
         self,
         completion_stream,
         model,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObject,
         custom_llm_provider: str | None = None,
         stream_options=None,
         make_call: Callable | None = None,
@@ -186,7 +239,7 @@ class CustomStreamWrapper:
         # Snapshot assumes self._hidden_params is populated from litellm_params
         # at init and never mutated during the stream. If that ever changes,
         # this cache must be removed.
-        self._base_hidden_params: dict[str, Any] = {
+        self._base_hidden_params: dict[str, object] = {
             **self._hidden_params,
             "response_cost": None,
         }
@@ -416,7 +469,7 @@ class CustomStreamWrapper:
             finish_reason = ""
             print_verbose(f"chunk: {chunk}")
             if chunk.startswith("data:"):
-                data_json: Final = json.loads(chunk[5:])
+                data_json: Final[_PredibaseStreamData] = json.loads(chunk[5:])
                 print_verbose(f"data json: {data_json}")
                 if "token" in data_json and "text" in data_json["token"]:
                     text = data_json["token"]["text"]
@@ -446,7 +499,7 @@ class CustomStreamWrapper:
 
     def handle_ai21_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json: Final = json.loads(chunk)
+        data_json: Final[_Ai21StreamData] = json.loads(chunk)
         try:
             text: Final = data_json["completions"][0]["data"]["text"]
             is_finished: Final = True
@@ -461,7 +514,7 @@ class CustomStreamWrapper:
 
     def handle_maritalk_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json: Final = json.loads(chunk)
+        data_json: Final[_MaritalkStreamData] = json.loads(chunk)
         try:
             text: Final = data_json["answer"]
             is_finished: Final = True
@@ -482,7 +535,7 @@ class CustomStreamWrapper:
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
-                data_json: Final = json.loads(chunk)
+                data_json: Final[_NlpCloudStreamData] = json.loads(chunk)
                 chunk = data_json["generated_text"]
             text = chunk
             if "[DONE]" in text:
@@ -499,7 +552,7 @@ class CustomStreamWrapper:
 
     def handle_aleph_alpha_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
-        data_json: Final = json.loads(chunk)
+        data_json: Final[_AlephAlphaStreamData] = json.loads(chunk)
         try:
             text: Final = data_json["completions"][0]["completion"]
             is_finished: Final = True
@@ -527,7 +580,7 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         elif chunk.startswith("data:"):
-            data_json: Final = json.loads(chunk[5:])  # chunk.startswith("data:"):
+            data_json: Final[_AzureStreamData] = json.loads(chunk[5:])  # chunk.startswith("data:"):
             try:
                 if len(data_json["choices"]) > 0:
                     delta: Final = data_json["choices"][0]["delta"]
@@ -616,7 +669,7 @@ class CustomStreamWrapper:
             text = ""
             is_finished = False
             finish_reason = None
-            choices: Final = getattr(chunk, "choices", [])
+            choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -637,7 +690,7 @@ class CustomStreamWrapper:
             is_finished = False
             finish_reason = None
             usage = None
-            choices: Final = getattr(chunk, "choices", [])
+            choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -654,12 +707,12 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_baseten_chunk(self, chunk):
+    def handle_baseten_chunk(self, chunk) -> str:
         try:
             chunk = chunk.decode("utf-8")
             if len(chunk) > 0:
                 if chunk.startswith("data:"):
-                    data_json = json.loads(chunk[5:])
+                    data_json: _BasetenStreamData = json.loads(chunk[5:])
                     if "token" in data_json and "text" in data_json["token"]:
                         return data_json["token"]["text"]
                     else:
@@ -1325,13 +1378,14 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
             if "usage" in response_obj is not None:
+                _codestral_usage: Final[Usage] = response_obj["usage"]
                 setattr(
                     model_response,
                     "usage",
                     litellm.Usage(
-                        prompt_tokens=response_obj["usage"].prompt_tokens,
-                        completion_tokens=response_obj["usage"].completion_tokens,
-                        total_tokens=response_obj["usage"].total_tokens,
+                        prompt_tokens=_codestral_usage.prompt_tokens,
+                        completion_tokens=_codestral_usage.completion_tokens,
+                        total_tokens=_codestral_usage.total_tokens,
                     ),
                 )
         elif self.custom_llm_provider == "azure_text":
@@ -1474,7 +1528,7 @@ class CustomStreamWrapper:
                                                 is None
                                             ):
                                                 t.function.arguments = ""
-                            _json_delta: Final = delta.model_dump()
+                            _json_delta: Final[_DeltaDumpDict] = delta.model_dump()
                             if "role" not in _json_delta or _json_delta["role"] is None:
                                 _json_delta["role"] = "assistant"  # mistral's api returns role as None
                             if "tool_calls" in _json_delta and isinstance(_json_delta["tool_calls"], list):
@@ -1744,7 +1798,7 @@ class CustomStreamWrapper:
         usage.cost, copy it into _hidden_params so litellm's cost
         calculator uses it instead of a token-based estimate.
         """
-        _usage: Final = getattr(response, "usage", None)
+        _usage: Final[Usage | None] = getattr(response, "usage", None)
         if _usage is not None and hasattr(_usage, "cost") and _usage.cost is not None:
             if "additional_headers" not in response._hidden_params:
                 response._hidden_params["additional_headers"] = {}

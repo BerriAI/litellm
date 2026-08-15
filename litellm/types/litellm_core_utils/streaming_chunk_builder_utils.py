@@ -14,3 +14,4 @@ class UsagePerChunk(TypedDict):
     prompt_tokens_details: PromptTokensDetailsWrapper | None
     cost: float | None
     inference_geo: str | None
+    speed: str | None

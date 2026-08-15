@@ -145,7 +145,7 @@ class ChunkProcessor:
 
         if first_hidden_params.get("created_at"):
 
-            def _created_at(chunk: Any) -> int | float:
+            def _created_at(chunk: object) -> int | float:
                 if isinstance(chunk, dict):
                     params = chunk.get("_hidden_params", {})
                 else:
@@ -158,7 +158,7 @@ class ChunkProcessor:
         return chunks
 
     def update_model_response_with_hidden_params(
-        self, model_response: ModelResponse, chunk: dict[str, Any] | None = None
+        self, model_response: ModelResponse, chunk: Mapping[str, dict[str, object]] | None = None
     ) -> ModelResponse:
         if chunk is None:
             return model_response
@@ -176,7 +176,7 @@ class ChunkProcessor:
         if not chunks:
             return
 
-        model: Final = getattr(response, "model", None)
+        model: Final[str | None] = getattr(response, "model", None)
         if not model:
             return
 
@@ -214,7 +214,7 @@ class ChunkProcessor:
             )
 
     @staticmethod
-    def _get_chunk_id(chunks: list[dict[str, Any]]) -> str:
+    def _get_chunk_id(chunks: Sequence[Mapping[str, str]]) -> str:
         """
         Chunks:
         [{"id": ""}, {"id": "1"}, {"id": "1"}]
@@ -225,7 +225,7 @@ class ChunkProcessor:
         return ""
 
     @staticmethod
-    def _get_model_from_chunks(chunks: list[dict[str, Any]], first_chunk_model: str) -> str:
+    def _get_model_from_chunks(chunks: Sequence[Mapping[str, str]], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
 
@@ -730,7 +730,6 @@ class ChunkProcessor:
         # lost and 1h cache writes get billed at the 5m rate.
         cache_creation_token_details: CacheCreationTokenDetails | None = None
         cost: float | None = None
-        inference_geo: str | None = None
 
         for chunk in chunks:
             usage_chunk = self._extract_usage_chunk(chunk)
@@ -786,10 +785,6 @@ class ChunkProcessor:
                 if usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
 
-                chunk_inference_geo = getattr(usage_chunk, "inference_geo", None)
-                if isinstance(chunk_inference_geo, str) and chunk_inference_geo:
-                    inference_geo = chunk_inference_geo
-
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
 
         completion_tokens = self._reset_anthropic_cursor_completion_tokens(
@@ -808,8 +803,27 @@ class ChunkProcessor:
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
-            inference_geo=inference_geo,
+            inference_geo=self._last_provider_pricing_field(chunks, "inference_geo"),
+            speed=self._last_provider_pricing_field(chunks, "speed"),
         )
+
+    def _last_provider_pricing_field(
+        self,
+        chunks: Sequence["_UsageBearingChunk | ModelResponse"],
+        field: str,
+    ) -> str | None:
+        """
+        Last value of a provider-specific usage field that changes pricing but is not a
+        declared ``Usage`` field, e.g. Anthropic's ``speed`` (fast mode multiplies
+        non-cache token cost) and ``inference_geo``.
+        """
+        values: Final = [
+            value
+            for chunk in chunks
+            if (usage_chunk := self._extract_usage_chunk(chunk)) is not None
+            and isinstance(value := getattr(usage_chunk, field, None), str)
+        ]
+        return values[-1] if values else None
 
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
@@ -878,7 +892,6 @@ class ChunkProcessor:
         ]
         prompt_tokens_details: PromptTokensDetailsWrapper | None = calculated_usage_per_chunk["prompt_tokens_details"]
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
-        inference_geo: Final[str | None] = calculated_usage_per_chunk["inference_geo"]
 
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
@@ -939,13 +952,18 @@ class ChunkProcessor:
         if cost is not None:
             setattr(returned_usage, "cost", cost)
 
-        extra_usage_fields: Final[dict[str, str]] = (
-            {"inference_geo": inference_geo} if inference_geo is not None else {}
-        )
-
         # Return a new usage object with the new values
 
-        returned_usage = Usage(**returned_usage.model_dump(), **extra_usage_fields)
+        provider_pricing_fields: Final = {
+            field: value
+            for field, value in (
+                ("inference_geo", calculated_usage_per_chunk["inference_geo"]),
+                ("speed", calculated_usage_per_chunk["speed"]),
+            )
+            if value is not None
+        }
+
+        returned_usage = Usage(**returned_usage.model_dump(), **provider_pricing_fields)
 
         return returned_usage
 
