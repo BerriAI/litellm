@@ -684,11 +684,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 ("direction", "response" if is_response else "request"),
                 ("action", str(scan_result.get("action", "block"))),
                 ("category", str(scan_result.get("category", "unknown"))),
-                *(
-                    (field, str(scan_result[field]))
-                    for field in self._SCAN_DETAIL_FIELDS
-                    if scan_result.get(field)
-                ),
+                *((field, str(scan_result[field])) for field in self._SCAN_DETAIL_FIELDS if scan_result.get(field)),
             ),
         )
 
