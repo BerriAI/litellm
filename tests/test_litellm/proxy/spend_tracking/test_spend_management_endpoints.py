@@ -202,6 +202,7 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
 from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
+    ProxyException,
     SpendLogsPayload,
     UserAPIKeyAuth,
 )
@@ -2905,8 +2906,8 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
                 "start_date": start_date,
                 "end_date": end_date,
                 "summarize": "true",
-                "page": 2,
-                "page_size": 1,
+                "page": 2_147_485,
+                "page_size": 1000,
             },
             headers={"Authorization": "Bearer sk-test"},
         )
@@ -3790,14 +3791,32 @@ class _LegacySpendLogsPaginationDB:
 
     async def _find_many(self, *args, **kwargs):
         where = kwargs.get("where", {})
-        filtered = tuple(
-            row
-            for row in self.spend_logs
-            if all(key == "startTime" or row.get(key) == value for key, value in where.items())
+
+        def matches(row):
+            for key, value in where.items():
+                if key == "startTime":
+                    row_value = row.get(key)
+                    if row_value is None:
+                        return False
+                    if value.get("gte") is not None and row_value < value["gte"]:
+                        return False
+                    if value.get("lte") is not None and row_value > value["lte"]:
+                        return False
+                elif row.get(key) != value:
+                    return False
+            return True
+
+        filtered = tuple(row for row in self.spend_logs if matches(row))
+        ordered = tuple(
+            sorted(
+                filtered,
+                key=lambda row: (row.get("startTime"), row.get("request_id")),
+                reverse=True,
+            )
         )
         skip = kwargs.get("skip", 0)
         take = kwargs.get("take")
-        return filtered[skip:] if take is None else filtered[skip : skip + take]
+        return ordered[skip:] if take is None else ordered[skip : skip + take]
 
 
 class _LegacySpendLogsPaginationPrismaClient:
@@ -3853,11 +3872,100 @@ def test_legacy_spend_logs_default_pagination_is_bounded(legacy_spend_logs_reque
     )
 
 
+@pytest.mark.asyncio
+async def test_legacy_spend_logs_direct_call_uses_pagination_defaults(monkeypatch):
+    spend_logs = [
+        {
+            "request_id": f"req-{index}",
+            "api_key": "key-id",
+            "startTime": "2024-01-01T00:00:00+00:00",
+        }
+        for index in range(3)
+    ]
+    mock_prisma = _LegacySpendLogsPaginationPrismaClient(spend_logs)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    response = await spend_management_endpoints.view_spend_logs(
+        api_key="key-id",
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert len(response) == 3
+    mock_prisma.db.find_many.assert_awaited_once_with(
+        where={"api_key": "key-id"},
+        order=[{"startTime": "desc"}, {"request_id": "desc"}],
+        take=50,
+        skip=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pagination",
+    [
+        {"page": 0},
+        {"page_size": 0},
+        {"page_size": 10**9},
+        {"page": 2_147_485, "page_size": 1000},
+    ],
+)
+async def test_legacy_spend_logs_direct_call_rejects_invalid_pagination(
+    monkeypatch, pagination
+):
+    mock_prisma = _LegacySpendLogsPaginationPrismaClient([])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await spend_management_endpoints.view_spend_logs(
+            **pagination,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.code == "422"
+    mock_prisma.db.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "database_error",
+    [RuntimeError("database unavailable"), TimeoutError("query timed out")],
+)
+async def test_legacy_spend_logs_database_failure_maps_to_500(
+    monkeypatch, database_error
+):
+    mock_prisma = _LegacySpendLogsPaginationPrismaClient([])
+    mock_prisma.db.find_many.side_effect = database_error
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await spend_management_endpoints.view_spend_logs(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.code == "500"
+    mock_prisma.db.find_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_legacy_spend_logs_cancellation_propagates(monkeypatch):
+    mock_prisma = _LegacySpendLogsPaginationPrismaClient([])
+    mock_prisma.db.find_many.side_effect = asyncio.CancelledError()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    with pytest.raises(asyncio.CancelledError):
+        await spend_management_endpoints.view_spend_logs(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    mock_prisma.db.find_many.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     ("params", "expected_take", "expected_skip"),
     [
         ({"page": 2, "page_size": 2}, 2, 2),
         ({"page_size": 1000}, 1000, 0),
+        ({"page": 2_147_484, "page_size": 1000}, 1000, 2_147_483_000),
     ],
 )
 def test_legacy_spend_logs_pagination_is_pushed_to_database(
@@ -3877,8 +3985,61 @@ def test_legacy_spend_logs_pagination_is_pushed_to_database(
     )
 
 
-@pytest.mark.parametrize("params", [{"page": 0}, {"page_size": 0}, {"page_size": 1001}])
-def test_legacy_spend_logs_rejects_invalid_pagination(legacy_spend_logs_request, params):
+def test_legacy_spend_logs_stably_orders_duplicate_timestamps(
+    legacy_spend_logs_request,
+):
+    spend_logs = [
+        {"request_id": "req-b", "startTime": "2024-01-02T00:00:00+00:00"},
+        {"request_id": "req-a", "startTime": "2024-01-03T00:00:00+00:00"},
+        {"request_id": "req-d", "startTime": "2024-01-02T00:00:00+00:00"},
+        {"request_id": "req-c", "startTime": "2024-01-03T00:00:00+00:00"},
+    ]
+
+    first_page, _ = legacy_spend_logs_request(spend_logs, {"page": 1, "page_size": 2})
+    second_page, _ = legacy_spend_logs_request(spend_logs, {"page": 2, "page_size": 2})
+
+    assert [row["request_id"] for row in first_page.json()] == ["req-c", "req-a"]
+    assert [row["request_id"] for row in second_page.json()] == ["req-d", "req-b"]
+
+
+def test_legacy_spend_logs_page_past_end_returns_empty_list(legacy_spend_logs_request):
+    spend_logs = [
+        {"request_id": f"req-{index}", "startTime": "2024-01-01T00:00:00+00:00"}
+        for index in range(3)
+    ]
+
+    response, mock_prisma = legacy_spend_logs_request(
+        spend_logs, {"page": 3, "page_size": 2}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+    mock_prisma.db.find_many.assert_awaited_once_with(
+        where={},
+        order=[{"startTime": "desc"}, {"request_id": "desc"}],
+        take=2,
+        skip=4,
+    )
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"page": ""},
+        {"page": "1.5"},
+        {"page": 0},
+        {"page": -1},
+        {"page": 2_147_485, "page_size": 1000},
+        {"page_size": ""},
+        {"page_size": "1.5"},
+        {"page_size": 0},
+        {"page_size": -1},
+        {"page_size": 1001},
+    ],
+)
+def test_legacy_spend_logs_rejects_invalid_pagination(
+    legacy_spend_logs_request, params
+):
     response, mock_prisma = legacy_spend_logs_request([], params)
 
     assert response.status_code == 422
@@ -3921,6 +4082,63 @@ def test_legacy_spend_logs_filtered_paths_are_paginated(legacy_spend_logs_reques
         take=3,
         skip=3,
     )
+
+
+def test_legacy_spend_logs_filters_before_applying_page_offset(
+    legacy_spend_logs_request,
+):
+    spend_logs = [
+        {
+            "request_id": "req-other-new",
+            "api_key": "other",
+            "startTime": "2024-01-04T00:00:00+00:00",
+        },
+        {
+            "request_id": "req-match-new",
+            "api_key": "key-id",
+            "startTime": "2024-01-03T00:00:00+00:00",
+        },
+        {
+            "request_id": "req-other-old",
+            "api_key": "other",
+            "startTime": "2024-01-02T00:00:00+00:00",
+        },
+        {
+            "request_id": "req-match-old",
+            "api_key": "key-id",
+            "startTime": "2024-01-01T00:00:00+00:00",
+        },
+    ]
+
+    response, _ = legacy_spend_logs_request(
+        spend_logs,
+        {"api_key": "key-id", "page": 2, "page_size": 1},
+    )
+
+    assert [row["request_id"] for row in response.json()] == ["req-match-old"]
+
+
+def test_legacy_spend_logs_date_filter_is_applied_before_page_offset(
+    legacy_spend_logs_request,
+):
+    spend_logs = [
+        {"request_id": "req-feb", "startTime": "2024-02-01T00:00:00+00:00"},
+        {"request_id": "req-jan-new", "startTime": "2024-01-20T00:00:00+00:00"},
+        {"request_id": "req-jan-old", "startTime": "2024-01-10T00:00:00+00:00"},
+    ]
+
+    response, _ = legacy_spend_logs_request(
+        spend_logs,
+        {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-31",
+            "summarize": "false",
+            "page": 2,
+            "page_size": 1,
+        },
+    )
+
+    assert [row["request_id"] for row in response.json()] == ["req-jan-old"]
 
 
 def test_legacy_spend_logs_request_id_lookup_remains_precise(legacy_spend_logs_request):

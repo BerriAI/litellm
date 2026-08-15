@@ -39,6 +39,8 @@ else:
 router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
+LEGACY_SPEND_LOGS_MAX_PAGE_SIZE: Final = 1000
+LEGACY_SPEND_LOGS_MAX_SKIP: Final = 2_147_483_647
 
 _RowT = TypeVar("_RowT")
 
@@ -2873,17 +2875,22 @@ async def view_spend_logs(
         default=True,
         description="When start_date and end_date are provided, summarize=true returns aggregated data by date (legacy behavior), summarize=false returns filtered individual logs",
     ),
-    page: int = fastapi.Query(
-        default=1,
-        description="Page number for individual spend logs",
-        ge=1,
-    ),
-    page_size: int = fastapi.Query(
-        default=50,
-        description="Number of individual spend logs per page",
-        ge=1,
-        le=1000,
-    ),
+    page: Annotated[
+        int,
+        fastapi.Query(
+            description="Page number for individual spend logs",
+            ge=1,
+            le=LEGACY_SPEND_LOGS_MAX_SKIP + 1,
+        ),
+    ] = 1,
+    page_size: Annotated[
+        int,
+        fastapi.Query(
+            description="Number of individual spend logs per page",
+            ge=1,
+            le=LEGACY_SPEND_LOGS_MAX_PAGE_SIZE,
+        ),
+    ] = 50,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -2942,8 +2949,26 @@ async def view_spend_logs(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        skip: Final = 0 if request_id is not None else (page - 1) * page_size
-        take: Final = 1 if request_id is not None else page_size
+        is_request_id_lookup: Final = isinstance(request_id, str)
+        is_summarized_date_range: Final = isinstance(start_date, str) and isinstance(end_date, str) and bool(summarize)
+        if page < 1:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="page must be greater than or equal to 1",
+            )
+        if not 1 <= page_size <= LEGACY_SPEND_LOGS_MAX_PAGE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"page_size must be between 1 and {LEGACY_SPEND_LOGS_MAX_PAGE_SIZE}",
+            )
+        max_page: Final = LEGACY_SPEND_LOGS_MAX_SKIP // page_size + 1
+        if not is_request_id_lookup and not is_summarized_date_range and page > max_page:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"page must be less than or equal to {max_page} when page_size is {page_size}",
+            )
+        skip: Final = 0 if is_request_id_lookup or is_summarized_date_range else (page - 1) * page_size
+        take: Final = 1 if is_request_id_lookup else page_size
         if (
             start_date is not None
             and isinstance(start_date, str)
