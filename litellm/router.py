@@ -636,7 +636,7 @@ class Router:
         # Lazily-built (provider, canonical_name) -> model_group index for
         # ``resolve_canonical_model_name``. Invalidated alongside the model
         # group info cache and on cost-map mutation (generation counter).
-        self._canonical_model_index: dict[tuple[str, str], str | None] | None = None
+        self._canonical_model_index: Mapping[tuple[str, str], str | None] | None = None
         self._canonical_model_index_cost_generation: int = -1
         # (requested, target) pairs already announced at INFO, so a hot path
         # logs once per distinct pair rather than once per request. Keyed on
@@ -645,7 +645,8 @@ class Router:
         # the signal used to size demand for possible follow-up resolution
         # rules, so a second spelling silently sharing the first's log line
         # would undercount it.
-        self._canonical_resolution_logged: set[tuple[str, str]] = set()
+        # mutable-ok: grow-only log-dedup ledger, intentionally accumulates across requests
+        self._canonical_resolution_logged: set[tuple[str, str]] = set()  # mutable-ok: grow-only log-dedup ledger
         self._init_routing_groups(None)
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
@@ -10711,7 +10712,7 @@ class Router:
         """
         return resolve_model_group_alias(self.model_group_alias, model)
 
-    def _get_canonical_model_index(self) -> dict[tuple[str, str], str | None]:
+    def _get_canonical_model_index(self) -> Mapping[tuple[str, str], str | None]:
         """The ``(provider, canonical_name) -> model group`` index, built on demand.
 
         Rebuilt when the model list changes (the index is dropped by
@@ -10721,10 +10722,10 @@ class Router:
         cost_generation: Final = get_model_cost_mutation_generation()
         if self._canonical_model_index is None or self._canonical_model_index_cost_generation != cost_generation:
             try:
-                self._canonical_model_index = build_canonical_index(cast("list[DeploymentTypedDict]", self.model_list))
+                self._canonical_model_index = build_canonical_index(self.model_list)
             except Exception as exc:  # noqa: BLE001  # index construction must never brick a router; degrade to 'strict'
                 verbose_router_logger.error("canonical-resolution: index build failed, disabling feature: %s", exc)
-                self._canonical_model_index = {}
+                self._canonical_model_index = MappingProxyType({})
             self._canonical_model_index_cost_generation = cost_generation
         return self._canonical_model_index
 

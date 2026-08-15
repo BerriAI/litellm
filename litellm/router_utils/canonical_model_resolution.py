@@ -35,12 +35,12 @@ succeeds today can never be re-pointed by this module.
 See also ``Router.resolve_canonical_model_name``.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 import litellm
 from litellm._logging import verbose_router_logger
-from litellm.types.router import DeploymentTypedDict
 
 # Cost-map fields that must match exactly for two names to be called the same
 # model. Pricing equality is a tripwire against false identity, not the
@@ -59,10 +59,13 @@ _IDENTITY_ATTESTING_FIELDS: Final[tuple[str, ...]] = (
 # billing path the operator never sanctioned.
 _AMBIGUOUS: Final = None
 
+# Read-only stand-in for a missing sub-mapping on a deployment row.
+_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
+
 
 def _cost_map_entry(model: str) -> Mapping[str, object] | None:
     """The cost-map entry for ``model``, or None when absent."""
-    entry = litellm.model_cost.get(model)
+    entry: Final = litellm.model_cost.get(model)
     return entry if isinstance(entry, Mapping) else None
 
 
@@ -138,8 +141,8 @@ def _undated_variants(model: str) -> tuple[str, ...]:
 
 
 def build_canonical_index(
-    deployments: list[DeploymentTypedDict],
-) -> dict[tuple[str, str], str | None]:
+    deployments: Sequence[Mapping[str, object]],
+) -> Mapping[tuple[str, str], str | None]:
     """Map ``(provider, canonical_name) -> model group`` for ``deployments``.
 
     A model group is indexed only when every one of its deployments agrees on
@@ -160,25 +163,24 @@ def build_canonical_index(
     Never raises: a malformed deployment or cost-map entry degrades to a smaller
     index, never to a router that fails to boot.
     """
-    index: dict[tuple[str, str], str | None] = {}
-    group_identity: dict[str, tuple[str, str] | None] = {}
+    # Both accumulate across the deployment scan, then the result is frozen into
+    # a MappingProxyType before it leaves this function.
+    index: Final[dict[tuple[str, str], str | None]] = {}  # mutable-ok: local accumulator, frozen on return
+    group_identity: Final[dict[str, tuple[str, str] | None]] = {}  # mutable-ok: local accumulator, never escapes
 
     for deployment in deployments:
         try:
-            model_info = deployment.get("model_info") or {}
-            if isinstance(  # pyright: ignore[reportUnnecessaryIsInstance] - config/DB rows can violate the TypedDict
-                model_info, Mapping
-            ) and model_info.get("team_id"):
+            model_info = deployment.get("model_info") or _EMPTY  # rebind-ok: per-deployment loop variable
+            if isinstance(model_info, Mapping) and model_info.get("team_id"):
                 continue
-            # ``model_name``/``model`` are typed Required[str], but this index is
-            # built from operator config and DB rows that can violate the type,
-            # so both are validated at runtime rather than trusted.
-            model_group: object = deployment.get("model_name")
-            litellm_params = deployment.get("litellm_params") or {}
-            underlying: object = litellm_params.get("model")
-            if not isinstance(model_group, str) or not isinstance(  # pyright: ignore[reportUnnecessaryIsInstance] - config/DB rows can violate the TypedDict
-                underlying, str
-            ):
+            # Deployments come from operator config and DB rows, so the declared
+            # str types are validated at runtime rather than trusted.
+            model_group = deployment.get("model_name")  # rebind-ok: per-deployment loop variable
+            litellm_params = deployment.get("litellm_params") or _EMPTY  # rebind-ok: per-deployment loop variable
+            underlying = (
+                litellm_params.get("model") if isinstance(litellm_params, Mapping) else None
+            )  # rebind-ok: per-deployment loop variable
+            if not isinstance(model_group, str) or not isinstance(underlying, str):
                 continue
 
             identity = canonicalize(underlying)
@@ -197,18 +199,24 @@ def build_canonical_index(
             continue
         provider, canonical_name = identity
         # Index the canonical spelling plus any dated<->undated sibling the cost
-        # map attests is the same model.
-        spellings: list[str] = [canonical_name]
-        spellings.extend(
+        # map attests is the same model: the undated form of a dated canonical
+        # name, and every dated cost-map entry whose undated form is this one.
+        undated_siblings = tuple(  # rebind-ok: per-group loop variable
             candidate
             for candidate in _undated_variants(canonical_name)
             if _same_model_per_cost_map(canonical_name, candidate)
         )
-        for dated, entry in litellm.model_cost.items():
-            if not isinstance(dated, str) or not isinstance(entry, Mapping) or dated in spellings:
-                continue
-            if _undated_variants(dated) == (canonical_name,) and _same_model_per_cost_map(canonical_name, dated):
-                spellings.append(dated)
+        dated_siblings = tuple(  # rebind-ok: per-group loop variable
+            dated
+            for dated, entry in litellm.model_cost.items()
+            if isinstance(dated, str)
+            and isinstance(entry, Mapping)
+            and dated != canonical_name
+            and dated not in undated_siblings
+            and _undated_variants(dated) == (canonical_name,)
+            and _same_model_per_cost_map(canonical_name, dated)
+        )
+        spellings = (canonical_name, *undated_siblings, *dated_siblings)  # rebind-ok: per-group loop variable
 
         for spelling in spellings:
             key = (provider, spelling)
@@ -228,7 +236,7 @@ def build_canonical_index(
                     model_group,
                 )
 
-    return index
+    return MappingProxyType(index)
 
 
 def lookup(

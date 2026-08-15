@@ -226,6 +226,52 @@ def get_team_id_from_data(data: dict) -> str | None:
     return None
 
 
+def _requested_model_metadata(
+    requested_model: str,
+) -> dict:  # mutable-ok: request metadata is consumed downstream as a plain dict
+    """A fresh metadata dict recording the client's original model spelling.
+
+    Downstream logging consumes request metadata as a plain mutable dict, so
+    this is deliberately not frozen.
+    """
+    return {"requested_model": requested_model}  # mutable-ok: request metadata is consumed downstream as a plain dict
+
+
+async def _canonical_target_is_allowed(
+    canonical_target: str,
+    llm_router: LitellmRouter,
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> bool:
+    """Whether the caller may call a canonically-resolved target model group.
+
+    AND-on-target: the caller must be permitted to call the *resolved* group.
+    The requested spelling having passed the earlier auth check is not enough --
+    without this, a key whose allowlist holds only a stale, unserved name would
+    ride the rewrite onto a deployment it was never granted. (Auth ran on the
+    requested string before routing, when the target group was not yet known.)
+
+    A denial returns False rather than raising, so the request falls through to
+    the same 400 an unresolvable model gets today and the response reveals
+    nothing about the target's existence.
+    """
+    if user_api_key_dict is None:
+        return True
+    from litellm.proxy.auth.auth_checks import (
+        can_key_call_model,  # pyright: ignore[reportUnknownVariableType] - auth_checks is partially typed
+    )
+
+    try:
+        await can_key_call_model(
+            model=canonical_target,
+            llm_model_list=llm_router.get_model_list(),
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+    except Exception:  # noqa: BLE001  # any auth failure declines the rewrite; never widens access
+        return False
+    return True
+
+
 _shared_session_lock: asyncio.Lock | None = None
 
 
@@ -687,31 +733,24 @@ async def route_request(
             # routing; the target group was not visible to it then.) On denial
             # the rewrite is simply declined -- the request falls through to
             # the same 400 it gets today, revealing nothing about the target.
-            target_allowed = True
-            if user_api_key_dict is not None:
-                from litellm.proxy.auth.auth_checks import (
-                    can_key_call_model,  # pyright: ignore[reportUnknownVariableType] - auth_checks is partially typed
-                )
-
-                try:
-                    await can_key_call_model(
-                        model=canonical_target,
-                        llm_model_list=llm_router.get_model_list(),
-                        valid_token=user_api_key_dict,
-                        llm_router=llm_router,
-                    )
-                except Exception:  # noqa: BLE001  # any auth failure declines the rewrite; never widens access
-                    target_allowed = False
+            target_allowed: Final = await _canonical_target_is_allowed(
+                canonical_target=canonical_target,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
             if target_allowed:
                 # Preserve the client's spelling for spend logs / debugging --
                 # after the rewrite it is otherwise invisible downstream.
                 metadata_field: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
-                existing_metadata: object = data.get(metadata_field)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType] - data is an untyped request dict
+                existing_metadata: Final[object] = data.get(metadata_field)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType] - data is an untyped request dict
+                # `data` is rewritten in place here because every other route in
+                # this function does the same; see the rebind-ok notes below.
                 if isinstance(existing_metadata, dict):
                     existing_metadata.setdefault("requested_model", requested_model)  # pyright: ignore[reportUnknownMemberType] - metadata dict is untyped
                 else:
-                    data[metadata_field] = {"requested_model": requested_model}
-                data["model"] = canonical_target
+                    stamp: Final = _requested_model_metadata(requested_model)
+                    data[metadata_field] = stamp  # rebind-ok: in-place rewrite, as everywhere in route_request
+                data["model"] = canonical_target  # rebind-ok: in-place data rewrite, as everywhere in route_request
                 return getattr(llm_router, f"{route_type}")(**data)
 
     # if no route found then it's a bad request

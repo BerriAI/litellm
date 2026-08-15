@@ -3264,6 +3264,10 @@ def _check_model_access_helper(
     return True
 
 
+# Read-only stand-in for an absent model_group_alias map.
+_EMPTY_ALIAS_MAP: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def _can_object_call_model(
     model: str | list[str],
     llm_router: Router | None,
@@ -3331,7 +3335,7 @@ def _can_object_call_model(
     # requested name being in the allowlist grants nothing. This prevents a key
     # allowed ["stale-deployment-name"] from gaining access to a different
     # deployment via a canonical rewrite.
-    if llm_router and model not in (llm_router.model_group_alias or {}):
+    if llm_router and model not in (llm_router.model_group_alias or _EMPTY_ALIAS_MAP):
         canonical_target: Final[object] = llm_router.resolve_canonical_model_name(
             model=model,
             request_team_id=team_id,
