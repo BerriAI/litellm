@@ -2695,6 +2695,26 @@ def test_should_not_decode_an_upload_above_the_memory_cap():
     assert estimated == pytest.approx((MAX_AUDIO_DECODE_BYTES + 1) / 500.0 * 0.0001)
 
 
+def test_should_not_read_the_upload_for_a_non_transcription_model():
+    """Body parsing is content-type driven, so any LLM route can carry a multipart
+    file. Reading one pulls it into memory, so a chat model must never trigger the
+    read no matter what the body contains."""
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.calculate_request_duration"
+    ) as decode:
+        estimate_request_max_cost(
+            request_body={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hi"}],
+                "file": _upload(_wav_bytes(600.0)),
+            },
+            route="/v1/chat/completions",
+            llm_router=None,
+        )
+
+    decode.assert_not_called()
+
+
 def test_should_decode_the_upload_once_regardless_of_pricing_candidate_count():
     """The duration is read once per request, not once per pricing candidate. A
     routed group yields several candidates, and decoding per candidate would read
