@@ -777,6 +777,53 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         assert exc.value.status_code == 400
         assert field in str(exc.value.detail)
 
+    def test_a_tiered_price_the_caller_supplies_is_refused(self):
+        """Tier rates bill the traffic per token just as surely as a flat rate does."""
+        with pytest.raises(HTTPException) as exc:
+            self._zeroed(model_info=self.PTU, supplied={"tiered_pricing": [{"range": [0, 100], "input_cost_per_token": 1e-06}]})
+        assert exc.value.status_code == 400
+        assert "tiered_pricing" in str(exc.value.detail)
+
+    def test_tiered_pricing_already_on_the_row_is_cleared_not_zeroed(self):
+        """tiered_pricing is a list, so the zero the other fields store would not even validate.
+        Left in place it would keep billing per token at the tier rates."""
+        tiers = [{"range": [0, 128000], "input_cost_per_token": 3e-06}]
+        priced = _ptu_priced_deployment(
+            Deployment(
+                model_name="tiered",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+                model_info=ModelInfo(
+                    id="dep-tiered",
+                    team_id="t",
+                    tiered_pricing=tiers,
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                ),
+            )
+        )
+        assert priced.litellm_params.tiered_pricing is None
+        assert priced.model_info.tiered_pricing is None
+
+        written = update_db_model(
+            db_model=Deployment(
+                model_name="tiered",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o", tiered_pricing=tiers),
+                model_info=ModelInfo(id="dep-tiered", team_id="t"),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-tiered",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                )
+            ),
+        )
+        for blob in ("model_info", "litellm_params"):
+            stored = json.loads(written[blob])
+            assert "tiered_pricing" not in stored, blob
+            assert stored["input_cost_per_token"] == 0, blob
+
     def test_a_price_the_caller_supplies_as_zero_is_accepted(self):
         assert self._zeroed(model_info={**self.PTU, "input_cost_per_token": 0}, supplied={"input_cost_per_token": 0})[
             "input_cost_per_token"
@@ -1098,8 +1145,10 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             )
 
         written = add_team_model_to_db.call_args.kwargs["model_params"]
-        assert all(getattr(written.model_info, field, None) == 0 for field in SPECIAL_MODEL_INFO_PARAMS)
+        assert all(getattr(written.model_info, field, None) == 0 for field in SPECIAL_MODEL_INFO_PARAMS if field != "tiered_pricing")
+        assert written.model_info.tiered_pricing is None
         assert all(written.litellm_params.get(field) == 0 for field in _PTU_ZEROED_PRICING_FIELDS)
+        assert written.litellm_params.tiered_pricing is None
 
     @pytest.mark.asyncio
     async def test_model_new_refuses_a_priced_ptu_deployment(self):
