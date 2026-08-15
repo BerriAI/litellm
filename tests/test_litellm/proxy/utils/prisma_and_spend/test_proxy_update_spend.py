@@ -10,13 +10,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm.proxy.utils as utils_mod
-from litellm.proxy.utils import ProxyUpdateSpend, enqueue_spend_logs
+from litellm.proxy.db.spend_log_batching import spend_log_row_bytes
+from litellm.proxy.utils import PrismaClient, ProxyUpdateSpend, enqueue_spend_logs
+
+
+@pytest.fixture(autouse=True)
+def reset_spend_log_queue_bytes() -> Iterator[None]:
+    PrismaClient._spend_log_queue_bytes = 0
+    yield
+    PrismaClient._spend_log_queue_bytes = 0
 
 
 class _AsyncCM:
@@ -395,38 +404,75 @@ async def test_update_spend_logs_retries_and_requeues_batch_on_db_outage(
 
 
 @pytest.mark.asyncio
-async def test_requeue_after_outage_drops_oldest_logs_at_the_queue_cap(
-    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+async def test_requeue_after_outage_drops_oldest_logs_past_the_byte_budget(
+    mock_prisma_client: Any, make_spend_log_row: Any
 ) -> None:
-    """Requeueing must stay bounded: a long outage cannot grow the in-memory
-    queue past its cap, and the rows dropped are the oldest ones.
+    """Requeueing must stay bounded by what the queue costs in memory, not by a
+    row count: a row carries the whole prompt under
+    ``store_prompts_in_spend_logs``, so a row cap that survives an outage of
+    counter-only rows is an OOM once prompts are stored. Past the budget the
+    oldest rows are the ones dropped.
     """
-    monkeypatch.setattr(utils_mod, "SPEND_LOG_QUEUE_MAX_SIZE", 3)
-    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="new")]
+    budget = 3 * spend_log_row_bytes(make_spend_log_row(request_id="new0"))
+    mock_prisma_client.spend_log_transactions = []
+    await enqueue_spend_logs(mock_prisma_client, [make_spend_log_row(request_id="new0")], max_bytes=budget)
 
     await enqueue_spend_logs(
         mock_prisma_client,
         [make_spend_log_row(request_id=f"old{i}") for i in range(4)],
         at_head=True,
+        max_bytes=budget,
     )
 
-    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["old2", "old3", "new"]
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["old2", "old3", "new0"]
 
 
 @pytest.mark.asyncio
 async def test_enqueue_drops_oldest_logs_once_producers_fill_the_queue(
-    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+    mock_prisma_client: Any, make_spend_log_row: Any
 ) -> None:
-    """The cap has to govern the producer side too. While a flush retries against
-    a dead DB, requests keep landing, so an append path that ignores the cap
-    leaves the outage OOM open no matter how well the requeue trims.
+    """The budget has to govern the producer side too. While a flush retries
+    against a dead DB, requests keep landing, so an append path that ignores the
+    budget leaves the outage OOM open no matter how well the requeue trims.
     """
-    monkeypatch.setattr(utils_mod, "SPEND_LOG_QUEUE_MAX_SIZE", 2)
-    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id=f"old{i}") for i in range(2)]
+    budget = 2 * spend_log_row_bytes(make_spend_log_row(request_id="old0"))
+    mock_prisma_client.spend_log_transactions = []
+    await enqueue_spend_logs(
+        mock_prisma_client,
+        [make_spend_log_row(request_id=f"old{i}") for i in range(2)],
+        max_bytes=budget,
+    )
 
-    await enqueue_spend_logs(mock_prisma_client, [make_spend_log_row(request_id="new")])
+    await enqueue_spend_logs(mock_prisma_client, [make_spend_log_row(request_id="new0")], max_bytes=budget)
 
-    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["old1", "new"]
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["old1", "new0"]
+
+
+@pytest.mark.asyncio
+async def test_flush_returns_the_bytes_it_took_off_the_queue(mock_prisma_client: Any, make_spend_log_row: Any) -> None:
+    """A flush has to give its bytes back to the budget. Accounting that only
+    ever grows would treat a healthy pod as permanently full and start dropping
+    fresh spend logs after the queue has already drained.
+    """
+    budget = 2 * spend_log_row_bytes(make_spend_log_row(request_id="row0"))
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = []
+    await enqueue_spend_logs(
+        mock_prisma_client,
+        [make_spend_log_row(request_id=f"row{i}") for i in range(2)],
+        max_bytes=budget,
+    )
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=0,
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+    )
+    await enqueue_spend_logs(mock_prisma_client, [make_spend_log_row(request_id="row9")], max_bytes=budget)
+
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["row9"]
 
 
 @pytest.mark.asyncio
