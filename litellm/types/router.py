@@ -266,6 +266,8 @@ class CredentialLiteLLMParams(BaseModel):
     s3_region_name: str | None = None
     s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
+    s3_output_bucket_name: str | None = None
+    bedrock_tags: list | None = None
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
 
