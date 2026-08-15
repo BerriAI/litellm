@@ -11,7 +11,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
-    GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
     RESET_BUDGET_JOB_BATCH_SIZE,
     RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN,
@@ -262,28 +261,14 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _invalidate_global_proxy_spend_cache() -> None:
-        """Drop the cached global-proxy spend accumulator after the proxy
-        budget aggregate row is reset so the next auth-time read reloads the
-        zeroed DB row. Reads and writes are atomic now (increment-if-present on
-        Redis), so deleting cannot resurrect a stale pre-reset value, and it
-        cannot clobber a concurrent increment the way a plain SET to zero could.
-        """
-        try:
-            from litellm.proxy.auth.user_api_key_auth import (
-                invalidate_global_proxy_spend_db_floor_marker,
-            )
-            from litellm.proxy.proxy_server import user_api_key_cache
+        """Drop the cached proxy-budget row spend after the row is reset.
 
-            await user_api_key_cache.async_delete_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
-            invalidate_global_proxy_spend_db_floor_marker(
-                user_api_key_cache=user_api_key_cache,
-                cache_key=GLOBAL_PROXY_SPEND_CACHE_KEY,
-            )
-        except Exception as e:  # noqa: BLE001  # cache invalidation failure must not break budget reset
-            verbose_proxy_logger.warning(
-                "Failed to invalidate global proxy spend cache after budget reset: %s",
-                e,
-            )
+        Auth uses it only as the fallback signal for the shared spend counter's
+        DB floor, so every worker must reload the zeroed row instead of acting
+        on a pre-reset value. The counter itself is zeroed by the standard
+        ``_invalidate_spend_counter`` path for the proxy-budget user row.
+        """
+        await ResetBudgetJob._invalidate_user_api_key_cache_entry(LITELLM_PROXY_BUDGET_NAME)
 
     @staticmethod
     async def _invalidate_user_api_key_cache_entry(cache_key: str) -> None:

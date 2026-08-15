@@ -5273,65 +5273,38 @@ async def test_spend_tracking_never_writes_the_auth_object_back():
 @pytest.mark.asyncio
 async def test_update_cache_global_proxy_spend_scalar_stays_shared():
     """
-    The proxy-wide spend estimate must keep flowing to Redis when the spend
-    writeback goes per-pod: the global max_budget check reads the
-    ``{litellm_proxy_admin_name}:spend`` cache entry between authoritative DB
-    reloads, so keeping it pod-local would let traffic spread across replicas
-    exceed the proxy budget by roughly a factor of the replica count within a
-    cache TTL. The scalar is updated via an atomic cache increment, which
-    remains shared across pods and avoids resurrecting a stale pre-reset value.
+    The proxy-wide spend estimate must live in the shared spend counter
+    (``spend:user:litellm-proxy-budget``), which seeds from the authoritative
+    DB row when cold and increments atomically. A per-pod cache key would let
+    traffic spread across replicas exceed the proxy budget by roughly a factor
+    of the replica count within a cache TTL.
     """
     from litellm.caching.caching import DualCache
 
-    admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
-    global_key = f"{admin_name}:spend"
-
-    async def fake_get(key, **kwargs):
-        if key == "user-lit":
-            return {"user_id": "user-lit", "spend": 1.0}
-        return None
-
     original_cache = litellm.proxy.proxy_server.user_api_key_cache
-    cache = DualCache(default_in_memory_ttl=300)
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    original_max_budget = litellm.max_budget
+    init_and_increment = AsyncMock()
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache(default_in_memory_ttl=300))
+    setattr(litellm, "max_budget", 100.0)
+    setattr(litellm.proxy.proxy_server, "_init_and_increment_spend_counter", init_and_increment)
     try:
-        with patch.object(cache, "async_get_cache", new=AsyncMock(side_effect=fake_get)):
-            with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
-                with patch.object(cache, "async_increment_cache", new=AsyncMock()) as mock_increment:
-                    await litellm.proxy.proxy_server.update_cache(
-                        token=None,
-                        user_id="user-lit",
-                        end_user_id=None,
-                        team_id=None,
-                        response_cost=5.0,
-                        parent_otel_span=None,
-                    )
+        await litellm.proxy.proxy_server.update_cache(
+            token=None,
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            response_cost=5.0,
+            parent_otel_span=None,
+        )
 
-                    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-                    if pending:
-                        await asyncio.wait(pending, timeout=5)
-
-                    calls = mock_set_cache.await_args_list
-                    local_keys = [k for c in calls if c.kwargs.get("local_only") is True for k, _ in c.kwargs["cache_list"]]
-                    shared_keys = [
-                        k for c in calls if c.kwargs.get("local_only") is not True for k, _ in c.kwargs["cache_list"]
-                    ]
-                    assert "user-lit" in local_keys
-                    assert global_key not in local_keys
-                    assert shared_keys == []
-
-                    increment_calls = [
-                        c
-                        for c in mock_increment.await_args_list
-                        if (c.args[0] if c.args else c.kwargs.get("key")) == global_key
-                    ]
-                    assert len(increment_calls) == 1
-                    call = increment_calls[0]
-                    value = call.args[1] if len(call.args) >= 2 else call.kwargs.get("value")
-                    assert value == 5.0
-                    assert call.kwargs.get("refresh_ttl") is True
+        init_and_increment.assert_awaited_once_with(
+            counter_key="spend:user:litellm-proxy-budget",
+            source_cache_key="litellm-proxy-budget",
+            increment=5.0,
+        )
     finally:
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
+        setattr(litellm, "max_budget", original_max_budget)
 
 
 @pytest.mark.asyncio

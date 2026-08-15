@@ -1273,133 +1273,79 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
 
 
 @pytest.mark.asyncio
-async def test_update_cache_global_proxy_spend_starts_from_zero_after_reset(
-    monkeypatch,
-):
-    """Global proxy spend starts from zero after the cache key is reset."""
+async def test_update_cache_global_proxy_spend_uses_spend_counter(monkeypatch):
+    """Global proxy spend goes through the shared spend-counter path so cold
+    counters seed from the authoritative DB row and increments stay atomic."""
+    from unittest.mock import AsyncMock
+
     from litellm.caching.caching import DualCache
 
-    cache = DualCache(default_in_memory_ttl=300)
-    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    init_and_increment = AsyncMock()
+    monkeypatch.setattr(ps, "_init_and_increment_spend_counter", init_and_increment)
+    monkeypatch.setattr(ps.litellm, "max_budget", 100.0)
+    monkeypatch.setattr(ps, "user_api_key_cache", DualCache(default_in_memory_ttl=300))
 
-    await cache.async_set_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY, value=50.0)
-    await cache.async_delete_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY)
-    await cache.async_set_cache(
-        key="user-lit",
-        value={"user_id": "user-lit", "spend": 0.0},
-    )
     await ps.update_cache(
         token=None,
-        user_id="user-lit",
-        end_user_id=None,
-        team_id=None,
-        response_cost=1.05,
-        parent_otel_span=None,
-    )
-
-    final_value = await cache.async_get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY)
-    assert final_value == 1.05
-
-
-@pytest.mark.asyncio
-async def test_update_cache_global_proxy_spend_concurrent_increments_after_reset(
-    monkeypatch,
-):
-    """Concurrent spend updates after a reset accumulate from zero."""
-    from litellm.caching.caching import DualCache
-
-    cache = DualCache(default_in_memory_ttl=300)
-    monkeypatch.setattr(ps, "user_api_key_cache", cache)
-
-    await cache.async_set_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY, value=100.0)
-    await cache.async_delete_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY)
-    await cache.async_set_cache(
-        key="user-concurrent",
-        value={"user_id": "user-concurrent", "spend": 0.0},
-    )
-
-    async def _update(cost: float) -> None:
-        await ps.update_cache(
-            token=None,
-            user_id="user-concurrent",
-            end_user_id=None,
-            team_id=None,
-            response_cost=cost,
-            parent_otel_span=None,
-        )
-
-    await asyncio.gather(*[_update(0.01) for _ in range(50)])
-
-    final_value = await cache.async_get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY)
-    assert final_value == pytest.approx(0.5)
-
-
-@pytest.mark.asyncio
-async def test_update_cache_global_proxy_spend_does_not_mirror_to_in_memory(
-    monkeypatch,
-):
-    """Authorization reads the shared Redis scalar directly, so the increment
-    path must not maintain a per-worker in-memory copy that could go stale
-    across resets and confuse budget checks."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from litellm.caching.caching import DualCache
-
-    redis_cache = MagicMock()
-    redis_cache.async_increment = AsyncMock(return_value=3.5)
-    cache = DualCache(redis_cache=redis_cache, default_in_memory_ttl=300)
-    monkeypatch.setattr(ps, "user_api_key_cache", cache)
-
-    await cache.async_set_cache(
-        key="user-no-mirror",
-        value={"user_id": "user-no-mirror", "spend": 0.0},
-    )
-    await ps.update_cache(
-        token=None,
-        user_id="user-no-mirror",
+        user_id=None,
         end_user_id=None,
         team_id=None,
         response_cost=1.5,
         parent_otel_span=None,
     )
 
-    redis_cache.async_increment.assert_awaited_once_with(
-        key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY,
-        value=1.5,
-        ttl=ps.get_management_object_ttl(cache),
-        refresh_ttl=True,
+    init_and_increment.assert_awaited_once_with(
+        counter_key="spend:user:litellm-proxy-budget",
+        source_cache_key="litellm-proxy-budget",
+        increment=1.5,
     )
-    assert cache.in_memory_cache.get_cache(key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY) is None
 
 
 @pytest.mark.asyncio
-async def test_update_cache_global_proxy_spend_swallows_redis_failure(monkeypatch):
-    """A Redis failure on the global spend increment must not fail the request."""
-    from unittest.mock import AsyncMock, MagicMock
+async def test_update_cache_global_proxy_spend_skipped_without_max_budget(monkeypatch):
+    """No global cap configured means the proxy-budget row is never written by
+    the DB flusher either, so the counter must not accumulate spend it could
+    not be reseeded from."""
+    from unittest.mock import AsyncMock
 
     from litellm.caching.caching import DualCache
 
-    redis_cache = MagicMock()
-    redis_cache.async_increment = AsyncMock(side_effect=RuntimeError("redis down"))
-    cache = DualCache(redis_cache=redis_cache, default_in_memory_ttl=300)
-    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    init_and_increment = AsyncMock()
+    monkeypatch.setattr(ps, "_init_and_increment_spend_counter", init_and_increment)
+    monkeypatch.setattr(ps.litellm, "max_budget", 0)
+    monkeypatch.setattr(ps, "user_api_key_cache", DualCache(default_in_memory_ttl=300))
 
-    await cache.async_set_cache(
-        key="user-redis-down",
-        value={"user_id": "user-redis-down", "spend": 0.0},
-    )
     await ps.update_cache(
         token=None,
-        user_id="user-redis-down",
+        user_id=None,
+        end_user_id=None,
+        team_id=None,
+        response_cost=1.5,
+        parent_otel_span=None,
+    )
+
+    init_and_increment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_cache_global_proxy_spend_swallows_failure(monkeypatch):
+    """A failure on the global spend increment must not fail the request."""
+    from unittest.mock import AsyncMock
+
+    from litellm.caching.caching import DualCache
+
+    init_and_increment = AsyncMock(side_effect=RuntimeError("redis down"))
+    monkeypatch.setattr(ps, "_init_and_increment_spend_counter", init_and_increment)
+    monkeypatch.setattr(ps.litellm, "max_budget", 100.0)
+    monkeypatch.setattr(ps, "user_api_key_cache", DualCache(default_in_memory_ttl=300))
+
+    await ps.update_cache(
+        token=None,
+        user_id=None,
         end_user_id=None,
         team_id=None,
         response_cost=1.0,
         parent_otel_span=None,
     )
 
-    redis_cache.async_increment.assert_awaited_once_with(
-        key=ps.GLOBAL_PROXY_SPEND_CACHE_KEY,
-        value=1.0,
-        ttl=ps.get_management_object_ttl(cache),
-        refresh_ttl=True,
-    )
+    init_and_increment.assert_awaited_once()

@@ -235,7 +235,7 @@ from litellm.constants import (
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
-    GLOBAL_PROXY_SPEND_CACHE_KEY,
+    GLOBAL_PROXY_SPEND_COUNTER_KEY,
     LITELLM_PROXY_ADMIN_NAME,
     LITELLM_PROXY_BUDGET_NAME,
     MONTHLY_SPEND_REPORT_JOB_ID,
@@ -292,7 +292,6 @@ from litellm.proxy.auth.model_checks import (
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
-    _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
@@ -3123,27 +3122,16 @@ async def update_cache(
 
     ### UPDATE GLOBAL PROXY SPEND ###
     async def _update_global_proxy_spend() -> None:
-        if response_cost is None:
+        if response_cost is None or litellm.max_budget <= 0:
             return
         try:
-            # Atomically accumulate the shared global-proxy scalar in Redis.
-            # Authorization reads this Redis scalar directly, so there is no
-            # per-worker in-memory copy that can go stale across resets.
-            if user_api_key_cache.redis_cache is not None:
-                await user_api_key_cache.redis_cache.async_increment(
-                    key=GLOBAL_PROXY_SPEND_CACHE_KEY,
-                    value=response_cost,
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                    refresh_ttl=True,
-                )
-            else:
-                # No Redis: single-process, so an in-memory increment is coherent.
-                await user_api_key_cache.async_increment_cache(
-                    key=GLOBAL_PROXY_SPEND_CACHE_KEY,
-                    value=response_cost,
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                    refresh_ttl=True,
-                )
+            # Same spend-counter path as every other budget entity: seed a cold
+            # counter from the authoritative DB row (SET NX), then increment.
+            await _init_and_increment_spend_counter(
+                counter_key=GLOBAL_PROXY_SPEND_COUNTER_KEY,
+                source_cache_key=LITELLM_PROXY_BUDGET_NAME,
+                increment=response_cost,
+            )
         except Exception as e:  # noqa: BLE001  # spend update must not fail the request
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update global proxy spend in cache. "
@@ -8613,11 +8601,9 @@ class ProxyStartupEvent:
     ) -> None:
         """Warm global spend cache once at startup to reduce impact of first wave of requests."""
         try:
-            cache_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
-            await _fetch_global_spend_with_event_coordination(
-                cache_key=cache_key,
-                user_api_key_cache=user_api_key_cache,
-                prisma_client=prisma_client,
+            await get_current_spend(
+                counter_key=GLOBAL_PROXY_SPEND_COUNTER_KEY,
+                fallback_spend=0.0,
             )
         except Exception as e:
             verbose_proxy_logger.debug("Global spend cache warm-up at startup skipped or failed: %s", e)

@@ -863,48 +863,6 @@ def test_reset_budget_windows_uses_is_not_null_filter(monkeypatch):
     assert "budget_limits IS NOT NULL" in team_query
 
 
-def test_invalidate_global_proxy_spend_cache_deletes_key_and_db_floor_marker(monkeypatch):
-    """ResetBudgetJob must drop both the shared Redis spend key and the worker-
-    local DB-floor marker. Otherwise a stale pre-reset marker can be used to
-    write previous-window spend back into Redis at the next auth check."""
-    from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
-    from litellm.proxy.auth.user_api_key_auth import (
-        _GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX,
-    )
-
-    user_api_key_cache = MagicMock()
-    user_api_key_cache.async_delete_cache = AsyncMock()
-    user_api_key_cache.in_memory_cache.delete_cache = MagicMock()
-
-    fake_module = types.ModuleType("litellm.proxy.proxy_server")
-    fake_module.user_api_key_cache = user_api_key_cache
-    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
-
-    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=MagicMock())
-    asyncio.run(job._invalidate_global_proxy_spend_cache())
-
-    user_api_key_cache.async_delete_cache.assert_awaited_once_with(
-        key=GLOBAL_PROXY_SPEND_CACHE_KEY
-    )
-    user_api_key_cache.in_memory_cache.delete_cache.assert_called_once_with(
-        key=f"{_GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX}{GLOBAL_PROXY_SPEND_CACHE_KEY}"
-    )
-
-
-def test_invalidate_global_proxy_spend_cache_swallows_cache_failure(monkeypatch):
-    """A failure to invalidate the cache must not break the budget reset job."""
-    user_api_key_cache = MagicMock()
-    user_api_key_cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("redis down"))
-
-    fake_module = types.ModuleType("litellm.proxy.proxy_server")
-    fake_module.user_api_key_cache = user_api_key_cache
-    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
-
-    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=MagicMock())
-    # Should not raise.
-    asyncio.run(job._invalidate_global_proxy_spend_cache())
-
-
 def test_reset_budget_windows_resets_expired_key_window(monkeypatch):
     """A key whose window's `reset_at` has passed gets an update with a new
     `reset_at` in the future, and the in-memory spend counter is cleared."""
@@ -1134,8 +1092,9 @@ def test_reset_budget_for_users_invalidates_redis_counter(reset_budget_job, mock
 def test_reset_budget_for_proxy_budget_row_resets_global_spend_cache(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
-    """Resetting the proxy-wide budget aggregate row invalidates the cached
-    global-spend accumulator so the next read reloads the zeroed DB row."""
+    """Resetting the proxy-wide budget aggregate row zeroes its spend counter
+    and invalidates the cached row-spend hint so the next auth reloads the
+    zeroed DB row instead of acting on a pre-reset value."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
 
     now = datetime.now(timezone.utc)
@@ -1155,16 +1114,19 @@ def test_reset_budget_for_proxy_budget_row_resets_global_spend_cache(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
 
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:user:litellm-proxy-budget", value=0.0, ttl=60
+    )
     counter_cache.user_api_key_cache.async_delete_cache.assert_any_call(
-        key="default_user_id:spend"
+        key="litellm-proxy-budget"
     )
 
 
 def test_reset_budget_for_ordinary_user_does_not_touch_global_spend_cache(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
-    """The global-spend accumulator must only be invalidated when the proxy
-    budget aggregate row itself resets, not on every user reset."""
+    """The proxy-budget hint must only be invalidated when the proxy budget
+    aggregate row itself resets, not on every user reset."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
 
     now = datetime.now(timezone.utc)
@@ -1185,7 +1147,7 @@ def test_reset_budget_for_ordinary_user_does_not_touch_global_spend_cache(
     asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
 
     assert not any(
-        call.kwargs.get("key") == "default_user_id:spend"
+        call.kwargs.get("key") == "litellm-proxy-budget"
         for call in counter_cache.user_api_key_cache.async_delete_cache.call_args_list
     )
     assert not any(

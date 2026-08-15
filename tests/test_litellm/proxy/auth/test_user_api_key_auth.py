@@ -6068,16 +6068,14 @@ class TestCheckKeyModelBudgetWithFallback:
 
 
 @pytest.mark.asyncio
-async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
+async def test_global_proxy_spend_hint_reads_resettable_proxy_budget_row():
     """Regression for the global proxy budget ignoring budget_duration
-    (LIT-4309 / gh#31292): the enforced global spend must be loaded from the
+    (LIT-4309 / gh#31292): the fallback spend must be loaded from the
     "litellm-proxy-budget" user row, which the spend writer increments per
     request and ResetBudgetJob zeroes every budget_duration. It must NOT be
     loaded from the MonthlyGlobalSpend view, whose window is hardcoded to a
     trailing 30 days and never resets on the configured duration."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-    )
+    from litellm.proxy.auth.user_api_key_auth import _load_global_proxy_spend_hint
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     proxy_budget_row = MagicMock()
@@ -6088,8 +6086,7 @@ async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
         side_effect=AssertionError("global spend must not be loaded from the fixed-30d MonthlyGlobalSpend view")
     )
 
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
+    result = await _load_global_proxy_spend_hint(
         user_api_key_cache=UserApiKeyCache(),
         prisma_client=prisma_client,
     )
@@ -6101,19 +6098,16 @@ async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
 
 
 @pytest.mark.asyncio
-async def test_global_proxy_spend_none_when_proxy_budget_row_missing():
-    """Before the startup upsert creates the aggregate row, enforcement must
-    see None (no cap applied) rather than raising."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-    )
+async def test_global_proxy_spend_hint_none_when_proxy_budget_row_missing():
+    """Before the startup upsert creates the aggregate row, the fallback hint
+    is None so the counter falls back to 0 rather than raising."""
+    from litellm.proxy.auth.user_api_key_auth import _load_global_proxy_spend_hint
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
+    result = await _load_global_proxy_spend_hint(
         user_api_key_cache=UserApiKeyCache(),
         prisma_client=prisma_client,
     )
@@ -6122,209 +6116,61 @@ async def test_global_proxy_spend_none_when_proxy_budget_row_missing():
 
 
 @pytest.mark.asyncio
-async def test_global_proxy_spend_reads_shared_redis_scalar_when_configured():
-    """With Redis, the global spend read goes straight to the shared Redis
-    scalar instead of a per-worker in-memory copy, which can go stale across
-    resets and falsely reject requests at auth time."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-    )
+async def test_global_proxy_spend_hint_reads_redis_first():
+    """The hint is read from the shared Redis tier first so a reset
+    invalidation is visible to every worker immediately; a per-worker
+    in-memory copy is only a Redis-outage fallback."""
+    from litellm.proxy.auth.user_api_key_auth import _load_global_proxy_spend_hint
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     cache = UserApiKeyCache()
     redis_cache = MagicMock()
     redis_cache.async_get_cache = AsyncMock(return_value=8.5)
-    redis_cache.async_set_cache = AsyncMock()
     cache.redis_cache = redis_cache
+    cache.in_memory_cache.set_cache(key="litellm-proxy-budget", value=999.0)
 
-    proxy_budget_row = MagicMock()
-    proxy_budget_row.spend = 5.0
     prisma_client = MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=proxy_budget_row
+        side_effect=AssertionError("DB must not be queried when Redis has the hint")
     )
 
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
+    result = await _load_global_proxy_spend_hint(
         user_api_key_cache=cache,
         prisma_client=prisma_client,
     )
 
     assert result == 8.5
-    redis_cache.async_get_cache.assert_awaited_once_with(key="default_user_id:spend")
-    redis_cache.async_set_cache.assert_not_called()
+    redis_cache.async_get_cache.assert_awaited_once_with(key="litellm-proxy-budget")
 
 
 @pytest.mark.asyncio
-async def test_global_proxy_spend_floors_stale_low_redis_to_db():
-    """A Redis counter that is stale-low (e.g., recreated from zero after a
-    reset or Redis restart) must be floored to the authoritative DB spend so
-    requests cannot leak past the global cap."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-    )
+async def test_global_proxy_spend_value_uses_shared_spend_counter(monkeypatch):
+    """The enforced global proxy spend comes from the shared spend counter
+    (spend:user:litellm-proxy-budget) via get_current_spend, with the DB row
+    spend as the fallback signal and the configured cap as max_budget."""
+    import litellm
+    from litellm.proxy.auth.user_api_key_auth import _get_global_proxy_spend_value
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    cache = UserApiKeyCache()
-    redis_cache = MagicMock()
-    redis_cache.async_get_cache = AsyncMock(return_value="2.0")
-    redis_cache.async_set_max = AsyncMock(side_effect=lambda key, value: value)
-    cache.redis_cache = redis_cache
 
     proxy_budget_row = MagicMock()
     proxy_budget_row.spend = 9.0
     prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=proxy_budget_row
-    )
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=proxy_budget_row)
 
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
-        user_api_key_cache=cache,
+    get_current_spend = AsyncMock(return_value=9.0)
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_current_spend", get_current_spend)
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
+
+    result = await _get_global_proxy_spend_value(
+        user_api_key_cache=UserApiKeyCache(),
         prisma_client=prisma_client,
     )
 
     assert result == 9.0
-    redis_cache.async_get_cache.assert_awaited_once_with(key="default_user_id:spend")
-    redis_cache.async_set_max.assert_awaited_once_with(
-        key="default_user_id:spend", value=9.0
-    )
-
-
-@pytest.mark.asyncio
-async def test_global_proxy_spend_floor_does_not_overwrite_concurrent_increment():
-    """When Redis already holds a higher value than the DB floor (because a
-    concurrent request incremented it after our read), the repair must use a
-    monotonic write so the concurrent increment is not discarded."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-    )
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    cache = UserApiKeyCache()
-    redis_cache = MagicMock()
-    redis_cache.async_get_cache = AsyncMock(return_value="2.0")
-    redis_cache.async_set_max = AsyncMock(side_effect=lambda key, value: value)
-    cache.redis_cache = redis_cache
-
-    proxy_budget_row = MagicMock()
-    proxy_budget_row.spend = 1.0
-    prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=proxy_budget_row
-    )
-
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
-        user_api_key_cache=cache,
-        prisma_client=prisma_client,
-    )
-
-    # DB (1.0) is not greater than Redis (2.0), so no repair is attempted.
-    assert result == 2.0
-    redis_cache.async_set_max.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_global_proxy_spend_marker_cached_db_value_used_without_db_query():
-    """The DB-floor marker should be reused for subsequent reads so we do not
-    query Postgres on every request."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-        _GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX,
-    )
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    cache = UserApiKeyCache()
-    redis_cache = MagicMock()
-    redis_cache.async_get_cache = AsyncMock(return_value="2.0")
-    redis_cache.async_set_max = AsyncMock(side_effect=lambda key, value: value)
-    cache.redis_cache = redis_cache
-
-    # Seed the marker cache with a DB value greater than Redis.
-    marker_key = f"{_GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX}default_user_id:spend"
-    cache.in_memory_cache.set_cache(key=marker_key, value=9.0)
-
-    prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        side_effect=AssertionError("DB must not be queried when marker is present")
-    )
-
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
-        user_api_key_cache=cache,
-        prisma_client=prisma_client,
-    )
-
-    assert result == 9.0
-    prisma_client.db.litellm_usertable.find_unique.assert_not_called()
-    redis_cache.async_set_max.assert_awaited_once_with(
-        key="default_user_id:spend", value=9.0
-    )
-
-
-@pytest.mark.asyncio
-async def test_global_proxy_spend_floor_falls_back_when_set_max_returns_none():
-    """If the monotonic Redis repair returns None (e.g. connection hiccup),
-    the enforced total must still fall back to the authoritative DB floor."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-    )
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    cache = UserApiKeyCache()
-    redis_cache = MagicMock()
-    redis_cache.async_get_cache = AsyncMock(return_value="2.0")
-    redis_cache.async_set_max = AsyncMock(return_value=None)
-    cache.redis_cache = redis_cache
-
-    proxy_budget_row = MagicMock()
-    proxy_budget_row.spend = 9.0
-    prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=proxy_budget_row
-    )
-
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
-        user_api_key_cache=cache,
-        prisma_client=prisma_client,
-    )
-
-    assert result == 9.0
-
-
-@pytest.mark.asyncio
-async def test_global_proxy_spend_treats_unparseable_redis_as_zero():
-    """A corrupted/non-numeric Redis value is treated as 0.0 and then floored
-    to the DB total so enforcement remains safe."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-    )
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    cache = UserApiKeyCache()
-    redis_cache = MagicMock()
-    redis_cache.async_get_cache = AsyncMock(return_value="not-a-number")
-    redis_cache.async_set_max = AsyncMock(side_effect=lambda key, value: value)
-    cache.redis_cache = redis_cache
-
-    proxy_budget_row = MagicMock()
-    proxy_budget_row.spend = 7.0
-    prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=proxy_budget_row
-    )
-
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
-        user_api_key_cache=cache,
-        prisma_client=prisma_client,
-    )
-
-    assert result == 7.0
-    redis_cache.async_set_max.assert_awaited_once_with(
-        key="default_user_id:spend", value=7.0
+    get_current_spend.assert_awaited_once_with(
+        counter_key="spend:user:litellm-proxy-budget",
+        fallback_spend=9.0,
+        max_budget=100.0,
     )
 
 

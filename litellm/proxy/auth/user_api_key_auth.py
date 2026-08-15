@@ -23,7 +23,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
-    GLOBAL_PROXY_SPEND_CACHE_KEY,
+    GLOBAL_PROXY_SPEND_COUNTER_KEY,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
 )
@@ -76,7 +76,6 @@ from litellm.proxy.auth.resolvers import CredentialRef, Principal
 from litellm.proxy.auth.resolvers.store import IdentityStore
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
-from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -491,103 +490,57 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
     return valid_token
 
 
-# Reusable coordinator for global spend to prevent cache stampede
-_global_spend_coordinator: Final = EventDrivenCacheCoordinator(log_prefix="[GLOBAL SPEND]")
-
-# Cache the authoritative DB spend read for a few seconds per worker so the
-# global-proxy budget floor check does not query the DB on every request.
-_GLOBAL_PROXY_SPEND_DB_FLOOR_TTL_SECONDS: Final = 5
-_GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX: Final = "global_proxy_spend_db_floor:"
-
-
-def invalidate_global_proxy_spend_db_floor_marker(user_api_key_cache: UserApiKeyCache, cache_key: str) -> None:
-    """Drop the worker-local DB-floor marker for ``cache_key``.
-
-    ResetBudgetJob calls this after zeroing the aggregate DB row so a stale
-    pre-reset marker is not used to write previous-window spend back into
-    Redis during the next auth-time floor check.
-    """
-    marker_key: Final = f"{_GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX}{cache_key}"
-    user_api_key_cache.in_memory_cache.delete_cache(key=marker_key)
+async def _read_global_proxy_spend_hint_from_cache(user_api_key_cache: UserApiKeyCache) -> float | None:
+    redis_cache: Final = user_api_key_cache.redis_cache
+    if redis_cache is not None:
+        try:
+            cached: Final = await redis_cache.async_get_cache(key=LITELLM_PROXY_BUDGET_NAME)
+        except Exception as e:  # noqa: BLE001  # hint read failure must not break auth; in-memory fallback below
+            verbose_proxy_logger.debug("Global proxy spend hint: Redis read failed, falling back to in-memory: %s", e)
+        else:
+            return float(cached) if cached is not None else None
+    cached_in_memory: Final = user_api_key_cache.in_memory_cache.get_cache(key=LITELLM_PROXY_BUDGET_NAME)
+    return float(cached_in_memory) if cached_in_memory is not None else None
 
 
-async def _fetch_global_spend_with_event_coordination(
-    cache_key: str,
+async def _load_global_proxy_spend_hint(
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient,
 ) -> float | None:
+    """Spend of the proxy-budget aggregate user row, cached in the management cache.
+
+    This is only the fallback/staleness signal for get_current_spend; the
+    enforced value is the shared spend counter. Read Redis-first so the reset
+    job's invalidation is visible to every worker immediately.
     """
-    Fetch global spend with event-driven coordination to prevent cache stampede.
-    Uses EventDrivenCacheCoordinator: first request queries DB and signals others when done.
-
-    Reads the proxy budget aggregate user row, which accrues proxy-wide spend
-    per request and is zeroed by ResetBudgetJob every ``litellm.budget_duration``.
-
-    With Redis configured, the shared scalar is read straight from Redis: the
-    global spend is incremented by every worker, so a per-worker in-memory copy
-    can go stale across resets and falsely reject requests at auth time. Reading
-    the Redis value directly keeps the budget check on the shared total. On a
-    Redis miss the coordinator loads the authoritative DB spend once and
-    repopulates Redis. Without Redis (single process), the normal DualCache
-    coordinator path is used.
-    """
-
-    async def _load_global_spend() -> float | None:
-        proxy_budget_row: Final = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": LITELLM_PROXY_BUDGET_NAME}
-        )
-        return float(proxy_budget_row.spend) if proxy_budget_row is not None else None
-
-    async def _authoritative_db_spend() -> float | None:
-        # Cached per-worker for a few seconds to avoid a DB query per request.
-        marker_key: Final = f"{_GLOBAL_PROXY_SPEND_DB_FLOOR_MARKER_PREFIX}{cache_key}"
-        cached = user_api_key_cache.in_memory_cache.get_cache(key=marker_key)
-        if cached is not None:
-            return float(cached)
-        db_spend = await _load_global_spend()
-        if db_spend is not None:
-            user_api_key_cache.in_memory_cache.set_cache(
-                key=marker_key,
-                value=db_spend,
-                ttl=_GLOBAL_PROXY_SPEND_DB_FLOOR_TTL_SECONDS,
-            )
-        return db_spend
-
-    spend_cache: Final = (
-        user_api_key_cache.redis_cache if user_api_key_cache.redis_cache is not None else user_api_key_cache
+    cached: Final = await _read_global_proxy_spend_hint_from_cache(user_api_key_cache)
+    if cached is not None:
+        return cached
+    proxy_budget_row: Final = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": LITELLM_PROXY_BUDGET_NAME}
     )
-    value = await _global_spend_coordinator.get_or_load(
-        cache_key=cache_key,
-        cache=spend_cache,  # pyright: ignore[reportArgumentType]
-        load_fn=_load_global_spend,
-    )
-    if value is None:
+    if proxy_budget_row is None:
         return None
+    spend: Final = float(proxy_budget_row.spend or 0.0)
+    await user_api_key_cache.async_set_cache(key=LITELLM_PROXY_BUDGET_NAME, value=spend)
+    return spend
 
-    try:
-        numeric_value = float(value)
-    except (TypeError, ValueError):
-        numeric_value = 0.0
 
-    # Floor to the authoritative DB spend when Redis is in use. A Redis counter
-    # that was clobbered by a reset race, restarted from an old RDB snapshot,
-    # or recreated from zero after expiry can under-report current-period spend;
-    # capping the value to the DB row prevents requests from leaking past the
-    # global cap. Without Redis the coordinator already loaded the DB row.
-    if user_api_key_cache.redis_cache is not None:
-        db_spend = await _authoritative_db_spend()
-        if db_spend is not None and db_spend > numeric_value:
-            # Use a monotonic write so a concurrent increment that already
-            # pushed Redis above the DB value is not overwritten by a repair
-            # carrying a slightly-stale DB total. Use the resulting Redis value
-            # so the enforced total reflects any concurrent increment.
-            repaired_value: Final[float | None] = await user_api_key_cache.redis_cache.async_set_max(
-                key=cache_key, value=db_spend
-            )
-            numeric_value = repaired_value if repaired_value is not None else db_spend
-            user_api_key_cache.in_memory_cache.set_cache(key=cache_key, value=numeric_value)
+async def _get_global_proxy_spend_value(
+    user_api_key_cache: UserApiKeyCache,
+    prisma_client: PrismaClient,
+) -> float:
+    from litellm.proxy.proxy_server import get_current_spend
 
-    return numeric_value
+    hint: Final = await _load_global_proxy_spend_hint(
+        user_api_key_cache=user_api_key_cache,
+        prisma_client=prisma_client,
+    )
+    return await get_current_spend(
+        counter_key=GLOBAL_PROXY_SPEND_COUNTER_KEY,
+        fallback_spend=hint if hint is not None else 0.0,
+        max_budget=litellm.max_budget,
+    )
 
 
 async def get_global_proxy_spend(
@@ -599,10 +552,7 @@ async def get_global_proxy_spend(
 ) -> float | None:
     global_proxy_spend = None
     if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
-        # Use event-driven coordination to prevent cache stampede
-        cache_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
-        global_proxy_spend = await _fetch_global_spend_with_event_coordination(
-            cache_key=cache_key,
+        global_proxy_spend = await _get_global_proxy_spend_value(
             user_api_key_cache=user_api_key_cache,
             prisma_client=prisma_client,
         )
@@ -2112,10 +2062,8 @@ async def _user_api_key_auth_builder(
 
             global_proxy_spend = None
             if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
-                cache_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
                 with tracer.trace("litellm.proxy.auth.get_global_proxy_spend"):
-                    global_proxy_spend = await _fetch_global_spend_with_event_coordination(
-                        cache_key=cache_key,
+                    global_proxy_spend = await _get_global_proxy_spend_value(
                         user_api_key_cache=user_api_key_cache,
                         prisma_client=prisma_client,
                     )
