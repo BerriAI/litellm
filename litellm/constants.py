@@ -141,6 +141,8 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
     "x-litellm-adaptive-router-model",
+    "x-litellm-applied-guardrails",
+    "x-litellm-guardrail-scan-id",
 ]
 
 # Gemini model-specific minimal thinking budget constants

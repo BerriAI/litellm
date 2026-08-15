@@ -70,7 +70,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     """
 
     _PROVIDER_NAME = "panw_prisma_airs"
-    _SCAN_DETAIL_FIELDS: Final = ("scan_id", "report_id", "profile_name", "profile_id", "tr_id")
 
     def __init__(
         self,
@@ -665,7 +664,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         }
 
         # Add optional fields if present
-        for field in self._SCAN_DETAIL_FIELDS:
+        optional_fields: Final = [
+            "scan_id",
+            "report_id",
+            "profile_name",
+            "profile_id",
+            "tr_id",
+        ]
+        for field in optional_fields:
             if scan_result.get(field):
                 error_detail["error"][field] = scan_result[field]
 
