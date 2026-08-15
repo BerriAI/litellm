@@ -308,6 +308,7 @@ const StartForm: React.FC = () => {
     const startBody = {
       api_key_id: apiKeyId,
       router_name: routerName,
+      direction: "forward" as const,
       shadow_percentage: parsedPct,
       duration_days: Number.parseInt(durationDays, 10),
       max_turns: parsedMaxTurns,
