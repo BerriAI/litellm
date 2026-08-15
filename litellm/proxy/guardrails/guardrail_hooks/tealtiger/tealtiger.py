@@ -41,7 +41,7 @@ class TealTigerGuardrail(CustomGuardrail):
         self,
         policies: Sequence[Mapping[str, object]] | None = None,
         policy_mode: str = "ENFORCE",
-        **kwargs,  # kwargs-ok: forwards unknown/future CustomGuardrail.__init__ params (guardrail_name, event_hook, default_on, ...) to the base class
+        **kwargs: object,  # kwargs-ok: forwards unknown/future CustomGuardrail.__init__ params (guardrail_name, event_hook, default_on, ...) to the base class
     ) -> None:
         self.engine: Final = TealEngine(
             policies=policies or DEFAULT_POLICIES,
