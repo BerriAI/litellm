@@ -7,6 +7,7 @@ resolution, and cost calculation.
 """
 
 import io
+import tempfile
 import threading
 import wave
 
@@ -214,7 +215,7 @@ def test_get_model_cost_key_case_insensitive():
 
 
 # ---------------------------------------------------------------------------
-# Audio duration extraction (budget reservation, auth path)
+# Audio duration extraction
 # ---------------------------------------------------------------------------
 
 
@@ -228,28 +229,37 @@ def _benchmark_wav(duration_seconds: float, sample_rate: int = 16000) -> bytes:
     return buffer.getvalue()
 
 
-SHORT_WAV = _benchmark_wav(5.0)
-LONG_WAV = _benchmark_wav(600.0)
-UNREADABLE_UPLOAD = b"\x00\x00\x00\x20ftypM4A " + b"\x11" * (2 * 1024 * 1024)
+def _spooled_upload(content: bytes) -> tempfile.SpooledTemporaryFile:
+    """A starlette-shaped upload. A BytesIO over an existing bytes object shares
+    its buffer, so reading it costs nothing and would understate the real work."""
+    handle = tempfile.SpooledTemporaryFile(max_size=1024 * 1024)
+    handle.write(content)
+    handle.seek(0)
+    return handle
+
+
+SHORT_UPLOAD = _spooled_upload(_benchmark_wav(5.0))
+LONG_UPLOAD = _spooled_upload(_benchmark_wav(600.0))
+UNREADABLE_UPLOAD = _spooled_upload(b"\x00\x00\x00\x20ftypM4A " + b"\x11" * (2 * 1024 * 1024))
 
 
 @pytest.mark.benchmark
 def test_audio_duration_short_wav():
     """Duration read for a 5s WAV, the common transcription upload."""
-    calculate_request_duration(io.BytesIO(SHORT_WAV))
+    calculate_request_duration(SHORT_UPLOAD)
 
 
 @pytest.mark.benchmark
 def test_audio_duration_long_wav():
     """Duration read for 10 minutes of WAV, ~19 MB, near the provider size cap."""
-    calculate_request_duration(io.BytesIO(LONG_WAV))
+    calculate_request_duration(LONG_UPLOAD)
 
 
 @pytest.mark.benchmark
 def test_audio_duration_unreadable_container():
     """Measures the failure path taken by any upload libsndfile declines to
     decode, before the byte-count ceiling picks it up."""
-    calculate_request_duration(io.BytesIO(UNREADABLE_UPLOAD))
+    calculate_request_duration(UNREADABLE_UPLOAD)
 
 
 # ---------------------------------------------------------------------------

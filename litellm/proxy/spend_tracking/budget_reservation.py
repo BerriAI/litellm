@@ -914,12 +914,14 @@ def estimate_request_max_cost(
         return None
 
     models: Final = [model] if isinstance(model, str) else model
+    audio_seconds: Final = _estimate_audio_duration_seconds(request_body=request_body)
     estimates = [
         _estimate_request_max_cost_for_model(
             request_body=request_body,
             route=route,
             model=model_name,
             llm_router=llm_router,
+            audio_seconds=audio_seconds,
         )
         for model_name in models
     ]
@@ -946,12 +948,14 @@ def estimate_request_input_cost(
         return None
 
     models: Final = [model] if isinstance(model, str) else model
+    audio_seconds: Final = _estimate_audio_duration_seconds(request_body=request_body)
     estimates = [
         _estimate_request_input_cost_for_model(
             request_body=request_body,
             route=route,
             model=model_name,
             llm_router=llm_router,
+            audio_seconds=audio_seconds,
         )
         for model_name in models
     ]
@@ -966,6 +970,7 @@ def _estimate_request_input_cost_for_model(
     route: str,
     model: str,
     llm_router: Router | None,
+    audio_seconds: float | None,
 ) -> float | None:
     estimates: Final = [
         _input_cost_for_cost_info(
@@ -973,6 +978,7 @@ def _estimate_request_input_cost_for_model(
             route=route,
             model=model,
             model_info=model_info,
+            audio_seconds=audio_seconds,
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
@@ -985,11 +991,12 @@ def _input_cost_for_cost_info(
     route: str,
     model: str,
     model_info: Mapping[str, Any],
+    audio_seconds: float | None,
 ) -> float | None:
     # The provider bills the full duration on accepting the upload, so a
     # cancelled transcription has no unbilled share to refund.
     audio_cost: Final = _estimate_audio_transcription_cost(
-        request_body=request_body,
+        audio_seconds=audio_seconds,
         model_info=model_info,
     )
     if audio_cost is not None:
@@ -1019,6 +1026,7 @@ def _estimate_request_max_cost_for_model(
     route: str,
     model: str,
     llm_router: Router | None,
+    audio_seconds: float | None,
 ) -> float | None:
     estimates: Final = [
         _max_cost_for_cost_info(
@@ -1026,6 +1034,7 @@ def _estimate_request_max_cost_for_model(
             route=route,
             model=model,
             model_info=model_info,
+            audio_seconds=audio_seconds,
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
@@ -1038,6 +1047,7 @@ def _max_cost_for_cost_info(
     route: str,
     model: str,
     model_info: Mapping[str, Any],
+    audio_seconds: float | None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
@@ -1047,7 +1057,7 @@ def _max_cost_for_cost_info(
         return image_cost
 
     audio_cost: Final = _estimate_audio_transcription_cost(
-        request_body=request_body,
+        audio_seconds=audio_seconds,
         model_info=model_info,
     )
     if audio_cost is not None:
@@ -1143,32 +1153,32 @@ def _estimate_image_generation_cost(
 # decoded. 500 sits below the lowest rate measured for speech at 8-32 kbps.
 MIN_AUDIO_BYTES_PER_SECOND: Final = 500.0
 
+# Cap on what a duration read will pull into memory during auth. Above it the
+# byte-count ceiling is used instead of decoding.
+MAX_AUDIO_DECODE_BYTES: Final = 25 * 1024 * 1024
+
 
 def _estimate_audio_transcription_cost(
-    request_body: dict,
+    audio_seconds: float | None,
     model_info: Mapping[str, Any],
 ) -> float | None:
     """Cost of transcribing the request's audio: its duration times the model's
     per-second rate. ``None`` for anything not priced that way."""
-    if model_info.get("mode") != "audio_transcription":
+    if audio_seconds is None or model_info.get("mode") != "audio_transcription":
         return None
 
     cost_per_second: Final = _audio_cost_per_second(model_info)
     if cost_per_second is None or cost_per_second <= 0:
         return None
 
-    seconds: Final = _estimate_audio_duration_seconds(request_body=request_body)
-    if seconds is None:
-        return None
-
-    return cost_per_second * seconds
+    return cost_per_second * audio_seconds
 
 
 def _audio_cost_per_second(model_info: Mapping[str, Any]) -> float | None:
     """The model's per-second billing rate, chosen the way ``cost_per_second``
     chooses it."""
     output_cost_per_second: Final = _to_float(model_info.get("output_cost_per_second"))
-    if output_cost_per_second is not None:
+    if output_cost_per_second is not None and output_cost_per_second > 0:
         return output_cost_per_second
     return _to_float(model_info.get("input_cost_per_second"))
 
@@ -1180,12 +1190,15 @@ def _estimate_audio_duration_seconds(request_body: dict) -> float | None:
     upload: Final = request_body.get("file")
     if not isinstance(upload, UploadFile):
         return None
+    size_in_bytes: Final = _to_float(upload.size)
+
+    if size_in_bytes is not None and size_in_bytes > MAX_AUDIO_DECODE_BYTES:
+        return size_in_bytes / MIN_AUDIO_BYTES_PER_SECOND
 
     exact_duration: Final = calculate_request_duration(upload.file)
     if exact_duration is not None and exact_duration > 0:
         return exact_duration
 
-    size_in_bytes: Final = _to_float(upload.size)
     if size_in_bytes is None or size_in_bytes <= 0:
         return None
     return size_in_bytes / MIN_AUDIO_BYTES_PER_SECOND

@@ -2663,6 +2663,68 @@ def test_should_price_transcription_from_input_rate_when_output_rate_absent():
     assert estimated == pytest.approx(10.0 * 0.0002)
 
 
+def test_should_price_transcription_from_input_rate_when_output_rate_is_zero():
+    """43 of the 55 per-second transcription models (deepgram, assemblyai, azure
+    speech) declare output_cost_per_second: 0.0 alongside a positive input rate.
+    cost_per_second bills them on the input rate, so treating 0.0 as the answer
+    would leave the majority of transcription models unreserved."""
+    estimated = _estimate_transcription(
+        _transcription_body(_upload(_wav_bytes(10.0))),
+        cost_info={
+            "mode": "audio_transcription",
+            "input_cost_per_second": 0.00020833,
+            "output_cost_per_second": 0.0,
+        },
+    )
+
+    assert estimated == pytest.approx(10.0 * 0.00020833)
+
+
+def test_should_not_decode_an_upload_above_the_memory_cap():
+    """Decoding reads the whole upload into memory, and it runs during auth. An
+    upload past the cap must be sized from its byte count rather than read in."""
+    from litellm.proxy.spend_tracking.budget_reservation import MAX_AUDIO_DECODE_BYTES
+
+    oversized = _upload(b"\x00" * (MAX_AUDIO_DECODE_BYTES + 1), filename="huge.wav")
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.calculate_request_duration"
+    ) as decode:
+        estimated = _estimate_transcription(_transcription_body(oversized))
+
+    decode.assert_not_called()
+    assert estimated == pytest.approx((MAX_AUDIO_DECODE_BYTES + 1) / 500.0 * 0.0001)
+
+
+def test_should_decode_the_upload_once_regardless_of_pricing_candidate_count():
+    """The duration is read once per request, not once per pricing candidate. A
+    routed group yields several candidates, and decoding per candidate would read
+    the whole file into memory that many times."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "whisper-1",
+                "litellm_params": {"model": "openai/whisper-1", "api_key": "sk-test"},
+            },
+            {
+                "model_name": "whisper-1",
+                "litellm_params": {"model": "azure/whisper-1", "api_key": "sk-test", "api_base": "https://e.test"},
+            },
+        ]
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.calculate_request_duration",
+        return_value=20.0,
+    ) as decode:
+        estimate_request_max_cost(
+            request_body=_transcription_body(_upload(_wav_bytes(20.0))),
+            route="/v1/audio/transcriptions",
+            llm_router=router,
+        )
+
+    assert decode.call_count == 1
+
+
 def test_should_fall_back_to_byte_ceiling_when_duration_is_unreadable():
     """An upload whose audio cannot be decoded must still reserve, bounded by its
     byte count, rather than fall back to no reservation at all. Uses .m4a as a
