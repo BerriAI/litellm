@@ -495,7 +495,7 @@ class ProxyLogging:
 
     def _ensure_deprecation_check_scheduled(self) -> None:
         """Alerting can be configured at startup or by a later config reload, so schedule from either path"""
-        if self.alerting is None or self.slack_alerting_instance is None or self.deprecation_check_started:
+        if self.alerting is None or self.deprecation_check_started:
             return
 
         try:
@@ -503,7 +503,7 @@ class ProxyLogging:
         except RuntimeError:
             return
 
-        asyncio.create_task(self.slack_alerting_instance._run_scheduled_deprecation_check())
+        asyncio.create_task(self.slack_alerting_instance.run_scheduled_deprecation_check())
         self.deprecation_check_started = True
 
     def update_values(

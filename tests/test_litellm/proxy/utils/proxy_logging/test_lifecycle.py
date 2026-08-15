@@ -136,13 +136,13 @@ async def test_startup_event_schedules_deprecation_check_before_its_alert_type_i
     proxy_logging.alerting = ["slack"]
     proxy_logging.slack_alerting_instance = MagicMock()
     proxy_logging.slack_alerting_instance.alert_types = []
-    proxy_logging.slack_alerting_instance._run_scheduled_deprecation_check = AsyncMock()
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check = AsyncMock()
     proxy_logging._init_litellm_callbacks = MagicMock()
 
     proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
 
     assert proxy_logging.deprecation_check_started is True
-    proxy_logging.slack_alerting_instance._run_scheduled_deprecation_check.assert_called_once_with()
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -150,7 +150,7 @@ async def test_update_values_schedules_deprecation_check_when_alerting_arrives_l
     """A proxy that boots without alerting still needs the loop once a config reload turns it on"""
     proxy_logging.slack_alerting_instance = MagicMock()
     proxy_logging.slack_alerting_instance.alert_types = []
-    proxy_logging.slack_alerting_instance._run_scheduled_deprecation_check = AsyncMock()
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check = AsyncMock()
     proxy_logging._init_litellm_callbacks = MagicMock()
 
     proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
@@ -159,7 +159,7 @@ async def test_update_values_schedules_deprecation_check_when_alerting_arrives_l
     proxy_logging.update_values(alerting=["slack"])
 
     assert proxy_logging.deprecation_check_started is True
-    proxy_logging.slack_alerting_instance._run_scheduled_deprecation_check.assert_called_once_with()
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with()
 
 
 def test_startup_event_propagates_init_callbacks_failure_raises(proxy_logging):

@@ -1087,7 +1087,7 @@ Model Info:
         )
         return True
 
-    async def _run_scheduled_deprecation_check(
+    async def run_scheduled_deprecation_check(
         self, get_llm_router: Callable[[], Router | None] = _proxy_llm_router
     ) -> None:
         """Alert once the router is loaded and the alert is on, then daily, re-reading both each pass"""
