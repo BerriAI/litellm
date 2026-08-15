@@ -1,11 +1,15 @@
 import React, { useState, useCallback, useEffect } from "react";
-import { Modal, Form, Steps, Button, Checkbox } from "antd";
-import { Text, Title, Badge } from "@tremor/react";
+import { Loader2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/cva.config";
 import { makeModelGroupPublic } from "../../networking";
 import ModelFilters from "../../model_filters";
 import NotificationsManager from "../../molecules/notifications_manager";
 
-const { Step } = Steps;
+const STEP_TITLES = ["Select Models", "Confirm"];
 
 interface ModelGroupInfo {
   model_group: string;
@@ -44,13 +48,11 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [form] = Form.useForm();
 
   const handleClose = () => {
     setCurrentStep(0);
     setSelectedModels(new Set());
     setFilteredData([]);
-    form.resetFields();
     onClose();
   };
 
@@ -138,23 +140,24 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <Title>Select Models to Make Public</Title>
+          <h3 className="text-lg font-semibold">Select Models to Make Public</h3>
           <div className="flex items-center space-x-2">
-            <Checkbox
-              checked={allModelsSelected}
-              indeterminate={isIndeterminate}
-              onChange={(e) => handleSelectAll(e.target.checked)}
-              disabled={filteredData.length === 0}
-            >
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={allModelsSelected}
+                indeterminate={isIndeterminate}
+                onCheckedChange={(checked) => handleSelectAll(checked === true)}
+                disabled={filteredData.length === 0}
+              />
               Select All {filteredData.length > 0 && `(${filteredData.length})`}
-            </Checkbox>
+            </label>
           </div>
         </div>
 
-        <Text className="text-sm text-gray-600">
+        <p className="text-sm text-gray-600">
           Select the models you want to be visible on the public model hub. Users will still require a valid Virtual Key
           to use these models.
-        </Text>
+        </p>
 
         {/* Filters */}
         <ModelFilters
@@ -168,7 +171,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           <div className="space-y-3">
             {filteredData.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                <Text>No models match the current filters.</Text>
+                <p>No models match the current filters.</p>
               </div>
             ) : (
               filteredData.map((model) => (
@@ -178,20 +181,16 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
                 >
                   <Checkbox
                     checked={selectedModels.has(model.model_group)}
-                    onChange={(e) => handleModelSelection(model.model_group, e.target.checked)}
+                    onCheckedChange={(checked) => handleModelSelection(model.model_group, checked === true)}
                   />
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-2">
-                      <Text className="font-medium">{model.model_group}</Text>
-                      {model.mode && (
-                        <Badge color="green" size="sm">
-                          {model.mode}
-                        </Badge>
-                      )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium break-words">{model.model_group}</p>
+                      {model.mode && <Badge>{model.mode}</Badge>}
                     </div>
                     <div className="flex flex-wrap gap-1 mt-1">
                       {model.providers.map((provider) => (
-                        <Badge key={provider} color="blue" size="xs">
+                        <Badge key={provider} variant="secondary">
                           {provider}
                         </Badge>
                       ))}
@@ -205,9 +204,9 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
         {selectedModels.size > 0 && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <Text className="text-sm text-blue-800">
+            <p className="text-sm text-blue-800">
               <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} selected
-            </Text>
+            </p>
           </div>
         )}
       </div>
@@ -217,29 +216,29 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const renderStep2Content = () => {
     return (
       <div className="space-y-4">
-        <Title>Confirm Making Models Public</Title>
+        <h3 className="text-lg font-semibold">Confirm Making Models Public</h3>
 
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <Text className="text-sm text-yellow-800">
+          <p className="text-sm text-yellow-800">
             <strong>Warning:</strong> Once you make these models public, anyone who can go to the{" "}
             <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
-          </Text>
+          </p>
         </div>
 
         <div className="space-y-3">
-          <Text className="font-medium">Models to be made public:</Text>
+          <p className="font-medium">Models to be made public:</p>
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
               {Array.from(selectedModels).map((modelGroup) => {
                 const model = modelHubData.find((m) => m.model_group === modelGroup);
                 return (
                   <div key={modelGroup} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
-                    <div>
-                      <Text className="font-medium">{modelGroup}</Text>
+                    <div className="min-w-0">
+                      <p className="font-medium break-words">{modelGroup}</p>
                       {model && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {model.providers.map((provider) => (
-                            <Badge key={provider} color="blue" size="xs">
+                            <Badge key={provider} variant="secondary">
                               {provider}
                             </Badge>
                           ))}
@@ -254,10 +253,10 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         </div>
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <Text className="text-sm text-blue-800">
+          <p className="text-sm text-blue-800">
             Total: <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} will be made
             public
-          </Text>
+          </p>
         </div>
       </div>
     );
@@ -277,7 +276,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const renderStepButtons = () => {
     return (
       <div className="flex justify-between mt-6">
-        <Button onClick={currentStep === 0 ? handleClose : handlePrevious}>
+        <Button variant="outline" onClick={currentStep === 0 ? handleClose : handlePrevious}>
           {currentStep === 0 ? "Cancel" : "Previous"}
         </Button>
 
@@ -289,7 +288,8 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           )}
 
           {currentStep === 1 && (
-            <Button onClick={handleSubmit} loading={loading}>
+            <Button onClick={handleSubmit} disabled={loading}>
+              {loading && <Loader2 className="size-4 animate-spin" />}
               Make Public
             </Button>
           )}
@@ -299,24 +299,42 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   };
 
   return (
-    <Modal
-      title="Make Models Public"
-      open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={1200}
-      maskClosable={false}
-    >
-      <Form form={form} layout="vertical">
-        <Steps current={currentStep} className="mb-6">
-          <Step title="Select Models" />
-          <Step title="Confirm" />
-        </Steps>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1200px]">
+        <DialogHeader>
+          <DialogTitle>Make Models Public</DialogTitle>
+        </DialogHeader>
 
-        {renderStepContent()}
-        {renderStepButtons()}
-      </Form>
-    </Modal>
+        <div>
+          <ol className="mb-6 flex items-center gap-6">
+            {STEP_TITLES.map((title, index) => (
+              <li
+                key={title}
+                className="flex items-center gap-2"
+                aria-current={currentStep === index ? "step" : undefined}
+              >
+                <span
+                  className={cn(
+                    "flex size-6 items-center justify-center rounded-full border text-xs",
+                    currentStep === index
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border text-muted-foreground",
+                  )}
+                >
+                  {index + 1}
+                </span>
+                <span className={cn("text-sm", currentStep === index ? "font-medium" : "text-muted-foreground")}>
+                  {title}
+                </span>
+              </li>
+            ))}
+          </ol>
+
+          {renderStepContent()}
+          {renderStepButtons()}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

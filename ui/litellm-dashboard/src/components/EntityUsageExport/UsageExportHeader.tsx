@@ -1,4 +1,4 @@
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { Download } from "lucide-react";
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import EntityUsageExportModal from "./EntityUsageExportModal";
 import type { EntitySpendData, EntityType } from "./types";
@@ -51,6 +52,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   compactLayout = false,
   teams = [],
 }) => {
+  const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   const hasFilters = showFilters && filterOptions.length > 0;
@@ -58,7 +60,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
 
   const filterList = (
-    <ComboboxContent>
+    <ComboboxContent anchor={anchor}>
       <ComboboxEmpty>No options found</ComboboxEmpty>
       <ComboboxList>
         {(value: string) => (
@@ -104,7 +106,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
                   value={selectedFilters}
                   onValueChange={(next: string[]) => onFiltersChange?.(next)}
                 >
-                  <ComboboxChips className="w-full">
+                  <ComboboxChips render={<div ref={anchor} />} className="w-full">
                     <ComboboxValue>
                       {(selected: string[]) =>
                         selected.map((value) => (
