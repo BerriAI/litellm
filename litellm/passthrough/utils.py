@@ -18,6 +18,7 @@ _PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset] = frozenset(
         "x-goog-api-key",
         "host",
         "content-length",
+        "accept-encoding",
     }
 )
 
