@@ -34,6 +34,8 @@ import {
 } from "@/components/networking";
 import { Button as AntdButton, Modal, Select as AntdSelect, Form, Tooltip } from "antd";
 import { rolesWithWriteAccess } from "@/utils/roles";
+import { teamDetailHref } from "@/utils/entityLinks";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
@@ -484,7 +486,11 @@ export default function UserInfoView({
                         <TableBody>
                           {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
                             <TableRow key={team.team_id}>
-                              <TableCell>{team.team_alias || team.team_id}</TableCell>
+                              <TableCell>
+                                <BadgeLink href={teamDetailHref(team.team_id)}>
+                                  {team.team_alias || team.team_id}
+                                </BadgeLink>
+                              </TableCell>
                               {isProxyAdmin && (
                                 <TableCell className="text-right">
                                   <Button

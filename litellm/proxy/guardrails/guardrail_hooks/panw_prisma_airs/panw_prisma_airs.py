@@ -27,11 +27,13 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_scan_id,
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
@@ -83,6 +85,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
         violation_message_template: str | None = None,
+        http_client: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         """Initialize PANW Prisma AIRS guardrail handler."""
@@ -130,6 +133,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_name,
             )
 
+        self.http_client = http_client
         self.fallback_on_error = fallback_on_error
         # Coerce defensively. The dashboard UI persists this field as a JSON
         # string, and Pydantic extras (the path that splats model_dump into
@@ -344,7 +348,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         try:
             # Use LiteLLM's async HTTP client
-            async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+            async_client: Final = self.http_client or get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.GuardrailCallback
+            )
 
             # Bypass wrapper to access follow_redirects parameter
             response: Final = await async_client.client.post(
@@ -675,6 +681,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return error_detail
 
+    def _record_scan_id(self, request_data: dict[str, Any], scan_result: Mapping[str, object]) -> None:
+        """Surface the AIRS scan id on the response, so allowed calls are auditable too."""
+        scan_id: Final = scan_result.get("scan_id")
+        add_guardrail_scan_id(request_data=request_data, scan_id=str(scan_id) if scan_id else None)
+
     def _handle_api_error_with_logging(
         self,
         scan_result: dict[str, object],
@@ -897,6 +908,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             event_type=GuardrailEventHooks.post_call,
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+        self._record_scan_id(request_data, scan_result)
 
     def _check_and_mark_scanned(self, data: dict, scan_type: str) -> bool:
         """
@@ -1026,6 +1038,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.pre_call,
             )
+            self._record_scan_id(data, scan_result)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1146,6 +1159,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.post_call,
             )
+            self._record_scan_id(data, scan_result)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1347,6 +1361,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     duration=(end_time - start_time).total_seconds(),
                     event_type=GuardrailEventHooks.post_call,
                 )
+                self._record_scan_id(request_data, scan_result)
 
                 # Add guardrail to applied guardrails header for observability
                 add_guardrail_to_applied_guardrails_header(
@@ -1449,6 +1464,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     is_response=is_response,
                 )
                 continue  # fallback_on_error="allow" — leave args unchanged
+
+            self._record_scan_id(request_data, scan_result)
 
             action = scan_result.get("action", "block")
             # Always is_response=False for masked data lookup because
@@ -1768,6 +1785,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 new_texts.append(text)
                 continue
 
+            self._record_scan_id(request_data, scan_result)
+
             action = scan_result.get("action", "block")
             masked_text = self._get_masked_text(scan_result, is_response=is_response)
 
@@ -1838,6 +1857,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 # If we reach here, fallback_on_error="allow"
             else:
+                self._record_scan_id(request_data, mcp_scan_result)
                 action = mcp_scan_result.get("action", "block")
                 masked_text = self._get_masked_text(mcp_scan_result, is_response=False)
                 if action == "allow":

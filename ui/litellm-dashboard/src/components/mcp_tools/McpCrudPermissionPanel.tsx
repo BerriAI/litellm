@@ -10,8 +10,7 @@
  */
 
 import React, { useMemo, useState } from "react";
-import { Checkbox } from "antd";
-import { Text } from "@tremor/react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { CrudOp, MCPToolEntry, CRUD_GROUP_META, groupToolsByCrud } from "../../utils/mcpToolCrudClassification";
 
@@ -187,14 +186,13 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
 
               {!readOnly && (
                 <div className="flex items-center gap-2 ml-4">
-                  <Text className="text-xs text-gray-500">
-                    {fullyAllowed ? "All on" : partial ? "Partial" : "All off"}
-                  </Text>
+                  <p className="text-xs text-gray-500">{fullyAllowed ? "All on" : partial ? "Partial" : "All off"}</p>
                   {/* Checkbox supports `indeterminate`; Switch does not. */}
                   <Checkbox
+                    aria-label={`Allow all ${meta.label} tools`}
                     checked={fullyAllowed}
                     indeterminate={partial}
-                    onChange={(e) => toggleGroup(op, e.target.checked)}
+                    onCheckedChange={(checked) => toggleGroup(op, checked)}
                     onClick={(e) => e.stopPropagation()}
                   />
                 </div>
@@ -229,15 +227,15 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                         onClick={() => toggleTool(tool.name)}
                       >
                         <Checkbox
+                          aria-label={tool.name}
                           checked={allowed}
-                          onChange={() => toggleTool(tool.name)}
                           disabled={readOnly}
                           onClick={(e) => e.stopPropagation()}
                         />
                         <div className="flex-1 min-w-0">
-                          <Text className="font-medium text-gray-900 text-sm">{tool.name}</Text>
+                          <p className="font-medium text-gray-900 text-sm">{tool.name}</p>
                           {tool.description && (
-                            <Text className="text-xs text-gray-500 mt-0.5 leading-snug">{tool.description}</Text>
+                            <p className="text-xs text-gray-500 mt-0.5 leading-snug">{tool.description}</p>
                           )}
                         </div>
                         <span

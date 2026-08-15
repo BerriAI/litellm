@@ -105,7 +105,7 @@ test.describe("Team Admin", () => {
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.getByTestId("delete-member").click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Delete Team Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
     const remove = await captureRequestBody(page, { method: "POST", urlIncludes: "/team/member_delete" }, async () => {
@@ -139,10 +139,10 @@ test.describe("Team Admin", () => {
     await page.getByTestId("base-input").fill(keyName);
 
     // Team selector — same locator pattern as the proxy-admin keys test.
-    const teamSelect = page.locator(".ant-select", { hasText: "Search or select a team" });
+    const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await page.locator(".ant-select-dropdown:visible").getByText(E2E_TEAM_CRUD_ALIAS).first().click();
+    await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ALIAS).first().click();
 
     // Models — pick "All Team Models"
     await page.locator(".ant-select-selection-overflow").click();
