@@ -654,8 +654,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return {
             "error": {
-                # Pass the raw AIRS scan response through for audit/compliance logging,
-                # minus the internal underscore-prefixed control flags.
                 **{key: value for key, value in scan_result.items() if not key.startswith("_")},
                 "message": error_msg,
                 "type": "guardrail_violation",
