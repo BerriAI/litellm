@@ -510,16 +510,16 @@ async def test_get_form_data():
 
     mock_form_data = FormData(
         [
-            ("file", "file_object"),  # In a real request this would be an UploadFile
+            ("file", "file_object"),
             ("model", "gpt-4o-transcribe"),
-            ("include[]", "logprobs"),  # Array notation
+            ("include[]", "logprobs"),
             ("language", "en"),
             ("prompt", "Transcribe this audio file"),
             ("response_format", "json"),
             ("stream", "false"),
             ("temperature", "0.2"),
-            ("timestamp_granularities[]", "word"),  # First array item
-            ("timestamp_granularities[]", "segment"),  # Second array item
+            ("timestamp_granularities[]", "word"),
+            ("timestamp_granularities[]", "segment"),
         ]
     )
 
