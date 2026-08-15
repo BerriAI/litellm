@@ -3555,7 +3555,7 @@ async def _attach_budget_limits_usage(key_info: dict, api_key_hash: str) -> None
         return
 
     for idx, window in enumerate(budget_limits):
-        w: Final = _budget_window_to_dict(window)
+        w = _budget_window_to_dict(window)
         if not w:
             continue
         budget_limits[idx] = w
@@ -3567,8 +3567,8 @@ async def _attach_budget_limits_usage(key_info: dict, api_key_hash: str) -> None
             max_budget = float(max_budget) if max_budget is not None else None
         except (TypeError, ValueError):
             max_budget = None
-        counter_key: Final = f"spend:key:{api_key_hash}:window:{duration}"
-        spend: Final = await get_current_spend(
+        counter_key = f"spend:key:{api_key_hash}:window:{duration}"
+        spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
             max_budget=max_budget,
