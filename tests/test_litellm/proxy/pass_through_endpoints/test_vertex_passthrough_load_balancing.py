@@ -580,6 +580,7 @@ def test_forward_headers_never_forwards_client_accept_encoding():
 
     request_headers = {
         "accept-encoding": "gzip, deflate, br, zstd",
+        "x-pass-accept-encoding": "br",
         "x-request-id": "req-123",
     }
 
