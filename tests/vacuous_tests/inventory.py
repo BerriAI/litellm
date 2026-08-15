@@ -339,6 +339,41 @@ def _module_level_skip(tree: ast.Module) -> Optional[str]:
     return None
 
 
+def _is_main_guard(node: ast.If) -> bool:
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
+
+
+def _nested_scopes(child: ast.stmt) -> Tuple[Sequence[ast.stmt], ...]:
+    if isinstance(child, ast.If):
+        # Nothing under `if __name__ == "__main__"` runs on import, so pytest never sees it
+        return (child.orelse,) if _is_main_guard(child) else (child.body, child.orelse)
+    if isinstance(child, ast.Try):
+        return (child.body, child.orelse, child.finalbody, *(handler.body for handler in child.handlers))
+    if isinstance(child, (ast.With, ast.AsyncWith)):
+        return (child.body,)
+    if isinstance(child, (ast.For, ast.AsyncFor, ast.While)):
+        return (child.body, child.orelse)
+    return ()
+
+
+def _scope_statements(body: Sequence[ast.stmt]) -> List[ast.stmt]:
+    """Every statement pytest sees at this scope.
+
+    A `def test_x` guarded by `if` or `try` still binds on the module or class,
+    so pytest collects it; only another function's body is a different scope.
+    """
+    nested = [stmt for child in body for group in _nested_scopes(child) for stmt in group]
+    return list(body) + (_scope_statements(nested) if nested else [])
+
+
 def classify_file(path: str, source: str) -> List[Candidate]:
     rel = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
     try:
@@ -351,14 +386,15 @@ def classify_file(path: str, source: str) -> List[Candidate]:
     candidates: List[Candidate] = []
 
     def visit(node: Union[ast.Module, ast.ClassDef], prefix: str) -> None:
-        for child in node.body:
+        for child in _scope_statements(node.body):
             if isinstance(child, ast.ClassDef):
                 if child.name.startswith("Test"):
                     visit(child, f"{prefix}{child.name}.")
                 continue
             if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if not child.name.startswith("test_"):
+            # pytest's default python_functions is `test*`, so `testFoo` counts too
+            if not child.name.startswith("test"):
                 continue
             found = classify_test(child, module_skip)
             if found is not None:

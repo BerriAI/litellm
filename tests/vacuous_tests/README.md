@@ -33,6 +33,8 @@ python tests/vacuous_tests/inventory.py --queue 15 --area tests/test_litellm/pro
 
 `inventory_baseline.json` names every known candidate per file and bucket, not just how many there are. `--check` fails on any candidate it does not already name, so fixing one test does not open a slot for a new vacuous one in the same file. The cost is that renaming or moving a known candidate also fails the check, which is a one-command fix: if the failure is a rename, or a deliberate assert-by-not-raising test whose docstring says so, regenerate the baseline
 
+The scan matches pytest's own collection rules rather than a narrower guess, so `test*` names, not only `test_*`, and tests defined inside module-level `if` or `try` blocks are seen too, while nested helpers and anything under `if __name__ == "__main__"` are not, since pytest never binds those on import. One hole is left on purpose: a new vacuous test that reuses the exact name of a fixed one keys to the same baseline entry and passes, which takes deliberate effort and reads as such in review
+
 ## Stage B: does the test actually have teeth
 
 `mutation_probe.py` decides. For one test it runs the test under coverage, subtracts the coverage floor of a no-op test in the same directory (so import-time lines are not counted), mutates only the lines the test itself executed, and re-runs the test against each mutant

@@ -138,6 +138,52 @@ def test_classifies_methods_of_test_classes() -> None:
     assert [c.name for c in candidates] == ["TestThings.test_thing"]
 
 
+def test_classifies_camel_case_test_names_pytest_still_collects() -> None:
+    source = """
+    def testNoAssertCamelCase():
+        compute()
+    """
+    assert bucket_of(source, "testNoAssertCamelCase") == "no_assert"
+
+
+def test_classifies_tests_defined_inside_module_level_blocks() -> None:
+    source = """
+    if sys.version_info >= (3, 9):
+
+        def test_guarded():
+            compute()
+
+    try:
+        def test_in_try():
+            compute()
+    except ImportError:
+        pass
+    """
+    candidates = inventory.classify_file("/repo/tests/test_sample.py", textwrap.dedent(source))
+    assert sorted(c.name for c in candidates) == ["test_guarded", "test_in_try"]
+
+
+def test_ignores_tests_under_a_main_guard() -> None:
+    source = """
+    if __name__ == "__main__":
+
+        def test_manual_script():
+            compute()
+    """
+    assert inventory.classify_file("/repo/tests/test_sample.py", textwrap.dedent(source)) == []
+
+
+def test_ignores_nested_helpers_pytest_does_not_collect() -> None:
+    source = """
+    def test_outer():
+        def test_inner():
+            compute()
+
+        assert compute() == 3
+    """
+    assert inventory.classify_file("/repo/tests/test_sample.py", textwrap.dedent(source)) == []
+
+
 def test_ratchet_rejects_new_candidates() -> None:
     failures = inventory.regressions(
         {"tests/test_sample.py": {"no_assert": ["test_known", "test_new"]}},

@@ -2,7 +2,7 @@
   "_comment": "Ratchet baseline for tests/vacuous_tests/inventory.py. It names every known candidate per file and bucket, and any candidate missing from it fails the check. Regenerate with --update-baseline after a cleanup or a rename.",
   "totals": {
     "dead_skip": 309,
-    "no_assert": 723,
+    "no_assert": 724,
     "swallowed_failure": 46,
     "trivial_assert": 35
   },
@@ -1337,6 +1337,11 @@
     "tests/router_unit_tests/test_router_aresponses_streaming_fallback.py": {
       "no_assert": [
         "test_combine_responses_fallback_usage_passthrough_for_unknown_event"
+      ]
+    },
+    "tests/router_unit_tests/test_router_cooldown_utils.py": {
+      "no_assert": [
+        "testing_litellm_router"
       ]
     },
     "tests/router_unit_tests/test_router_endpoints.py": {
