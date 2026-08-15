@@ -15,6 +15,8 @@ import pytest
 
 import litellm
 from litellm.proxy import proxy_server
+from litellm.proxy import utils as proxy_utils
+from litellm.proxy.utils import create_model_info_response
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -151,8 +153,38 @@ def test_anthropic_format_exposes_token_limits(
     assert claude["max_input_tokens"] == 200000
     assert claude["max_tokens"] == 64000
     assert "max_output_tokens" not in claude
-    assert "max_input_tokens" not in gpt_4
-    assert "max_tokens" not in gpt_4
+    assert gpt_4["max_input_tokens"] is None
+    assert gpt_4["max_tokens"] is None
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_anthropic_format_carries_router_configured_token_limits(client, auth_as, patched_models, monkeypatch, path):
+    """Pins the whole resolution chain, not just the formatter: a deployment's
+    configured limits beat the cost map, and the configured output budget is what
+    lands on the Anthropic ``max_tokens``. All eight limits differ, so an entry
+    built from another entry's lookup shows up as the wrong numbers."""
+
+    def _configured(model_name):
+        return (300000, 32000) if model_name == "gpt-4" else (500000, 4096)
+
+    def _cost_map_lookup(model_id):
+        max_input, max_output = (200000, 64000) if model_id == "gpt-4" else (100000, 8000)
+        return {"max_input_tokens": max_input, "max_output_tokens": max_output, "mode": "chat"}
+
+    patched_models.get_configured_token_limits = MagicMock(side_effect=_configured)
+
+    def _resolved(**kwargs):
+        return create_model_info_response(**kwargs, get_model_info=_cost_map_lookup)
+
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _resolved)
+
+    with auth_as():
+        response = client.get(path, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    gpt_4, claude = response.json()["data"]
+    assert (gpt_4["max_input_tokens"], gpt_4["max_tokens"]) == (300000, 32000)
+    assert (claude["max_input_tokens"], claude["max_tokens"]) == (500000, 4096)
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
