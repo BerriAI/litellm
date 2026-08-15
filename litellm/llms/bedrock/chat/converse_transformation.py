@@ -57,6 +57,7 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionMessageToolCall,
     CompletionTokensDetailsWrapper,
     Function,
@@ -1770,6 +1771,23 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
 
+    @staticmethod
+    def _transform_cache_details(
+        cache_details: list[ConverseCacheDetailBlock] | None,
+    ) -> CacheCreationTokenDetails | None:
+        if not cache_details:
+            return None
+        ephemeral_5m_input_tokens: Final = sum(
+            detail["inputTokens"] for detail in cache_details if detail.get("ttl") == "5m"
+        )
+        ephemeral_1h_input_tokens: Final = sum(
+            detail["inputTokens"] for detail in cache_details if detail.get("ttl") == "1h"
+        )
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=ephemeral_5m_input_tokens,
+            ephemeral_1h_input_tokens=ephemeral_1h_input_tokens,
+        )
+
     def _transform_usage(
         self,
         usage: ConverseTokenUsageBlock,
@@ -1789,9 +1807,12 @@ class AmazonConverseConfig(BaseConfig):
             cache_creation_input_tokens = usage["cacheWriteInputTokens"]
             input_tokens += cache_creation_input_tokens
 
+        cache_creation_token_details: Final = self._transform_cache_details(usage.get("cacheDetails"))
+
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
+            cache_creation_token_details=cache_creation_token_details,
             text_tokens=raw_input_tokens,
         )
         reasoning_tokens = token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0

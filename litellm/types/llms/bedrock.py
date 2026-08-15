@@ -216,6 +216,11 @@ class ConverseResponseOutputBlock(TypedDict):
     message: MessageBlock | None
 
 
+class ConverseCacheDetailBlock(TypedDict):
+    inputTokens: int
+    ttl: Literal["5m", "1h"]
+
+
 class ConverseTokenUsageBlock(TypedDict):
     inputTokens: int
     outputTokens: int
@@ -224,6 +229,7 @@ class ConverseTokenUsageBlock(TypedDict):
     cacheReadInputTokens: int
     cacheWriteInputTokenCount: int
     cacheWriteInputTokens: int
+    cacheDetails: list[ConverseCacheDetailBlock]
 
 
 class ServiceTierBlock(TypedDict):

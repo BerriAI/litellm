@@ -6003,3 +6003,41 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
     )
 
     assert "thinking" not in optional_params
+
+
+def test_transform_usage_splits_cache_writes_by_ttl():
+    config = AmazonConverseConfig()
+    usage: ConverseTokenUsageBlock = {
+        "inputTokens": 100,
+        "outputTokens": 50,
+        "totalTokens": 150,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 4000,
+        "cacheDetails": [
+            {"inputTokens": 3000, "ttl": "1h"},
+            {"inputTokens": 1000, "ttl": "5m"},
+        ],
+    }
+
+    result = config._transform_usage(usage)
+
+    details = result.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_1h_input_tokens == 3000
+    assert details.ephemeral_5m_input_tokens == 1000
+    assert result.cache_creation_input_tokens == 4000
+
+
+def test_transform_usage_without_cache_details_leaves_ttl_split_unset():
+    config = AmazonConverseConfig()
+    usage: ConverseTokenUsageBlock = {
+        "inputTokens": 100,
+        "outputTokens": 50,
+        "totalTokens": 150,
+        "cacheWriteInputTokens": 4000,
+    }
+
+    result = config._transform_usage(usage)
+
+    assert getattr(result.prompt_tokens_details, "cache_creation_token_details", None) is None
+    assert result.cache_creation_input_tokens == 4000
