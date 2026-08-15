@@ -24,10 +24,10 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
 )
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
     DB_RETRY_SAFE_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -121,7 +121,11 @@ from litellm.proxy.db.prisma_client import (
     parse_iam_endpoint_from_url,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
-from litellm.proxy.db.spend_log_batching import spend_log_write_batches
+from litellm.proxy.db.spend_log_batching import (
+    spend_log_queue_within_budget,
+    spend_log_row_bytes,
+    spend_log_write_batches,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -3066,6 +3070,7 @@ class _StaleReadEngine:
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
+    spend_log_queue_bytes: ClassVar[int] = 0
     spend_logs_queue_monitor_task: "asyncio.Task[None] | None" = None
     tool_usage_transactions: list["ToolUsageTransaction"] = []
     _tool_usage_transactions_lock = asyncio.Lock()
@@ -5702,6 +5707,53 @@ def _hash_token_if_needed(token: str) -> str:
         return token
 
 
+async def enqueue_spend_logs(
+    prisma_client: PrismaClient,
+    logs: Sequence[Mapping[str, object]],
+    *,
+    at_head: bool = False,
+    max_bytes: int = SPEND_LOG_QUEUE_MAX_BYTES,
+) -> None:
+    """Queue spend logs for the next flush, held under ``SPEND_LOG_QUEUE_MAX_BYTES``.
+
+    ``at_head`` replays a batch the DB refused, so it flushes before the logs
+    that piled up during the outage. Past the budget the oldest logs are
+    dropped, which keeps a long outage from growing the queue until the pod
+    dies.
+    """
+    added: Final = sum(spend_log_row_bytes(row) for row in logs)
+    async with prisma_client._spend_log_transactions_lock:
+        queued: Final = (
+            tuple(logs) + tuple(prisma_client.spend_log_transactions)
+            if at_head
+            else tuple(prisma_client.spend_log_transactions) + tuple(logs)
+        )
+        kept, kept_bytes = spend_log_queue_within_budget(queued, PrismaClient.spend_log_queue_bytes + added, max_bytes)
+        prisma_client.spend_log_transactions[:] = kept
+        PrismaClient.spend_log_queue_bytes = kept_bytes
+    if len(kept) < len(queued):
+        verbose_proxy_logger.error(
+            "Spend tracking - spend log queue is at its %d byte budget; dropped the %d oldest spend logs",
+            max_bytes,
+            len(queued) - len(kept),
+        )
+
+
+async def dequeue_spend_logs(prisma_client: PrismaClient, limit: int) -> list[dict[str, object]]:
+    """Take up to ``limit`` of the oldest queued spend logs off the queue.
+
+    Every enqueue and dequeue goes through this pair so the byte total the
+    queue is bounded by stays in step with what the queue actually holds.
+    """
+    async with prisma_client._spend_log_transactions_lock:
+        popped: Final = prisma_client.spend_log_transactions[:limit]
+        prisma_client.spend_log_transactions[:] = prisma_client.spend_log_transactions[limit:]
+        PrismaClient.spend_log_queue_bytes = max(
+            0, PrismaClient.spend_log_queue_bytes - sum(spend_log_row_bytes(row) for row in popped)
+        )
+    return popped
+
+
 class ProxyUpdateSpend:
     @staticmethod
     async def update_end_user_spend(
@@ -5754,11 +5806,7 @@ class ProxyUpdateSpend:
         MAX_LOGS_PER_INTERVAL: Final = 10000  # Maximum number of logs to flush in a single interval
         popped_batch = False
         if logs_to_process is None:
-            # Atomically read and remove logs to process (protected by lock)
-            async with prisma_client._spend_log_transactions_lock:
-                logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
-                # Remove the logs we're about to process
-                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process) :]
+            logs_to_process = await dequeue_spend_logs(prisma_client, MAX_LOGS_PER_INTERVAL)
             popped_batch = True
         if len(logs_to_process) > 0:
             verbose_proxy_logger.info(
@@ -5808,9 +5856,9 @@ class ProxyUpdateSpend:
                             "%s logs processed. Remaining in queue: %s", len(logs_to_process), remaining_count
                         )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i is None:
-                        i = 0
+                except Exception as e:
+                    if not PrismaDBExceptionHandler.is_database_transport_error(e):
+                        raise
                     verbose_proxy_logger.warning(
                         "Spend tracking - DB connection error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
                         i + 1,
@@ -5819,11 +5867,10 @@ class ProxyUpdateSpend:
                         str(e),
                     )
                     if i >= n_retry_times:
+                        await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
                         raise
                     await asyncio.sleep(2**i)
         except Exception as e:
-            # Logs already removed from queue at start - don't put them back
-            # This matches the original behavior where logs are removed even on error
             _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
         finally:
             # Clean up logs_to_process only if we popped it (caller-owned otherwise)
@@ -5965,9 +6012,7 @@ async def update_spend_logs_job(
     if await _total_queued_spend_transactions(prisma_client) == 0:
         return
 
-    async with prisma_client._spend_log_transactions_lock:
-        logs_to_process: Final = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
-        prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process) :]
+    logs_to_process: Final = await dequeue_spend_logs(prisma_client, MAX_LOGS_PER_INTERVAL)
 
     try:
         await ProxyUpdateSpend.update_spend_logs(
@@ -5978,8 +6023,7 @@ async def update_spend_logs_job(
             logs_to_process=logs_to_process,
         )
     except asyncio.CancelledError:
-        async with prisma_client._spend_log_transactions_lock:
-            prisma_client.spend_log_transactions[:0] = logs_to_process
+        await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
         verbose_proxy_logger.warning(
             "Spend tracking - spend log write cancelled, requeued %d rows for the next flush",
             len(logs_to_process),
