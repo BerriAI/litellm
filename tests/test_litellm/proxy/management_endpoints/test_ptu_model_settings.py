@@ -15,6 +15,7 @@ from litellm.proxy._types import (
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _PTU_ZEROED_PRICING_FIELDS,
@@ -37,6 +38,7 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
 )
+from litellm.types.utils import Usage
 
 
 def test_model_info_accepts_valid_ptu_fields():
@@ -762,7 +764,10 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         assert self._zeroed(model_info={"ptu_count": 15}) == {}
 
     def test_every_field_the_cost_map_could_fill_is_zeroed(self):
-        assert self._zeroed(model_info=self.PTU) == dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0)
+        assert self._zeroed(model_info=self.PTU) == {
+            **dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0),
+            "tiered_pricing": (),
+        }
 
     def test_nothing_is_zeroed_while_the_feature_is_disabled(self, monkeypatch):
         monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
@@ -776,6 +781,54 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             self._zeroed(model_info=self.PTU, supplied={field: 5e-07})
         assert exc.value.status_code == 400
         assert field in str(exc.value.detail)
+
+    def test_a_tiered_price_the_caller_supplies_is_refused(self):
+        """Tier rates bill the traffic per token just as surely as a flat rate does."""
+        with pytest.raises(HTTPException) as exc:
+            self._zeroed(model_info=self.PTU, supplied={"tiered_pricing": [{"range": [0, 100], "input_cost_per_token": 1e-06}]})
+        assert exc.value.status_code == 400
+        assert "tiered_pricing" in str(exc.value.detail)
+
+    def test_tiered_pricing_already_on_the_row_is_emptied_not_zeroed(self):
+        """tiered_pricing is a table of ranges, so the zero the other fields store would not even
+        validate. Dropping it instead would fall back to the cost map's tiers, whose rates outrank
+        the zeros written beside them, so it is stored empty."""
+        tiers = [{"range": [0, 128000], "input_cost_per_token": 3e-06}]
+        priced = _ptu_priced_deployment(
+            Deployment(
+                model_name="tiered",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+                model_info=ModelInfo(
+                    id="dep-tiered",
+                    team_id="t",
+                    tiered_pricing=tiers,
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                ),
+            )
+        )
+        assert priced.litellm_params.tiered_pricing == []
+        assert priced.model_info.tiered_pricing == []
+
+        written = update_db_model(
+            db_model=Deployment(
+                model_name="tiered",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o", tiered_pricing=tiers),
+                model_info=ModelInfo(id="dep-tiered", team_id="t"),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-tiered",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                )
+            ),
+        )
+        for blob in ("model_info", "litellm_params"):
+            stored = json.loads(written[blob])
+            assert stored["tiered_pricing"] == [], blob
+            assert stored["input_cost_per_token"] == 0, blob
 
     def test_a_price_the_caller_supplies_as_zero_is_accepted(self):
         assert self._zeroed(model_info={**self.PTU, "input_cost_per_token": 0}, supplied={"input_cost_per_token": 0})[
@@ -909,6 +962,32 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         registered = Router._deployment_model_cost_payload(priced)
         charged = {k: v for k, v in registered.items() if "cost" in k and k != "cost_per_ptu_per_hour" and v}
         assert charged == {}
+
+    def test_the_cost_map_tiers_contribute_no_price_to_a_priced_ptu_deployment(self):
+        """A tier table outranks the zeroed flat rates wherever cost is read, so leaving the
+        deployment's own table unset bills the reserved capacity's traffic at the map's tiers."""
+        priced = _ptu_priced_deployment(
+            Deployment(
+                model_name="ptu-deployment",
+                litellm_params=LiteLLM_Params(model="dashscope/qwen-flash", api_key="fake-key"),
+                model_info=ModelInfo(
+                    id="dep-ptu",
+                    team_id="team-1",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                ),
+            )
+        )
+        router = Router(model_list=[priced.to_json(exclude_none=True)])
+        registered = router.get_deployment_model_info(model_id="dep-ptu", model_name="dashscope/qwen-flash")
+        assert registered is not None
+        assert registered["tiered_pricing"] == []
+        assert generic_cost_per_token(
+            model="dashscope/qwen-flash",
+            usage=Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            custom_llm_provider="dashscope",
+            model_info=registered,
+        ) == (0.0, 0.0)
 
     def test_the_zeroed_pricing_does_not_waive_budget_enforcement(self):
         """A zero price otherwise tells auth the model is free and skips every budget check."""
@@ -1098,8 +1177,10 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             )
 
         written = add_team_model_to_db.call_args.kwargs["model_params"]
-        assert all(getattr(written.model_info, field, None) == 0 for field in SPECIAL_MODEL_INFO_PARAMS)
+        assert all(getattr(written.model_info, field, None) == 0 for field in SPECIAL_MODEL_INFO_PARAMS if field != "tiered_pricing")
+        assert written.model_info.tiered_pricing == []
         assert all(written.litellm_params.get(field) == 0 for field in _PTU_ZEROED_PRICING_FIELDS)
+        assert written.litellm_params.tiered_pricing == []
 
     @pytest.mark.asyncio
     async def test_model_new_refuses_a_priced_ptu_deployment(self):
