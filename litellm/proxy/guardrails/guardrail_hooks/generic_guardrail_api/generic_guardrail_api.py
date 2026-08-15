@@ -375,6 +375,17 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
             self.streaming_end_of_stream_only = True
 
+        if self._payload_policy.is_lossy and not self.fire_and_forget:
+            # Whatever the shaping leaves out is never scanned, so an enforcing
+            # guardrail cannot act on it. Fine for an observer, worth saying out
+            # loud for a guardrail that can still block.
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API (%s): max_messages / max_text_chars / strip_patterns / excluded text "
+                "keep part of the request from ever reaching the guardrail, so it can only enforce on what it "
+                "is sent. Content outside the configured window cannot be blocked or masked.",
+                configured_name,
+            )
+
         if self._skip_policy.filters_requests:
             verbose_proxy_logger.warning(
                 "Generic Guardrail API (%s): skip_if_system_prompt_matches / skip_if_first_role_in match on the "

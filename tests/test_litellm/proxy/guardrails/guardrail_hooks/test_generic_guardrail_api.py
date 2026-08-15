@@ -3303,3 +3303,65 @@ class TestSessionScopeIsolation:
             await guardrail.apply_guardrail(inputs={"texts": ["a"]}, request_data=data, input_type="request")
 
         assert len(_recorded_entries(data)) == 1
+
+
+class TestLossyShapingSafeguards:
+    """Bounds and warnings for what payload shaping keeps from the guardrail."""
+
+    @pytest.mark.asyncio
+    async def test_oversized_text_is_dropped_rather_than_matched(self):
+        """re has no match timeout, so a huge block is replaced instead of scanned."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler, strip_patterns=[r"SECRET-\d+"])
+        huge = "SECRET-1 " + ("a" * 200_000)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [huge, "SECRET-2 small"]},
+            request_data={},
+            input_type="request",
+        )
+
+        sent = handler.payloads[0]["texts"]
+        assert sent[0] == "[omitted: exceeds strip size limit]"
+        # A normal-sized block is still stripped as usual.
+        assert sent[1] == " small"
+
+    @pytest.mark.asyncio
+    async def test_oversized_placeholder_is_not_written_back(self):
+        handler = _RecordingHandler(action="GUARDRAIL_INTERVENED", texts=["MASKED"])
+        guardrail = _make_guardrail(handler, strip_patterns=[r"SECRET-\d+"])
+        huge = "SECRET-1 " + ("a" * 200_000)
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": [huge]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["texts"] == [huge]
+
+    @pytest.mark.asyncio
+    async def test_size_limit_only_applies_with_strip_patterns(self):
+        """Without patterns there is nothing to match, so a big block is sent as-is."""
+        handler = _RecordingHandler()
+        guardrail = _make_guardrail(handler)
+        huge = "a" * 200_000
+
+        await guardrail.apply_guardrail(inputs={"texts": [huge]}, request_data={}, input_type="request")
+
+        assert handler.payloads[0]["texts"] == [huge]
+
+    def test_enforcing_guardrail_warns_that_shaped_content_cannot_be_blocked(self, caplog):
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            _make_guardrail(_RecordingHandler(), max_messages=4)
+        assert "cannot be blocked or masked" in caplog.text
+
+    def test_observer_does_not_get_the_enforcement_warning(self, caplog):
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            _make_guardrail(_RecordingHandler(), max_messages=4, fire_and_forget=True)
+        assert "cannot be blocked or masked" not in caplog.text
+
+    def test_unshaped_guardrail_does_not_warn(self, caplog):
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            _make_guardrail(_RecordingHandler())
+        assert "cannot be blocked or masked" not in caplog.text

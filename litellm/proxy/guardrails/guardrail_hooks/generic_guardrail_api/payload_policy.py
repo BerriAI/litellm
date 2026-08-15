@@ -36,6 +36,17 @@ PROTECTED_PAYLOAD_FIELDS: Final = frozenset({"input_type", "litellm_call_id"})
 # huge transcript cannot stall the request path.
 MAX_STRIP_SUBSTITUTIONS: Final = 64
 
+# Python's re has no match timeout, and the substitution cap above bounds how many
+# matches are replaced, not how long the engine spends finding one. A configured
+# pattern that backtracks catastrophically would therefore burn the worker for as
+# long as the caller's text lets it, so text past this size is not matched at all.
+MAX_STRIP_INPUT_CHARS: Final = 100_000
+
+# What a too-large block is replaced with. Dropping it is the fail-closed choice:
+# sending it unstripped would leak exactly the content strip_patterns exists to
+# remove, and it cannot be written back either, since it is marked lossy.
+OVERSIZED_TEXT_PLACEHOLDER: Final = "[omitted: exceeds strip size limit]"
+
 # Stands in for image data when send_images=False, mirroring the "[present]"
 # convention used for headers whose value is not forwarded.
 IMAGE_OMITTED_PLACEHOLDER: Final = "[omitted]"
@@ -56,6 +67,11 @@ class PayloadPolicy:
     @property
     def shapes_text(self) -> bool:
         return self.max_text_chars is not None or bool(self.strip_patterns)
+
+    @property
+    def is_lossy(self) -> bool:
+        """Whether any option keeps part of the request from reaching the guardrail."""
+        return self.shapes_text or self.max_messages is not None or not self.send_images or bool(self.exclude_fields)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,11 +134,19 @@ def _strip_text(text: str, patterns: tuple[re.Pattern[str], ...]) -> str:
 
 
 def _shape_text(text: str, policy: PayloadPolicy) -> str:
+    if policy.strip_patterns and len(text) > MAX_STRIP_INPUT_CHARS:
+        verbose_proxy_logger.warning(
+            "Generic Guardrail API: a %d character text block exceeds the %d character strip_patterns "
+            "limit and was replaced with a placeholder instead of being matched.",
+            len(text),
+            MAX_STRIP_INPUT_CHARS,
+        )
+        return OVERSIZED_TEXT_PLACEHOLDER
     stripped: Final = _strip_text(text, policy.strip_patterns)
     return stripped[: policy.max_text_chars] if policy.max_text_chars is not None else stripped
 
 
-def _retained_messages(messages: JsonValue, policy: PayloadPolicy) -> list[JsonValue] | None:
+def _retained_messages(messages: JsonValue, policy: PayloadPolicy) -> JsonValue:
     """The message window ``max_messages`` keeps, or None when there is nothing to window."""
     if not isinstance(messages, list) or not messages:
         return None
@@ -131,7 +155,7 @@ def _retained_messages(messages: JsonValue, policy: PayloadPolicy) -> list[JsonV
     return messages[-policy.max_messages :]
 
 
-def _text_window_size(retained: list[JsonValue] | None, policy: PayloadPolicy, total_texts: int) -> int:
+def _text_window_size(retained: JsonValue, policy: PayloadPolicy, total_texts: int) -> int:
     """How many trailing ``texts`` entries belong to the retained messages.
 
     ``texts`` is fragment-based (a multimodal turn contributes several entries, a
@@ -144,7 +168,7 @@ def _text_window_size(retained: list[JsonValue] | None, policy: PayloadPolicy, t
     """
     if policy.max_messages is None:
         return total_texts
-    if retained is None:
+    if not isinstance(retained, list):
         return min(policy.max_messages, total_texts)
     fragments: Final = sum(1 for _ in iter_messages_text(retained))
     return min(fragments, total_texts)
@@ -171,8 +195,8 @@ def _shape_texts(
     return shaped, frozenset(index for index, text in enumerate(texts) if text != shaped[index])
 
 
-def _shape_messages(retained: list[JsonValue] | None, policy: PayloadPolicy) -> JsonValue:
-    if retained is None:
+def _shape_messages(retained: JsonValue, policy: PayloadPolicy) -> JsonValue:
+    if not isinstance(retained, list):
         return None
     texted: Final = (
         map_messages_text(retained, lambda text: _shape_text(text, policy)) if policy.shapes_text else retained
