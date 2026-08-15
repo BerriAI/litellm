@@ -142,7 +142,9 @@ async def test_startup_event_schedules_deprecation_check_before_its_alert_type_i
     proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
 
     assert proxy_logging.deprecation_check_started is True
-    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with()
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with(
+        pod_lock_manager=proxy_logging.db_spend_update_writer.pod_lock_manager
+    )
 
 
 @pytest.mark.asyncio
@@ -159,7 +161,9 @@ async def test_update_values_schedules_deprecation_check_when_alerting_arrives_l
     proxy_logging.update_values(alerting=["slack"])
 
     assert proxy_logging.deprecation_check_started is True
-    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with()
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with(
+        pod_lock_manager=proxy_logging.db_spend_update_writer.pod_lock_manager
+    )
 
 
 def test_startup_event_propagates_init_callbacks_failure_raises(proxy_logging):

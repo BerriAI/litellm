@@ -503,7 +503,11 @@ class ProxyLogging:
         except RuntimeError:
             return
 
-        asyncio.create_task(self.slack_alerting_instance.run_scheduled_deprecation_check())
+        asyncio.create_task(
+            self.slack_alerting_instance.run_scheduled_deprecation_check(
+                pod_lock_manager=self.db_spend_update_writer.pod_lock_manager
+            )
+        )
         self.deprecation_check_started = True
 
     def update_values(

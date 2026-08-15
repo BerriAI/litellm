@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
+from litellm.constants import SLACK_MODEL_DEPRECATION_LOCK_ID
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import AlertType
 from litellm.types.proxy.model_deprecation import (
@@ -202,3 +203,53 @@ async def test_should_wait_for_the_router_instead_of_sleeping_a_full_day(monkeyp
     ]
     mock_send_alert.assert_awaited_once()
     assert "dead-alias" in mock_send_alert.await_args.kwargs["message"]
+
+
+@pytest.mark.parametrize(
+    "lock_acquired, expect_alert",
+    [(True, True), (None, True), (False, False)],
+    ids=["lock won", "no redis lock", "another pod holds the lock"],
+)
+@pytest.mark.asyncio
+async def test_should_alert_only_from_the_pod_holding_the_daily_lock(
+    monkeypatch, lock_acquired, expect_alert
+):
+    """Every pod runs the loop, so a fleet must not send one identical alert per replica"""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {"dead-model": {"deprecation_date": "2020-01-01", "litellm_provider": "openai"}},
+    )
+    alerting = SlackAlerting(
+        alerting=["slack"], alert_types=[AlertType.model_deprecation_warnings]
+    )
+    router = _make_router(
+        [
+            {
+                "model_name": "dead-alias",
+                "litellm_params": {"model": "dead-model"},
+                "model_info": {"id": "1"},
+            }
+        ]
+    )
+    pod_lock_manager = MagicMock()
+    pod_lock_manager.acquire_lock = AsyncMock(return_value=lock_acquired)
+
+    with (
+        patch.object(alerting, "send_alert", new_callable=AsyncMock) as mock_send_alert,
+        patch(
+            "litellm.integrations.SlackAlerting.slack_alerting.asyncio.sleep",
+            side_effect=asyncio.CancelledError,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await alerting.run_scheduled_deprecation_check(
+            get_llm_router=lambda: router, pod_lock_manager=pod_lock_manager
+        )
+
+    assert mock_send_alert.await_count == int(expect_alert)
+    assert pod_lock_manager.acquire_lock.await_args.kwargs == {
+        "cronjob_id": SLACK_MODEL_DEPRECATION_LOCK_ID,
+        "ttl": DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+        "allow_reentrant": False,
+    }
