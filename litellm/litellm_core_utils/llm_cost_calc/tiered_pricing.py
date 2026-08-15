@@ -60,6 +60,12 @@ def tier_rate(
     cost_key: str,
     fallback_cost_key: str | None = None,
 ) -> float:
-    """Read a per-token rate from a tier, coercing YAML string costs to float."""
-    raw: Final = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
-    return _coerce_cost_per_token(raw)
+    """Read a per-token rate from a tier, coercing YAML string costs to float.
+
+    A rate that is explicitly present wins over the fallback, an explicit zero
+    included, so a tier can declare a token type free.
+    """
+    primary: Final = tier.get(cost_key)
+    if primary is not None:
+        return _coerce_cost_per_token(primary)
+    return _coerce_cost_per_token(tier.get(fallback_cost_key, 0))

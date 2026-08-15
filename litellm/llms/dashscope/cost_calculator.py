@@ -97,11 +97,15 @@ def _calculate_completion_cost(
         if tier_declares_output
         else float(model_info.get("output_cost_per_token") or 0.0)
     )
-    tier_reasoning_cost: Final = tier_rate(tier, "output_cost_per_reasoning_token") if tier is not None else 0.0
-    model_reasoning_cost: Final = (
-        0.0 if tier_declares_output else float(model_info.get("output_cost_per_reasoning_token") or 0.0)
+    tier_declares_reasoning: Final = tier is not None and "output_cost_per_reasoning_token" in tier
+    model_reasoning_rate: Final = None if tier_declares_output else model_info.get("output_cost_per_reasoning_token")
+    reasoning_cost: Final = (
+        tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
+        if tier_declares_reasoning
+        else float(model_reasoning_rate)
+        if model_reasoning_rate is not None
+        else output_cost
     )
-    reasoning_cost: Final = tier_reasoning_cost or model_reasoning_cost or output_cost
 
     return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
