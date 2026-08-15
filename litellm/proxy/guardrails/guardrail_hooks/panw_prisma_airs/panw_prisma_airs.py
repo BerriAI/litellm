@@ -640,11 +640,23 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         choice.message.function_call.arguments = masked_text
 
     def _build_error_detail(
-        self, scan_result: Mapping[str, object], is_response: bool = False
+        self,
+        scan_result: Mapping[str, object],
+        is_response: bool = False,
+        also_hide: str | None = None,
     ) -> Mapping[str, Mapping[str, object]]:
-        """Build enhanced error detail with scan information."""
+        """Build enhanced error detail with scan information.
+
+        ``also_hide`` names one more scan field to withhold, for the caller that knows
+        its AIRS verdict carries model-generated content under a key that is normally
+        caller input.
+        """
         action_type: Final = "Response" if is_response else "Prompt"
         code_suffix: Final = "_response_blocked" if is_response else "_blocked"
+
+        hidden_fields: Final = self._CLIENT_HIDDEN_SCAN_FIELDS.union(
+            () if also_hide is None else (also_hide,)
+        )
 
         category: Final = scan_result.get("category", "unknown")
         default_msg: Final = f"{action_type} blocked by PANW Prisma AI Security policy (Category: {category})"
@@ -665,7 +677,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 **{
                     key: value
                     for key, value in scan_result.items()
-                    if not key.startswith("_") and key not in self._CLIENT_HIDDEN_SCAN_FIELDS
+                    if not key.startswith("_") and key not in hidden_fields
                 },
                 "message": error_msg,
                 "type": "guardrail_violation",
@@ -1475,7 +1487,17 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             ):
                 self._set_tool_call_arguments(tool_call, masked_text)
             else:
-                error_detail = self._build_error_detail(scan_result, is_response=is_response)
+                # tool_event scans are request-side in the AIRS schema, so AIRS returns
+                # the model's own tool arguments under prompt_masked_data. On a
+                # response-side block that is generated content, not caller input, and
+                # the class-level default only withholds response_masked_data — which is
+                # empty on this path. Withhold it explicitly so the 400 does not become
+                # the content channel this branch declined to deliver.
+                error_detail = self._build_error_detail(
+                    scan_result,
+                    is_response=is_response,
+                    also_hide="prompt_masked_data" if is_response else None,
+                )
                 raise HTTPException(status_code=400, detail=error_detail)
 
     @staticmethod

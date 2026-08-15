@@ -5753,8 +5753,11 @@ class TestPanwAirsErrorDetailWithheldFields:
     caller exactly the text the operator declined to deliver. ``error`` is AIRS's own
     message about the operator's Strata Cloud Manager profile configuration.
 
-    ``prompt_masked_data`` is deliberately NOT withheld: it is the caller's own input,
-    and it is one of the fields LIT-5638 asks for.
+    ``prompt_masked_data`` is deliberately NOT withheld by default: it is the caller's
+    own input, and it is one of the fields LIT-5638 asks for. The one exception is the
+    response-side tool-call path, covered by
+    ``TestPanwAirsToolCallBlockWithholdsGeneratedArgs`` below — tool_event scans are
+    request-side in the AIRS schema, so there the key holds model output instead.
     """
 
     @pytest.mark.parametrize("is_response", [False, True])
@@ -5797,6 +5800,82 @@ class TestPanwAirsErrorDetailWithheldFields:
 
         assert detail["error"]["error"] == "profile not found"
         assert detail["error"]["scan_id"] == "scan-2"
+
+
+class TestPanwAirsToolCallBlockWithholdsGeneratedArgs:
+    """A response-side tool-call block must not ship the model's tool arguments.
+
+    ``_scan_tool_calls_for_guardrail`` calls AIRS with ``is_response=False`` because
+    tool_event is request-side in the AIRS schema, so AIRS returns the scanned tool
+    arguments under ``prompt_masked_data``. When the tool calls being scanned are the
+    model's own output, that key holds generated content, and the class-level
+    ``_CLIENT_HIDDEN_SCAN_FIELDS`` default (``response_masked_data``, empty on this
+    path) does not cover it.
+    """
+
+    MASKED_ARGS = '{"to_account": "XXXXXXXXXX", "amount": 5000}'
+
+    SCAN_RESULT = {
+        "action": "block",
+        "category": "sensitive_data",
+        "scan_id": "scan-tool-1",
+        "prompt_detected": {"dlp": True},
+        "prompt_masked_data": {"data": MASKED_ARGS},
+        "response_masked_data": {},
+    }
+
+    @staticmethod
+    def _tool_call():
+        return ChatCompletionMessageToolCall(
+            id="call_1",
+            type="function",
+            function=Function(
+                name="transfer_funds",
+                arguments='{"to_account": "ACME-VENDOR-001", "amount": 5000}',
+            ),
+        )
+
+    async def _block(self, handler, is_response):
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = dict(self.SCAN_RESULT)
+            with pytest.raises(HTTPException) as exc_info:
+                await handler._scan_tool_calls_for_guardrail(
+                    tool_calls=[self._tool_call()],
+                    is_response=is_response,
+                    metadata={},
+                    call_id="test-call-id",
+                    request_data={"metadata": {}},
+                    start_time=datetime.now(),
+                )
+        return exc_info.value
+
+    @pytest.mark.asyncio
+    async def test_response_side_block_withholds_generated_tool_args(self):
+        handler = make_handler(mask_response_content=False)
+        # The block branch is only reached with masking off; guard the premise.
+        assert handler.mask_response_content is False
+
+        exc = await self._block(handler, is_response=True)
+        error = exc.detail["error"]
+
+        assert exc.status_code == 400
+        assert "prompt_masked_data" not in error
+        assert self.MASKED_ARGS not in str(error)
+
+        # The audit fields LIT-5638 asks for are unaffected.
+        assert error["scan_id"] == "scan-tool-1"
+        assert error["prompt_detected"] == {"dlp": True}
+
+    @pytest.mark.asyncio
+    async def test_request_side_block_still_returns_masked_tool_args(self):
+        """Caller-supplied tool arguments stay in the verdict — that is the ticket's ask."""
+        handler = make_handler(mask_request_content=False)
+
+        exc = await self._block(handler, is_response=False)
+        error = exc.detail["error"]
+
+        assert error["prompt_masked_data"] == {"data": self.MASKED_ARGS}
+        assert error["scan_id"] == "scan-tool-1"
 
 
 if __name__ == "__main__":
