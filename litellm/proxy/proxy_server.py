@@ -265,6 +265,10 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.proxy._experimental.mcp_server.db import (
+    DRAFT_MCP_SERVER_TTL_SECONDS,
+    delete_expired_draft_mcp_servers,
+)
 from litellm.proxy._lazy_features import attach_lazy_features
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -8729,6 +8733,17 @@ class ProxyStartupEvent:
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
+
+        ### CLEANUP EXPIRED DRAFT MCP SERVERS ###
+        scheduler.add_job(
+            delete_expired_draft_mcp_servers,
+            "interval",
+            seconds=DRAFT_MCP_SERVER_TTL_SECONDS,
+            args=[prisma_client, DRAFT_MCP_SERVER_TTL_SECONDS],
+            id="cleanup_draft_mcp_servers_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
 
         ### UPDATE SPEND ###
         scheduler.add_job(
