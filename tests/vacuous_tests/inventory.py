@@ -13,12 +13,16 @@ Two jobs:
    tests cannot land. Regenerate with `--update-baseline` after a cleanup.
 2. Queue (automation). `--queue N` prints the next N candidates for the daily
    run, skipping anything Stage B has already cleared in
-   `verified_not_vacuous.json`.
+   `verified_not_vacuous.json`. `--todays-area` keeps a run inside one area,
+   rotating by date so each PR stays reviewable by one owner and no state file
+   is needed.
 
 Usage:
     python tests/vacuous_tests/inventory.py --report
     python tests/vacuous_tests/inventory.py --check
     python tests/vacuous_tests/inventory.py --update-baseline
+    python tests/vacuous_tests/inventory.py --areas
+    python tests/vacuous_tests/inventory.py --queue 15 --todays-area
     python tests/vacuous_tests/inventory.py --queue 15 --area tests/litellm_utils_tests
 """
 
@@ -30,8 +34,10 @@ import json
 import os
 import sys
 import warnings
+from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
+from datetime import date
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL_DIR = os.path.join(REPO_ROOT, "tests", "vacuous_tests")
@@ -498,6 +504,28 @@ def print_report(candidates: List[Candidate]) -> None:
         print(f"  {bucket:<20} {totals[bucket]}")
 
 
+def area_of(path: str) -> str:
+    parts = path.split("/")
+    return "/".join(parts[:3]) if len(parts) > 3 else os.path.dirname(path)
+
+
+def areas(candidates: Sequence[Candidate]) -> Tuple[Tuple[str, int], ...]:
+    cleared = cleared_ids()
+    open_candidates = tuple(c for c in candidates if c.test_id not in cleared)
+    return tuple(
+        sorted(
+            Counter(area_of(c.path) for c in open_candidates).items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+    )
+
+
+def rotated_area(candidates: Sequence[Candidate], day: date) -> Optional[str]:
+    """Pick one area per day without storing state, so reviewers get one area per PR."""
+    ranked = areas(candidates)
+    return ranked[day.toordinal() % len(ranked)][0] if ranked else None
+
+
 def print_queue(candidates: List[Candidate], limit: int, area: Optional[str]) -> None:
     cleared = cleared_ids()
     queue = [c for c in candidates if c.test_id not in cleared and (area is None or c.path.startswith(area))]
@@ -516,6 +544,12 @@ def main() -> int:
     parser.add_argument("--json", metavar="PATH", help="write the full candidate list")
     parser.add_argument("--queue", type=int, metavar="N", help="print the next N candidates")
     parser.add_argument("--area", help="restrict --queue to a path prefix")
+    parser.add_argument("--areas", action="store_true", help="print candidate counts per area")
+    parser.add_argument(
+        "--todays-area",
+        action="store_true",
+        help="print the area this day's run should take, rotating by date",
+    )
     parser.add_argument("--root", default=TESTS_ROOT, help="tests root to scan")
     args = parser.parse_args()
 
@@ -529,9 +563,17 @@ def main() -> int:
     if args.update_baseline:
         write_baseline(counts)
         print(f"wrote {os.path.relpath(BASELINE_PATH, REPO_ROOT)}")
+    today = rotated_area(candidates, date.today())
+    if args.areas:
+        for area, count in areas(candidates):
+            print(f"  {area:<50} {count}")
+    if args.todays_area and not args.queue:
+        print(today or "")
     if args.queue:
-        print_queue(candidates, args.queue, args.area)
-    if args.report or not (args.check or args.update_baseline or args.queue or args.json):
+        print_queue(candidates, args.queue, args.area or (today if args.todays_area else None))
+    if args.report or not (
+        args.check or args.update_baseline or args.queue or args.json or args.areas or args.todays_area
+    ):
         print_report(candidates)
     if args.check:
         return check_against_baseline(counts)

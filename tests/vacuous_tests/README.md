@@ -24,8 +24,12 @@ Commands:
 python tests/vacuous_tests/inventory.py --report
 python tests/vacuous_tests/inventory.py --check            # CI ratchet
 python tests/vacuous_tests/inventory.py --update-baseline  # after a cleanup
+python tests/vacuous_tests/inventory.py --areas                 # candidates per area
+python tests/vacuous_tests/inventory.py --queue 15 --todays-area # the daily batch
 python tests/vacuous_tests/inventory.py --queue 15 --area tests/test_litellm/proxy
 ```
+
+`--todays-area` picks one area per day from the ranked list, rotating by date. That keeps every PR inside one owner's area and needs no state file, so two runs on the same day cannot disagree about where they are working
 
 `inventory_baseline.json` records per-file candidate counts. `--check` fails when any count grows, so the number can only go down. If you are adding a deliberate assert-by-not-raising test, say so in the test's docstring and regenerate the baseline
 
@@ -72,6 +76,6 @@ Each removal needs its own entry, keyed by the removed test id:
 
 ## Daily automation
 
-The scheduled run pulls the next batch from `--queue`, probes each candidate, fixes only the confirmed ones, clears the rest into `verified_not_vacuous.json`, runs the flake gate and the guardrails, then opens a single PR capped at 15 tests in one area. Anything it cannot fix honestly is reported rather than patched
+The scheduled run pulls the next batch from `--queue 15 --todays-area`, probes each candidate, fixes only the confirmed ones, clears the rest into `verified_not_vacuous.json`, runs the flake gate and the guardrails, then opens a single PR capped at 15 tests in one area. Anything it cannot fix honestly is reported rather than patched
 
 It stops rather than lowering the bar: if fewer than three candidates survive probing it opens no PR that day, and if three or more of its own PRs are still open it skips the run entirely

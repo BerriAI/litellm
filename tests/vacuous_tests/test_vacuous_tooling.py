@@ -11,6 +11,7 @@ import ast
 import os
 import sys
 import textwrap
+from datetime import date
 from typing import List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -236,6 +237,22 @@ def test_module_under_test_is_recognised_from_imports() -> None:
     imports = {"litellm.llms.bedrock.base_aws_llm", "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM"}
     assert mutation_probe._is_under_test("litellm/llms/bedrock/base_aws_llm.py", imports)
     assert not mutation_probe._is_under_test("litellm/caching/dual_cache.py", imports)
+
+
+def test_area_rotation_moves_on_each_day_and_is_stable_within_one(monkeypatch) -> None:
+    monkeypatch.setattr(inventory, "cleared_ids", lambda: frozenset())
+    candidates = [
+        inventory.Candidate(path=path, lineno=index, name=f"test_{index}", bucket="no_assert", evidence="e")
+        for index, path in enumerate(
+            ["tests/a/one.py"] * 3 + ["tests/b/two.py"] * 2 + ["tests/c/three.py"],
+        )
+    ]
+    assert inventory.areas(candidates) == (("tests/a", 3), ("tests/b", 2), ("tests/c", 1))
+    picks = [inventory.rotated_area(candidates, date(2026, 8, day)) for day in (15, 16, 17, 18)]
+    assert len(set(picks[:3])) == 3
+    assert picks[3] == picks[0]
+    assert inventory.rotated_area(candidates, date(2026, 8, 15)) == picks[0]
+    assert inventory.rotated_area([], date(2026, 8, 15)) is None
 
 
 def test_budget_reaches_the_module_under_test() -> None:
