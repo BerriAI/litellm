@@ -17,8 +17,11 @@ from litellm.proxy._types import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _PTU_ZEROED_PRICING_FIELDS,
+    _SEARCH_CONTEXT_SIZES,
+    _is_nonzero_price,
     _merged_ptu_model_info,
     _update_team_model_in_db,
     _ptu_priced_deployment,
@@ -29,6 +32,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     update_db_model,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+from litellm.types.utils import PromptTokensDetailsWrapper
 from litellm.router import Router
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
@@ -767,6 +771,7 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         assert self._zeroed(model_info=self.PTU) == {
             **dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0),
             "tiered_pricing": (),
+            "search_context_cost_per_query": dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0),
         }
 
     def test_nothing_is_zeroed_while_the_feature_is_disabled(self, monkeypatch):
@@ -788,6 +793,39 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             self._zeroed(model_info=self.PTU, supplied={"tiered_pricing": [{"range": [0, 100], "input_cost_per_token": 1e-06}]})
         assert exc.value.status_code == 400
         assert "tiered_pricing" in str(exc.value.detail)
+
+    def test_a_search_context_price_the_caller_supplies_is_refused(self):
+        """The rates sit in a table keyed by context size, so a guard that only reads numbers
+        lets a per-request charge onto a deployment its reserved capacity already pays for."""
+        with pytest.raises(HTTPException) as exc:
+            self._zeroed(model_info=self.PTU, supplied={"search_context_cost_per_query": {"search_context_size_medium": 0.05}})
+        assert exc.value.status_code == 400
+        assert "search_context_cost_per_query" in str(exc.value.detail)
+
+    def test_search_context_already_on_the_row_is_zeroed_in_place(self):
+        """An absent table means the provider's own default rate rather than free, so emptying or
+        dropping this one would start a charge instead of stopping it."""
+        stored = {"search_context_cost_per_query": {"search_context_size_medium": 0.05}}
+        override = self._zeroed(model_info=self.PTU, litellm_params=stored)
+        assert override["search_context_cost_per_query"] == dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)
+        assert cost_per_web_search_request(usage=self._grounded_usage(), model_info={**stored, **override}) == 0
+        assert cost_per_web_search_request(usage=self._grounded_usage(), model_info={}) > 0
+
+    def test_an_all_zero_search_context_table_is_not_a_price(self):
+        """An all-zero table is how an operator expresses free, so refusing it would block the save
+        and replacing it would restore the provider default."""
+        free = dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)
+        assert self._zeroed(model_info=self.PTU, supplied={"search_context_cost_per_query": free})
+        assert cost_per_web_search_request(usage=self._grounded_usage(), model_info={"search_context_cost_per_query": free}) == 0
+
+    @staticmethod
+    def _grounded_usage():
+        return Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+        )
 
     def test_tiered_pricing_already_on_the_row_is_emptied_not_zeroed(self):
         """tiered_pricing is a table of ranges, so the zero the other fields store would not even
@@ -938,6 +976,43 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         )
         assert "input_cost_per_second" not in json.loads(off["litellm_params"])
 
+    def test_removing_ptu_config_releases_a_zeroed_search_context_table(self):
+        """The all-zero table exists only to stop the double charge, so a deployment taken off PTU
+        has to give it up or it keeps serving grounded requests for free forever."""
+        on = update_db_model(
+            db_model=Deployment(
+                model_name="grounded",
+                litellm_params=LiteLLM_Params(
+                    model="gemini/gemini-2.5-pro",
+                    search_context_cost_per_query={"search_context_size_medium": 0.05},
+                ),
+                model_info=ModelInfo(id="dep-ground", team_id="t"),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-ground",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                )
+            ),
+        )
+        assert json.loads(on["litellm_params"])["search_context_cost_per_query"] == dict.fromkeys(
+            _SEARCH_CONTEXT_SIZES, 0.0
+        )
+
+        off = update_db_model(
+            db_model=Deployment(
+                model_name="grounded",
+                litellm_params=LiteLLM_Params(**json.loads(on["litellm_params"])),
+                model_info=ModelInfo(**json.loads(on["model_info"])),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-ground", ptu_count=None, cost_per_ptu_per_hour=None)
+            ),
+        )
+        assert "search_context_cost_per_query" not in json.loads(off["litellm_params"])
+
     @pytest.mark.parametrize(
         "backend", ["azure/gpt-4o", "anthropic/claude-sonnet-4-5", "bedrock/anthropic.claude-sonnet-4-20250514-v1:0"]
     )
@@ -960,7 +1035,11 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             )
         )
         registered = Router._deployment_model_cost_payload(priced)
-        charged = {k: v for k, v in registered.items() if "cost" in k and k != "cost_per_ptu_per_hour" and v}
+        charged = {
+            k: v
+            for k, v in registered.items()
+            if "cost" in k and k != "cost_per_ptu_per_hour" and _is_nonzero_price(v)
+        }
         assert charged == {}
 
     def test_the_cost_map_tiers_contribute_no_price_to_a_priced_ptu_deployment(self):
