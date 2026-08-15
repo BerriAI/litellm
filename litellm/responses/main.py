@@ -585,7 +585,7 @@ def _apply_prompt_management_to_responses_call(
 
     if isinstance(input, str):
         client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
-    elif not isinstance(input, list): # pyright: ignore[reportUnnecessaryIsInstance]
+    elif not isinstance(input, list):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise litellm.BadRequestError(
             message=f"'input' must be a string or list of input items, got {type(input).__name__}",
             model=model,
