@@ -10,11 +10,12 @@ import os
 import re
 from collections.abc import AsyncIterable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -38,6 +39,9 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     ChatCompletionToolCallChunk,
     Choices,
@@ -45,6 +49,28 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
 )
+
+ToolCallLike: TypeAlias = (
+    ChatCompletionMessageToolCall
+    | ChatCompletionDeltaToolCall
+    | ChatCompletionMessageCustomToolCall
+    | ChatCompletionDeltaCustomToolCall
+    | ChatCompletionToolCallChunk
+)
+
+
+class _ToolCallFunctionSlice(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    name: str | None = None
+    arguments: str | None = None
+
+
+class _ToolCallSlice(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    function: _ToolCallFunctionSlice | None = None
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1390,18 +1416,22 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         request_data: dict,
         start_time: datetime,
     ) -> None:
-        """Scan tool call arguments with allow/block/mask treatment (in-place modification).
+        """Scan tool calls with allow/block/mask treatment (in-place modification).
 
-        Arguments go out as plain prompt/response text: the AIRS ``tool_event`` schema
-        only accepts ``ecosystem: "mcp"``, which OpenAI-format tool calls are not.
+        Tool name and arguments go out as plain prompt/response text, newline separated:
+        the AIRS ``tool_event`` schema only accepts ``ecosystem: "mcp"``, which
+        OpenAI-format tool calls are not. A name-only call is still scanned so
+        tool-name policies keep firing on empty arguments.
         """
         for tool_call in tool_calls:
-            args_text = self._get_tool_call_arguments(tool_call)
-            if not args_text or not args_text.strip():
+            tool_name, args_text = self._get_tool_call_function(tool_call)
+            scanned_args = args_text if args_text and args_text.strip() else None
+            scan_text = "\n".join(part for part in (tool_name, scanned_args) if part)
+            if not scan_text.strip():
                 continue
 
             scan_result = await self._call_panw_api(
-                content=args_text,
+                content=scan_text,
                 is_response=is_response,
                 metadata=metadata,
                 call_id=call_id,
@@ -1419,36 +1449,58 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 continue
 
             action = scan_result.get("action", "block")
-            masked_text = self._get_masked_text(scan_result, is_response=is_response)
+            masked_args = self._masked_tool_call_arguments(
+                self._get_masked_text(scan_result, is_response=is_response),
+                scanned_name=bool(tool_name),
+                scanned_args=scanned_args,
+            )
 
             if action == "allow":
-                if masked_text:
-                    self._set_tool_call_arguments(tool_call, masked_text)
-            elif masked_text and (
+                if masked_args:
+                    self._set_tool_call_arguments(tool_call, masked_args)
+            elif masked_args and (
                 (is_response and self.mask_response_content) or (not is_response and self.mask_request_content)
             ):
-                self._set_tool_call_arguments(tool_call, masked_text)
+                self._set_tool_call_arguments(tool_call, masked_args)
             else:
                 error_detail = self._build_error_detail(scan_result, is_response=is_response)
                 raise HTTPException(status_code=400, detail=error_detail)
 
     @staticmethod
-    def _get_tool_call_arguments(
-        tool_call: ChatCompletionMessageToolCall | ChatCompletionToolCallChunk,
+    def _masked_tool_call_arguments(
+        masked_text: str | None,
+        *,
+        scanned_name: bool,
+        scanned_args: str | None,
     ) -> str | None:
-        """Read a tool call's function arguments, handling both object and dict forms."""
-        if isinstance(tool_call, dict):
-            func: Final = tool_call.get("function")
-            return func.get("arguments") if isinstance(func, dict) else None
-        return tool_call.function.arguments
+        """Recover the arguments slice of a masked scan, or None when it cannot be applied."""
+        if masked_text is None or scanned_args is None:
+            return None
+        if not scanned_name:
+            return masked_text
+        _, separator, masked_args = masked_text.partition("\n")
+        return masked_args if separator else None
 
     @staticmethod
-    def _set_tool_call_arguments(tool_call, masked_text: str) -> None:
-        """Set masked text on a tool call's function arguments, handling both object and dict forms."""
-        if hasattr(tool_call, "function"):
-            tool_call.function.arguments = masked_text
-        elif isinstance(tool_call, dict) and isinstance(tool_call.get("function"), dict):
+    def _get_tool_call_function(tool_call: ToolCallLike) -> tuple[str | None, str | None]:
+        """Read a tool call's function name and arguments; (None, None) for non-function shapes."""
+        try:
+            parsed: Final = _ToolCallSlice.model_validate(tool_call, from_attributes=True)
+        except ValidationError:
+            return (None, None)
+        if parsed.function is None:
+            return (None, None)
+        return (parsed.function.name, parsed.function.arguments)
+
+    @staticmethod
+    def _set_tool_call_arguments(tool_call: ToolCallLike, masked_text: str) -> None:
+        """Set masked text on the function arguments of a call that _get_tool_call_function accepted."""
+        if isinstance(tool_call, dict):
             tool_call["function"]["arguments"] = masked_text
+            return
+        if isinstance(tool_call, ChatCompletionMessageCustomToolCall | ChatCompletionDeltaCustomToolCall):
+            return
+        tool_call.function.arguments = masked_text
 
     @staticmethod
     def _is_anthropic_request(

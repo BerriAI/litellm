@@ -26,6 +26,8 @@ from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.utils import (
+    ChatCompletionCustomToolCallPayload,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     Delta,
@@ -1811,7 +1813,7 @@ class TestPanwAirsApplyGuardrail:
             mock_api.return_value = {
                 "action": "block",
                 "category": "dlp",
-                "prompt_masked_data": {"data": '{"ssn": "XXXXXXXXXX"}'},
+                "prompt_masked_data": {"data": 'get_user\n{"ssn": "XXXXXXXXXX"}'},
             }
 
             await handler_mask_request.apply_guardrail(
@@ -2174,7 +2176,7 @@ class TestPanwAirsToolEventIsResponseFix:
             )
             mock_api.assert_called_once()
             assert mock_api.call_args.kwargs.get("is_response") is True
-            assert mock_api.call_args.kwargs.get("content") == '{"city": "Paris"}'
+            assert mock_api.call_args.kwargs.get("content") == 'get_weather\n{"city": "Paris"}'
             assert mock_api.call_args.kwargs.get("tool_event") is None
 
     @pytest.mark.asyncio
@@ -2727,13 +2729,13 @@ class TestPanwAirsToolCallContentScan:
             )
 
             call_kwargs = mock_api.call_args.kwargs
-            assert call_kwargs["content"] == '{"city": "San Francisco"}'
+            assert call_kwargs["content"] == 'get_weather\n{"city": "San Francisco"}'
             assert call_kwargs["is_response"] is False
             assert call_kwargs.get("tool_event") is None
 
     @pytest.mark.asyncio
-    async def test_empty_args_are_not_scanned(self, handler):
-        """Empty args carry nothing to scan, so no AIRS call is made."""
+    async def test_empty_args_still_scan_the_tool_name(self, handler):
+        """A name-only call is still scanned so tool-name policies keep firing."""
 
         tool_call = ChatCompletionMessageToolCall(
             id="call_1",
@@ -2749,6 +2751,46 @@ class TestPanwAirsToolCallContentScan:
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
+            await handler._scan_tool_calls_for_guardrail(
+                tool_calls=[tool_call],
+                is_response=False,
+                metadata={"user": "test", "model": "gpt-4"},
+                call_id="test-call-id",
+                request_data={"litellm_call_id": "test-call-id"},
+                start_time=datetime.now(),
+            )
+
+            assert mock_api.call_args.kwargs["content"] == "list_items"
+
+    @pytest.mark.asyncio
+    async def test_custom_tool_call_is_skipped(self, handler):
+        """Custom tool calls carry no function payload, so they are skipped instead of crashing."""
+
+        tool_call = ChatCompletionMessageCustomToolCall(
+            id="call_1",
+            type="custom",
+            custom=ChatCompletionCustomToolCallPayload(name="run_sql", input="select 1"),
+        )
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            await handler._scan_tool_calls_for_guardrail(
+                tool_calls=[tool_call],
+                is_response=False,
+                metadata={"user": "test", "model": "gpt-4"},
+                call_id="test-call-id",
+                request_data={"litellm_call_id": "test-call-id"},
+                start_time=datetime.now(),
+            )
+
+            mock_api.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_tool_call_without_function_is_skipped(self, handler):
+        """A tool call with no function payload is skipped instead of raising AttributeError."""
+
+        tool_call = ChatCompletionMessageToolCall(id="call_1", type="function", function=None)
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             await handler._scan_tool_calls_for_guardrail(
                 tool_calls=[tool_call],
                 is_response=False,
@@ -2809,7 +2851,7 @@ class TestPanwAirsToolCallContentScan:
             mock_api.return_value = {
                 "action": "block",
                 "category": "dlp",
-                "prompt_masked_data": {"data": '{"ssn": "XXXXXXXXXX"}'},
+                "prompt_masked_data": {"data": 'get_user\n{"ssn": "XXXXXXXXXX"}'},
             }
 
             await handler_mask_request._scan_tool_calls_for_guardrail(
@@ -2849,7 +2891,7 @@ class TestPanwAirsToolCallContentScan:
             )
 
             call_kwargs = mock_api.call_args.kwargs
-            assert call_kwargs["content"] == '{"query": "test"}'
+            assert call_kwargs["content"] == 'search\n{"query": "test"}'
             assert call_kwargs.get("tool_event") is None
 
     @pytest.mark.asyncio
@@ -2869,7 +2911,7 @@ class TestPanwAirsToolCallContentScan:
             mock_api.return_value = {
                 "action": "allow",
                 "category": "dlp",
-                "prompt_masked_data": {"data": '{"ssn": "XXXXXXXXXX"}'},
+                "prompt_masked_data": {"data": 'get_user\n{"ssn": "XXXXXXXXXX"}'},
             }
 
             await handler._scan_tool_calls_for_guardrail(
@@ -2893,7 +2935,7 @@ class TestPanwAirsToolCallContentScan:
             mock_api.return_value = {
                 "action": "block",
                 "category": "dlp",
-                "prompt_masked_data": {"data": '{"ssn": "XXXXXXXXXX"}'},
+                "prompt_masked_data": {"data": 'get_user\n{"ssn": "XXXXXXXXXX"}'},
             }
 
             await handler_mask_request._scan_tool_calls_for_guardrail(
@@ -3411,7 +3453,7 @@ class TestPanwAirsDuplicateScanRegression:
 
             # Second call: tool_calls scan (args as prompt text, no tool_event)
             assert calls[1].kwargs.get("tool_event") is None
-            assert calls[1].kwargs["content"] == '{"city": "NYC"}'
+            assert calls[1].kwargs["content"] == 'get_weather\n{"city": "NYC"}'
 
             # Third call: MCP scan (tool_event with file_reader)
             assert (
@@ -3944,8 +3986,8 @@ class TestPanwAirsEmptyToolArgsBlock:
     """Test empty-arg tool call handling."""
 
     @pytest.mark.asyncio
-    async def test_tool_call_empty_args_not_scanned(self):
-        """Empty-args tool call has no text to scan, so no AIRS call and no block."""
+    async def test_tool_call_empty_args_block_by_name_policy(self):
+        """An empty-args call is still scanned by name, so a name policy can block it."""
 
         handler = make_handler()
 
@@ -3963,16 +4005,18 @@ class TestPanwAirsEmptyToolArgsBlock:
         ) as mock_api:
             mock_api.return_value = {"action": "block", "category": "dangerous"}
 
-            await handler._scan_tool_calls_for_guardrail(
-                tool_calls=[tool_call],
-                is_response=False,
-                metadata={"user": "test", "model": "gpt-4"},
-                call_id="test-call-id",
-                request_data={"litellm_call_id": "test-call-id"},
-                start_time=datetime.now(),
-            )
+            with pytest.raises(HTTPException) as exc_info:
+                await handler._scan_tool_calls_for_guardrail(
+                    tool_calls=[tool_call],
+                    is_response=False,
+                    metadata={"user": "test", "model": "gpt-4"},
+                    call_id="test-call-id",
+                    request_data={"litellm_call_id": "test-call-id"},
+                    start_time=datetime.now(),
+                )
 
-            mock_api.assert_not_called()
+            assert exc_info.value.status_code == 400
+            assert mock_api.call_args.kwargs["content"] == "dangerous_tool"
 
 
 class TestPanwAirsDictChunkStreaming:
@@ -4252,7 +4296,7 @@ class TestPanwAirsUnifiedToolsScan:
 
             call_kwargs = mock_api.call_args.kwargs
             # Must carry the invocation arguments, not definition-shaped payloads
-            assert call_kwargs["content"] == '{"location": "NYC"}'
+            assert call_kwargs["content"] == 'get_weather\n{"location": "NYC"}'
             assert call_kwargs.get("tool_event") is None
 
 
@@ -5347,10 +5391,11 @@ class TestPanwAirsResponseToolCallMasking:
     async def test_response_side_tool_call_uses_response_masked_data(self, handler):
         """_scan_tool_calls_for_guardrail(is_response=True) scans args as response text,
         so masked output comes from response_masked_data and masks instead of blocking."""
-        tool_call = MagicMock()
-        tool_call.function = MagicMock()
-        tool_call.function.arguments = '{"query": "sensitive-data"}'
-        tool_call.function.name = "search"
+        tool_call = ChatCompletionMessageToolCall(
+            id="call_1",
+            type="function",
+            function=Function(name="search", arguments='{"query": "sensitive-data"}'),
+        )
 
         with patch.object(
             handler, "_call_panw_api", new_callable=AsyncMock
@@ -5358,7 +5403,7 @@ class TestPanwAirsResponseToolCallMasking:
             mock_api.return_value = {
                 "action": "block",
                 "category": "dlp",
-                "response_masked_data": {"data": '{"query": "****"}'},
+                "response_masked_data": {"data": 'search\n{"query": "****"}'},
             }
 
             await handler._scan_tool_calls_for_guardrail(
