@@ -5974,26 +5974,41 @@ class TestPanwAirsErrorDetailWithheldFields:
         assert detail["error"]["scan_id"] == "scan-2"
 
 
-class TestPanwAirsToolCallBlockWithholdsGeneratedArgs:
-    """A response-side tool-call block must not ship the model's tool arguments.
+class TestPanwAirsToolCallBlockMaskedDataRouting:
+    """A tool-call block must withhold model output and keep caller input.
 
-    ``_scan_tool_calls_for_guardrail`` calls AIRS with ``is_response=False`` because
-    tool_event is request-side in the AIRS schema, so AIRS returns the scanned tool
-    arguments under ``prompt_masked_data``. When the tool calls being scanned are the
-    model's own output, that key holds generated content, and the class-level
-    ``_CLIENT_HIDDEN_SCAN_FIELDS`` default (``response_masked_data``, empty on this
-    path) does not cover it.
+    Tool calls are scanned as ordinary prompt/response text, so the side of the scan
+    decides which key holds what: a response-side scan reports the model's generated
+    arguments under ``response_masked_data`` (withheld by
+    ``_CLIENT_HIDDEN_SCAN_FIELDS``), while ``prompt_masked_data`` is the caller's own
+    input and is one of the fields LIT-5638 asks for.
+
+    Regression guard for the interaction with #37036. That PR withheld
+    ``prompt_masked_data`` on response-side tool blocks, correctly, while tool calls
+    still went out as a request-side ``tool_event``. Once this PR routes them by side,
+    that withholding drops a caller-facing audit field instead. The two PRs merge
+    without a conflict, so nothing but this test catches it.
     """
 
-    MASKED_ARGS = '{"to_account": "XXXXXXXXXX", "amount": 5000}'
+    MODEL_ARGS = '{"to_account": "XXXXXXXXXX", "amount": 5000}'
+    CALLER_INPUT = "my ssn is XXX-XX-XXXX"
 
-    SCAN_RESULT = {
+    RESPONSE_SIDE_SCAN = {
         "action": "block",
         "category": "sensitive_data",
         "scan_id": "scan-tool-1",
         "prompt_detected": {"dlp": True},
-        "prompt_masked_data": {"data": MASKED_ARGS},
-        "response_masked_data": {},
+        "response_detected": {"dlp": True},
+        "prompt_masked_data": {"data": CALLER_INPUT},
+        "response_masked_data": {"data": MODEL_ARGS},
+    }
+
+    REQUEST_SIDE_SCAN = {
+        "action": "block",
+        "category": "sensitive_data",
+        "scan_id": "scan-tool-2",
+        "prompt_detected": {"dlp": True},
+        "prompt_masked_data": {"data": MODEL_ARGS},
     }
 
     @staticmethod
@@ -6007,9 +6022,9 @@ class TestPanwAirsToolCallBlockWithholdsGeneratedArgs:
             ),
         )
 
-    async def _block(self, handler, is_response):
+    async def _block(self, handler, is_response, scan_result):
         with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
-            mock_api.return_value = dict(self.SCAN_RESULT)
+            mock_api.return_value = dict(scan_result)
             with pytest.raises(HTTPException) as exc_info:
                 await handler._scan_tool_calls_for_guardrail(
                     tool_calls=[self._tool_call()],
@@ -6027,27 +6042,34 @@ class TestPanwAirsToolCallBlockWithholdsGeneratedArgs:
         # The block branch is only reached with masking off; guard the premise.
         assert handler.mask_response_content is False
 
-        exc = await self._block(handler, is_response=True)
+        exc = await self._block(handler, True, self.RESPONSE_SIDE_SCAN)
         error = exc.detail["error"]
 
         assert exc.status_code == 400
-        assert "prompt_masked_data" not in error
-        assert self.MASKED_ARGS not in str(error)
+        assert "response_masked_data" not in error
+        assert self.MODEL_ARGS not in str(error)
 
-        # The audit fields LIT-5638 asks for are unaffected.
+    @pytest.mark.asyncio
+    async def test_response_side_block_still_returns_caller_input(self):
+        """The caller's own masked input is an audit field, not model output."""
+        handler = make_handler(mask_response_content=False)
+
+        exc = await self._block(handler, True, self.RESPONSE_SIDE_SCAN)
+        error = exc.detail["error"]
+
+        assert error["prompt_masked_data"] == {"data": self.CALLER_INPUT}
         assert error["scan_id"] == "scan-tool-1"
-        assert error["prompt_detected"] == {"dlp": True}
 
     @pytest.mark.asyncio
     async def test_request_side_block_still_returns_masked_tool_args(self):
         """Caller-supplied tool arguments stay in the verdict — that is the ticket's ask."""
         handler = make_handler(mask_request_content=False)
 
-        exc = await self._block(handler, is_response=False)
+        exc = await self._block(handler, False, self.REQUEST_SIDE_SCAN)
         error = exc.detail["error"]
 
-        assert error["prompt_masked_data"] == {"data": self.MASKED_ARGS}
-        assert error["scan_id"] == "scan-tool-1"
+        assert error["prompt_masked_data"] == {"data": self.MODEL_ARGS}
+        assert error["scan_id"] == "scan-tool-2"
 
 
 if __name__ == "__main__":
