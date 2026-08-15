@@ -40143,7 +40143,8 @@
         "max_output_tokens": 161000,
         "max_tokens": 161000,
         "mode": "chat",
-        "output_cost_per_token": 5.4e-06
+        "output_cost_per_token": 5.4e-06,
+        "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/deepseek-ai/DeepSeek-V3-0324": {
         "input_cost_per_token": 1.14e-06,
@@ -40152,7 +40153,8 @@
         "max_output_tokens": 161000,
         "max_tokens": 161000,
         "mode": "chat",
-        "output_cost_per_token": 2.75e-06
+        "output_cost_per_token": 2.75e-06,
+        "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/deepseek-ai/DeepSeek-V3.1": {
         "input_cost_per_token": 5.5e-07,
@@ -40264,7 +40266,8 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
-        "output_cost_per_token": 6.6e-07
+        "output_cost_per_token": 6.6e-07,
+        "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/MiniMaxAI/MiniMax-M2.5": {
         "input_cost_per_token": 3e-07,
@@ -40297,7 +40300,8 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 3.5e-07
+        "output_cost_per_token": 3.5e-07,
+        "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/moonshotai/Kimi-K2-Instruct": {
         "input_cost_per_token": 6e-07,
@@ -40414,7 +40418,8 @@
         "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
-        "output_cost_per_token": 1e-07
+        "output_cost_per_token": 1e-07,
+        "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": {
         "input_cost_per_token": 1e-07,
@@ -40423,7 +40428,8 @@
         "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
-        "output_cost_per_token": 1e-07
+        "output_cost_per_token": 1e-07,
+        "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/Qwen/Qwen3-30B-A3B-Instruct-2507": {
         "input_cost_per_token": 1e-07,
@@ -40483,7 +40489,8 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 2e-06
+        "output_cost_per_token": 2e-06,
+        "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/zai-org/GLM-5.1": {
         "cache_read_input_token_cost": 2.6e-07,

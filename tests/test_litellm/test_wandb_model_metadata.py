@@ -13,6 +13,8 @@ PRICE_FILES: Final = (
 SOURCE: Final = "https://wandb.ai/site/pricing/tokens/"
 CURRENT_PRICES_PER_MILLION_TOKENS: Final = MappingProxyType(
     {
+        "wandb/deepseek-ai/DeepSeek-R1-0528": (1.35, 5.40, None),
+        "wandb/deepseek-ai/DeepSeek-V3-0324": (1.14, 2.75, None),
         "wandb/deepseek-ai/DeepSeek-V3.1": (0.55, 1.65, None),
         "wandb/deepseek-ai/DeepSeek-V4-Flash": (0.14, 0.28, 0.07),
         "wandb/deepseek-ai/DeepSeek-V4-Flash-0731": (0.13, 0.28, 0.07),
@@ -23,6 +25,8 @@ CURRENT_PRICES_PER_MILLION_TOKENS: Final = MappingProxyType(
         "wandb/meta-llama/Llama-3.1-70B-Instruct": (0.80, 0.80, None),
         "wandb/meta-llama/Llama-3.1-8B-Instruct": (0.22, 0.22, None),
         "wandb/meta-llama/Llama-3.3-70B-Instruct": (0.71, 0.71, None),
+        "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": (0.17, 0.66, None),
+        "wandb/microsoft/Phi-4-mini-instruct": (0.08, 0.35, None),
         "wandb/MiniMaxAI/MiniMax-M2.5": (0.30, 1.20, None),
         "wandb/MiniMaxAI/MiniMax-M3": (0.23, 0.96, 0.05),
         "wandb/moonshotai/Kimi-K2.6": (0.65, 3.41, 0.15),
@@ -33,11 +37,14 @@ CURRENT_PRICES_PER_MILLION_TOKENS: Final = MappingProxyType(
         "wandb/openai/gpt-oss-120b": (0.03, 0.17, None),
         "wandb/openai/gpt-oss-20b": (0.03, 0.13, None),
         "wandb/OpenPipe/Qwen3-14B-Instruct": (0.05, 0.22, None),
+        "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": (0.10, 0.10, None),
+        "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": (0.10, 0.10, None),
         "wandb/Qwen/Qwen3-30B-A3B-Instruct-2507": (0.10, 0.30, None),
         "wandb/Qwen/Qwen3-Coder-480B-A35B-Instruct": (1.00, 1.50, None),
         "wandb/Qwen/Qwen3.5-35B-A3B": (0.25, 1.25, None),
         "wandb/Qwen/Qwen3.6-27B": (0.60, 3.60, 0.12),
         "wandb/Qwen/Qwen3.6-35B-A3B": (0.25, 1.25, None),
+        "wandb/zai-org/GLM-4.5": (0.55, 2.00, None),
         "wandb/zai-org/GLM-5.1": (1.40, 4.40, 0.26),
         "wandb/zai-org/GLM-5.2": (0.76, 2.42, 0.14),
     }
