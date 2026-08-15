@@ -766,7 +766,7 @@ class CheckBatchCost:
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if (
-                response.status == "completed"
+                response.status in ("completed", "complete", "expired")
                 and response.output_file_id is not None
             ):
                 try:
@@ -793,7 +793,7 @@ class CheckBatchCost:
                 # mark the job as complete
                 try:
                     update_data: dict = {
-                        "status": "complete",
+                        "status": response.status if response.status != "completed" else "complete",
                         "file_object": response.model_dump_json(),
                     }
                     if self._has_batch_processed_column:
@@ -807,7 +807,13 @@ class CheckBatchCost:
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
 
-            elif response.status in ("failed", "expired", "cancelled"):
+            elif response.status in (
+                "completed",
+                "complete",
+                "failed",
+                "expired",
+                "cancelled",
+            ):
                 try:
                     from litellm.proxy.openai_files_endpoints.common_utils import (
                         _is_base64_encoded_unified_file_id,
