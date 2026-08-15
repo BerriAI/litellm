@@ -20,6 +20,59 @@ from unittest.mock import MagicMock, patch
 from litellm.proxy.utils import get_custom_url, join_paths
 
 
+class _RecordingLoop:
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def call_soon_threadsafe(self, fn, pid) -> None:
+        self.calls.append((fn, pid))
+
+
+def _echild_raise(pid, options):
+    raise ChildProcessError()
+
+
+def test_waitpid_echild_with_live_engine_skips_death_notify(monkeypatch):
+    from litellm.proxy.utils import PrismaClient
+
+    client = PrismaClient.__new__(PrismaClient)
+    client._engine_pid = 4242
+    client._is_engine_alive = lambda: True
+    loop = _RecordingLoop()
+    monkeypatch.setattr(os, 'waitpid', _echild_raise)
+
+    client._waitpid_thread_func(4242, loop)
+
+    assert loop.calls == [], 'live engine must not trigger a death notification'
+
+
+def test_waitpid_echild_with_dead_engine_notifies(monkeypatch):
+    from litellm.proxy.utils import PrismaClient
+
+    client = PrismaClient.__new__(PrismaClient)
+    client._engine_pid = 4242
+    client._is_engine_alive = lambda: False
+    loop = _RecordingLoop()
+    monkeypatch.setattr(os, 'waitpid', _echild_raise)
+
+    client._waitpid_thread_func(4242, loop)
+
+    assert [pid for _, pid in loop.calls] == [4242], 'dead engine must notify the event loop'
+
+
+def test_waitpid_normal_exit_notifies(monkeypatch):
+    from litellm.proxy.utils import PrismaClient
+
+    client = PrismaClient.__new__(PrismaClient)
+    client._engine_pid = 4242
+    loop = _RecordingLoop()
+    monkeypatch.setattr(os, 'waitpid', lambda pid, options: (pid, 0))
+
+    client._waitpid_thread_func(4242, loop)
+
+    assert [pid for _, pid in loop.calls] == [4242], 'normal exit must notify the event loop'
+
+
 def test_get_custom_url(monkeypatch):
     monkeypatch.setenv("SERVER_ROOT_PATH", "/litellm")
     custom_url = get_custom_url(request_base_url="http://0.0.0.0:4000", route="ui/")

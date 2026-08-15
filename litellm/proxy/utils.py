@@ -4215,13 +4215,15 @@ class PrismaClient:
         """Thread function: block until engine PID exits, then notify event loop.
 
         Note: uvloop/libuv may reap the child first via waitpid(-1, WNOHANG)
-        in its SIGCHLD handler. In that case our waitpid raises ChildProcessError.
-        we still notify the event loop because the engine is dead either way.
+        in its SIGCHLD handler, which makes our waitpid raise ChildProcessError.
+        ECHILD can also mean the process was reparented and is still running,
+        so only notify the event loop when the engine is actually gone.
         """
         try:
             os.waitpid(pid, 0)
         except ChildProcessError:
-            pass
+            if self._is_engine_alive():
+                return
         except OSError:
             pass
         try:
