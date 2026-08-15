@@ -1,5 +1,6 @@
 """Per-request multi-tenant credential routing (V1 parity)."""
 
+import base64
 import os
 import sys
 
@@ -40,6 +41,17 @@ def test_langfuse_dynamic_headers_need_both_keys():
         "langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}
     )
     assert headers is not None and "Authorization" in headers
+
+
+def test_langfuse_dynamic_headers_carry_v4_ingestion_version():
+    headers = dynamic_otlp_headers(
+        "langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}
+    )
+    expected_auth = "Basic " + base64.b64encode(b"pk:sk").decode()
+    assert headers == {
+        "Authorization": expected_auth,
+        "x-langfuse-ingestion-version": "4",
+    }
 
 
 def test_weave_dynamic_headers():

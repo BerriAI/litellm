@@ -26,6 +26,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierContextIncludeAssistantTurns: undefined,
   classifierFallback: undefined,
   sessionAffinity: false,
+  deploymentAffinity: true,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
@@ -46,6 +47,7 @@ describe("buildComplexityRouterConfig", () => {
       tiers,
       classifier_type: "heuristic",
       session_affinity: false,
+      deployment_affinity: true,
       escalation_keywords: ["LITELLM ESCALATE"],
     });
   });
@@ -443,6 +445,39 @@ describe("classifier prompt and fallback", () => {
 
   it("omits classifier_fallback when unset so the backend default applies", () => {
     expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
+  });
+
+  it("sends the chat preset the operator picked", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, classification_rubric: "chat" },
+    });
+    expect(config.classifier_llm_config).toEqual({
+      model: "haiku-classifier",
+      timeout_ms: 400,
+      classification_rubric: "chat",
+    });
+  });
+
+  it("omits the preset when none is set, leaving an existing router on the rubric it already had", () => {
+    // An unset preset means the pre-calibration rubric on the backend. Materializing a value here
+    // would change the tier decisions, and the bill, of a router the operator only opened to edit.
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
+  });
+
+  it("drops the preset when a custom prompt replaces the rubric, which the backend rejects together", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: {
+        model: "haiku-classifier",
+        timeout_ms: 400,
+        classification_rubric: "chat",
+        system_prompt: "Grade the data sensitivity of the request.",
+      },
+    });
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
+    expect(config.classifier_llm_config?.system_prompt).toBe("Grade the data sensitivity of the request.");
   });
 
   it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {

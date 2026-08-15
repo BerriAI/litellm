@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { Tooltip } from "antd";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import PresidioDetectedEntities from "./PresidioDetectedEntities";
 import BedrockGuardrailDetails, {
   BedrockGuardrailResponse,
@@ -517,13 +517,20 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           )}
 
           {riskScore != null && success && (
-            <Tooltip title={`Risk score: ${riskScore}/10`}>
-              <span
-                className={`px-2 py-0.5 border rounded-sm text-[11px] font-semibold shrink-0 ${getRiskColor(riskScore)}`}
-              >
-                Risk {riskScore}/10
-              </span>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className={`px-2 py-0.5 border rounded-sm text-[11px] font-semibold shrink-0 ${getRiskColor(riskScore)}`}
+                    />
+                  }
+                >
+                  Risk {riskScore}/10
+                </TooltipTrigger>
+                <TooltipContent>{`Risk score: ${riskScore}/10`}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
 

@@ -243,7 +243,7 @@ def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma):
     assert set(body.keys()) == {"login_url", "token", "user_email", "user"}
     assert body["token"] == "session-jwt-token"
     assert body["user_email"] == "alice@example.com"
-    assert body["login_url"].endswith("/ui/?login=success")
+    assert body["login_url"].endswith("/ui?login=success")
 
 
 def test_claim_onboarding_link_invalid_invite_401(client, monkeypatch, mock_prisma):

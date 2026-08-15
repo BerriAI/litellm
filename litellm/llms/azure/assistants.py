@@ -1,8 +1,9 @@
 from collections.abc import Coroutine, Iterable
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypedDict
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai.types.shared_params.metadata import Metadata
 from typing_extensions import overload
 
 from ...types.llms.openai import (
@@ -20,6 +21,16 @@ from ...types.llms.openai import (
     Thread,
 )
 from .common_utils import BaseAzureLLM
+
+
+class _RunThreadStreamData(TypedDict):
+    thread_id: str
+    assistant_id: str
+    additional_instructions: str | None
+    instructions: str | None
+    metadata: Metadata | None
+    model: str | None
+    tools: Iterable[AssistantToolParam] | None
 
 
 class AzureAssistantsAPI(BaseAzureLLM):
@@ -212,9 +223,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
         response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         return response_obj
 
     # fmt: off
@@ -301,9 +312,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
         response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         return response_obj
 
     async def async_get_messages(
@@ -443,7 +454,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         message_thread: Final = await openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.dict())
 
     # fmt: off
 
@@ -539,7 +550,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         message_thread: Final = azure_openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.dict())
 
     async def async_get_thread(
         self,
@@ -566,7 +577,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         response: Final = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.dict())
 
     # fmt: off
 
@@ -642,7 +653,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         response: Final = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.dict())
 
     # def delete_thread(self):
     #     pass
@@ -730,7 +741,8 @@ class AzureAssistantsAPI(BaseAzureLLM):
         event_handler: AssistantEventHandler | None,
         litellm_params: dict | None = None,
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data: Final[dict[str, Any]] = {
+        stream_fn: Final = client.beta.threads.runs.stream
+        base_data: Final[_RunThreadStreamData] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -740,8 +752,8 @@ class AzureAssistantsAPI(BaseAzureLLM):
             "tools": tools,
         }
         if event_handler is not None:
-            data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)
+            return stream_fn(**base_data, event_handler=event_handler)
+        return stream_fn(**base_data)
 
     # fmt: off
 
