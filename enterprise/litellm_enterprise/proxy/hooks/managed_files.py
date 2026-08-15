@@ -54,6 +54,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     normalize_mime_type_for_provider,
     resolve_managed_output_file_model_name,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    request_tags_from_metadata,
+)
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
     AsyncCursorPage,
@@ -1146,6 +1149,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get("unified_file_id")  # managed file id
             unified_batch_id = response._hidden_params.get("unified_batch_id")  # managed batch id
+            is_batch_create: Final = unified_file_id is not None
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
 
@@ -1216,6 +1220,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             model_mappings={model_id: provider_file_id},
                             user_api_key_dict=user_api_key_dict,
                         )
+            request_metadata: Final = data.get("litellm_metadata")
             await self.store_unified_object_id(
                 unified_object_id=response.id,
                 file_object=response,
@@ -1223,6 +1228,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 model_object_id=original_response_id,
                 file_purpose="batch",
                 user_api_key_dict=user_api_key_dict,
+                request_tags=request_tags_from_metadata(request_metadata if isinstance(request_metadata, dict) else {}),
+                persist_attribution=is_batch_create,
             )
 
             # Only record batch creation metric on actual create (not retrieve/cancel).
