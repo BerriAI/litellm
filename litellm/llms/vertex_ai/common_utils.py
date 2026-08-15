@@ -1166,7 +1166,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         else:
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
             from litellm.llms.vertex_ai.gemini.transformation import (
-                _gemini_convert_messages_with_history,
+                _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
             )
 
             resolved_contents: Final = (
