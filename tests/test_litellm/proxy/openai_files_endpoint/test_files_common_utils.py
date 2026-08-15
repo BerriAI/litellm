@@ -97,6 +97,274 @@ def test_apply_unified_file_ids_swaps_all_three_ids():
     )
 
 
+class _FakeScheduler:
+    def __init__(self, job):
+        self._job = job
+
+    def get_job(self, job_id):
+        assert job_id == "check_batch_cost_job"
+        return self._job
+
+
+class _FakePoller:
+    def __init__(self, confirmed):
+        self.batch_processed_support_confirmed = confirmed
+
+    def check_batch_cost(self):
+        return None
+
+
+def _job_for(poller):
+    if poller is None:
+        return None
+    job = MagicMock()
+    job.func = poller.check_batch_cost
+    return job
+
+
+@pytest.mark.parametrize(
+    "polling_enabled, job, expected",
+    [
+        (True, _job_for(_FakePoller(confirmed=True)), True),
+        (True, _job_for(_FakePoller(confirmed=False)), False),
+        (True, None, False),
+        (False, _job_for(_FakePoller(confirmed=True)), False),
+    ],
+    ids=[
+        "poller-running-and-column-confirmed",
+        "poller-running-but-column-unconfirmed",
+        "job-absent-enterprise-import-failed",
+        "polling-disabled-by-config",
+    ],
+)
+def test_batch_cost_poller_is_active(monkeypatch, polling_enabled, job, expected):
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", polling_enabled, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", _FakeScheduler(job), raising=False)
+
+    assert batch_cost_poller_is_active() is expected
+
+
+def test_batch_cost_poller_is_active_is_false_when_no_scheduler_exists(monkeypatch):
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", True, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", None, raising=False)
+
+    assert batch_cost_poller_is_active() is False
+
+
+def _completed_batch() -> LiteLLMBatch:
+    return LiteLLMBatch(
+        id="batch-done",
+        completion_window="24h",
+        created_at=1234567890,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status="completed",
+        output_file_id="file-out",
+    )
+
+
+async def _run_update(monkeypatch, poller_active: bool) -> dict:
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: poller_active)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+
+    db_batch_object = MagicMock()
+    db_batch_object.status = "in_progress"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+    )
+
+    assert update_mock.await_count == 1
+    return update_mock.await_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_retrieving_a_completed_batch_leaves_batch_processed_to_the_cost_poller(monkeypatch):
+    data = await _run_update(monkeypatch, poller_active=True)
+
+    assert "batch_processed" not in data
+    assert data["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_retrieving_a_completed_batch_still_marks_processed_without_a_cost_poller(monkeypatch):
+    data = await _run_update(monkeypatch, poller_active=False)
+
+    assert data["batch_processed"] is True
+    assert data["status"] == "complete"
+
+
+def test_batch_cost_poller_is_active_is_false_when_the_job_has_no_bound_poller(monkeypatch):
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    def unbound_check_batch_cost():
+        return None
+
+    job = MagicMock()
+    job.func = unbound_check_batch_cost
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", True, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", _FakeScheduler(job), raising=False)
+
+    assert batch_cost_poller_is_active() is False
+
+
+def test_batch_cost_poller_is_active_is_false_when_get_job_raises(monkeypatch):
+    import litellm.constants
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        batch_cost_poller_is_active,
+    )
+
+    class _ExplodingScheduler:
+        def get_job(self, job_id):
+            raise RuntimeError("scheduler not started")
+
+    monkeypatch.setattr(litellm.constants, "PROXY_BATCH_POLLING_ENABLED", True, raising=False)
+    monkeypatch.setattr(proxy_server_module, "scheduler", _ExplodingScheduler(), raising=False)
+
+    assert batch_cost_poller_is_active() is False
+
+
+@pytest.mark.asyncio
+async def test_retrieving_a_batch_whose_status_is_unchanged_writes_nothing(monkeypatch):
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: False)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+
+    db_batch_object = MagicMock()
+    db_batch_object.status = "completed"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+    )
+
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_batch_in_database_is_a_noop_for_unmanaged_batches(monkeypatch):
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+
+    await cu.update_batch_in_database(
+        batch_id="batch-raw-xyz",
+        unified_batch_id=False,
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        operation="retrieve",
+    )
+
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_caller_s_accounting_decision_wins_over_a_later_poller_transition(monkeypatch):
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: True)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+    db_batch_object = MagicMock()
+    db_batch_object.status = "in_progress"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+        poller_owns_accounting=False,
+    )
+
+    data = update_mock.await_args.kwargs["data"]
+    assert data["batch_processed"] is True
+    assert data["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_a_caller_that_handed_off_accounting_still_leaves_the_marker_alone(monkeypatch):
+    import litellm.proxy.openai_files_endpoints.common_utils as cu
+
+    monkeypatch.setattr(cu, "batch_cost_poller_is_active", lambda: False)
+    monkeypatch.setattr(cu, "ensure_batch_response_managed_file_ids", AsyncMock())
+
+    prisma_client = MagicMock()
+    update_mock = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.update = update_mock
+    db_batch_object = MagicMock()
+    db_batch_object.status = "in_progress"
+
+    await cu.update_batch_in_database(
+        batch_id="unified-batch-id",
+        unified_batch_id="unified-batch-id",
+        response=_completed_batch(),
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_client,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+        poller_owns_accounting=True,
+    )
+
+    data = update_mock.await_args.kwargs["data"]
+    assert "batch_processed" not in data
+    assert data["status"] == "complete"
+
+
 # =========================================================================== #
 # add_internal_model_credentials - the snapshot that lets a completed
 # batch's output file be read, and therefore its cost be recorded
