@@ -238,6 +238,17 @@ def test_module_under_test_is_recognised_from_imports() -> None:
     assert not mutation_probe._is_under_test("litellm/caching/dual_cache.py", imports)
 
 
+def test_budget_reaches_the_module_under_test() -> None:
+    def mutant(path: str, lineno: int) -> mutation_probe.Mutant:
+        return mutation_probe.Mutant(path=path, lineno=lineno, description=f"{path}:{lineno}", source="")
+
+    under_test = [mutant("litellm/llms/bedrock/base_aws_llm.py", line) for line in (10, 11)]
+    shared = [mutant("litellm/caching/dual_cache.py", line) for line in range(100, 120)]
+    chosen = mutation_probe.interleave([under_test, shared], 8)
+    assert [m.path for m in chosen].count("litellm/llms/bedrock/base_aws_llm.py") == 2
+    assert len(chosen) == 8
+
+
 def test_flake_gate_flags_sleep_and_wall_clock(monkeypatch, tmp_path) -> None:
     source = """
     def test_thing():

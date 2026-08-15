@@ -381,6 +381,20 @@ def select_mutants(mutants: Sequence[Mutant], limit: int) -> List[Mutant]:
     return ordered
 
 
+def interleave(groups: Sequence[Sequence[Mutant]], limit: int) -> List[Mutant]:
+    """Take from each file in turn, so the module under test always gets mutants.
+
+    Files are already ranked with the module under test first, and a busy shared
+    module like a cache can otherwise eat the whole budget.
+    """
+    return [
+        group[index]
+        for index in range(max((len(group) for group in groups), default=0))
+        for group in groups
+        if index < len(group)
+    ][:limit]
+
+
 def probe(test_id: str, max_mutants: int, max_files: int, timeout: int) -> ProbeReport:
     code, output = run_test(test_id, timeout)
     if code == 5:
@@ -408,21 +422,30 @@ def probe(test_id: str, max_mutants: int, max_files: int, timeout: int) -> Probe
         behavioural.items(),
         key=lambda item: (not _is_under_test(item[0], imports), -len(item[1]), item[0]),
     )[:max_files]
+    if not any(_is_under_test(path, imports) for path, _ in ranked):
+        return ProbeReport(
+            test_id,
+            "inconclusive",
+            "the test runs no function body of the modules it imports, only shared "
+            f"infrastructure ({', '.join(path for path, _ in ranked)}); needs a human",
+            covered_files={path: len(lines) for path, lines in ranked},
+        )
     report = ProbeReport(
         test_id,
         "inconclusive",
         "",
         covered_files={path: len(lines) for path, lines in ranked},
     )
-    candidates: List[Mutant] = []
-    for path, lines in ranked:
-        candidates.extend(generate_mutants(path, lines))
+    candidates = interleave(
+        [select_mutants(generate_mutants(path, lines), max_mutants) for path, lines in ranked],
+        max_mutants,
+    )
     if not candidates:
         report.detail = "no mutable statements on the covered lines"
         return report
 
     kills = 0
-    for mutant in select_mutants(candidates, max_mutants):
+    for mutant in candidates:
         outcome = _run_mutant(mutant, test_id, timeout)
         report.mutants.append(MutantResult(mutant.path, mutant.lineno, mutant.description, outcome))
         if outcome in {"killed", "timeout"}:
