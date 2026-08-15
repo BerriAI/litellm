@@ -102,6 +102,176 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         ),
     )
 
+    fire_and_forget: bool | None = Field(
+        default=None,
+        description=(
+            "If True, the guardrail HTTP call is dispatched as a background task and the "
+            "request proceeds immediately without awaiting the response. Applies to every "
+            "mode (pre_call, post_call, during_call), adding ~0 latency. Because the "
+            "response is never awaited, the guardrail is observe-only: action=BLOCKED and "
+            "action=GUARDRAIL_INTERVENED are ignored. Also forces "
+            "streaming_end_of_stream_only=True so a stream dispatches one background call "
+            "instead of one per sampled chunk. Defaults to False in "
+            "GenericGuardrailAPI.__init__ when None."
+        ),
+    )
+
+    fire_and_forget_max_inflight: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Maximum number of fire_and_forget calls in flight at once. Async dispatch "
+            "decouples the request rate from the guardrail endpoint's throughput, so a slow "
+            "endpoint would otherwise pile up tasks without bound. Calls beyond this limit "
+            "are dropped and counted, with a rate-limited warning. Ignored unless "
+            "fire_and_forget is True. Defaults to 100 in GenericGuardrailAPI.__init__ when None."
+        ),
+    )
+
+    send_images: bool | None = Field(
+        default=None,
+        description=(
+            "If False, base64 image data is omitted from the guardrail request even when the "
+            "LLM request contains images. Large payload saver for guardrails that only "
+            "inspect text. Images the guardrail never received cannot be rewritten by its "
+            "response. Defaults to True in GenericGuardrailAPI.__init__ when None."
+        ),
+    )
+
+    exclude_payload_fields: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Top-level GenericGuardrailAPIRequest keys to omit from the payload (e.g. "
+            "['images','texts','request_headers']), for providers that do not consume them. "
+            "Unknown keys and the routing-critical keys input_type and litellm_call_id are "
+            "ignored with a warning at init. A component that is not sent cannot be "
+            "rewritten by the guardrail response."
+        ),
+    )
+
+    max_messages: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "If set, only the last N entries of structured_messages and the last N text "
+            "blocks are sent. Bounds payload size when the full conversation is re-sent "
+            "every turn. Note the system prompt and early context fall out of the window "
+            "once the session exceeds N. LOSSY: windowing shifts text positions, so the "
+            "guardrail can no longer rewrite text on this call (action=BLOCKED still "
+            "applies); leave it unset on a guardrail that masks or redacts."
+        ),
+    )
+
+    max_text_chars: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "If set, each individual text block is truncated to this many characters before "
+            "sending, for providers that only need a prefix. LOSSY: truncated text blocks "
+            "keep their original content on write-back, so the guardrail cannot rewrite them."
+        ),
+    )
+
+    strip_patterns: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Regex patterns applied to text content (texts[] and the text of each "
+            "structured_messages entry) before the guardrail request is sent. Matches are "
+            "removed. Intended to drop volatile boilerplate the provider does not need. "
+            "Applied only to string text fields, never to JSON structure, tool schemas, ids "
+            "or metadata. LOSSY: stripped content cannot be inspected by the guardrail, and "
+            "stripped text blocks keep their original content on write-back. An invalid "
+            "regex raises at init. Patterns run synchronously on the request path against "
+            "caller-supplied text, and Python's re has no match timeout, so a pattern that "
+            "backtracks catastrophically (nested quantifiers such as (a+)+) can stall the "
+            "worker: keep patterns linear-time. Text over 100k characters is not matched at "
+            "all, and is sent unstripped so an enforcing guardrail still sees it."
+        ),
+    )
+
+    skip_if_system_prompt_matches: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Regex patterns matched against the request's system message (role=system or "
+            "developer). On a match the guardrail is skipped for this call: no request is "
+            "sent, and the paired response is skipped too, so both telemetry and enforcement "
+            "are suppressed for matched requests. Matching the system message only (not "
+            "arbitrary user text) avoids false positives from pasted content. Requires a "
+            "request-side hook (pre_call or during_call) in the mode list. "
+            "TRUST BOUNDARY: the system message comes from the request body, so any caller "
+            "who knows the configured pattern can add a system message and exempt itself "
+            "from this guardrail. Treat this as traffic scoping, not as enforcement, and "
+            "prefer skip_if_key_alias_in / skip_if_team_id_in when the exemption has to "
+            "hold against the caller. Patterns run synchronously against caller-supplied "
+            "text, so they must be linear-time for the same reason as strip_patterns."
+        ),
+    )
+
+    skip_if_first_role_in: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "If the first message's role is in this list (e.g. ['developer']), skip the "
+            "guardrail for the call, with the same request/response semantics as, and the "
+            "same trust boundary as, skip_if_system_prompt_matches: the caller chooses the "
+            "roles it sends."
+        ),
+    )
+
+    skip_if_key_alias_in: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "If the calling virtual key's alias is in this list, skip the guardrail for the "
+            "call. Unlike the message-based filters this reads what authentication "
+            "established, so a caller cannot exempt itself by changing its request body. "
+            "Same request/response semantics: neither side is sent."
+        ),
+    )
+
+    skip_if_team_id_in: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "If the calling key's team id is in this list, skip the guardrail for the call. "
+            "Admin-controlled like skip_if_key_alias_in, and matched on the same "
+            "authenticated metadata."
+        ),
+    )
+
+    run_only_on_call_types: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "If set, the guardrail runs ONLY for these call types (e.g. "
+            "['completion','acompletion','anthropic_messages','responses','aresponses']). All "
+            "other call types, including embeddings, image generation, audio, rerank and "
+            "moderation, are skipped before any request is sent. Allowlist; takes precedence "
+            "over skip_call_types. Values are CallTypes names. An unresolvable call type runs."
+        ),
+    )
+
+    skip_call_types: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "If set (and run_only_on_call_types is not), the guardrail is skipped for these "
+            "call types (e.g. ['embedding','aembedding','image_generation','transcription',"
+            "'speech','rerank','moderation']). Denylist. Values are CallTypes names."
+        ),
+    )
+
+    guardrail_information_scope: Literal["per_call", "per_session", "off"] | None = Field(
+        default=None,
+        description=(
+            "How often this guardrail records a StandardLoggingGuardrailInformation entry "
+            "into request metadata (spend logs / OTEL). Every invocation records one today, "
+            "with no cap and no dedup, so a long agent session accumulates one entry per "
+            "guardrail call in the same row. 'per_call' (default) keeps that behavior. "
+            "'per_session' records only the first call of a session, and needs a resolvable "
+            "session id (litellm_session_id or metadata.session_id); without one it behaves "
+            "as 'per_call' rather than dropping every entry. 'off' records nothing on "
+            "success. Blocks and guardrail failures are recorded under every scope. Dedup "
+            "is per proxy process, so a session spread across workers records once per "
+            "worker. Defaults to 'per_call' in GenericGuardrailAPI.__init__ when None."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
