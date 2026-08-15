@@ -694,6 +694,23 @@ def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str |
         return 1.0
 
 
+def get_provider_specific_geo_multiplier(model_info: ModelInfo, usage: Usage) -> float:
+    """
+    Resolve the provider-specific regional pricing multiplier for the geo the
+    request was served from (``usage.inference_geo``), e.g. Anthropic's ``us: 1.1``
+    stored under ``provider_specific_entry``. The regional surcharge applies to
+    every token type, so per-type cost breakdowns must scale by it too.
+
+    Returns 1.0 when the request was served globally or the model carries no
+    multiplier for the geo.
+    """
+    inference_geo: Final = getattr(usage, "inference_geo", None)
+    if not isinstance(inference_geo, str) or inference_geo.lower() in ("global", "not_available"):
+        return 1.0
+    provider_specific_entry: Final[dict[str, float]] = model_info.get("provider_specific_entry") or {}
+    return float(provider_specific_entry.get(inference_geo.lower(), 1.0))
+
+
 def _resolve_reasoning_token_cost(
     model_info: ModelInfo,
     service_tier: str | None,
@@ -980,6 +997,14 @@ def get_token_type_cost_breakdown(
         reasoning_cost *= uplift
         cache_read_cost *= uplift
         cache_creation_cost *= uplift
+
+    # Mirror the provider-specific geo uplift (e.g. Anthropic us: 1.1) the totals
+    # apply, so cache and reasoning line items stay reconciled with them.
+    geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
+    if geo_multiplier != 1.0:
+        reasoning_cost *= geo_multiplier
+        cache_read_cost *= geo_multiplier
+        cache_creation_cost *= geo_multiplier
 
     return TokenTypeCostBreakdown(
         reasoning_cost=reasoning_cost,

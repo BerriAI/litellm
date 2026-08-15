@@ -1572,7 +1572,7 @@ class RedisCache(BaseCache):
     async def _pipeline_rpush_helper(
         self,
         pipe: pipeline,
-        rpush_list: list[RedisPipelineRpushOperation],
+        rpush_list: Sequence[RedisPipelineRpushOperation],
     ) -> list[int]:
         """Helper function for pipeline rpush operations"""
         for rpush_op in rpush_list:
@@ -1588,7 +1588,7 @@ class RedisCache(BaseCache):
     @_redis_circuit_breaker_guard
     async def async_rpush_pipeline(
         self,
-        rpush_list: list[RedisPipelineRpushOperation],
+        rpush_list: Sequence[RedisPipelineRpushOperation],
     ) -> list[int]:
         """
         Use Redis Pipelines for bulk RPUSH operations
