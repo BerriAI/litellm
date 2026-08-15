@@ -635,6 +635,59 @@ def test_generic_cost_per_token_tiered_pricing_is_all_or_nothing():
         litellm.model_cost.pop(model, None)
 
 
+def test_generic_cost_per_token_tiered_pricing_bills_reasoning_at_tier_rate():
+    """Regression: a tier's output_cost_per_reasoning_token must price reasoning tokens
+    on the generic path and in the logged breakdown, not the tier's plain output rate."""
+    model = "litellm-test-tiered-reasoning"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "tiered_pricing": [
+                    {
+                        "range": [0, 256000],
+                        "input_cost_per_token": 4e-07,
+                        "output_cost_per_token": 1.2e-06,
+                        "output_cost_per_reasoning_token": 4e-06,
+                    },
+                    {
+                        "range": [256000, 1000000],
+                        "input_cost_per_token": 1.2e-06,
+                        "output_cost_per_token": 3.6e-06,
+                        "output_cost_per_reasoning_token": 1.2e-05,
+                    },
+                ],
+            }
+        }
+    )
+
+    try:
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            total_tokens=1500,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=400),
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert round(prompt_cost, 12) == round(1000 * 4e-07, 12)
+        assert round(completion_cost, 12) == round((100 * 1.2e-06) + (400 * 4e-06), 12)
+
+        breakdown = get_token_type_cost_breakdown(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            usage=usage,
+        )
+        assert round(breakdown.reasoning_cost, 12) == round(400 * 4e-06, 12)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
 def test_generic_cost_per_token_gpt55():
     """gpt-5.5: base pricing — $5/1M input, $30/1M output, $0.50/1M cached input."""
     model = "gpt-5.5"
