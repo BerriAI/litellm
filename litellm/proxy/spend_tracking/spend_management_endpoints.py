@@ -153,7 +153,12 @@ class _SpendLogsTable(Protocol):
     """The subset of the Prisma spend-logs table API this module uses."""
 
     async def find_many(
-        self, *, where: Mapping[str, object], order: Mapping[str, str]
+        self,
+        *,
+        where: Mapping[str, object],
+        order: Sequence[Mapping[str, str]],
+        take: int,
+        skip: int,
     ) -> Sequence[_SupportsModelDump]: ...
 
     async def find_unique(
@@ -198,10 +203,17 @@ def _verification_token_table(prisma_client: PrismaClient) -> _VerificationToken
 async def _find_spend_logs(
     prisma_client: PrismaClient,
     where: Mapping[str, object],
-    order: Mapping[str, str],
+    *,
+    take: int,
+    skip: int,
 ) -> Sequence[_SupportsModelDump]:
-    """Read spend log rows as Prisma model instances."""
-    return await _spend_logs_table(prisma_client).find_many(where=where, order=order)
+    """Read a bounded, stable page of spend log rows as Prisma model instances."""
+    return await _spend_logs_table(prisma_client).find_many(
+        where=where,
+        order=[{"startTime": "desc"}, {"request_id": "desc"}],
+        take=take,
+        skip=skip,
+    )
 
 
 async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _SpendLogOwnershipRow | None:
@@ -2848,19 +2860,32 @@ async def view_spend_logs(
         default=True,
         description="When start_date and end_date are provided, summarize=true returns aggregated data by date (legacy behavior), summarize=false returns filtered individual logs",
     ),
+    page: int = fastapi.Query(
+        default=1,
+        description="Page number for individual spend logs",
+        ge=1,
+    ),
+    page_size: int = fastapi.Query(
+        default=50,
+        description="Number of individual spend logs per page",
+        ge=1,
+        le=1000,
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [DEPRECATED] This endpoint is not paginated and can cause performance issues.
-    Please use `/spend/logs/v2` instead for paginated access to spend logs.
+    [DEPRECATED] Individual log responses from this endpoint are bounded list pages.
+    Please use `/spend/logs/v2` for a pagination envelope and total count.
 
-    View all spend logs, if request_id is provided, only logs for that request_id will be returned
+    View spend logs. If request_id is provided, only logs for that request_id will be returned.
+
+    Individual log responses accept page and page_size. The default page size is 50 and the maximum is 1000.
 
     When start_date and end_date are provided:
     - summarize=true (default): Returns aggregated spend data grouped by date (maintains backward compatibility)
     - summarize=false: Returns filtered individual log entries within the date range
 
-    Example Request for all logs
+    Example Request for the first page of logs
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs" \
 -H "Authorization: Bearer sk-1234"
@@ -2904,7 +2929,8 @@ async def view_spend_logs(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        spend_logs = []
+        skip: Final = 0 if request_id is not None else (page - 1) * page_size
+        take: Final = 1 if request_id is not None else page_size
         if (
             start_date is not None
             and isinstance(start_date, str)
@@ -2942,7 +2968,8 @@ async def view_spend_logs(
                 data = await _find_spend_logs(
                     prisma_client,
                     where=filter_query,
-                    order={"startTime": "desc"},
+                    take=take,
+                    skip=skip,
                 )
                 return data
 
@@ -3012,14 +3039,11 @@ async def view_spend_logs(
             if user_id is not None and isinstance(user_id, str):
                 scoped_filter["user"] = user_id
 
-            if not scoped_filter:
-                spend_logs = await prisma_client.get_data(table_name="spend", query_type="find_all")
-                return spend_logs
-
             data = await _find_spend_logs(
                 prisma_client,
                 where=scoped_filter,
-                order={"startTime": "desc"},
+                take=take,
+                skip=skip,
             )
             return data
 
