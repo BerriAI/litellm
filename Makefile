@@ -9,7 +9,7 @@
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
-	lint-install lint-fetch-base bootstrap bootstrap-inner
+	lint-install lint-fetch-base bootstrap
 
 # Default target
 help:
@@ -53,7 +53,7 @@ help:
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo ""
-	@echo "Heavy targets (check, bootstrap, lint) queue for LITELLM_GATE_SLOTS machine-wide"
+	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
 
 UV := uv
@@ -80,10 +80,9 @@ info:
 install-dev:
 	$(UV) sync --inexact --frozen
 
+# Deliberately unqueued: provisioning is I/O bound, so it doesn't need one of the
+# machine-wide slots the CPU-bound gates below share.
 bootstrap:
-	@$(GATE_SLOT_LOCK) $(MAKE) bootstrap-inner
-
-bootstrap-inner:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
