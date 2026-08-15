@@ -5718,6 +5718,9 @@ class TestPanwAirsBlockedErrorDetailPassthrough:
         for field, value in self._FULL_BLOCK_RESPONSE.items():
             if field == "category":
                 continue
+            if field in PanwPrismaAirsHandler._CLIENT_HIDDEN_SCAN_FIELDS:
+                # Withheld on purpose, covered by TestPanwAirsErrorDetailWithheldFields
+                continue
             assert error[field] == value, f"{field} missing or altered in blocked-request error"
 
         assert error["category"] == "malicious"
@@ -5740,6 +5743,60 @@ class TestPanwAirsBlockedErrorDetailPassthrough:
         assert "_always_block" not in detail["error"]
         assert "_is_transient" not in detail["error"]
         assert detail["error"]["scan_id"] == "scan-1"
+
+
+class TestPanwAirsErrorDetailWithheldFields:
+    """The blocked-request passthrough must not become a content channel.
+
+    ``response_masked_data`` is the model's own generation. The block branch is only
+    reached when ``mask_response_content`` is False, so echoing it back would hand the
+    caller exactly the text the operator declined to deliver. ``error`` is AIRS's own
+    message about the operator's Strata Cloud Manager profile configuration.
+
+    ``prompt_masked_data`` is deliberately NOT withheld: it is the caller's own input,
+    and it is one of the fields LIT-5638 asks for.
+    """
+
+    @pytest.mark.parametrize("is_response", [False, True])
+    def test_response_masked_data_never_reaches_client(self, base_handler, is_response):
+        detail = base_handler._build_error_detail(
+            {
+                "action": "block",
+                "category": "sensitive_data",
+                "scan_id": "scan-1",
+                "response_detected": {"dlp": True},
+                "response_masked_data": {"data": "routing number XXXXXXXXXX"},
+                "prompt_masked_data": {"data": "my ssn is XXX-XX-XXXX"},
+                "prompt_detection_details": {"dlp_report": {"dlp_report_id": "1"}},
+            },
+            is_response=is_response,
+        )
+        error = detail["error"]
+
+        assert "response_masked_data" not in error
+        assert "routing number" not in str(error)
+
+        # The audit fields LIT-5638 asks for still come through untouched.
+        assert error["scan_id"] == "scan-1"
+        assert error["response_detected"] == {"dlp": True}
+        assert error["prompt_masked_data"] == {"data": "my ssn is XXX-XX-XXXX"}
+        assert error["prompt_detection_details"] == {"dlp_report": {"dlp_report_id": "1"}}
+
+    def test_upstream_airs_error_field_still_passes_through(self, base_handler):
+        """A 2xx AIRS body can carry its own ``error`` (see _call_panw_api's
+        profile-misconfiguration branch, which only logs and then blocks). It is
+        diagnostic rather than content, so it stays in the passthrough."""
+        detail = base_handler._build_error_detail(
+            {
+                "action": "block",
+                "category": "malicious",
+                "scan_id": "scan-2",
+                "error": "profile not found",
+            }
+        )
+
+        assert detail["error"]["error"] == "profile not found"
+        assert detail["error"]["scan_id"] == "scan-2"
 
 
 if __name__ == "__main__":

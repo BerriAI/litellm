@@ -71,6 +71,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     _PROVIDER_NAME = "panw_prisma_airs"
 
+    #: AIRS fields withheld from the client-visible error detail.
+    #: ``response_masked_data`` is the model's own generation. The block branch that builds
+    #: this detail is only reached when ``mask_response_content`` is False, so echoing it
+    #: back would hand the caller exactly the text the operator declined to deliver.
+    #: ``prompt_masked_data`` is deliberately NOT withheld: it is the caller's own input,
+    #: and it is one of the fields the ticket asks for.
+    _CLIENT_HIDDEN_SCAN_FIELDS: Final = frozenset({"response_masked_data"})
+
     def __init__(
         self,
         guardrail_name: str,
@@ -654,7 +662,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return {
             "error": {
-                **{key: value for key, value in scan_result.items() if not key.startswith("_")},
+                **{
+                    key: value
+                    for key, value in scan_result.items()
+                    if not key.startswith("_") and key not in self._CLIENT_HIDDEN_SCAN_FIELDS
+                },
                 "message": error_msg,
                 "type": "guardrail_violation",
                 "code": f"panw_prisma_airs{code_suffix}",
