@@ -1,10 +1,25 @@
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import * as networking from "@/components/networking";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import TeamInfoView from "./TeamInfo";
+
+const authState = vi.hoisted(() => ({ userRole: "Admin" }));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({
+    token: "123",
+    accessToken: "123",
+    userId: "user-1",
+    userEmail: "user@example.com",
+    userRole: authState.userRole,
+    premiumUser: false,
+    disabledPersonalKeyCreation: null,
+    showSSOBanner: false,
+  }),
+}));
 
 vi.mock("@/components/networking", () => ({
   teamInfoCall: vi.fn(),
@@ -20,6 +35,11 @@ vi.mock("@/components/networking", () => ({
   organizationInfoCall: vi.fn(),
   getRouterSettingsCall: vi.fn().mockResolvedValue({ fields: [] }),
   getPassThroughEndpointsCall: vi.fn(),
+}));
+
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
 }));
 
 vi.mock("@/components/utils/dataUtils", () => ({
@@ -227,6 +247,7 @@ describe("TeamInfoView", () => {
     } as any);
     vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: [], isLoading: false } as any);
 
+    can.mockReturnValue(true);
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
@@ -238,6 +259,7 @@ describe("TeamInfoView", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    authState.userRole = "Admin";
   });
 
   describe("display and rendering", () => {
@@ -289,6 +311,8 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByText("Budget Status")).toBeInTheDocument();
       });
+      expect(screen.getByText("$250.50")).toBeInTheDocument();
+      expect(screen.getByText(/of \$1,000\.00/)).toBeInTheDocument();
     });
 
     it("should display guardrails in overview when present", async () => {
@@ -341,6 +365,7 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByText("Budget Status")).toBeInTheDocument();
       });
+      expect(screen.getByText("Team Member Budget: $500.00")).toBeInTheDocument();
     });
 
     it("should display virtual keys information", async () => {
@@ -631,6 +656,43 @@ describe("TeamInfoView", () => {
   });
 
   describe("settings and editing", () => {
+    const policiesFormFieldLabel = () => screen.queryByText("Policies", { selector: "span" });
+
+    it("should offer the policies field and load it for a caller with the viewPolicies capability", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(networking.getPoliciesList).toHaveBeenCalled();
+      });
+      expect(can).toHaveBeenCalledWith("viewPolicies");
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(policiesFormFieldLabel()).toBeInTheDocument();
+      });
+    });
+
+    it("should omit the policies field and skip the admin-only list without the capability", async () => {
+      can.mockReturnValue(false);
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Team Name")).toBeInTheDocument();
+
+      expect(networking.getPoliciesList).not.toHaveBeenCalled();
+      expect(policiesFormFieldLabel()).not.toBeInTheDocument();
+    });
+
     it("should open edit mode when edit button is clicked", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
@@ -897,6 +959,82 @@ describe("TeamInfoView", () => {
         );
       });
     });
+
+    const openSettingsEditorForTeam = async (
+      user: ReturnType<typeof userEvent.setup>,
+      teamOverrides: Record<string, unknown>,
+    ) => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData(teamOverrides));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      await waitFor(() => {
+        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+      });
+
+      return screen.getByText("Reset Budget").closest(".ant-form-item") as HTMLElement;
+    };
+
+    it("should send an explicit null budget_duration when a stored Reset Budget is cleared", async () => {
+      const user = userEvent.setup({ delay: null });
+      const resetBudgetItem = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
+
+      await user.click(within(resetBudgetItem).getByRole("combobox"));
+      await user.click(await screen.findByText("Never resets"));
+
+      await waitFor(() => {
+        expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(updateArg.budget_duration).toBeNull();
+      expect(JSON.stringify(updateArg)).toContain('"budget_duration":null');
+    });
+
+    it("should keep a stored Reset Budget when the form is saved untouched", async () => {
+      const user = userEvent.setup({ delay: null });
+      await openSettingsEditorForTeam(user, { budget_duration: "30d" });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].budget_duration).toBe("30d");
+    });
+
+    it("should send the newly picked budget_duration when one is selected", async () => {
+      const user = userEvent.setup({ delay: null });
+      const resetBudgetItem = await openSettingsEditorForTeam(user, { budget_duration: null });
+
+      await user.click(within(resetBudgetItem).getByRole("combobox"));
+      await user.click(await screen.findByText("weekly"));
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].budget_duration).toBe("7d");
+    });
   });
 
   describe("metadata key-value editing", () => {
@@ -962,6 +1100,106 @@ describe("TeamInfoView", () => {
       });
       expect(updateArg.metadata).not.toHaveProperty("model_tpm_limit");
       expect(updateArg.model_tpm_limit).toEqual({ "gpt-4": 100 });
+    });
+
+    it("prefills the estimated output token controls, hides them from the pair editor, and saves edits", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: {
+            department: "research",
+            default_estimated_output_tokens: 512,
+            default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+          },
+          models: ["gpt-4"],
+        }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+      await openSettingsEditor(user);
+
+      expect(screen.getByLabelText("Estimated Output Tokens")).toHaveValue(512);
+      expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toHaveValue('{"gpt-4":4096}');
+      const keyValues = screen.queryAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value);
+      expect(keyValues).toEqual(["department"]);
+
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens"), { target: { value: "999" } });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(updateArg.metadata.default_estimated_output_tokens).toBe(999);
+      expect(updateArg.metadata.default_estimated_output_tokens_per_model).toEqual({ "gpt-4": 4096 });
+    });
+
+    it("omits the estimated output token settings when both controls are blank", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+      await openSettingsEditor(user);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(updateArg.metadata).not.toHaveProperty("default_estimated_output_tokens");
+      expect(updateArg.metadata).not.toHaveProperty("default_estimated_output_tokens_per_model");
+    });
+
+    it.each(["Internal User", "Admin Viewer", "org_admin"])(
+      "leaves both estimate controls read-only for %s and still resubmits the stored values",
+      async (userRole) => {
+        authState.userRole = userRole;
+        const user = userEvent.setup({ delay: null });
+        vi.mocked(networking.teamInfoCall).mockResolvedValue(
+          createMockTeamData({
+            metadata: {
+              default_estimated_output_tokens: 512,
+              default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+            },
+            models: ["gpt-4"],
+          }),
+        );
+        vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+        renderWithProviders(<TeamInfoView {...defaultProps} />);
+        await openSettingsEditor(user);
+
+        expect(screen.getByLabelText("Estimated Output Tokens")).toBeDisabled();
+        expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeDisabled();
+
+        await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(networking.teamUpdateCall).toHaveBeenCalled();
+        });
+
+        const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+        expect(updateArg.metadata.default_estimated_output_tokens).toBe(512);
+        expect(updateArg.metadata.default_estimated_output_tokens_per_model).toEqual({ "gpt-4": 4096 });
+      },
+    );
+
+    it.each(["Admin", "proxy_admin"])("leaves both estimate controls editable for %s", async (userRole) => {
+      authState.userRole = userRole;
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+      await openSettingsEditor(user);
+
+      expect(screen.getByLabelText("Estimated Output Tokens")).toBeEnabled();
+      expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
     });
 
     it("should keep declared keys as ordinary prefilled rows and submit the edited value", async () => {
@@ -1055,6 +1293,34 @@ describe("TeamInfoView", () => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
       expect(screen.getByText("my-fast-model")).toBeInTheDocument();
       expect(screen.getByText("gpt-3.5-turbo")).toBeInTheDocument();
+    });
+
+    it("should render the estimated output token settings in the overview and read-only settings views", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: {
+            default_estimated_output_tokens: 512,
+            default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByText("Team Settings")).toBeInTheDocument();
+      });
+
+      expect(screen.getAllByText("Estimated Output Tokens: 512")).toHaveLength(2);
+      expect(screen.getAllByText('Estimated Output Tokens Per Model: {"gpt-4":4096}')).toHaveLength(2);
     });
 
     it("should show an empty state when the team has no model aliases", async () => {
@@ -1287,13 +1553,14 @@ describe("TeamInfoView", () => {
 
       await user.click(within(routesFormItem).getByRole("combobox"));
 
-      const option = await screen.findByTitle("POST /bedrock-passthrough");
+      const option = await screen.findByText("POST /bedrock-passthrough");
       await user.click(option);
 
       await waitFor(() => {
         expect(within(routesFormItem).getByText(/\/bedrock-passthrough/)).toBeInTheDocument();
       });
 
+      await user.keyboard("{Escape}");
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
