@@ -1707,10 +1707,20 @@ class ComplexityRouter(CustomLogger):
                     parts.append(part)
                 elif isinstance(part, dict):
                     if part.get("type") == "text" and "text" in part:
-                        parts.append(str(part["text"]))
+                        text_val = part["text"]
+                        if isinstance(text_val, str):
+                            parts.append(text_val)
                     elif "content" in part and isinstance(part["content"], str):
                         parts.append(part["content"])
             return "".join(parts)
+        if isinstance(content, dict):
+            if content.get("type") == "text" and "text" in content:
+                text_val = content["text"]
+                if isinstance(text_val, str):
+                    return text_val
+            elif "content" in content and isinstance(content["content"], str):
+                return content["content"]
+            return ""
         if content is None:
             return ""
         return str(content)
@@ -1735,9 +1745,9 @@ class ComplexityRouter(CustomLogger):
                     continue
                 role = msg.get("role")
                 if not first_system_msg and role in ("system", "developer"):
-                    first_system_msg = self._extract_message_text(msg.get("content")).strip()
+                    first_system_msg = self._extract_message_text(msg.get("content"))[:1024].strip()
                 elif not first_user_msg and role == "user":
-                    first_user_msg = self._extract_message_text(msg.get("content")).strip()
+                    first_user_msg = self._extract_message_text(msg.get("content"))[:1024].strip()
                 if first_system_msg and first_user_msg:
                     break
 
