@@ -1993,6 +1993,13 @@ async def openai_websocket_proxy_route(
         "Authorization": f"Bearer {openai_api_key}"
     }
 
+    requested_subprotocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+    await websocket.accept(subprotocol=requested_subprotocols[0] if requested_subprotocols else None)
+
     await websocket_passthrough_request(
         websocket=websocket,
         target=wss_target,
@@ -2000,7 +2007,7 @@ async def openai_websocket_proxy_route(
         user_api_key_dict=user_api_key_dict,
         forward_headers=False,
         endpoint=websocket.url.path,
-        accept_websocket=True,
+        accept_websocket=False,
     )
 
 
