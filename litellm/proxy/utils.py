@@ -1774,18 +1774,23 @@ class ProxyLogging:
         return caps
 
     @staticmethod
-    def _stream_requires_guardrail_translation(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    def _stream_guardrail_translation_call_type(
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> CallTypes | None:
         from litellm.litellm_core_utils.api_route_to_call_types import (
             get_call_types_for_route,
         )
 
         route: Final = user_api_key_dict.request_route
         if not route:
-            return False
+            return None
         call_types: Final = get_call_types_for_route(route)
         if not call_types:
-            return False
-        return call_types[0] in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES
+            return None
+        call_type: Final = call_types[0]
+        if call_type not in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES:
+            return None
+        return call_type
 
     @staticmethod
     def has_post_call_response_headers_callbacks() -> bool:
@@ -2748,7 +2753,7 @@ class ProxyLogging:
         request_data = _check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
         current_response = response
-        stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
+        stream_translation_call_type: Final = ProxyLogging._stream_guardrail_translation_call_type(user_api_key_dict)
 
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
@@ -2761,10 +2766,11 @@ class ProxyLogging:
                 "apply_guardrail"
                 if (
                     kind == "override"
-                    and stream_needs_translation
+                    and stream_translation_call_type is not None
                     and isinstance(resolved_callback, CustomGuardrail)
                     and resolved_callback.uses_apply_guardrail_interface()
                     and not resolved_callback.mask_response_content
+                    and stream_translation_call_type not in resolved_callback.supported_streaming_call_types
                 )
                 else kind
             )

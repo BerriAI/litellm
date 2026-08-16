@@ -103,6 +103,7 @@ class CustomGuardrail(CustomLogger):
     use_native_during_call_hook: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+    supported_streaming_call_types: ClassVar[frozenset[CallTypes]] = frozenset()
 
     def __init__(
         self,

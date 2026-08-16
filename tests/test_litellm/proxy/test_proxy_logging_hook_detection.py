@@ -233,27 +233,28 @@ def _streaming_logging_obj():
     )
 
 
-def test_stream_requires_guardrail_translation_route_detection():
+def test_stream_guardrail_translation_call_type_route_detection():
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import CallTypes
 
     assert (
-        ProxyLogging._stream_requires_guardrail_translation(
+        ProxyLogging._stream_guardrail_translation_call_type(
             UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages")
         )
-        is True
+        is CallTypes.anthropic_messages
     )
     assert (
-        ProxyLogging._stream_requires_guardrail_translation(
+        ProxyLogging._stream_guardrail_translation_call_type(
             UserAPIKeyAuth(api_key="sk-1234", request_route="/chat/completions")
         )
-        is False
+        is None
     )
-    assert ProxyLogging._stream_requires_guardrail_translation(UserAPIKeyAuth(api_key="sk-1234")) is False
+    assert ProxyLogging._stream_guardrail_translation_call_type(UserAPIKeyAuth(api_key="sk-1234")) is None
     assert (
-        ProxyLogging._stream_requires_guardrail_translation(
+        ProxyLogging._stream_guardrail_translation_call_type(
             UserAPIKeyAuth(api_key="sk-1234", request_route="/route/without/call/types")
         )
-        is False
+        is None
     )
 
 
@@ -425,6 +426,46 @@ async def test_post_call_stream_guardrail_reroutes_inherited_apply_guardrail(mon
 
     assert exc_info.value.detail["keyword"] == "zebra"
     assert delivered == []
+
+
+@pytest.mark.asyncio
+async def test_protocol_aware_guardrail_keeps_own_anthropic_streaming_iterator(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import CallTypes
+
+    first_chunk = _sse_bytes("message_start", {"type": "message_start"})
+
+    class _ProtocolAwareGuardrail(CustomGuardrail):
+        supported_streaming_call_types = frozenset({CallTypes.anthropic_messages})
+
+        def __init__(self):
+            super().__init__(guardrail_name="protocol-aware", event_hook="post_call", default_on=True)
+            self.own_iterator_called = False
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            self.own_iterator_called = True
+            async for item in response:
+                yield item
+
+    async def response_stream():
+        yield first_chunk
+        raise AssertionError("upstream requested another chunk before the first chunk was emitted")
+
+    guardrail = _ProtocolAwareGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    guarded_stream = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
+        response=response_stream(),
+        request_data={"model": "claude-sonnet-5", "metadata": {}},
+    )
+
+    assert await anext(guarded_stream) == first_chunk
+    assert guardrail.own_iterator_called is True
+    await guarded_stream.aclose()
 
 
 @pytest.mark.asyncio
