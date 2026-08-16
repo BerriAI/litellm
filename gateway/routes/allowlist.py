@@ -103,6 +103,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/toolset/",
     # Realtime / streaming
     "/v1/realtime",
+    "/v1/live",
     "/realtime",
     # Health & ops
     "/health",
