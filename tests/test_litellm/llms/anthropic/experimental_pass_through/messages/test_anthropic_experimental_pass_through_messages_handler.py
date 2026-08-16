@@ -939,6 +939,28 @@ def test_gate_translates_when_supported_endpoints_absent(monkeypatch):
     assert "config" not in captured
 
 
+def test_gate_uses_chat_completions_when_requested(monkeypatch):
+    """The per-deployment chat-completions opt-in must bypass Responses API."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    captured, translation_calls = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+        use_chat_completions_api=True,
+    )
+
+    assert result == "translated"
+    assert translation_calls["count"] == 1
+    assert "config" not in captured
+
+
 def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypatch):
     """A deployment that lists only /v1/chat/completions is still translated;
     the opt-in is specifically the /v1/messages entry."""
