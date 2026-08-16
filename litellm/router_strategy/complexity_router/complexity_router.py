@@ -30,6 +30,7 @@ from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
+from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
@@ -1129,7 +1130,9 @@ class ComplexityRouter(CustomLogger):
         if classifier_cost is not None:
             decision["classifier_cost"] = classifier_cost
         if tier_litellm_params:
-            decision["tier_litellm_params"] = tier_litellm_params
+            masked_tier_litellm_params: Final = mask_credentials_in_payload(tier_litellm_params)
+            if isinstance(masked_tier_litellm_params, Mapping):
+                decision["tier_litellm_params"] = masked_tier_litellm_params
         return decision
 
     async def aclassify(

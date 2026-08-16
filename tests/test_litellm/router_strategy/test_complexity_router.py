@@ -8261,6 +8261,49 @@ async def test_tier_model_params_reach_the_hook_response_and_override_client_val
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["classification", "keyword", "session"])
+async def test_tier_params_mask_credentials_in_routing_decision(route, mock_router_instance):
+    params = {"reasoning_effort": "xhigh", "api_key": "secret-tier-key"}
+    config = {
+        "tiers": {
+            tier.value: {"model_name": "opus", "litellm_params": params}
+            for tier in ComplexityTier
+        },
+        "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}]
+        if route == "keyword"
+        else None,
+        "session_affinity": route == "session",
+    }
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config=config,
+    )
+    request_kwargs = {"metadata": {"session_id": "masked-params-session"}}
+    if route == "session":
+        mock_router_instance.cache = DualCache()
+        await mock_router_instance.cache.async_set_cache(
+            key=router._get_session_affinity_cache_key("masked-params-session", request_kwargs),
+            value={"model": "opus", "tier": "REASONING"},
+        )
+    message = "reason carefully about this" if route == "keyword" else "hello"
+
+    response = await router.async_pre_routing_hook(
+        model="test-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": message}],
+    )
+
+    assert response is not None
+    assert response.litellm_params == params
+    assert response.routing_decision is not None
+    assert response.routing_decision["tier_litellm_params"] == {
+        "reasoning_effort": "xhigh",
+        "api_key": "secr*******-key",
+    }
+
+
+@pytest.mark.asyncio
 async def test_session_pin_outside_tiers_does_not_inherit_medium_params(mock_router_instance):
     mock_router_instance.cache = DualCache()
     router = ComplexityRouter(
