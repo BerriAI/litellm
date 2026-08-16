@@ -10868,6 +10868,146 @@ async def realtime_websocket_endpoint(
 
 ######################################################################
 
+#                    /v1/audio/speech/stream-input Endpoint
+
+######################################################################
+
+
+@app.websocket("/v1/audio/speech/stream-input")
+@app.websocket("/audio/speech/stream-input")
+async def elevenlabs_tts_stream_input_endpoint(
+    websocket: WebSocket,
+    model: str = fastapi.Query(
+        ...,
+        description="Model ID, e.g. 'elevenlabs/eleven_multilingual_v2' or 'eleven_multilingual_v2'.",
+    ),
+    voice: str = fastapi.Query(
+        ...,
+        description="ElevenLabs voice ID or an OpenAI voice-name alias (alloy, coral, …).",
+    ),
+    output_format: str = fastapi.Query(
+        "mp3_44100_128",
+        description="Audio output format accepted by ElevenLabs (e.g. 'pcm_44100', 'mp3_44100_128').",
+    ),
+    stability: float | None = fastapi.Query(None, description="Voice stability (0-1)."),
+    similarity_boost: float | None = fastapi.Query(None, description="Voice similarity boost (0-1)."),
+    style: float | None = fastapi.Query(None, description="Voice style (0-1, v2+ models only)."),
+    speed: float | None = fastapi.Query(None, description="Speaking speed (0.7-1.2)."),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+):
+    """
+    ElevenLabs WebSocket streaming-input TTS endpoint.
+
+    The proxy sends BOS automatically. The client streams text chunks as
+    {"text": "..."} messages and signals end-of-stream with {"text": ""}.
+    Audio responses are forwarded back as JSON (same format as ElevenLabs).
+
+    Query parameters map directly to ElevenLabs voice/model options; no
+    per-message auth is needed because the proxy injects xi-api-key upstream.
+    """
+    from datetime import datetime
+    from uuid import uuid4
+
+    import httpx
+
+    from litellm.llms.elevenlabs.text_to_speech.transformation import (
+        ElevenLabsTextToSpeechConfig,
+    )
+    from litellm.llms.elevenlabs.text_to_speech.ws_handler import (
+        VoiceSettings,
+        stream_input_tts,
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+    elevenlabs_model: Final = model.removeprefix("elevenlabs/")
+    litellm_model: Final = f"elevenlabs/{elevenlabs_model}"
+
+    try:
+        await can_key_call_resolved_model(
+            model=litellm_model,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+    except ProxyException as e:
+        await websocket.close(code=1008, reason=e.message[:120])
+        return
+
+    await websocket.accept()
+
+    elevenlabs_config: Final = ElevenLabsTextToSpeechConfig()
+    voice_id: Final = elevenlabs_config._extract_voice_id(voice)
+
+    raw_voice_settings: Final = {
+        k: v
+        for k, v in {
+            "stability": stability,
+            "similarity_boost": similarity_boost,
+            "style": style,
+            "speed": speed,
+        }.items()
+        if v is not None
+    }
+    voice_settings: Final[VoiceSettings | None] = cast(VoiceSettings, raw_voice_settings) if raw_voice_settings else None
+
+    start_time: Final = datetime.now()
+    litellm_call_id: Final = str(uuid4())
+
+    logging_obj: Final = Logging(
+        model=litellm_model,
+        messages=[],
+        stream=True,
+        call_type="aspeech",
+        start_time=start_time,
+        litellm_call_id=litellm_call_id,
+        function_id="elevenlabs_tts_stream_input",
+    )
+
+    try:
+        total_chars: Final = await stream_input_tts(
+            client_ws=websocket,
+            model=elevenlabs_model,
+            voice_id=voice_id,
+            output_format=output_format,
+            voice_settings=voice_settings,
+        )
+
+        end_time: Final = datetime.now()
+
+        try:
+            model_info: Final = litellm.get_model_info(
+                model=litellm_model, custom_llm_provider="elevenlabs"
+            )
+            cost_per_char: Final = model_info.get("input_cost_per_character") or 0.0
+        except Exception:
+            cost_per_char = 0.0
+
+        response_cost: Final = total_chars * cost_per_char
+
+        mock_http_response: Final = httpx.Response(200, content=b"")
+        result: Final = HttpxBinaryResponseContent(mock_http_response)
+        result._hidden_params = {
+            "response_cost": response_cost,
+            "model_id": litellm_model,
+            "litellm_call_id": litellm_call_id,
+        }
+        await logging_obj.async_success_handler(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+        )
+    except Exception:
+        verbose_proxy_logger.exception("ElevenLabs TTS stream-input error")
+        try:
+            await websocket.close(code=1011, reason="Internal server error")
+        except Exception:
+            pass
+
+
+######################################################################
+
 #                          /v1/assistant Endpoints
 
 
