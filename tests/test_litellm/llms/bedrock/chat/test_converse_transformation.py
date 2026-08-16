@@ -30,7 +30,7 @@ def test_transform_usage():
         }
     )
     config = AmazonConverseConfig()
-    openai_usage = config._transform_usage(usage)
+    openai_usage = config.transform_usage(usage)
     assert (
         openai_usage.prompt_tokens
         == usage["inputTokens"]
@@ -62,7 +62,7 @@ def test_transform_usage_with_reasoning_content():
     )
     config = AmazonConverseConfig()
     reasoning_text = "Let me think about this step by step."
-    openai_usage = config._transform_usage(usage, reasoning_content=reasoning_text)
+    openai_usage = config.transform_usage(usage, reasoning_content=reasoning_text)
     assert openai_usage.completion_tokens_details is not None
     assert openai_usage.completion_tokens_details.reasoning_tokens > 0
     assert openai_usage.completion_tokens_details.text_tokens == (

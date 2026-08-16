@@ -424,6 +424,38 @@ def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
     return 0
 
 
+def _is_converse_usage_shape(usage_object: dict) -> bool:
+    """Converse-family models report camelCase token counts, not Anthropic's snake_case."""
+    return "inputTokens" in usage_object or "outputTokens" in usage_object
+
+
+def _get_converse_batch_usage(usage_object: dict) -> Usage:
+    """Read a Converse-shaped usage block with the same transform the live Converse path uses,
+    so a batch and an equivalent non-batch call agree on tokens."""
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.llms.bedrock import ConverseTokenUsageBlock
+
+    input_tokens: Final = int(usage_object.get("inputTokens") or 0)
+    output_tokens: Final = int(usage_object.get("outputTokens") or 0)
+    cache_read: Final = int(
+        usage_object.get("cacheReadInputTokens") or usage_object.get("cacheReadInputTokenCount") or 0
+    )
+    cache_write: Final = int(
+        usage_object.get("cacheWriteInputTokens") or usage_object.get("cacheWriteInputTokenCount") or 0
+    )
+    return AmazonConverseConfig().transform_usage(
+        ConverseTokenUsageBlock(
+            inputTokens=input_tokens,
+            outputTokens=output_tokens,
+            totalTokens=int(usage_object.get("totalTokens") or input_tokens + output_tokens),
+            cacheReadInputTokenCount=cache_read,
+            cacheReadInputTokens=cache_read,
+            cacheWriteInputTokenCount=cache_write,
+            cacheWriteInputTokens=cache_write,
+        )
+    )
+
+
 def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_provider: str = "openai") -> Usage:
     """
     Get the tokens of a batch job from the response body
@@ -431,10 +463,21 @@ def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_prov
     if custom_llm_provider in ("anthropic", "bedrock"):
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        return AnthropicConfig().calculate_usage(
-            usage_object=response_body.get("usage", None) or {},
+        usage_object: Final = response_body.get("usage", None) or {}
+        if custom_llm_provider == "bedrock" and _is_converse_usage_shape(usage_object):
+            return _get_converse_batch_usage(usage_object)
+        anthropic_usage: Final = AnthropicConfig().calculate_usage(
+            usage_object=usage_object,
             reasoning_content=None,
         )
+        if usage_object and anthropic_usage.total_tokens == 0:
+            verbose_logger.warning(
+                "batch output line reported usage this parser does not understand, so it will be billed at $0. "
+                "provider=%s usage_keys=%s",
+                custom_llm_provider,
+                sorted(usage_object.keys()),
+            )
+        return anthropic_usage
     from litellm.responses.utils import ResponseAPILoggingUtils
 
     _usage_dict: Final = response_body.get("usage", None) or {}
