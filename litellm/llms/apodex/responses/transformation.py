@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from time import time
-from typing import TYPE_CHECKING, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -44,6 +45,27 @@ if TYPE_CHECKING:
 _STATEFUL_PARAMS: Final = ("previous_response_id", "background")
 _CANCEL_RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
 _BODY_FRAMING_HEADERS: Final = frozenset({"content-encoding", "content-length"})
+
+_SWARM_DELTA_EVENT: Final = "response.swarm.llm_delta"
+
+
+class _SwarmChannel(NamedTuple):
+    """How one `swarm.data.channel` maps onto the OpenAI event that carries it."""
+
+    event_type: str
+    item_id_prefix: str
+    index_field: str
+
+
+# A Deep Research run streams several agents. Only the reporter's `output_text` is
+# the answer that lands in the final `response.completed` snapshot; the worker's
+# channel-less deltas are an intermediate draft and must not be mistaken for it.
+_SWARM_CHANNELS: Final = MappingProxyType(
+    {
+        "output_text": _SwarmChannel("response.output_text.delta", "msg", "content_index"),
+        "reasoning": _SwarmChannel("response.reasoning_summary_text.delta", "rs", "summary_index"),
+    }
+)
 
 
 class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
@@ -115,41 +137,48 @@ class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
         parsed_chunk: dict,  # mutable-ok: matches the base-class signature
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIStreamingResponse:
-        """Surface the Deep Research answer text as the OpenAI delta event callers expect.
+        """Surface a Deep Research run's text as the OpenAI delta events callers expect.
 
-        Observed live, not documented: a Deep Research stream carries its text in
-        `response.swarm.llm_delta` and never emits `response.output_text.delta`, so
-        without this the answer arrives only in the final `response.completed`
-        snapshot. `channel` splits the agent's reasoning from its answer; everything
-        else falls through to the base class as a GenericEvent.
+        Observed live, not documented: the stream carries all of its text in
+        `response.swarm.llm_delta` and never emits `response.output_text.delta` or
+        any reasoning event, so without this the answer arrives only in the final
+        `response.completed` snapshot and the reasoning is lost. Everything this
+        does not recognise, the remaining `response.swarm.*` lifecycle events
+        included, falls through to the base class as a GenericEvent.
         """
-        swarm: Final = parsed_chunk.get("swarm")
-        swarm_data: Final = swarm.get("data") if isinstance(swarm, dict) else None
-        if (
-            parsed_chunk.get("type") != "response.swarm.llm_delta"
-            or not isinstance(swarm_data, dict)
-            or swarm_data.get("channel") != "output_text"
-            or not isinstance(swarm_data.get("delta"), str)
-        ):
-            return super().transform_streaming_response(
-                model=model,
-                parsed_chunk=parsed_chunk,
-                logging_obj=logging_obj,
-            )
-
-        response_id: Final = str(parsed_chunk.get("response_id", ""))
+        mapped: Final = self._map_swarm_delta(parsed_chunk)
         return super().transform_streaming_response(
             model=model,
-            parsed_chunk={  # mutable-ok: JSON event payload
-                "type": "response.output_text.delta",
-                "item_id": f"msg_{response_id}",
-                "output_index": 0,
-                "content_index": 0,
-                "delta": swarm_data["delta"],
-                "sequence_number": parsed_chunk.get("sequence_number", 0),
-            },
+            parsed_chunk=parsed_chunk if mapped is None else mapped,
             logging_obj=logging_obj,
         )
+
+    @staticmethod
+    def _map_swarm_delta(
+        parsed_chunk: Mapping[str, object],
+    ) -> dict[str, object] | None:  # mutable-ok: feeds the base class's `parsed_chunk: dict`
+        """The OpenAI event for this swarm delta, or None to pass the chunk through."""
+        if parsed_chunk.get("type") != _SWARM_DELTA_EVENT:
+            return None
+        swarm: Final = parsed_chunk.get("swarm")
+        data: Final = swarm.get("data") if isinstance(swarm, Mapping) else None
+        if not isinstance(data, Mapping):
+            return None
+
+        channel: Final = _SWARM_CHANNELS.get(data.get("channel"))
+        delta: Final = data.get("delta")
+        if channel is None or not isinstance(delta, str):
+            return None
+
+        response_id: Final = str(parsed_chunk.get("response_id", ""))
+        return {  # mutable-ok: JSON event payload
+            "type": channel.event_type,
+            "item_id": f"{channel.item_id_prefix}_{response_id}",
+            "output_index": 0,
+            channel.index_field: 0,
+            "delta": delta,
+            "sequence_number": parsed_chunk.get("sequence_number", 0),
+        }
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: matches the base-class signature
         inherited: Final = super().get_supported_openai_params(model)

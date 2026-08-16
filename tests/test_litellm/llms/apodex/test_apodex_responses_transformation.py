@@ -246,7 +246,7 @@ class TestDeepResearchKeepsState:
                 "response_id": "w_c4b77c96",
                 "sequence_number": 12,
                 "swarm": {
-                    "agent_id": "stateful_react",
+                    "agent_id": "reporter",
                     "data": {
                         "channel": "output_text",
                         "delta": "Hello there, friend!",
@@ -263,15 +263,46 @@ class TestDeepResearchKeepsState:
         assert event.item_id == "msg_w_c4b77c96"
         assert event.delta == "Hello there, friend!"
         assert event.sequence_number == 12
+        assert event.content_index == 0
+
+    def test_reasoning_delta_becomes_a_reasoning_summary_delta(self):
+        """`response.reasoning_summary_text.delta` is what LiteLLM already translates
+        into an Anthropic `thinking_delta`, which is the route Deep Research takes on
+        /v1/messages. It also keeps a separate item id from the answer text."""
+        config = _responses_config("apodex-1-1-deep-research")
+        event = config.transform_streaming_response(
+            model="apodex-1-1-deep-research",
+            parsed_chunk={
+                "type": "response.swarm.llm_delta",
+                "response_id": "w_c4b77c96",
+                "sequence_number": 7,
+                "swarm": {
+                    "agent_id": "stateful_react",
+                    "data": {"channel": "reasoning", "delta": "The user wants", "delta_index": 0},
+                },
+            },
+            logging_obj=None,
+        )
+
+        assert event.type == "response.reasoning_summary_text.delta"
+        assert event.item_id == "rs_w_c4b77c96"
+        assert event.delta == "The user wants"
+        assert event.summary_index == 0
+        assert not hasattr(event, "content_index")
 
     @pytest.mark.parametrize(
         "channel",
-        ("reasoning", None),
-        ids=("reasoning-channel", "no-channel"),
+        (None, "tool_output"),
+        ids=("no-channel", "unknown-channel"),
     )
-    def test_non_answer_deltas_are_not_claimed_as_output_text(self, channel):
-        """Most of the stream is the agent thinking; only `output_text` is the answer."""
-        data = {"delta": "The"} if channel is None else {"channel": channel, "delta": "The"}
+    def test_intermediate_agent_deltas_are_not_claimed(self, channel):
+        """The worker agent streams a draft answer on a channel-less delta.
+
+        Live capture: those four deltas spell "Hello, friend! How are you?" while the
+        reporter's `output_text` is the "Hello there, friend!" that lands in
+        response.completed. Claiming them would splice the draft into the answer.
+        """
+        data = {"delta": "Hello,"} if channel is None else {"channel": channel, "delta": "Hello,"}
         config = _responses_config("apodex-1-1-deep-research")
         event = config.transform_streaming_response(
             model="apodex-1-1-deep-research",
@@ -285,6 +316,33 @@ class TestDeepResearchKeepsState:
         )
 
         assert event.type == "response.swarm.llm_delta"
+
+    @pytest.mark.parametrize(
+        "event_type",
+        (
+            "response.swarm.run_started",
+            "response.swarm.run_finished",
+            "response.swarm.injection_window",
+            "response.swarm.llm_attempt_started",
+            "response.swarm.llm_attempt_finished",
+        ),
+    )
+    def test_swarm_lifecycle_events_pass_through(self, event_type: str):
+        """LiteLLM cannot drop a chunk from the stream, so these stay as GenericEvent
+        rather than being silently swallowed; `run_finished` carries the final content."""
+        config = _responses_config("apodex-1-1-deep-research")
+        event = config.transform_streaming_response(
+            model="apodex-1-1-deep-research",
+            parsed_chunk={
+                "type": event_type,
+                "response_id": "w_c4b77c96",
+                "sequence_number": 4,
+                "swarm": {"agent_id": "reporter", "data": {"status": "success"}},
+            },
+            logging_obj=None,
+        )
+
+        assert event.type == event_type
 
     def test_documented_events_pass_through_untouched(self):
         config = _responses_config("apodex-1-1-deep-research")
