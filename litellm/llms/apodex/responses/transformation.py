@@ -165,8 +165,11 @@ class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
         if not isinstance(data, Mapping):
             return None
 
-        channel: Final = _SWARM_CHANNELS.get(data.get("channel"))
+        channel_name: Final = data.get("channel")
         delta: Final = data.get("delta")
+        if not isinstance(channel_name, str):
+            return None
+        channel: Final = _SWARM_CHANNELS.get(channel_name)
         if channel is None or not isinstance(delta, str):
             return None
 

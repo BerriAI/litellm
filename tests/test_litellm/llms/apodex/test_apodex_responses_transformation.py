@@ -7,11 +7,15 @@ the model rather than applied provider-wide.
 """
 
 import gzip
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 import litellm
+from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
+    AnthropicResponsesStreamWrapper,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -290,10 +294,56 @@ class TestDeepResearchKeepsState:
         assert event.summary_index == 0
         assert not hasattr(event, "content_index")
 
+    def test_reasoning_and_answer_form_valid_anthropic_blocks(self):
+        config = _responses_config("apodex-1-1-deep-research")
+        reasoning_event = config.transform_streaming_response(
+            model="apodex-1-1-deep-research",
+            parsed_chunk={
+                "type": "response.swarm.llm_delta",
+                "response_id": "w_c4b77c96",
+                "sequence_number": 7,
+                "swarm": {"data": {"channel": "reasoning", "delta": "The user wants"}},
+            },
+            logging_obj=None,
+        )
+        answer_event = config.transform_streaming_response(
+            model="apodex-1-1-deep-research",
+            parsed_chunk={
+                "type": "response.swarm.llm_delta",
+                "response_id": "w_c4b77c96",
+                "sequence_number": 8,
+                "swarm": {"data": {"channel": "output_text", "delta": "Hello there, friend!"}},
+            },
+            logging_obj=None,
+        )
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=None, model="apodex-1-1-deep-research")
+        for event in (
+            reasoning_event,
+            answer_event,
+            {"type": "response.completed", "response": SimpleNamespace(status="completed", output=[], usage=None)},
+        ):
+            wrapper._process_event(event)
+
+        chunks = list(wrapper._chunk_queue)
+        assert [(chunk["type"], chunk.get("index")) for chunk in chunks] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+            ("content_block_stop", 0),
+            ("content_block_start", 1),
+            ("content_block_delta", 1),
+            ("content_block_stop", 1),
+            ("message_delta", None),
+            ("message_stop", None),
+        ]
+        assert chunks[0]["content_block"]["type"] == "thinking"
+        assert chunks[1]["delta"] == {"type": "thinking_delta", "thinking": "The user wants"}
+        assert chunks[3]["content_block"]["type"] == "text"
+        assert chunks[4]["delta"] == {"type": "text_delta", "text": "Hello there, friend!"}
+
     @pytest.mark.parametrize(
         "channel",
-        (None, "tool_output"),
-        ids=("no-channel", "unknown-channel"),
+        (None, "tool_output", []),
+        ids=("no-channel", "unknown-channel", "non-string-channel"),
     )
     def test_intermediate_agent_deltas_are_not_claimed(self, channel):
         """The worker agent streams a draft answer on a channel-less delta.

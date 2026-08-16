@@ -113,9 +113,10 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
                 {"type": "response.output_text.delta", "item_id": "m1", "delta": "Hi"},
             ]
         )
-        assert chunks[1]["type"] == "content_block_start"
-        assert chunks[1]["content_block"] == {"type": "text", "text": ""}
-        assert [c["index"] for c in chunks[1:]] == [1, 1]
+        assert chunks[1] == {"type": "content_block_stop", "index": 0}
+        assert chunks[2]["type"] == "content_block_start"
+        assert chunks[2]["content_block"] == {"type": "text", "text": ""}
+        assert [c["index"] for c in chunks[1:]] == [0, 1, 1]
 
     def test_process_event_registered_item_id_does_not_synthesize_start(self):
         chunks = _process_all(
@@ -131,6 +132,54 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestProcessEventReasoningDeltaWithoutOutputItemAdded:
+    def test_reasoning_opens_thinking_block_before_delta(self):
+        chunks = _process_all(
+            [
+                {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "Think "},
+                {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "carefully"},
+            ]
+        )
+
+        assert [chunk["type"] for chunk in chunks] == [
+            "content_block_start",
+            "content_block_delta",
+            "content_block_delta",
+        ]
+        assert chunks[0] == {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        }
+        assert chunks[1] == {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Think "},
+        }
+
+    def test_reasoning_and_text_get_separate_closed_blocks(self):
+        response = SimpleNamespace(status="completed", output=[], usage=None)
+        chunks = _process_all(
+            [
+                {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "Think"},
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Answer"},
+                {"type": "response.completed", "response": response},
+            ]
+        )
+
+        assert [(chunk["type"], chunk.get("index")) for chunk in chunks] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+            ("content_block_stop", 0),
+            ("content_block_start", 1),
+            ("content_block_delta", 1),
+            ("content_block_stop", 1),
+            ("message_delta", None),
+            ("message_stop", None),
+        ]
+        assert chunks[3]["content_block"] == {"type": "text", "text": ""}
 
 
 class TestResponseCompletedUsage:

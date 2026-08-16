@@ -3,7 +3,7 @@
 import json
 import traceback
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final
 
 from litellm import verbose_logger
@@ -36,6 +36,8 @@ class AnthropicResponsesStreamWrapper:
         self.model = model
         self._message_id: str = f"msg_{uuid.uuid4()}"
         self._current_block_index: int = -1
+        self._open_block_index: int | None = None
+        self._open_block_type: str | None = None
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
@@ -68,6 +70,48 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
+    def _close_open_block(self) -> None:
+        if self._open_block_index is None:
+            return
+        self._chunk_queue.append(
+            {
+                "type": "content_block_stop",
+                "index": self._open_block_index,
+            }
+        )
+        self._open_block_index = None
+        self._open_block_type = None
+
+    def _start_block(self, block_idx: int, block_type: str, content_block: Mapping[str, object]) -> None:
+        self._close_open_block()
+        self._chunk_queue.append(
+            {
+                "type": "content_block_start",
+                "index": block_idx,
+                "content_block": dict(content_block),
+            }
+        )
+        self._open_block_index = block_idx
+        self._open_block_type = block_type
+
+    def _get_or_start_block(
+        self,
+        item_id: str | None,
+        block_type: str,
+        content_block: Mapping[str, object],
+    ) -> int:
+        mapped_index: Final = self._item_id_to_block_index.get(item_id) if item_id else None
+        if mapped_index is not None:
+            return mapped_index
+        if item_id is None and self._open_block_index is not None and self._open_block_type == block_type:
+            return self._open_block_index
+
+        block_idx: Final = self._next_block_index()
+        if item_id:
+            self._item_id_to_block_index[item_id] = block_idx
+        self._start_block(block_idx, block_type, content_block)
+        return block_idx
+
     def _process_event(self, event: Any) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
         event_type = getattr(event, "type", None)
@@ -96,13 +140,7 @@ class AnthropicResponsesStreamWrapper:
                 block_idx = self._next_block_index()
                 if item_id:
                     self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                self._start_block(block_idx, "text", {"type": "text", "text": ""})
             elif item_type == "function_call":
                 call_id: Final = (
                     getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
@@ -112,54 +150,36 @@ class AnthropicResponsesStreamWrapper:
                 if item_id:
                     self._item_id_to_block_index[item_id] = block_idx
                     self._pending_tool_ids[item_id] = call_id
-                self._chunk_queue.append(
+                self._start_block(
+                    block_idx,
+                    "tool_use",
                     {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {
-                            "type": "tool_use",
-                            "id": call_id,
-                            "name": name,
-                            "input": {},
-                        },
-                    }
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": name,
+                        "input": {},
+                    },
                 )
             elif item_type == "reasoning":
                 block_idx = self._next_block_index()
                 if item_id:
                     self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "thinking", "thinking": ""},
-                    }
-                )
+                self._start_block(block_idx, "thinking", {"type": "thinking", "thinking": ""})
             return
 
         # ---- text delta ----
         if event_type == "response.output_text.delta":
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
-            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
-            if block_idx < 0:
-                # Some providers (e.g. LMStudio) skip response.output_item.added,
-                # so no text block is open yet; synthesize content_block_start
-                # instead of emitting a delta with index -1
-                block_idx = self._next_block_index()
-                if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+            text_block_idx: Final = self._get_or_start_block(
+                item_id=item_id,
+                block_type="text",
+                content_block={"type": "text", "text": ""},
+            )
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
-                    "index": block_idx,
+                    "index": text_block_idx,
                     "delta": {"type": "text_delta", "text": delta},
                 }
             )
@@ -169,15 +189,15 @@ class AnthropicResponsesStreamWrapper:
         if event_type == "response.reasoning_summary_text.delta":
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, self._current_block_index)
-                if item_id
-                else self._current_block_index
+            thinking_block_idx: Final = self._get_or_start_block(
+                item_id=item_id,
+                block_type="thinking",
+                content_block={"type": "thinking", "thinking": ""},
             )
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
-                    "index": block_idx,
+                    "index": thinking_block_idx,
                     "delta": {"type": "thinking_delta", "thinking": delta},
                 }
             )
@@ -212,12 +232,8 @@ class AnthropicResponsesStreamWrapper:
                 if item_id
                 else self._current_block_index
             )
-            self._chunk_queue.append(
-                {
-                    "type": "content_block_stop",
-                    "index": block_idx,
-                }
-            )
+            if block_idx == self._open_block_index:
+                self._close_open_block()
             return
 
         # ---- response completed -> message_delta + message_stop ----
@@ -226,6 +242,7 @@ class AnthropicResponsesStreamWrapper:
             "response.failed",
             "response.incomplete",
         ):
+            self._close_open_block()
             response_obj: Final = getattr(event, "response", None) or (
                 event.get("response") if isinstance(event, dict) else None
             )
