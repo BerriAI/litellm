@@ -11,7 +11,7 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -57,6 +57,7 @@ class BaseInteractionsAPIConfig(ABC):
     @abstractmethod
     def custom_llm_provider(self) -> LlmProviders:
         """Return the LLM provider identifier."""
+        pass
 
     @classmethod
     def get_config(cls):
@@ -78,13 +79,14 @@ class BaseInteractionsAPIConfig(ABC):
         }
 
     @abstractmethod
-    def get_supported_params(self, model: str) -> list[str]:
+    def get_supported_params(self, model: str) -> List[str]:
         """
         Return the list of supported parameters for the given model.
         """
+        pass
 
     @abstractmethod
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """
         Validate and prepare environment settings including headers.
         """
@@ -93,11 +95,11 @@ class BaseInteractionsAPIConfig(ABC):
     @abstractmethod
     def get_complete_url(
         self,
-        api_base: str | None,
-        model: str | None,
-        agent: str | None = None,
-        litellm_params: dict | None = None,
-        stream: bool | None = None,
+        api_base: Optional[str],
+        model: Optional[str],
+        agent: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         Get the complete URL for the interaction request.
@@ -121,13 +123,13 @@ class BaseInteractionsAPIConfig(ABC):
     @abstractmethod
     def transform_request(
         self,
-        model: str | None,
-        agent: str | None,
-        input: InteractionInput | None,
+        model: Optional[str],
+        agent: Optional[str],
+        input: Optional[InteractionInput],
         optional_params: InteractionsAPIOptionalRequestParams,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> Dict:
         """
         Transform the input request into the provider's expected format.
 
@@ -146,11 +148,12 @@ class BaseInteractionsAPIConfig(ABC):
         Returns:
             The transformed request body as a dictionary
         """
+        pass
 
     @abstractmethod
     def transform_response(
         self,
-        model: str | None,
+        model: Optional[str],
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
@@ -159,11 +162,12 @@ class BaseInteractionsAPIConfig(ABC):
 
         Per OpenAPI spec, the response is an Interaction object.
         """
+        pass
 
     @abstractmethod
     def transform_streaming_response(
         self,
-        model: str | None,
+        model: Optional[str],
         parsed_chunk: dict,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIStreamingResponse:
@@ -172,6 +176,7 @@ class BaseInteractionsAPIConfig(ABC):
 
         Per OpenAPI spec, streaming uses SSE with various event types.
         """
+        pass
 
     # =========================================================
     # GET INTERACTION TRANSFORMATION
@@ -184,7 +189,7 @@ class BaseInteractionsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> Tuple[str, Dict]:
         """
         Transform the get interaction request into URL and query params.
 
@@ -193,6 +198,7 @@ class BaseInteractionsAPIConfig(ABC):
         Returns:
             Tuple of (URL, query_params)
         """
+        pass
 
     @abstractmethod
     def transform_get_interaction_response(
@@ -203,6 +209,7 @@ class BaseInteractionsAPIConfig(ABC):
         """
         Transform the get interaction response.
         """
+        pass
 
     # =========================================================
     # DELETE INTERACTION TRANSFORMATION
@@ -215,7 +222,7 @@ class BaseInteractionsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> Tuple[str, Dict]:
         """
         Transform the delete interaction request into URL and body.
 
@@ -224,6 +231,7 @@ class BaseInteractionsAPIConfig(ABC):
         Returns:
             Tuple of (URL, request_body)
         """
+        pass
 
     @abstractmethod
     def transform_delete_interaction_response(
@@ -235,6 +243,7 @@ class BaseInteractionsAPIConfig(ABC):
         """
         Transform the delete interaction response.
         """
+        pass
 
     # =========================================================
     # CANCEL INTERACTION TRANSFORMATION
@@ -247,13 +256,14 @@ class BaseInteractionsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> Tuple[str, Dict]:
         """
         Transform the cancel interaction request into URL and body.
 
         Returns:
             Tuple of (URL, request_body)
         """
+        pass
 
     @abstractmethod
     def transform_cancel_interaction_response(
@@ -264,12 +274,15 @@ class BaseInteractionsAPIConfig(ABC):
         """
         Transform the cancel interaction response.
         """
+        pass
 
     # =========================================================
     # ERROR HANDLING
     # =========================================================
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
         """
         Get the appropriate exception class for an error.
         """
@@ -283,9 +296,9 @@ class BaseInteractionsAPIConfig(ABC):
 
     def should_fake_stream(
         self,
-        model: str | None,
-        stream: bool | None,
-        custom_llm_provider: str | None = None,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
     ) -> bool:
         """
         Returns True if litellm should fake a stream for the given model.

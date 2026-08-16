@@ -2,4 +2,4 @@
 
 from .main import aocr, ocr
 
-__all__ = ["aocr", "ocr"]
+__all__ = ["ocr", "aocr"]

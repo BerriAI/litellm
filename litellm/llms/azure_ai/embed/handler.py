@@ -1,4 +1,4 @@
-from typing import Final
+from typing import List, Optional, Union
 
 from openai import OpenAI
 
@@ -19,13 +19,13 @@ from .cohere_transformation import AzureAICohereConfig
 class AzureAIEmbedding(OpenAIChatCompletion):
     def _process_response(
         self,
-        image_embedding_responses: list | None,
-        text_embedding_responses: list | None,
-        image_embeddings_idx: list[int],
+        image_embedding_responses: Optional[List],
+        text_embedding_responses: Optional[List],
+        image_embeddings_idx: List[int],
         model_response: EmbeddingResponse,
-        input: list,
+        input: List,
     ):
-        combined_responses: Final = []
+        combined_responses = []
         if image_embedding_responses is not None and text_embedding_responses is not None:
             # Combine and order the results
             text_idx = 0
@@ -45,7 +45,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         elif text_embedding_responses is not None:
             model_response.data = text_embedding_responses
 
-        response: Final = AzureAICohereConfig()._transform_response(response=model_response)
+        response = AzureAICohereConfig()._transform_response(response=model_response)  # type: ignore
 
         return response
 
@@ -57,9 +57,9 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         logging_obj,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        api_key: str | None,
-        api_base: str | None,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> EmbeddingResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             client = get_async_httpx_client(
@@ -67,17 +67,17 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 params={"timeout": timeout},
             )
 
-        url: Final = f"{api_base}/images/embeddings"
+        url = "{}/images/embeddings".format(api_base)
 
-        response: Final = await client.post(
+        response = await client.post(
             url=url,
-            json=data,
-            headers={"Authorization": f"Bearer {api_key}"},
+            json=data,  # type: ignore
+            headers={"Authorization": "Bearer {}".format(api_key)},
         )
 
-        embedding_response: Final = response.json()
-        embedding_headers: Final = dict(response.headers)
-        returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(
+        embedding_response = response.json()
+        embedding_headers = dict(response.headers)
+        returned_response: EmbeddingResponse = convert_to_model_response_object(  # type: ignore
             response_object=embedding_response,
             model_response_object=model_response,
             response_type="embedding",
@@ -94,9 +94,9 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         logging_obj,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        api_key: str | None,
-        api_base: str | None,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
         if api_base is None:
             raise ValueError(
@@ -110,17 +110,17 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         if client is None or not isinstance(client, HTTPHandler):
             client = HTTPHandler(timeout=timeout, concurrent_limit=1)
 
-        url: Final = f"{api_base}/images/embeddings"
+        url = "{}/images/embeddings".format(api_base)
 
-        response: Final = client.post(
+        response = client.post(
             url=url,
-            json=data,
-            headers={"Authorization": f"Bearer {api_key}"},
+            json=data,  # type: ignore
+            headers={"Authorization": "Bearer {}".format(api_key)},
         )
 
-        embedding_response: Final = response.json()
-        embedding_headers: Final = dict(response.headers)
-        returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(
+        embedding_response = response.json()
+        embedding_headers = dict(response.headers)
+        returned_response: EmbeddingResponse = convert_to_model_response_object(  # type: ignore
             response_object=embedding_response,
             model_response_object=model_response,
             response_type="embedding",
@@ -132,13 +132,13 @@ class AzureAIEmbedding(OpenAIChatCompletion):
     async def async_embedding(
         self,
         model: str,
-        input: list,
+        input: List,
         timeout: float,
         logging_obj,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         client=None,
     ) -> EmbeddingResponse:
         (
@@ -147,11 +147,11 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_idx,
         ) = AzureAICohereConfig()._transform_request(input=input, optional_params=optional_params, model=model)
 
-        image_embedding_responses: list | None = None
-        text_embedding_responses: list | None = None
+        image_embedding_responses: Optional[List] = None
+        text_embedding_responses: Optional[List] = None
 
         if image_embeddings_request["input"]:
-            image_response: Final = await self.async_image_embedding(
+            image_response = await self.async_image_embedding(
                 model=model,
                 data=image_embeddings_request,
                 timeout=timeout,
@@ -168,7 +168,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 raise Exception("/image/embeddings route returned None Embeddings.")
 
         if v1_embeddings_request["input"]:
-            response: Final[EmbeddingResponse] = await super().embedding(
+            response: EmbeddingResponse = await super().embedding(  # type: ignore
                 model=model,
                 input=input,
                 timeout=timeout,
@@ -195,16 +195,16 @@ class AzureAIEmbedding(OpenAIChatCompletion):
     def embedding(
         self,
         model: str,
-        input: list,
+        input: List,
         timeout: float,
         logging_obj,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         client=None,
         aembedding=None,
-        max_retries: int | None = None,
+        max_retries: Optional[int] = None,
         shared_session=None,
     ) -> EmbeddingResponse:
         """
@@ -215,7 +215,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         assemble result in-order, and return
         """
         if aembedding is True:
-            return self.async_embedding(
+            return self.async_embedding(  # type: ignore
                 model,
                 input,
                 timeout,
@@ -233,11 +233,11 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_idx,
         ) = AzureAICohereConfig()._transform_request(input=input, optional_params=optional_params, model=model)
 
-        image_embedding_responses: list | None = None
-        text_embedding_responses: list | None = None
+        image_embedding_responses: Optional[List] = None
+        text_embedding_responses: Optional[List] = None
 
         if image_embeddings_request["input"]:
-            image_response: Final = self.image_embedding(
+            image_response = self.image_embedding(
                 model=model,
                 data=image_embeddings_request,
                 timeout=timeout,
@@ -254,7 +254,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 raise Exception("/image/embeddings route returned None Embeddings.")
 
         if v1_embeddings_request["input"]:
-            response: Final[EmbeddingResponse] = super().embedding(
+            response: EmbeddingResponse = super().embedding(  # type: ignore
                 model,
                 input,
                 timeout,

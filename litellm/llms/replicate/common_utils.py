@@ -1,3 +1,5 @@
+from typing import Optional, Union
+
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -8,6 +10,6 @@ class ReplicateError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict | httpx.Headers | None,
+        headers: Optional[Union[dict, httpx.Headers]],
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)

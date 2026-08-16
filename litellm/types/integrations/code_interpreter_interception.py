@@ -2,7 +2,7 @@
 Type definitions for Code Interpreter Interception integration.
 """
 
-from typing import TypedDict
+from typing import List, TypedDict
 
 
 class CodeInterpreterInterceptionConfig(TypedDict, total=False):
@@ -18,5 +18,5 @@ class CodeInterpreterInterceptionConfig(TypedDict, total=False):
     """
 
     enabled: bool
-    enabled_providers: list[str]
+    enabled_providers: List[str]
     sandbox_tool_name: str

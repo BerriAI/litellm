@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
+import { Text, Tab, TabGroup, TabList, TabPanel, TabPanels, Grid } from "@tremor/react";
 import CodeBlock from "@/components/CodeBlock";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DocLink from "./DocLink";
 
 interface ApiRefProps {
@@ -21,35 +21,33 @@ const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-2 p-8 h-[80vh] w-full mt-2">
-      <div className="mb-5">
-        {/* Header row with Docs link on the right */}
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold text-foreground">OpenAI Compatible Proxy: API Reference</h1>
-          <DocLink className="ml-3 shrink-0" href="https://docs.litellm.ai/docs/proxy/user_keys" />
-        </div>
+    <>
+      <Grid className="gap-2 p-8 h-[80vh] w-full mt-2">
+        <div className="mb-5">
+          {/* Header row with Docs link on the right */}
+          <div className="flex items-center justify-between">
+            <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
+              OpenAI Compatible Proxy: API Reference
+            </p>
+            <DocLink className="ml-3 shrink-0" href="https://docs.litellm.ai/docs/proxy/user_keys" />
+          </div>
 
-        <p className="mt-2 mb-2 text-sm text-muted-foreground">
-          LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url to
-          point to your litellm proxy. Example Below{" "}
-        </p>
+          <Text className="mt-2 mb-2">
+            LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url
+            to point to your litellm proxy. Example Below{" "}
+          </Text>
 
-        <Tabs defaultValue="openai">
-          <TabsList variant="line" className="border-b rounded-none w-full justify-start h-auto p-0">
-            <TabsTrigger value="openai" className="rounded-none px-4 py-2 flex-none">
-              OpenAI Python SDK
-            </TabsTrigger>
-            <TabsTrigger value="llamaindex" className="rounded-none px-4 py-2 flex-none">
-              LlamaIndex
-            </TabsTrigger>
-            <TabsTrigger value="langchain" className="rounded-none px-4 py-2 flex-none">
-              Langchain Py
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="openai">
-            <CodeBlock
-              language="python"
-              code={`import openai
+          <TabGroup>
+            <TabList>
+              <Tab>OpenAI Python SDK</Tab>
+              <Tab>LlamaIndex</Tab>
+              <Tab>Langchain Py</Tab>
+            </TabList>
+            <TabPanels>
+              <TabPanel>
+                <CodeBlock
+                  language="python"
+                  code={`import openai
 client = openai.OpenAI(
     api_key="your_api_key",
     base_url="${base_url}" # LiteLLM Proxy is OpenAI compatible, Read More: https://docs.litellm.ai/docs/proxy/user_keys
@@ -66,13 +64,13 @@ response = client.chat.completions.create(
 )
 
 print(response)`}
-            />
-          </TabsContent>
+                />
+              </TabPanel>
 
-          <TabsContent value="llamaindex">
-            <CodeBlock
-              language="python"
-              code={`import os, dotenv
+              <TabPanel>
+                <CodeBlock
+                  language="python"
+                  code={`import os, dotenv
 
 from llama_index.llms import AzureOpenAI
 from llama_index.embeddings import AzureOpenAIEmbedding
@@ -100,13 +98,13 @@ index = VectorStoreIndex.from_documents(documents, service_context=service_conte
 query_engine = index.as_query_engine()
 response = query_engine.query("What did the author do growing up?")
 print(response)`}
-            />
-          </TabsContent>
+                />
+              </TabPanel>
 
-          <TabsContent value="langchain">
-            <CodeBlock
-              language="python"
-              code={`from langchain.chat_models import ChatOpenAI
+              <TabPanel>
+                <CodeBlock
+                  language="python"
+                  code={`from langchain.chat_models import ChatOpenAI
 from langchain.prompts.chat import (
     ChatPromptTemplate,
     HumanMessagePromptTemplate,
@@ -131,11 +129,13 @@ messages = [
 response = chat(messages)
 
 print(response)`}
-            />
-          </TabsContent>
-        </Tabs>
-      </div>
-    </div>
+                />
+              </TabPanel>
+            </TabPanels>
+          </TabGroup>
+        </div>
+      </Grid>
+    </>
   );
 };
 

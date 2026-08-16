@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Iterable, List, Optional, Union
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import Literal, Required, TypedDict
 
 
 class CallObject(TypedDict):
@@ -10,12 +10,12 @@ class CallObject(TypedDict):
 
 class ToolResultObject(TypedDict):
     call: CallObject
-    outputs: list[dict]
+    outputs: List[dict]
 
 
 class ChatHistoryToolResult(TypedDict, total=False):
     role: Required[Literal["TOOL"]]
-    tool_results: list[ToolResultObject]
+    tool_results: List[ToolResultObject]
 
 
 class ToolCallObject(TypedDict):
@@ -26,22 +26,22 @@ class ToolCallObject(TypedDict):
 class ChatHistoryUser(TypedDict, total=False):
     role: Required[Literal["USER"]]
     message: str
-    tool_calls: list[ToolCallObject]
+    tool_calls: List[ToolCallObject]
 
 
 class ChatHistorySystem(TypedDict, total=False):
     role: Required[Literal["SYSTEM"]]
     message: str
-    tool_calls: list[ToolCallObject]
+    tool_calls: List[ToolCallObject]
 
 
 class ChatHistoryChatBot(TypedDict, total=False):
     role: Required[Literal["CHATBOT"]]
     message: str
-    tool_calls: list[ToolCallObject]
+    tool_calls: List[ToolCallObject]
 
 
-ChatHistory = list[ChatHistorySystem | ChatHistoryChatBot | ChatHistoryUser | ChatHistoryToolResult]
+ChatHistory = List[Union[ChatHistorySystem, ChatHistoryChatBot, ChatHistoryUser, ChatHistoryToolResult]]
 
 
 class CohereV2ChatResponseMessageToolCallFunction(TypedDict, total=False):
@@ -63,10 +63,10 @@ class CohereV2ChatResponseMessageContent(TypedDict):
 
 class CohereV2ChatResponseMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
-    tool_calls: list[CohereV2ChatResponseMessageToolCall]
+    tool_calls: List[CohereV2ChatResponseMessageToolCall]
     tool_plan: str
-    content: list[CohereV2ChatResponseMessageContent]
-    citations: list[dict]
+    content: List[CohereV2ChatResponseMessageContent]
+    citations: List[dict]
 
 
 class CohereV2ChatResponseUsageBilledUnits(TypedDict, total=False):
@@ -87,9 +87,9 @@ class CohereV2ChatResponseUsage(TypedDict, total=False):
 
 
 class CohereV2ChatResponseLogProbs(TypedDict, total=False):
-    token_ids: Required[list[int]]
+    token_ids: Required[List[int]]
     text: str
-    logprobs: list[float]
+    logprobs: List[float]
 
 
 class CohereV2ChatResponse(TypedDict):

@@ -1,6 +1,6 @@
 """Team management commands for LiteLLM CLI."""
 
-from typing import Any, Final
+from typing import Any, Dict, List, Optional
 
 import click
 import requests
@@ -13,17 +13,18 @@ from litellm.proxy.client import Client
 @click.group()
 def teams():
     """Manage teams and team assignments"""
+    pass
 
 
-def display_teams_table(teams: list[dict[str, Any]]) -> None:
+def display_teams_table(teams: List[Dict[str, Any]]) -> None:
     """Display teams in a formatted table"""
-    console: Final = Console()
+    console = Console()
 
     if not teams:
         console.print("No teams found for your user.")
         return
 
-    table: Final = Table(title="Available Teams")
+    table = Table(title="Available Teams")
     table.add_column("Index", style="cyan", no_wrap=True)
     table.add_column("Team Alias", style="magenta")
     table.add_column("Team ID", style="green")
@@ -64,19 +65,19 @@ def display_teams_table(teams: list[dict[str, Any]]) -> None:
 @click.pass_context
 def list(ctx: click.Context):
     """List teams that you belong to"""
-    client: Final = Client(ctx.obj["base_url"], ctx.obj["api_key"])
+    client = Client(ctx.obj["base_url"], ctx.obj["api_key"])
 
     try:
         # Use list() for simpler response structure (returns array directly)
-        teams: Final = client.teams.list()
+        teams = client.teams.list()
         display_teams_table(teams)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        error_body: Final = e.response.json()
+        error_body = e.response.json()
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        click.echo(f"Error: {str(e)}", err=True)
         raise click.Abort()
 
 
@@ -84,32 +85,32 @@ def list(ctx: click.Context):
 @click.pass_context
 def available(ctx: click.Context):
     """List teams that are available to join"""
-    client: Final = Client(ctx.obj["base_url"], ctx.obj["api_key"])
+    client = Client(ctx.obj["base_url"], ctx.obj["api_key"])
 
     try:
-        teams: Final = client.teams.get_available()
+        teams = client.teams.get_available()
         if teams:
-            console: Final = Console()
+            console = Console()
             console.print("\nAvailable Teams to Join:")
             display_teams_table(teams)
         else:
             click.echo("No available teams to join.")
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        error_body: Final = e.response.json()
+        error_body = e.response.json()
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        click.echo(f"Error: {str(e)}", err=True)
         raise click.Abort()
 
 
 @teams.command()
 @click.option("--team-id", type=str, help="Team ID to assign the key to")
 @click.pass_context
-def assign_key(ctx: click.Context, team_id: str | None):
+def assign_key(ctx: click.Context, team_id: Optional[str]):
     """Assign your current CLI key to a team"""
-    client: Final = Client(ctx.obj["base_url"], ctx.obj["api_key"])
-    api_key: Final = ctx.obj["api_key"]
+    client = Client(ctx.obj["base_url"], ctx.obj["api_key"])
+    api_key = ctx.obj["api_key"]
 
     if not api_key:
         click.echo("No API key found. Please login first using 'litellm login'")
@@ -127,7 +128,7 @@ def assign_key(ctx: click.Context, team_id: str | None):
             # Use interactive selection from auth module
             from .auth import prompt_team_selection
 
-            selected_team: Final = prompt_team_selection(teams)
+            selected_team = prompt_team_selection(teams)
 
             if selected_team:
                 team_id = selected_team.get("team_id")
@@ -154,9 +155,9 @@ def assign_key(ctx: click.Context, team_id: str | None):
 
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        error_body: Final = e.response.json()
+        error_body = e.response.json()
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        click.echo(f"Error: {str(e)}", err=True)
         raise click.Abort()

@@ -1,5 +1,5 @@
 import json
-from typing import Final, Literal
+from typing import List, Optional, Literal, Tuple
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -21,48 +21,49 @@ class CohereModelInfo(BaseLLMModelInfo):
     def get_provider_info(
         self,
         model: str,
-    ) -> ProviderSpecificModelInfo | None:
+    ) -> Optional[ProviderSpecificModelInfo]:
         """
         Default values all models of this provider support.
         """
         return None
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         """
         Returns a list of models supported by this provider.
         """
         return []
 
     @staticmethod
-    def get_api_key(api_key: str | None = None) -> str | None:
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
         return api_key
 
     @staticmethod
     def get_api_base(
-        api_base: str | None = None,
-    ) -> str | None:
+        api_base: Optional[str] = None,
+    ) -> Optional[str]:
         return api_base
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         return {}
 
     @staticmethod
-    def get_base_model(model: str) -> str | None:
+    def get_base_model(model: str) -> Optional[str]:
         """
         Returns the base model name from the given model name.
 
         Some providers like bedrock - can receive model=`invoke/anthropic.claude-3-opus-20240229-v1:0` or `converse/anthropic.claude-3-opus-20240229-v1:0`
             This function will return `anthropic.claude-3-opus-20240229-v1:0`
         """
+        pass
 
     @staticmethod
     def get_cohere_route(model: str) -> Literal["v1", "v2"]:
@@ -86,9 +87,9 @@ class CohereModelInfo(BaseLLMModelInfo):
 def validate_environment(
     headers: dict,
     model: str,
-    messages: list[AllMessageValues],
+    messages: List[AllMessageValues],
     optional_params: dict,
-    api_key: str | None = None,
+    api_key: Optional[str] = None,
 ) -> dict:
     """
     Return headers to use for cohere chat completion request
@@ -115,23 +116,23 @@ def validate_environment(
 
 
 class ModelResponseIterator:
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: list = []
+        self.content_blocks: List = []
         self.tool_index = -1
         self.json_mode = json_mode
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             text = ""
-            tool_use: Final[ChatCompletionToolCallChunk | None] = None
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
             finish_reason = ""
-            usage: Final[ChatCompletionUsageBlock | None] = None
+            usage: Optional[ChatCompletionUsageBlock] = None
             provider_specific_fields = None
 
-            index: Final = int(chunk.get("index", 0))
+            index = int(chunk.get("index", 0))
 
             if "text" in chunk:
                 text = chunk["text"]
@@ -142,7 +143,7 @@ class ModelResponseIterator:
             if "citations" in chunk:
                 provider_specific_fields = {"citations": chunk["citations"]}
 
-            returned_chunk: Final = GenericStreamingChunk(
+            returned_chunk = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
                 is_finished=is_finished,
@@ -163,7 +164,7 @@ class ModelResponseIterator:
 
     def __next__(self):
         try:
-            chunk: Final = self.response_iterator.__next__()
+            chunk = self.response_iterator.__next__()
         except StopIteration:
             raise StopIteration
         except ValueError as e:
@@ -185,11 +186,11 @@ class ModelResponseIterator:
         str_line = chunk
         if isinstance(chunk, bytes):  # Handle binary data
             str_line = chunk.decode("utf-8")  # Convert bytes to string
-            index: Final = str_line.find("data:")
+            index = str_line.find("data:")
             if index != -1:
                 str_line = str_line[index:]
 
-        data_json: Final = json.loads(str_line)
+        data_json = json.loads(str_line)
         return self.chunk_parser(chunk=data_json)
 
     # Async iterator
@@ -199,7 +200,7 @@ class ModelResponseIterator:
 
     async def __anext__(self):
         try:
-            chunk: Final = await self.async_response_iterator.__anext__()
+            chunk = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
@@ -216,28 +217,28 @@ class ModelResponseIterator:
 class CohereV2ModelResponseIterator:
     """V2-specific response iterator for Cohere streaming"""
 
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: list = []
+        self.content_blocks: List = []
         self.tool_index = -1
         self.json_mode = json_mode
 
     def _parse_content_delta(self, chunk: dict) -> str:
         """Parse content-delta chunks to extract text."""
-        delta: Final = chunk.get("delta", {})
-        message: Final = delta.get("message", {})
-        content: Final = message.get("content", {})
+        delta = chunk.get("delta", {})
+        message = delta.get("message", {})
+        content = message.get("content", {})
         if isinstance(content, dict) and "text" in content:
             return content["text"]
         elif isinstance(content, str):
             return content
         return ""
 
-    def _parse_tool_call_delta(self, chunk: dict) -> ChatCompletionToolCallChunk | None:
+    def _parse_tool_call_delta(self, chunk: dict) -> Optional[ChatCompletionToolCallChunk]:
         """Parse tool-call-delta chunks to extract tool calls."""
-        delta: Final = chunk.get("delta", {})
-        tool_calls: Final = delta.get("tool_calls", [])
+        delta = chunk.get("delta", {})
+        tool_calls = delta.get("tool_calls", [])
         if tool_calls:
             return {
                 "id": tool_calls[0].get("id", ""),
@@ -246,27 +247,27 @@ class CohereV2ModelResponseIterator:
                     "name": tool_calls[0].get("name", ""),
                     "arguments": tool_calls[0].get("arguments", ""),
                 },
-            }
+            }  # type: ignore
         return None
 
-    def _parse_tool_plan_delta(self, chunk: dict) -> dict | None:
+    def _parse_tool_plan_delta(self, chunk: dict) -> Optional[dict]:
         """Parse tool-plan-delta events to extract tool plan."""
-        data: Final = chunk.get("data", {})
-        delta: Final = data.get("delta", {})
-        message: Final = delta.get("message", {})
-        tool_plan: Final = message.get("tool_plan", "")
+        data = chunk.get("data", {})
+        delta = data.get("delta", {})
+        message = delta.get("message", {})
+        tool_plan = message.get("tool_plan", "")
         if tool_plan:
             return {"tool_plan": tool_plan}
         return None
 
-    def _parse_citation_start(self, chunk: dict) -> dict | None:
+    def _parse_citation_start(self, chunk: dict) -> Optional[dict]:
         """Parse citation-start events to extract citations."""
-        data: Final = chunk.get("data", {})
-        delta: Final = data.get("delta", {})
-        message: Final = delta.get("message", {})
-        citations: Final = message.get("citations", {})
+        data = chunk.get("data", {})
+        delta = data.get("delta", {})
+        message = delta.get("message", {})
+        citations = message.get("citations", {})
         if citations:
-            citation_data: Final = {
+            citation_data = {
                 "start": citations.get("start", 0),
                 "end": citations.get("end", 0),
                 "text": citations.get("text", ""),
@@ -276,17 +277,17 @@ class CohereV2ModelResponseIterator:
             return {"citations": [citation_data]}
         return None
 
-    def _parse_message_end(self, chunk: dict) -> tuple[bool, str, ChatCompletionUsageBlock | None]:
+    def _parse_message_end(self, chunk: dict) -> Tuple[bool, str, Optional[ChatCompletionUsageBlock]]:
         """Parse message-end events to extract finish info and usage."""
-        data: Final = chunk.get("data", {})
-        delta: Final = data.get("delta", {})
-        is_finished: Final = True
-        finish_reason: Final = delta.get("finish_reason", "stop")
+        data = chunk.get("data", {})
+        delta = data.get("delta", {})
+        is_finished = True
+        finish_reason = delta.get("finish_reason", "stop")
 
         usage = None
-        usage_data: Final = delta.get("usage", {})
+        usage_data = delta.get("usage", {})
         if usage_data:
-            tokens_data: Final = usage_data.get("tokens", {})
+            tokens_data = usage_data.get("tokens", {})
             usage = ChatCompletionUsageBlock(
                 prompt_tokens=tokens_data.get("input_tokens", 0),
                 completion_tokens=tokens_data.get("output_tokens", 0),
@@ -308,15 +309,15 @@ class CohereV2ModelResponseIterator:
         """
         try:
             text = ""
-            tool_use: ChatCompletionToolCallChunk | None = None
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
             finish_reason = ""
-            usage: ChatCompletionUsageBlock | None = None
+            usage: Optional[ChatCompletionUsageBlock] = None
             provider_specific_fields = None
 
-            index: Final = int(chunk.get("index", 0))
-            chunk_type: Final = chunk.get("type", "")
-            event_type: Final = chunk.get("event", "")
+            index = int(chunk.get("index", 0))
+            chunk_type = chunk.get("type", "")
+            event_type = chunk.get("event", "")
 
             # Handle different chunk types
             if chunk_type == "content-delta":
@@ -355,7 +356,7 @@ class CohereV2ModelResponseIterator:
 
     def __next__(self):
         try:
-            chunk: Final = self.response_iterator.__next__()
+            chunk = self.response_iterator.__next__()
         except StopIteration:
             raise StopIteration
         except ValueError as e:
@@ -377,11 +378,11 @@ class CohereV2ModelResponseIterator:
         str_line = chunk
         if isinstance(chunk, bytes):  # Handle binary data
             str_line = chunk.decode("utf-8")  # Convert bytes to string
-            index: Final = str_line.find("data:")
+            index = str_line.find("data:")
             if index != -1:
                 str_line = str_line[index:]
 
-        data_json: Final = json.loads(str_line)
+        data_json = json.loads(str_line)
         return self.chunk_parser(chunk=data_json)
 
     # Async iterator
@@ -391,7 +392,7 @@ class CohereV2ModelResponseIterator:
 
     async def __anext__(self):
         try:
-            chunk: Final = await self.async_response_iterator.__anext__()
+            chunk = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:

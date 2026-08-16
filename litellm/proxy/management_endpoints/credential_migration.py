@@ -32,7 +32,7 @@ config rows, and the SSO config table.
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
 
@@ -130,7 +130,9 @@ def classify_value(value: object, key: str = "scan") -> ValueClass:
         return "plaintext"
     if value.startswith(_V2_GCM_PREFIX):
         return "migrated"
-    decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
+    decrypted = decrypt_value_helper(
+        value=value, key=key, exception_type="debug", return_original_value=False
+    )
     if decrypted is None:
         # Did not decrypt under nacl and has no v2 marker: legacy plaintext.
         return "plaintext"
@@ -149,7 +151,9 @@ def reencrypt_value(value: object, key: str = "migrate") -> object:
         return value
     if value.startswith(_V2_GCM_PREFIX):
         return value  # idempotent: already migrated
-    decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
+    decrypted = decrypt_value_helper(
+        value=value, key=key, exception_type="debug", return_original_value=False
+    )
     if decrypted is None:
         # Either legacy plaintext (no ciphertext to migrate) or corrupt. Either
         # way, do not overwrite — preserve the value as stored.
@@ -157,13 +161,15 @@ def reencrypt_value(value: object, key: str = "migrate") -> object:
     return encrypt_value_helper(decrypted)
 
 
-def reencrypt_selective_dict(data: dict[str, object], sensitive_keys: list[str]) -> dict[str, object]:
+def reencrypt_selective_dict(
+    data: dict[str, object], sensitive_keys: list[str]
+) -> dict[str, object]:
     """Return a copy of ``data`` with only ``sensitive_keys`` re-encrypted.
 
     Non-sensitive fields (e.g. ``base_url``, ``connection_id``) are left as-is.
     Null/missing fields are skipped.
     """
-    out: Final = dict(data)
+    out = dict(data)
     for k in sensitive_keys:
         v = out.get(k)
         if v is None:
@@ -180,7 +186,7 @@ def _assert_aes_gate_enabled() -> None:
     """
     from litellm.proxy.proxy_server import general_settings
 
-    algo: Final = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING)
+    algo = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING)
     if not (isinstance(algo, str) and algo.lower() == _ALGO_AES_GCM):
         raise RuntimeError(
             "Encryption migration requires general_settings.encryption_algorithm: "
@@ -205,8 +211,10 @@ async def _migrate_config_settings_row(
     """Migrate a single ``LiteLLM_Config`` row whose ``param_value`` is a JSON
     dict with selected sensitive fields (vantage_settings / cloudzero_settings).
     """
-    report: Final = LocationReport(location=param_name)
-    record: Final = await prisma_client.db.litellm_config.find_unique(where={"param_name": param_name})
+    report = LocationReport(location=param_name)
+    record = await prisma_client.db.litellm_config.find_unique(
+        where={"param_name": param_name}
+    )
     if record is None or record.param_value is None:
         return report
 
@@ -257,8 +265,10 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
     (via the same ``_encrypt_env_variables`` path used on save), so we re-encrypt
     every present string field.
     """
-    report: Final = LocationReport(location="sso_config")
-    record: Final = await prisma_client.db.litellm_ssoconfig.find_unique(where={"id": "sso_config"})
+    report = LocationReport(location="sso_config")
+    record = await prisma_client.db.litellm_ssoconfig.find_unique(
+        where={"id": "sso_config"}
+    )
     if record is None or record.sso_settings is None:
         return report
 
@@ -268,7 +278,7 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
     if not isinstance(settings, dict):
         return report
 
-    new_settings: Final = dict(settings)
+    new_settings = dict(settings)
     changed = False
     for fld, v in settings.items():
         if not isinstance(v, str) or v == "":
@@ -322,7 +332,7 @@ async def _migrate_callback_vars_table(
         encrypt_callback_vars,
     )
 
-    report: Final = LocationReport(location=f"{table_name}.callback_vars")
+    report = LocationReport(location=f"{table_name}.callback_vars")
 
     if table_name == "team":
         table = prisma_client.db.litellm_teamtable
@@ -331,10 +341,12 @@ async def _migrate_callback_vars_table(
         table = prisma_client.db.litellm_verificationtoken
         pk = "token"
 
-    rows: Final = await table.find_many()
+    rows = await table.find_many()
     for row in rows or []:
         metadata = getattr(row, "metadata", None)
-        if not isinstance(metadata, dict) or ("logging" not in metadata and "callback_settings" not in metadata):
+        if not isinstance(metadata, dict) or (
+            "logging" not in metadata and "callback_settings" not in metadata
+        ):
             continue
 
         # Classify every callback-var value directly (strip the litellm_enc::
@@ -399,7 +411,7 @@ def _iter_callback_var_dicts(metadata: dict[str, object]):
             cvs = entry.get("callback_vars")
             if isinstance(cvs, dict):
                 yield cvs
-    callback_settings: Final = metadata.get("callback_settings")
+    callback_settings = metadata.get("callback_settings")
     if isinstance(callback_settings, dict):
         cvs = callback_settings.get("callback_vars")
         if isinstance(cvs, dict):
@@ -423,7 +435,8 @@ def _classify_callback_value(value: object) -> ValueClass:
     if not isinstance(value, str):
         return "not-a-string"
     inner = value
-    inner = inner.removeprefix(_CALLBACK_VAR_ENCRYPTED_PREFIX)
+    if inner.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
+        inner = inner[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
     return classify_value(inner, key="callback")
 
 
@@ -438,7 +451,7 @@ def _classify_callback_value(value: object) -> ValueClass:
 # ---------------------------------------------------------------------------
 
 # (location, prisma db attribute, JSON columns to walk, scalar string columns).
-_COVERED_TABLE_SPECS: Final = [
+_COVERED_TABLE_SPECS = [
     ("model_table", "litellm_proxymodeltable", ("litellm_params",), ()),
     ("credentials", "litellm_credentialstable", ("credential_values",), ()),
     ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars"), ()),
@@ -454,7 +467,7 @@ def _iter_encrypted_strings(obj: object):
     code-quality recursive-function detector (unbounded nesting has caused CPU
     spikes in the past), and an explicit stack walks arbitrary depth safely.
     """
-    stack: Final[list[object]] = [obj]
+    stack: list[object] = [obj]
     while stack:
         cur = stack.pop()
         if isinstance(cur, str):
@@ -473,7 +486,7 @@ def _classify_into_report(report: LocationReport, value: str) -> None:
     over-scanning a column is harmless to the residual count.
     """
     report.scanned += 1
-    cls: Final = classify_value(value, key="scan")
+    cls = classify_value(value, key="scan")
     if cls == "migrated":
         report.already_v2 += 1
     elif cls == "legacy":
@@ -489,12 +502,12 @@ async def _scan_one_table(
     json_columns: tuple,
     scalar_columns: tuple,
 ) -> LocationReport:
-    report: Final = LocationReport(location=location)
-    table: Final = getattr(prisma_client.db, db_attr, None)
+    report = LocationReport(location=location)
+    table = getattr(prisma_client.db, db_attr, None)
     if table is None:
         return report
     try:
-        rows: Final = await table.find_many()
+        rows = await table.find_many()
     except Exception as e:  # pragma: no cover - table absent / not migrated
         verbose_proxy_logger.debug("scan: %s unavailable: %s", location, str(e))
         return report
@@ -519,9 +532,11 @@ async def _scan_one_table(
 
 async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
     """Scan the ``environment_variables`` config row (``param_value`` dict)."""
-    report: Final = LocationReport(location="config_environment_variables")
+    report = LocationReport(location="config_environment_variables")
     try:
-        record: Final = await prisma_client.db.litellm_config.find_unique(where={"param_name": "environment_variables"})
+        record = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "environment_variables"}
+        )
     except Exception as e:  # pragma: no cover - defensive
         verbose_proxy_logger.debug("scan: config env vars unavailable: %s", str(e))
         return report
@@ -540,9 +555,13 @@ async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
 
 async def _scan_covered_tables(prisma_client: object) -> list[LocationReport]:
     """Read-only classification of every rotation-covered table. No writes."""
-    reports: Final[list[LocationReport]] = []
+    reports: list[LocationReport] = []
     for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS:
-        reports.append(await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols))
+        reports.append(
+            await _scan_one_table(
+                prisma_client, location, db_attr, json_cols, scalar_cols
+            )
+        )
     reports.append(await _scan_config_env_vars(prisma_client))
     return reports
 
@@ -552,11 +571,13 @@ async def _scan_covered_tables(prisma_client: object) -> list[LocationReport]:
 # ---------------------------------------------------------------------------
 
 # vantage_settings / cloudzero_settings sensitive fields (see *_endpoints.py).
-_VANTAGE_SENSITIVE: Final = ["api_key", "integration_token"]
-_CLOUDZERO_SENSITIVE: Final = ["api_key"]
+_VANTAGE_SENSITIVE = ["api_key", "integration_token"]
+_CLOUDZERO_SENSITIVE = ["api_key"]
 
 
-async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: object) -> list[LocationReport]:
+async def _migrate_covered_tables(
+    prisma_client: object, user_api_key_dict: object
+) -> list[LocationReport]:
     """Re-encrypt the tables already covered by ``_rotate_master_key`` (model
     table, credentials, MCP credential/env tables, config environment_variables)
     by running that orchestrator in *same-key* mode. With the AES gate on, the
@@ -571,12 +592,13 @@ async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: obje
         _rotate_master_key,
     )
 
-    pre: Final = {r.location: r for r in await _scan_covered_tables(prisma_client)}
+    pre = {r.location: r for r in await _scan_covered_tables(prisma_client)}
 
-    current_key: Final = _get_salt_key()
+    current_key = _get_salt_key()
     if current_key is None:
         raise RuntimeError(
-            "Cannot migrate covered tables: no salt key / master key is set. Set LITELLM_SALT_KEY before migrating."
+            "Cannot migrate covered tables: no salt key / master key is set. "
+            "Set LITELLM_SALT_KEY before migrating."
         )
     await _rotate_master_key(
         prisma_client=cast("PrismaClient", prisma_client),
@@ -585,7 +607,7 @@ async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: obje
         new_master_key=current_key,  # same key, algorithm-only switch
     )
 
-    post: Final = await _scan_covered_tables(prisma_client)
+    post = await _scan_covered_tables(prisma_client)
     for post_report in post:
         pre_report = pre.get(post_report.location)
         pre_legacy = pre_report.legacy if pre_report else 0
@@ -612,7 +634,7 @@ async def migrate_encryption(
     """
     _assert_aes_gate_enabled()
 
-    report: Final = MigrationReport()
+    report = MigrationReport()
 
     # Tables that already have a rotation path (items 1, 2, 5-10). On a real run
     # delegate to the rotation path (with bracketing scans for counts); on a dry
@@ -626,9 +648,19 @@ async def migrate_encryption(
 
     # Net-new walkers (items 3, 4, 11, 12, 13).
     report.add(await _migrate_callback_vars_table(prisma_client, "team", dry_run))
-    report.add(await _migrate_callback_vars_table(prisma_client, "verification_token", dry_run))
-    report.add(await _migrate_config_settings_row(prisma_client, "vantage_settings", _VANTAGE_SENSITIVE, dry_run))
-    report.add(await _migrate_config_settings_row(prisma_client, "cloudzero_settings", _CLOUDZERO_SENSITIVE, dry_run))
+    report.add(
+        await _migrate_callback_vars_table(prisma_client, "verification_token", dry_run)
+    )
+    report.add(
+        await _migrate_config_settings_row(
+            prisma_client, "vantage_settings", _VANTAGE_SENSITIVE, dry_run
+        )
+    )
+    report.add(
+        await _migrate_config_settings_row(
+            prisma_client, "cloudzero_settings", _CLOUDZERO_SENSITIVE, dry_run
+        )
+    )
     report.add(await _migrate_sso_config(prisma_client, dry_run))
 
     return report
@@ -643,7 +675,7 @@ async def check_encryption(prisma_client: object) -> MigrationReport:
     config rows, SSO config). Reports how many values are still ``legacy``;
     ``residual_legacy == 0`` across this full scan is the compliance attestation.
     """
-    report: Final = MigrationReport()
+    report = MigrationReport()
 
     # Rotation-covered tables (read-only classification).
     for covered in await _scan_covered_tables(prisma_client):
@@ -651,10 +683,20 @@ async def check_encryption(prisma_client: object) -> MigrationReport:
 
     # Net-new walker locations, in dry-run (read-only) mode.
     report.add(await _migrate_callback_vars_table(prisma_client, "team", dry_run=True))
-    report.add(await _migrate_callback_vars_table(prisma_client, "verification_token", dry_run=True))
-    report.add(await _migrate_config_settings_row(prisma_client, "vantage_settings", _VANTAGE_SENSITIVE, dry_run=True))
     report.add(
-        await _migrate_config_settings_row(prisma_client, "cloudzero_settings", _CLOUDZERO_SENSITIVE, dry_run=True)
+        await _migrate_callback_vars_table(
+            prisma_client, "verification_token", dry_run=True
+        )
+    )
+    report.add(
+        await _migrate_config_settings_row(
+            prisma_client, "vantage_settings", _VANTAGE_SENSITIVE, dry_run=True
+        )
+    )
+    report.add(
+        await _migrate_config_settings_row(
+            prisma_client, "cloudzero_settings", _CLOUDZERO_SENSITIVE, dry_run=True
+        )
     )
     report.add(await _migrate_sso_config(prisma_client, dry_run=True))
     return report

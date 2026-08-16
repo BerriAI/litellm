@@ -2,7 +2,7 @@
 CometAPI Embedding API support - OpenAI compatible
 """
 
-from typing import Final
+from typing import List, Optional, Union
 
 import httpx
 
@@ -29,29 +29,29 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         Get the complete URL for the CometAPI embedding endpoint.
         """
         api_base = "https://api.cometapi.com/v1" if api_base is None else api_base.rstrip("/")
-        complete_url: Final = f"{api_base}/embeddings"
+        complete_url = f"{api_base}/embeddings"
         return complete_url
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         """
         Validate and set up authentication headers for CometAPI.
@@ -59,7 +59,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         if api_key is None:
             api_key = get_secret_str("COMETAPI_KEY")
 
-        default_headers: Final = {
+        default_headers = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "Content-Type": "application/json",
@@ -70,7 +70,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
 
         return {**default_headers, **headers}
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> List[str]:
         """
         Get the supported OpenAI parameters for embedding requests.
         CometAPI supports standard OpenAI embedding parameters.
@@ -91,7 +91,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         """
         Map OpenAI parameters to CometAPI format.
         """
-        supported_openai_params: Final = self.get_supported_openai_params(model)
+        supported_openai_params = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
                 optional_params[param] = value
@@ -115,7 +115,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
+        api_key: Optional[str],
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -124,7 +124,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         Transform CometAPI response into standard EmbeddingResponse format.
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json = raw_response.json()
         except Exception:
             raise CometAPIException(
                 message=raw_response.text,
@@ -136,7 +136,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage: Final = Usage(
+        usage = Usage(
             prompt_tokens=raw_response_json.get("usage", {}).get("prompt_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )
@@ -144,7 +144,9 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         model_response.usage = usage
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
         """
         Get the appropriate error class for CometAPI exceptions.
         """

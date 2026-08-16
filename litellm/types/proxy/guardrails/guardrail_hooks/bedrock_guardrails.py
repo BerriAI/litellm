@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Dict, List, Literal, Optional
 
 from typing_extensions import TypedDict
 
@@ -9,7 +9,7 @@ BedrockGuardrailQualifier = Literal["grounding_source", "query", "guard_content"
 
 class BedrockTextContent(TypedDict, total=False):
     text: str
-    qualifiers: list[BedrockGuardrailQualifier]
+    qualifiers: List[BedrockGuardrailQualifier]
 
 
 class BedrockContentItem(TypedDict, total=False):
@@ -18,44 +18,41 @@ class BedrockContentItem(TypedDict, total=False):
 
 class BedrockRequest(TypedDict, total=False):
     source: Literal["INPUT", "OUTPUT"]
-    content: list[BedrockContentItem]
+    content: List[BedrockContentItem]
 
 
 class BedrockGuardrailUsage(TypedDict, total=False):
-    topicPolicyUnits: int | None
-    contentPolicyUnits: int | None
-    wordPolicyUnits: int | None
-    sensitiveInformationPolicyUnits: int | None
-    sensitiveInformationPolicyFreeUnits: int | None
-    contextualGroundingPolicyUnits: int | None
-    contentPolicyImageUnits: int | None
-    automatedReasoningPolicyUnits: int | None
-    automatedReasoningPolicies: int | None
+    topicPolicyUnits: Optional[int]
+    contentPolicyUnits: Optional[int]
+    wordPolicyUnits: Optional[int]
+    sensitiveInformationPolicyUnits: Optional[int]
+    sensitiveInformationPolicyFreeUnits: Optional[int]
+    contextualGroundingPolicyUnits: Optional[int]
 
 
 class BedrockGuardrailOutput(TypedDict, total=False):
-    text: str | None
+    text: Optional[str]
 
 
 class BedrockGuardrailTopicPolicyItem(TypedDict, total=False):
-    name: str | None
-    type: str | None
-    action: str | None
+    name: Optional[str]
+    type: Optional[str]
+    action: Optional[str]
 
 
 class BedrockGuardrailTopicPolicy(TypedDict, total=False):
-    topics: list[BedrockGuardrailTopicPolicyItem]
+    topics: List[BedrockGuardrailTopicPolicyItem]
 
 
 class BedrockGuardrailContentPolicyFilter(TypedDict, total=False):
-    type: str | None
-    confidence: str | None
-    filterStrength: str | None
-    action: str | None
+    type: Optional[str]
+    confidence: Optional[str]
+    filterStrength: Optional[str]
+    action: Optional[str]
 
 
 class BedrockGuardrailContentPolicy(TypedDict, total=False):
-    filters: list[BedrockGuardrailContentPolicyFilter]
+    filters: List[BedrockGuardrailContentPolicyFilter]
 
 
 class BedrockGuardrailWordPolicyCustomWord(TypedDict, total=False):
@@ -64,47 +61,47 @@ class BedrockGuardrailWordPolicyCustomWord(TypedDict, total=False):
 
 
 class BedrockGuardrailWordPolicyManagedWord(TypedDict, total=False):
-    match: str | None
-    type: str | None  # Note: There might be more types
-    action: str | None
+    match: Optional[str]
+    type: Optional[str]  # Note: There might be more types
+    action: Optional[str]
 
 
 class BedrockGuardrailWordPolicy(TypedDict, total=False):
-    customWords: list[BedrockGuardrailWordPolicyCustomWord]
-    managedWordLists: list[BedrockGuardrailWordPolicyManagedWord]
+    customWords: List[BedrockGuardrailWordPolicyCustomWord]
+    managedWordLists: List[BedrockGuardrailWordPolicyManagedWord]
 
 
 class BedrockGuardrailPiiEntity(TypedDict, total=False):
-    type: str | None  # Many PII types available per AWS docs
-    match: str | None
-    action: str | None
+    type: Optional[str]  # Many PII types available per AWS docs
+    match: Optional[str]
+    action: Optional[str]
 
 
 class BedrockGuardrailRegex(TypedDict, total=False):
-    name: str | None
-    regex: str | None
-    match: str | None
-    action: str | None
+    name: Optional[str]
+    regex: Optional[str]
+    match: Optional[str]
+    action: Optional[str]
 
 
 class BedrockGuardrailSensitiveInformationPolicy(TypedDict, total=False):
-    piiEntities: list[BedrockGuardrailPiiEntity] | None
-    regexes: list[BedrockGuardrailRegex] | None
+    piiEntities: Optional[List[BedrockGuardrailPiiEntity]]
+    regexes: Optional[List[BedrockGuardrailRegex]]
 
 
 class BedrockGuardrailContextualGroundingFilter(TypedDict, total=False):
-    type: str | None
-    threshold: float | None
-    score: float | None
-    action: str | None
+    type: Optional[str]
+    threshold: Optional[float]
+    score: Optional[float]
+    action: Optional[str]
 
 
 class BedrockGuardrailContextualGroundingPolicy(TypedDict, total=False):
-    filters: list[BedrockGuardrailContextualGroundingFilter]
+    filters: List[BedrockGuardrailContextualGroundingFilter]
 
 
 class BedrockGuardrailCoverage(TypedDict, total=False):
-    textCharacters: dict[str, int]
+    textCharacters: Dict[str, int]
 
 
 class BedrockGuardrailInvocationMetrics(TypedDict, total=False):
@@ -114,21 +111,21 @@ class BedrockGuardrailInvocationMetrics(TypedDict, total=False):
 
 
 class BedrockGuardrailAssessment(TypedDict, total=False):
-    topicPolicy: BedrockGuardrailTopicPolicy | None
-    contentPolicy: BedrockGuardrailContentPolicy | None
-    wordPolicy: BedrockGuardrailWordPolicy | None
-    sensitiveInformationPolicy: BedrockGuardrailSensitiveInformationPolicy | None
-    contextualGroundingPolicy: BedrockGuardrailContextualGroundingPolicy | None
+    topicPolicy: Optional[BedrockGuardrailTopicPolicy]
+    contentPolicy: Optional[BedrockGuardrailContentPolicy]
+    wordPolicy: Optional[BedrockGuardrailWordPolicy]
+    sensitiveInformationPolicy: Optional[BedrockGuardrailSensitiveInformationPolicy]
+    contextualGroundingPolicy: Optional[BedrockGuardrailContextualGroundingPolicy]
     invocationMetrics: BedrockGuardrailInvocationMetrics
     guardrailCoverage: BedrockGuardrailCoverage
 
 
 class BedrockGuardrailResponse(TypedDict, total=False):
-    usage: BedrockGuardrailUsage | None
-    action: str | None
-    output: list[BedrockGuardrailOutput] | None
-    outputs: list[BedrockGuardrailOutput] | None
-    assessments: list[BedrockGuardrailAssessment] | None
+    usage: Optional[BedrockGuardrailUsage]
+    action: Optional[str]
+    output: Optional[List[BedrockGuardrailOutput]]
+    outputs: Optional[List[BedrockGuardrailOutput]]
+    assessments: Optional[List[BedrockGuardrailAssessment]]
 
 
 # ---------------------------------------------------------------------------

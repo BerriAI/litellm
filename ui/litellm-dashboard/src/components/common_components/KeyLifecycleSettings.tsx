@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Select, Tooltip, Divider, Switch, Checkbox, Form } from "antd";
+import { Select, Tooltip, Divider, Switch, Checkbox } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput } from "@tremor/react";
 
@@ -34,6 +34,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
 
   const [showCustomInput, setShowCustomInput] = useState(isCustomInterval);
   const [customInterval, setCustomInterval] = useState(isCustomInterval ? rotationInterval : "");
+  const [durationValue, setDurationValue] = useState<string>(form?.getFieldValue?.("duration") || "");
 
   const handleIntervalChange = (value: string) => {
     if (value === "custom") {
@@ -52,6 +53,14 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
     onRotationIntervalChange(value);
   };
 
+  const handleDurationChange = (value: string) => {
+    setDurationValue(value);
+    if (form && typeof form.setFieldValue === "function") {
+      form.setFieldValue("duration", value);
+    } else if (form && typeof form.setFieldsValue === "function") {
+      form.setFieldsValue({ duration: value });
+    }
+  };
   return (
     <div className="space-y-6">
       {/* Key Expiry Section */}
@@ -71,6 +80,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
                   const checked = e.target.checked;
                   onNeverExpireChange(checked);
                   if (checked) {
+                    setDurationValue("");
                     if (form && typeof form.setFieldValue === "function") {
                       form.setFieldValue("duration", "");
                     } else if (form && typeof form.setFieldsValue === "function") {
@@ -84,13 +94,14 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
               </Checkbox>
             )}
           </label>
-          <Form.Item name="duration" noStyle initialValue="">
-            <TextInput
-              placeholder={isCreateMode ? "e.g., 30d or leave empty to never expire" : "e.g., 30d"}
-              className="w-full"
-              disabled={!isCreateMode && neverExpire}
-            />
-          </Form.Item>
+          <TextInput
+            name="duration"
+            placeholder={isCreateMode ? "e.g., 30d or leave empty to never expire" : "e.g., 30d"}
+            className="w-full"
+            value={durationValue}
+            onValueChange={handleDurationChange}
+            disabled={!isCreateMode && neverExpire}
+          />
         </div>
       </div>
 

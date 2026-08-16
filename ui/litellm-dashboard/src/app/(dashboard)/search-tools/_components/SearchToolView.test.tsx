@@ -155,8 +155,13 @@ describe("SearchToolView", () => {
     const toolNameContainer = screen.getByText("Test Search Tool").closest("div");
     expect(toolNameContainer).toBeInTheDocument();
 
-    const nameCopyButton = within(toolNameContainer!).getByRole("button");
-    await user.click(nameCopyButton);
+    const copyButtons = within(toolNameContainer!).getAllByRole("button");
+    const nameCopyButton = copyButtons.find((button) => {
+      return button.querySelector("svg") !== null;
+    });
+
+    expect(nameCopyButton).toBeInTheDocument();
+    await user.click(nameCopyButton!);
 
     await waitFor(() => {
       expect(copyToClipboard).toHaveBeenCalledWith("Test Search Tool");
@@ -171,8 +176,13 @@ describe("SearchToolView", () => {
     const toolIdContainer = screen.getByText("test-tool-id-123").closest("div");
     expect(toolIdContainer).toBeInTheDocument();
 
-    const idCopyButton = within(toolIdContainer!).getByRole("button");
-    await user.click(idCopyButton);
+    const copyButtons = within(toolIdContainer!).getAllByRole("button");
+    const idCopyButton = copyButtons.find((button) => {
+      return button.querySelector("svg") !== null;
+    });
+
+    expect(idCopyButton).toBeInTheDocument();
+    await user.click(idCopyButton!);
 
     await waitFor(() => {
       expect(copyToClipboard).toHaveBeenCalledWith("test-tool-id-123");
@@ -187,14 +197,22 @@ describe("SearchToolView", () => {
     render(<SearchToolView {...defaultProps} />);
 
     const toolNameContainer = screen.getByText("Test Search Tool").closest("div");
-    const nameCopyButton = within(toolNameContainer!).getByRole("button");
+    const copyButtons = within(toolNameContainer!).getAllByRole("button");
+    const nameCopyButton = copyButtons.find((button) => {
+      return button.querySelector("svg") !== null;
+    });
 
-    expect(nameCopyButton.querySelector(".lucide-copy")).toBeInTheDocument();
+    expect(nameCopyButton).toBeInTheDocument();
 
-    await user.click(nameCopyButton);
+    const initialSvg = nameCopyButton!.querySelector("svg");
+    expect(initialSvg).toBeInTheDocument();
+
+    await user.click(nameCopyButton!);
 
     await waitFor(() => {
-      expect(nameCopyButton.querySelector(".lucide-check")).toBeInTheDocument();
+      const updatedSvg = nameCopyButton!.querySelector("svg");
+      expect(updatedSvg).toBeInTheDocument();
+      expect(nameCopyButton).toHaveClass("text-green-600");
     });
   });
 
@@ -206,9 +224,13 @@ describe("SearchToolView", () => {
     render(<SearchToolView {...defaultProps} />);
 
     const toolNameContainer = screen.getByText("Test Search Tool").closest("div");
-    const nameCopyButton = within(toolNameContainer!).getByRole("button");
+    const copyButtons = within(toolNameContainer!).getAllByRole("button");
+    const nameCopyButton = copyButtons.find((button) => {
+      return button.querySelector("svg") !== null;
+    });
 
-    await user.click(nameCopyButton);
+    expect(nameCopyButton).toBeInTheDocument();
+    await user.click(nameCopyButton!);
 
     await waitFor(
       () => {
@@ -217,7 +239,7 @@ describe("SearchToolView", () => {
       { timeout: 3000 },
     );
 
-    expect(nameCopyButton.querySelector(".lucide-check")).not.toBeInTheDocument();
+    expect(nameCopyButton).not.toHaveClass("text-green-600");
   });
 
   it("should render SearchToolTester when accessToken is provided", () => {

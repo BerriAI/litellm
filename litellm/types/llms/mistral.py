@@ -1,17 +1,17 @@
-from typing import Literal
+from typing import List, Literal, Optional, Union
 
 from typing_extensions import TypedDict
 
 
 class FunctionCall(TypedDict):
-    name: str | None
-    arguments: str | dict | None
+    name: Optional[str]
+    arguments: Optional[Union[str, dict]]
 
 
 class MistralToolCallMessage(TypedDict):
-    id: str | None
+    id: Optional[str]
     type: Literal["function"]
-    function: FunctionCall | None
+    function: Optional[FunctionCall]
 
 
 class MistralTextBlock(TypedDict):
@@ -21,4 +21,4 @@ class MistralTextBlock(TypedDict):
 
 class MistralThinkingBlock(TypedDict):
     type: Literal["thinking"]
-    thinking: list[MistralTextBlock]
+    thinking: List[MistralTextBlock]

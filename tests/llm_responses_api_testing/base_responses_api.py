@@ -338,7 +338,7 @@ class BaseResponsesAPITest(ABC):
                 )
                 assert result is not None
                 assert result.id == response.id
-                assert result.output_text == response.output_text
+                assert result.output == response.output
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
         else:
@@ -352,7 +352,7 @@ class BaseResponsesAPITest(ABC):
                 )
                 assert result is not None
                 assert result.id == response.id
-                assert result.output_text == response.output_text
+                assert result.output == response.output
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
 

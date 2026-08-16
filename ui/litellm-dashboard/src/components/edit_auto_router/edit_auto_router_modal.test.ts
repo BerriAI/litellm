@@ -18,7 +18,6 @@ const storedConfigValue = {
   adaptive_weights: { quality: 0.3, cost: 0.7 },
   tier_distance_penalty: 0.8,
   adaptive_eligible: "all",
-  return_raw_model_name: true,
 };
 
 const storedConfig = JSON.stringify(storedConfigValue);
@@ -47,8 +46,6 @@ const expectedClassifiedTierConfig = {
   semantic_keyword_matching: true,
   embedding_model: "voyage-4-large",
   match_threshold: 0.65,
-  session_affinity: false,
-  deployment_affinity: true,
   adaptive: true,
   adaptive_weights: { quality: 0.4, cost: 0.6 },
   adaptive_eligible: "classified_tier",
@@ -68,8 +65,6 @@ const expectedAdaptiveDisabledConfig = {
   semantic_keyword_matching: true,
   embedding_model: "voyage-4-large",
   match_threshold: 0.65,
-  session_affinity: false,
-  deployment_affinity: true,
 };
 
 describe("buildUpdatedComplexityRouterConfig", () => {
@@ -83,15 +78,6 @@ describe("buildUpdatedComplexityRouterConfig", () => {
     const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, adaptiveDisabledValue);
 
     expect(updatedConfig).toEqual(expectedAdaptiveDisabledConfig);
-  });
-
-  it("includes return_raw_model_name only when enabled", () => {
-    const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, {
-      ...classifiedTierValue,
-      return_raw_model_name: true,
-    });
-
-    expect(updatedConfig.return_raw_model_name).toBe(true);
   });
 
   it("updates custom technical keywords when they are edited", () => {

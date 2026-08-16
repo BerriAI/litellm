@@ -6,6 +6,8 @@ Calls done in OpenAI/openai.py as Novita AI is openai-compatible.
 Docs: https://novita.ai/docs/guides/llm-api
 """
 
+from typing import List, Optional
+
 from ....types.llms.openai import AllMessageValues
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -15,11 +17,11 @@ class NovitaConfig(OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if api_key is None:
             raise ValueError(

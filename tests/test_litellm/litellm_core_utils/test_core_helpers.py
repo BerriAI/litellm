@@ -4,51 +4,10 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
-    get_or_create_metadata_bucket,
     map_finish_reason,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
 )
-
-
-class TestGetOrCreateMetadataBucket:
-    """The single owner every guardrail writer and reader shares, so the response
-    header and the spend log can never disagree about which dict a record lives in."""
-
-    def test_prefers_litellm_metadata_when_both_present(self):
-        request_data = {"metadata": {"user_id": "caller"}, "litellm_metadata": {}}
-
-        key, bucket = get_or_create_metadata_bucket(request_data)
-
-        assert key == "litellm_metadata"
-        assert bucket is request_data["litellm_metadata"]
-
-    def test_uses_metadata_when_litellm_metadata_absent(self):
-        request_data = {"metadata": {"user_id": "caller"}}
-
-        key, bucket = get_or_create_metadata_bucket(request_data)
-
-        assert key == "metadata"
-        assert bucket is request_data["metadata"]
-
-    def test_creates_the_bucket_in_place_when_missing(self):
-        request_data: dict = {}
-
-        key, bucket = get_or_create_metadata_bucket(request_data)
-
-        assert key == "metadata"
-        assert request_data["metadata"] is bucket
-        bucket["k"] = "v"
-        assert request_data["metadata"]["k"] == "v"
-
-    def test_replaces_a_non_dict_bucket(self):
-        request_data = {"litellm_metadata": None}
-
-        key, bucket = get_or_create_metadata_bucket(request_data)
-
-        assert key == "litellm_metadata"
-        assert isinstance(request_data["litellm_metadata"], dict)
-        assert bucket is request_data["litellm_metadata"]
 
 
 def test_reconstruct_model_name_prefers_deployment_value():
@@ -190,19 +149,6 @@ class TestMapFinishReasonOpenAIPassthrough:
     )
     def test_openai_values_pass_through(self, reason):
         assert map_finish_reason(reason) == reason
-
-
-class TestMapFinishReasonGenericError:
-    def test_lowercase_error_is_explicitly_mapped(self):
-        assert "error" in _FINISH_REASON_MAP
-        assert map_finish_reason("error") == "stop"
-
-    def test_lowercase_error_does_not_warn(self, mocker):
-        warn = mocker.patch(
-            "litellm.litellm_core_utils.core_helpers.verbose_logger.warning"
-        )
-        assert map_finish_reason("error") == "stop"
-        warn.assert_not_called()
 
 
 class TestMapFinishReasonUnknown:

@@ -1,5 +1,5 @@
 import types
-from typing import Final
+from typing import Optional
 
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -16,9 +16,9 @@ class VertexAIAi21Config(OpenAIGPTConfig):
 
     def __init__(
         self,
-        max_tokens: int | None = None,
+        max_tokens: Optional[int] = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

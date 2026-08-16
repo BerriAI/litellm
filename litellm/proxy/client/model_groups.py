@@ -1,12 +1,10 @@
-from typing import Any, Final
-
 import requests
-
+from typing import List, Dict, Any, Optional, Union
 from .exceptions import UnauthorizedError
 
 
 class ModelGroupsManagementClient:
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: Optional[str] = None):
         """
         Initialize the ModelGroupsManagementClient.
 
@@ -17,19 +15,19 @@ class ModelGroupsManagementClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> dict[str, str]:
+    def _get_headers(self) -> Dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers: Final = {}
+        headers = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def info(self, return_request: bool = False) -> list[dict[str, Any]] | requests.Request:
+    def info(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
         """
         Get detailed information about all model groups from the server.
 
@@ -44,16 +42,16 @@ class ModelGroupsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url: Final = f"{self._base_url}/model_group/info"
-        request: Final = requests.Request("GET", url, headers=self._get_headers())
+        url = f"{self._base_url}/model_group/info"
+        request = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
         # Prepare and send the request
-        session: Final = requests.Session()
+        session = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response = session.send(request.prepare())
             response.raise_for_status()
             return response.json()["data"]
         except requests.exceptions.HTTPError as e:

@@ -10,7 +10,7 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 """
 
 import types
-from typing import Final
+from typing import List
 
 from litellm.types.llms.bedrock import (
     AmazonTitanG1EmbeddingRequest,
@@ -27,7 +27,7 @@ class AmazonTitanG1Config:
     def __init__(
         self,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -50,7 +50,7 @@ class AmazonTitanG1Config:
             and v is not None
         }
 
-    def get_supported_openai_params(self) -> list[str]:
+    def get_supported_openai_params(self) -> List[str]:
         return []
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
@@ -59,12 +59,12 @@ class AmazonTitanG1Config:
     def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanG1EmbeddingRequest:
         return AmazonTitanG1EmbeddingRequest(inputText=input)
 
-    def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
+    def _transform_response(self, response_list: List[dict], model: str) -> EmbeddingResponse:
         total_prompt_tokens = 0
 
-        transformed_responses: Final[list[Embedding]] = []
+        transformed_responses: List[Embedding] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanG1EmbeddingResponse(**response)
+            _parsed_response = AmazonTitanG1EmbeddingResponse(**response)  # type: ignore
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],
@@ -74,7 +74,7 @@ class AmazonTitanG1Config:
             )
             total_prompt_tokens += _parsed_response["inputTextTokenCount"]
 
-        usage: Final = Usage(
+        usage = Usage(
             prompt_tokens=total_prompt_tokens,
             completion_tokens=0,
             total_tokens=total_prompt_tokens,

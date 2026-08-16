@@ -1,9 +1,7 @@
 import { getTeamPermissionsCall, teamPermissionsUpdateCall } from "@/components/networking";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { RotateCw, Save } from "lucide-react";
+import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { Card, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text, Title } from "@tremor/react";
+import { Button, Checkbox, Empty } from "antd";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getPermissionInfo } from "./permission_definitions";
@@ -77,38 +75,36 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
   const hasPermissions = permissions.length > 0;
 
   return (
-    <Card className="block bg-white shadow-md rounded-md p-6">
+    <Card className="bg-white shadow-md rounded-md p-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-4 mb-6">
-        <h3 className="text-lg font-medium text-gray-900 mb-2 sm:mb-0">Member Permissions</h3>
+        <Title className="mb-2 sm:mb-0">Member Permissions</Title>
         {canEditTeam && hasChanges && (
           <div className="flex gap-3">
-            <Button variant="outline" onClick={handleReset}>
-              <RotateCw className="size-3.5" />
+            <Button icon={<ReloadOutlined />} onClick={handleReset}>
               Reset
             </Button>
-            <Button onClick={handleSave} disabled={saving}>
-              <Save className="size-3.5" />
+            <Button onClick={handleSave} loading={saving} type="primary" icon={<SaveOutlined />}>
               Save Changes
             </Button>
           </div>
         )}
       </div>
 
-      <p className="mb-6 text-sm text-gray-600">Control what team members can do when they are not team admins.</p>
+      <Text className="mb-6 text-gray-600">Control what team members can do when they are not team admins.</Text>
 
       {hasPermissions ? (
         <div className="overflow-x-auto">
-          <Table className="min-w-full">
-            <TableHeader>
+          <Table className=" min-w-full">
+            <TableHead>
               <TableRow>
-                <TableHead>Method</TableHead>
-                <TableHead>Endpoint</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead className="sticky right-0 bg-white shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
+                <TableHeaderCell>Method</TableHeaderCell>
+                <TableHeaderCell>Endpoint</TableHeaderCell>
+                <TableHeaderCell>Description</TableHeaderCell>
+                <TableHeaderCell className="sticky right-0 bg-white shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
                   Allow Access
-                </TableHead>
+                </TableHeaderCell>
               </TableRow>
-            </TableHeader>
+            </TableHead>
             <TableBody>
               {permissions.map((permission) => {
                 const permInfo = getPermissionInfo(permission);
@@ -129,9 +125,8 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
                     <TableCell className="text-gray-700">{permInfo.description}</TableCell>
                     <TableCell className="sticky right-0 bg-white shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
                       <Checkbox
-                        className="mx-auto"
                         checked={selectedPermissions.includes(permission)}
-                        onCheckedChange={(checked) => handlePermissionChange(permission, checked)}
+                        onChange={(e) => handlePermissionChange(permission, e.target.checked)}
                         disabled={!canEditTeam}
                       />
                     </TableCell>
@@ -143,7 +138,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
         </div>
       ) : (
         <div className="py-12">
-          <p className="text-center text-sm text-gray-500">No permissions available</p>
+          <Empty description="No permissions available" />
         </div>
       )}
     </Card>

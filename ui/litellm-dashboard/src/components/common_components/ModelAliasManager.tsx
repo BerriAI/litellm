@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { PlusCircleIcon, PencilIcon, TrashIcon } from "@heroicons/react/outline";
-import { Card, CardTitle } from "@/components/ui/card";
-import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table";
+import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import ModelSelector from "./ModelSelector";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -142,7 +141,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
   return (
     <div className="mt-4">
       <div className="mb-6">
-        <p className="text-sm font-medium text-gray-700 mb-2">Add New Alias</p>
+        <Text className="text-sm font-medium text-gray-700 mb-2">Add New Alias</Text>
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-xs text-gray-500 mb-1">Alias Name</label>
@@ -187,17 +186,17 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
         </div>
       </div>
 
-      <p className="text-sm font-medium text-gray-700 mb-2">Manage Existing Aliases</p>
+      <Text className="text-sm font-medium text-gray-700 mb-2">Manage Existing Aliases</Text>
       <div className="rounded-lg custom-border relative mb-6">
         <div className="overflow-x-auto">
           <Table className="[&_td]:py-0.5 [&_th]:py-1">
-            <TableHeader>
+            <TableHead>
               <TableRow>
-                <TableHead className="py-1 h-8">Alias Name</TableHead>
-                <TableHead className="py-1 h-8">Target Model</TableHead>
-                <TableHead className="py-1 h-8">Actions</TableHead>
+                <TableHeaderCell className="py-1 h-8">Alias Name</TableHeaderCell>
+                <TableHeaderCell className="py-1 h-8">Target Model</TableHeaderCell>
+                <TableHeaderCell className="py-1 h-8">Actions</TableHeaderCell>
               </TableRow>
-            </TableHeader>
+            </TableHead>
             <TableBody>
               {aliases.map((alias) => (
                 <TableRow key={alias.id} className="h-8">
@@ -285,9 +284,9 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
 
       {/* Configuration Example */}
       {showExampleConfig && (
-        <Card className="px-6">
-          <CardTitle className="mb-4">Configuration Example</CardTitle>
-          <p className="text-gray-600 mb-4">Here&apos;s how your current aliases would look in the config:</p>
+        <Card>
+          <Title className="mb-4">Configuration Example</Title>
+          <Text className="text-gray-600 mb-4">Here&apos;s how your current aliases would look in the config:</Text>
           <div className="bg-gray-100 rounded-lg p-4 font-mono text-sm">
             <div className="text-gray-700">
               model_aliases:

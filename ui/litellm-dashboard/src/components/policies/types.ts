@@ -14,7 +14,6 @@ export interface Policy {
   updated_at?: string;
   created_by?: string;
   updated_by?: string;
-  definition_location?: "db" | "config";
 }
 
 export interface PolicyCondition {
@@ -48,7 +47,6 @@ export interface PolicyAttachment {
   updated_at?: string;
   created_by?: string;
   updated_by?: string;
-  definition_location?: "db" | "config";
 }
 
 export interface PolicyCreateRequest {

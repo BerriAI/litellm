@@ -8,6 +8,6 @@ from .text_to_speech.transformation import (
 )
 
 __all__ = [
-    "MinimaxException",
     "MinimaxTextToSpeechConfig",
+    "MinimaxException",
 ]

@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -11,6 +11,13 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -36,7 +43,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         XAI supports most OpenAI Responses API params except 'instructions'.
         """
-        supported_params: Final = super().get_supported_openai_params(model)
+        supported_params = super().get_supported_openai_params(model)
 
         # Remove 'instructions' as it's not supported by XAI
         if "instructions" in supported_params:
@@ -44,7 +51,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return supported_params
 
-    def _transform_web_search_tool(self, tool: dict[str, Any]) -> XAIWebSearchTool | dict[str, Any]:
+    def _transform_web_search_tool(self, tool: Dict[str, Any]) -> Union[XAIWebSearchTool, Dict[str, Any]]:
         """
         Transform web_search tool to XAI format.
 
@@ -55,7 +62,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         XAI does NOT support search_context_size (OpenAI-specific).
         """
-        xai_tool: Final[dict[str, Any]] = {"type": "web_search"}
+        xai_tool: Dict[str, Any] = {"type": "web_search"}
 
         # Remove search_context_size if present (not supported by XAI)
         if "search_context_size" in tool:
@@ -64,13 +71,13 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
 
         # Handle filters (XAI-specific structure)
-        filters: Final = {}
+        filters = {}
         if "allowed_domains" in tool:
-            allowed_domains: Final = tool["allowed_domains"]
+            allowed_domains = tool["allowed_domains"]
             filters["allowed_domains"] = allowed_domains
 
         if "excluded_domains" in tool:
-            excluded_domains: Final = tool["excluded_domains"]
+            excluded_domains = tool["excluded_domains"]
             filters["excluded_domains"] = excluded_domains
 
         # Add filters if any were specified
@@ -83,7 +90,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return xai_tool
 
-    def _transform_x_search_tool(self, tool: dict[str, Any]) -> XAIXSearchTool | dict[str, Any]:
+    def _transform_x_search_tool(self, tool: Dict[str, Any]) -> Union[XAIXSearchTool, Dict[str, Any]]:
         """
         Transform x_search tool to XAI format.
 
@@ -95,16 +102,16 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - enable_image_understanding
         - enable_video_understanding
         """
-        xai_tool: Final[dict[str, Any]] = {"type": "x_search"}
+        xai_tool: Dict[str, Any] = {"type": "x_search"}
 
         # Handle allowed_x_handles
         if "allowed_x_handles" in tool:
-            allowed_handles: Final = tool["allowed_x_handles"]
+            allowed_handles = tool["allowed_x_handles"]
             xai_tool["allowed_x_handles"] = allowed_handles
 
         # Handle excluded_x_handles
         if "excluded_x_handles" in tool:
-            excluded_handles: Final = tool["excluded_x_handles"]
+            excluded_handles = tool["excluded_x_handles"]
             xai_tool["excluded_x_handles"] = excluded_handles
 
         # Handle date range
@@ -128,7 +135,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> Dict:
         """
         Map parameters for XAI Responses API.
 
@@ -139,7 +146,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         4. Transforms x_search tools to XAI format
         5. Sets store=false when images are detected (recommended by XAI)
         """
-        params: Final = dict(response_api_optional_params)
+        params = dict(response_api_optional_params)
 
         # Drop instructions parameter (not supported by XAI)
         if "instructions" in params:
@@ -157,7 +164,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if not isinstance(tools_list, list):
                 tools_list = [tools_list]
 
-            transformed_tools: Final[list[Any]] = []
+            transformed_tools: List[Any] = []
             for tool in tools_list:
                 if isinstance(tool, dict):
                     tool_type = tool.get("type")
@@ -187,7 +194,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return params
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """
         Validate environment and set up headers for XAI API.
 
@@ -228,7 +235,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
         """
@@ -239,7 +246,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
 
-        api_key: Final = XAIModelInfo.get_api_key(litellm_params.get("api_key"), legacy_generic_before_env=True)
+        api_key = XAIModelInfo.get_api_key(litellm_params.get("api_key"), legacy_generic_before_env=True)
         if should_use_xai_oauth(litellm_params) and not api_key:
             api_base = XAIOAuthAuthenticator().get_api_base()
         else:

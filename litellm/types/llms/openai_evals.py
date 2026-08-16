@@ -2,9 +2,9 @@
 Type definitions for OpenAI Evals API
 """
 
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing_extensions import Required, TypedDict
 
 
@@ -15,10 +15,10 @@ class DataSourceConfigCustom(TypedDict, total=False):
     type: Required[Literal["custom"]]
     """Data source type - custom"""
 
-    item_schema: Required[dict[str, Any]]
+    item_schema: Required[Dict[str, Any]]
     """JSON schema describing the structure of each row in the dataset"""
 
-    include_sample_schema: bool | None
+    include_sample_schema: Optional[bool]
     """Whether eval expects sample schema population"""
 
 
@@ -28,7 +28,7 @@ class DataSourceConfigLogs(TypedDict, total=False):
     type: Required[Literal["logs"]]
     """Data source type - logs"""
 
-    metadata: dict[str, Any] | None
+    metadata: Optional[Dict[str, Any]]
     """Optional metadata for filtering logs"""
 
 
@@ -38,11 +38,11 @@ class DataSourceConfigStoredCompletions(TypedDict, total=False):
     type: Required[Literal["stored_completions"]]
     """Data source type - stored_completions (deprecated)"""
 
-    metadata: dict[str, Any] | None
+    metadata: Optional[Dict[str, Any]]
     """Optional metadata for filtering stored completions"""
 
 
-DataSourceConfig = DataSourceConfigCustom | DataSourceConfigLogs | DataSourceConfigStoredCompletions
+DataSourceConfig = Union[DataSourceConfigCustom, DataSourceConfigLogs, DataSourceConfigStoredCompletions]
 
 
 class LLMAsJudgeGraderConfig(TypedDict, total=False):
@@ -51,10 +51,10 @@ class LLMAsJudgeGraderConfig(TypedDict, total=False):
     type: Required[Literal["llm_as_judge"]]
     """Grader type - LLM as judge"""
 
-    model: str | None
+    model: Optional[str]
     """Model to use as judge (e.g., 'gpt-4')"""
 
-    prompt: str | None
+    prompt: Optional[str]
     """Custom prompt for the judge model"""
 
 
@@ -64,7 +64,7 @@ class GroundTruthGraderConfig(TypedDict, total=False):
     type: Required[Literal["ground_truth"]]
     """Grader type - ground truth comparison"""
 
-    metric: Literal["exact_match", "f1_score", "bleu"] | None
+    metric: Optional[Literal["exact_match", "f1_score", "bleu"]]
     """Metric to use for comparison"""
 
 
@@ -78,51 +78,51 @@ class CustomGraderConfig(TypedDict, total=False):
     """ID of the custom grading function"""
 
 
-GraderConfig = LLMAsJudgeGraderConfig | GroundTruthGraderConfig | CustomGraderConfig
+GraderConfig = Union[LLMAsJudgeGraderConfig, GroundTruthGraderConfig, CustomGraderConfig]
 
 
 class CreateEvalRequest(TypedDict, total=False):
     """Request parameters for creating an evaluation"""
 
-    name: str | None
+    name: Optional[str]
     """The name of the evaluation"""
 
     data_source_config: Required[DataSourceConfig]
     """Configuration for the data source"""
 
-    testing_criteria: Required[list[GraderConfig]]
+    testing_criteria: Required[List[GraderConfig]]
     """List of graders for all eval runs"""
 
-    metadata: dict[str, Any] | None
+    metadata: Optional[Dict[str, Any]]
     """Set of 16 key-value pairs that can be attached to an object (max 64 char keys, 512 char values)"""
 
 
 class UpdateEvalRequest(TypedDict, total=False):
     """Request parameters for updating an evaluation"""
 
-    name: str | None
+    name: Optional[str]
     """Updated name"""
 
-    metadata: dict[str, Any] | None
+    metadata: Optional[Dict[str, Any]]
     """Updated metadata"""
 
 
 class ListEvalsParams(TypedDict, total=False):
     """Query parameters for listing evaluations"""
 
-    limit: int | None
+    limit: Optional[int]
     """Number of results to return per page. Maximum value is 100. Defaults to 20."""
 
-    after: str | None
+    after: Optional[str]
     """Cursor for pagination - returns evals after this ID"""
 
-    before: str | None
+    before: Optional[str]
     """Cursor for pagination - returns evals before this ID"""
 
-    order: Literal["asc", "desc"] | None
+    order: Optional[Literal["asc", "desc"]]
     """Sort order for results. Defaults to 'desc'."""
 
-    order_by: Literal["created_at", "updated_at"] | None
+    order_by: Optional[Literal["created_at", "updated_at"]]
     """Field to sort by. Defaults to 'created_at'."""
 
 
@@ -139,19 +139,19 @@ class Eval(BaseModel):
     created_at: int
     """Unix timestamp of when the evaluation was created"""
 
-    updated_at: int | None = None
+    updated_at: Optional[int] = None
     """Unix timestamp of when the evaluation was last updated"""
 
-    name: str | None = None
+    name: Optional[str] = None
     """The name of the evaluation"""
 
-    data_source_config: dict[str, Any]
+    data_source_config: Dict[str, Any]
     """Configuration for the data source"""
 
-    testing_criteria: list[dict[str, Any]]
+    testing_criteria: List[Dict[str, Any]]
     """List of graders for the evaluation"""
 
-    metadata: dict[str, Any] | None = None
+    metadata: Optional[Dict[str, Any]] = None
     """Additional metadata"""
 
 
@@ -161,13 +161,13 @@ class ListEvalsResponse(BaseModel):
     object: str = "list"
     """Object type, always 'list'"""
 
-    data: list[Eval]
+    data: List[Eval]
     """List of evaluations"""
 
-    first_id: str | None = None
+    first_id: Optional[str] = None
     """ID of the first evaluation in the list"""
 
-    last_id: str | None = None
+    last_id: Optional[str] = None
     """ID of the last evaluation in the list"""
 
     has_more: bool = False
@@ -227,11 +227,11 @@ class DataSourceInlineConfig(TypedDict, total=False):
     type: Required[Literal["inline"]]
     """Data source type - inline"""
 
-    samples: Required[list[dict[str, Any]]]
+    samples: Required[List[Dict[str, Any]]]
     """List of inline samples to use for the run"""
 
 
-RunDataSourceConfig = DataSourceDatasetConfig | DataSourceSampleSetConfig | DataSourceInlineConfig
+RunDataSourceConfig = Union[DataSourceDatasetConfig, DataSourceSampleSetConfig, DataSourceInlineConfig]
 
 
 class CompletionConfig(TypedDict, total=False):
@@ -240,48 +240,48 @@ class CompletionConfig(TypedDict, total=False):
     model: Required[str]
     """Model to use for completions"""
 
-    temperature: float | None
+    temperature: Optional[float]
     """Sampling temperature (0-2)"""
 
-    max_tokens: int | None
+    max_tokens: Optional[int]
     """Maximum tokens to generate"""
 
-    top_p: float | None
+    top_p: Optional[float]
     """Nucleus sampling parameter"""
 
-    frequency_penalty: float | None
+    frequency_penalty: Optional[float]
     """Frequency penalty (-2.0 to 2.0)"""
 
-    presence_penalty: float | None
+    presence_penalty: Optional[float]
     """Presence penalty (-2.0 to 2.0)"""
 
 
 class CreateRunRequest(TypedDict, total=False):
     """Request parameters for creating a run"""
 
-    data_source: Required[dict[str, Any]]
+    data_source: Required[Dict[str, Any]]
     """Data source configuration for the run (can be jsonl, completions, or responses type)"""
 
-    name: str | None
+    name: Optional[str]
     """Optional name for the run"""
 
-    metadata: dict[str, Any] | None
+    metadata: Optional[Dict[str, Any]]
     """Optional metadata for the run"""
 
 
 class ListRunsParams(TypedDict, total=False):
     """Query parameters for listing runs"""
 
-    limit: int | None
+    limit: Optional[int]
     """Number of results to return per page. Maximum value is 100. Defaults to 20."""
 
-    after: str | None
+    after: Optional[str]
     """Cursor for pagination - returns runs after this ID"""
 
-    before: str | None
+    before: Optional[str]
     """Cursor for pagination - returns runs before this ID"""
 
-    order: Literal["asc", "desc"] | None
+    order: Optional[Literal["asc", "desc"]]
     """Sort order for results. Defaults to 'desc'."""
 
 
@@ -311,7 +311,7 @@ class PerTestingCriteriaResult(BaseModel):
     result_counts: ResultCounts
     """Result counts for this criteria"""
 
-    average_score: float | None = None
+    average_score: Optional[float] = None
     """Average score for this criteria"""
 
 
@@ -330,43 +330,43 @@ class Run(BaseModel):
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     """Current status of the run"""
 
-    data_source: dict[str, Any]
+    data_source: Dict[str, Any]
     """Data source configuration used for the run"""
 
     eval_id: str
     """ID of the evaluation this run belongs to"""
 
-    name: str | None = None
+    name: Optional[str] = None
     """Name of the run"""
 
-    started_at: int | None = None
+    started_at: Optional[int] = None
     """Unix timestamp of when the run started"""
 
-    completed_at: int | None = None
+    completed_at: Optional[int] = None
     """Unix timestamp of when the run completed"""
 
-    model: str | None = None
+    model: Optional[str] = None
     """Model used for the run, if any"""
 
-    per_model_usage: Any | None = None
+    per_model_usage: Optional[Any] = None
     """Model usage details per model, if available"""
 
-    per_testing_criteria_results: list[PerTestingCriteriaResult] | None = None
+    per_testing_criteria_results: Optional[List[PerTestingCriteriaResult]] = None
     """Per-criteria results"""
 
-    report_url: str | None = None
+    report_url: Optional[str] = None
     """URL for the evaluation report"""
 
-    result_counts: dict[str, int] | None = None
+    result_counts: Optional[Dict[str, int]] = None
     """Aggregate result counts (e.g., {"passed": 0, "failed": 0, "errored": 0, "total": 0})"""
 
-    shared_with_openai: bool | None = None
+    shared_with_openai: Optional[bool] = None
     """Whether run is shared with OpenAI"""
 
-    metadata: dict[str, Any] | None = None
+    metadata: Optional[Dict[str, Any]] = None
     """Additional metadata"""
 
-    error: dict[str, Any] | None = None
+    error: Optional[Dict[str, Any]] = None
     """Error details if the run failed"""
 
 
@@ -376,13 +376,13 @@ class ListRunsResponse(BaseModel):
     object: str = "list"
     """Object type, always 'list'"""
 
-    data: list[Run]
+    data: List[Run]
     """List of runs"""
 
-    first_id: str | None = None
+    first_id: Optional[str] = None
     """ID of the first run in the list"""
 
-    last_id: str | None = None
+    last_id: Optional[str] = None
     """ID of the last run in the list"""
 
     has_more: bool = False
@@ -408,8 +408,8 @@ class RunDeleteResponse(BaseModel):
     run_id: str
     """The ID of the deleted run"""
 
-    object: str | None = "eval.run.deleted"
+    object: Optional[str] = "eval.run.deleted"
     """Object type, always 'eval.run.deleted'"""
 
-    deleted: bool | None = True
+    deleted: Optional[bool] = True
     """Whether the run was successfully deleted"""

@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Any, Dict, Optional, Tuple
 
 from litellm.exceptions import ContentPolicyViolationError
 
@@ -21,13 +21,13 @@ class AzureOpenAIExceptionMapping:
         azure_error, inner_error = AzureOpenAIExceptionMapping._extract_azure_error(original_exception)
 
         # Prefer the provider message/type/code when present.
-        provider_message: Final = (azure_error.get("message") if isinstance(azure_error, dict) else None) or message
-        provider_type: Final = azure_error.get("type") if isinstance(azure_error, dict) else None
-        provider_code: Final = azure_error.get("code") if isinstance(azure_error, dict) else None
+        provider_message = (azure_error.get("message") if isinstance(azure_error, dict) else None) or message
+        provider_type = azure_error.get("type") if isinstance(azure_error, dict) else None
+        provider_code = azure_error.get("code") if isinstance(azure_error, dict) else None
 
         # Keep the OpenAI-style body fields populated so downstream (proxy + SDK)
         # can surface `type` / `code` correctly.
-        openai_style_body: Final[dict[str, Any]] = {
+        openai_style_body: Dict[str, Any] = {
             "message": provider_message,
             "type": provider_type or "invalid_request_error",
             "code": provider_code or "content_policy_violation",
@@ -54,7 +54,7 @@ class AzureOpenAIExceptionMapping:
     @staticmethod
     def _extract_azure_error(
         original_exception: Exception,
-    ) -> tuple[dict[str, Any], dict | None]:
+    ) -> Tuple[Dict[str, Any], Optional[dict]]:
         """Extract Azure OpenAI error payload and inner error details.
 
         Azure error formats can vary by endpoint/version. Common shapes:
@@ -62,18 +62,18 @@ class AzureOpenAIExceptionMapping:
         - {"error": {"code": "...", "message": "...", "type": "...", "inner_error": {...}}}
         - {"code": "...", "message": "...", "type": "..."} (already flattened)
         """
-        body_dict: Final = getattr(original_exception, "body", None) or {}
+        body_dict = getattr(original_exception, "body", None) or {}
         if not isinstance(body_dict, dict):
             return {}, None
 
         # Some SDKs place the payload under "error".
-        azure_error: dict[str, Any]
+        azure_error: Dict[str, Any]
         if isinstance(body_dict.get("error"), dict):
-            azure_error = body_dict.get("error", {})
+            azure_error = body_dict.get("error", {})  # type: ignore[assignment]
         else:
             azure_error = body_dict
 
-        inner_error: Final = (
+        inner_error = (
             azure_error.get("inner_error")
             or azure_error.get("innererror")
             or body_dict.get("innererror")

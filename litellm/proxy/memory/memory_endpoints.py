@@ -18,19 +18,15 @@ Scoping:
 """
 
 import json
-from collections.abc import Mapping, Sequence
-from datetime import datetime
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     CommonProxyErrors,
-    LiteLLM_TeamTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
-    user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.table_repositories import MemoryRepository
@@ -43,56 +39,10 @@ from litellm.types.memory_management import (
     MemoryUpdateRequest,
 )
 
-if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient
-
-router: Final = APIRouter()
+router = APIRouter()
 
 
-class _MemoryRecord(Protocol):
-    memory_id: str
-    key: str
-    value: str
-    metadata: object
-    user_id: str | None
-    team_id: str | None
-    created_at: datetime | None
-    created_by: str | None
-    updated_at: datetime | None
-    updated_by: str | None
-
-
-class _MemoryTableActions(Protocol):
-    async def create(self, data: Mapping[str, object]) -> _MemoryRecord: ...
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = ...,
-        order: Mapping[str, str] | None = ...,
-        skip: int = ...,
-        take: int = ...,
-    ) -> Sequence[_MemoryRecord]: ...
-
-    async def count(self, where: Mapping[str, object] | None = ...) -> int: ...
-
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _MemoryRecord: ...
-
-    async def delete(self, where: Mapping[str, object]) -> _MemoryRecord | None: ...
-
-
-def _memory_table(prisma_client: "PrismaClient") -> _MemoryTableActions:
-    return MemoryRepository(prisma_client).table
-
-
-class _TeamTableActions(Protocol):
-    async def find_unique(self, where: Mapping[str, str]) -> LiteLLM_TeamTable | None: ...
-
-
-def _team_table(prisma_client: "PrismaClient") -> _TeamTableActions:
-    return TeamRepository(prisma_client).table
-
-
-def _serialize_metadata_for_prisma(metadata: object) -> str:
+def _serialize_metadata_for_prisma(metadata: Any) -> str:
     """
     Encode a `metadata` payload for the `Json?` column.
 
@@ -111,25 +61,25 @@ def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
-def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object] | None:
+def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
     """
     Prisma `where` fragment restricting rows to those the caller can see.
     Returns None for admins (no restriction).
     """
-    if user_api_key_has_admin_view(user_api_key_dict):
+    if _is_admin(user_api_key_dict):
         return None
-    ors: Final = [
-        {field: value}
-        for field, value in (("user_id", user_api_key_dict.user_id), ("team_id", user_api_key_dict.team_id))
-        if value
-    ]
+    ors: List[dict] = []
+    if user_api_key_dict.user_id:
+        ors.append({"user_id": user_api_key_dict.user_id})
+    if user_api_key_dict.team_id:
+        ors.append({"team_id": user_api_key_dict.team_id})
     if not ors:
         # Caller has neither user_id nor team_id — match nothing.
         return {"memory_id": "__no_match__"}
     return {"OR": ors}
 
 
-def _row_to_model(row: _MemoryRecord) -> LiteLLM_MemoryRow:
+def _row_to_model(row: Any) -> LiteLLM_MemoryRow:
     return LiteLLM_MemoryRow(
         memory_id=row.memory_id,
         key=row.key,
@@ -144,7 +94,7 @@ def _row_to_model(row: _MemoryRecord) -> LiteLLM_MemoryRow:
     )
 
 
-def _require_prisma() -> "PrismaClient":
+def _require_prisma():
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -162,9 +112,7 @@ def _internal_error(log_message: str, exc: Exception, default_detail: str) -> HT
     return HTTPException(status_code=500, detail=default_detail)
 
 
-async def _assert_write_access(
-    prisma_client: "PrismaClient", row: _MemoryRecord, user_api_key_dict: UserAPIKeyAuth
-) -> None:
+async def _assert_write_access(prisma_client: Any, row: Any, user_api_key_dict: UserAPIKeyAuth) -> None:
     """
     Enforce ownership for mutations (PUT/DELETE).
 
@@ -186,8 +134,8 @@ async def _assert_write_access(
     """
     if _is_admin(user_api_key_dict):
         return
-    row_user_id: Final = getattr(row, "user_id", None)
-    row_team_id: Final = getattr(row, "team_id", None)
+    row_user_id = getattr(row, "user_id", None)
+    row_team_id = getattr(row, "team_id", None)
 
     # Personal ownership.
     if row_user_id and row_user_id == user_api_key_dict.user_id:
@@ -204,7 +152,7 @@ async def _assert_write_access(
     )
 
 
-async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: UserAPIKeyAuth, team_id: str) -> bool:
+async def _is_team_admin_for(prisma_client: Any, user_api_key_dict: UserAPIKeyAuth, team_id: str) -> bool:
     """
     True if the caller is a team admin of `team_id`, or an org admin for the
     team's organization. Mirrors the auth pattern used by team-management
@@ -219,7 +167,7 @@ async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: U
     )
 
     try:
-        team_obj: Final = await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+        team_obj = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
     except Exception as e:
         verbose_proxy_logger.exception("Error loading team for write-auth check (team_id=%s): %s", team_id, e)
         return False
@@ -249,18 +197,18 @@ def _is_unique_violation(exc: Exception) -> bool:
     fall back to string matching so we stay robust across Prisma versions
     where the typed class may be unavailable or differently named.
     """
-    code: Final = getattr(exc, "code", None)
+    code = getattr(exc, "code", None)
     if code == "P2002":
         return True
-    msg: Final = str(exc)
+    msg = str(exc)
     return "P2002" in msg or "Unique" in msg or "unique" in msg or "UniqueViolation" in msg
 
 
 def _resolve_scope(
     user_api_key_dict: UserAPIKeyAuth,
-    requested_user_id: str | None,
-    requested_team_id: str | None,
-) -> tuple[str | None, str | None]:
+    requested_user_id: Optional[str],
+    requested_team_id: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
     """
     Resolve the (user_id, team_id) to stamp on a new row.
 
@@ -314,13 +262,13 @@ async def create_memory(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Create a new memory entry for the caller (or, for admins, any scope)."""
-    prisma_client: Final = _require_prisma()
+    prisma_client = _require_prisma()
     user_id, team_id = _resolve_scope(user_api_key_dict, body.user_id, body.team_id)
 
     # `metadata` is a `Json?` column — prisma-client-python rejects raw
     # Python values, so JSON-encode any non-null payload and omit the field
     # entirely when None so the column defaults to SQL NULL.
-    create_data: Final[dict[str, object]] = {
+    create_data: dict = {
         "key": body.key,
         "value": body.value,
         "user_id": user_id,
@@ -332,7 +280,7 @@ async def create_memory(
         create_data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
 
     try:
-        row: Final = await _memory_table(prisma_client).create(data=create_data)
+        row = await MemoryRepository(prisma_client).table.create(data=create_data)
     except Exception as e:
         # Key is globally unique. Any duplicate → 409.
         if _is_unique_violation(e):
@@ -356,8 +304,8 @@ async def create_memory(
     response_model=MemoryListResponse,
 )
 async def list_memory(
-    key: str | None = Query(None, description="Filter by exact key match."),
-    key_prefix: str | None = Query(
+    key: Optional[str] = Query(None, description="Filter by exact key match."),
+    key_prefix: Optional[str] = Query(
         None,
         description=(
             "Filter by key prefix (Redis-style namespace scan). "
@@ -369,21 +317,21 @@ async def list_memory(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """List memory entries visible to the caller."""
-    prisma_client: Final = _require_prisma()
+    prisma_client = _require_prisma()
 
     # Build the key filter first (prefix wins if both `key` and `key_prefix`
     # are passed). Then AND it with the visibility filter via an explicit
     # top-level "AND" — safer than `dict.update` since future visibility
     # filters could grow an "OR" key that would clobber this one if merged
     # by key.
-    key_filter: Final[dict[str, object]] = {}
+    key_filter: dict = {}
     if key_prefix is not None:
         key_filter["key"] = {"startsWith": key_prefix}
     elif key is not None:
         key_filter["key"] = key
 
-    vis: Final = _visibility_filter(user_api_key_dict)
-    where: Mapping[str, object]
+    vis = _visibility_filter(user_api_key_dict)
+    where: dict
     if vis is None:
         where = key_filter
     elif not key_filter:
@@ -392,8 +340,8 @@ async def list_memory(
         where = {"AND": [key_filter, vis]}
 
     try:
-        total: Final = await _memory_table(prisma_client).count(where=where)
-        rows: Final = await _memory_table(prisma_client).find_many(
+        total = await MemoryRepository(prisma_client).table.count(where=where)
+        rows = await MemoryRepository(prisma_client).table.find_many(
             where=where,
             order={"updated_at": "desc"},
             skip=(page - 1) * page_size,
@@ -405,14 +353,12 @@ async def list_memory(
     return MemoryListResponse(memories=[_row_to_model(r) for r in rows], total=total)
 
 
-async def _find_memory_for_caller(
-    prisma_client: "PrismaClient", key: str, user_api_key_dict: UserAPIKeyAuth
-) -> _MemoryRecord:
+async def _find_memory_for_caller(prisma_client: Any, key: str, user_api_key_dict: UserAPIKeyAuth) -> Any:
     """Look up a memory row by key, scoped to the caller's visibility."""
-    key_filter: Final[Mapping[str, object]] = {"key": key}
-    vis: Final = _visibility_filter(user_api_key_dict)
-    where: Final[Mapping[str, object]] = key_filter if vis is None else {"AND": [key_filter, vis]}
-    rows = await _memory_table(prisma_client).find_many(where=where, take=1, order={"updated_at": "desc"})
+    key_filter: dict = {"key": key}
+    vis = _visibility_filter(user_api_key_dict)
+    where: dict = key_filter if vis is None else {"AND": [key_filter, vis]}
+    rows = await MemoryRepository(prisma_client).table.find_many(where=where, take=1, order={"updated_at": "desc"})
     if not rows:
         raise HTTPException(status_code=404, detail=f"Memory with key '{key}' not found")
     return rows[0]
@@ -429,8 +375,8 @@ async def get_memory(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Get a single memory entry by key, scoped to the caller."""
-    prisma_client: Final = _require_prisma()
-    row: Final = await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
+    prisma_client = _require_prisma()
+    row = await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
     return _row_to_model(row)
 
 
@@ -451,7 +397,7 @@ async def upsert_memory(
     If no row exists for (key, caller.user_id, caller.team_id), create one.
     If one exists, update the value/metadata fields that were provided.
     """
-    prisma_client: Final = _require_prisma()
+    prisma_client = _require_prisma()
 
     # `metadata` is a `Json?` column. prisma-client-python has no
     # `JsonNull`/`DbNull` sentinel for writing a true SQL NULL
@@ -465,10 +411,10 @@ async def upsert_memory(
     #
     # When `metadata` is omitted from the request body entirely (not in
     # `model_fields_set`), the column is preserved as-is.
-    fields_sent: Final = body.model_fields_set
-    metadata_in_payload: Final = "metadata" in fields_sent
+    fields_sent = body.model_fields_set
+    metadata_in_payload = "metadata" in fields_sent
 
-    data: Final[dict[str, object]] = {}
+    data: dict = {}
     if body.value is not None:
         data["value"] = body.value
     if metadata_in_payload:
@@ -480,7 +426,7 @@ async def upsert_memory(
         )
     data["updated_by"] = user_api_key_dict.user_id
 
-    async def _find_existing() -> _MemoryRecord | None:
+    async def _find_existing() -> Any:
         """Return the caller-visible row for `key`, or None."""
         try:
             return await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
@@ -490,14 +436,14 @@ async def upsert_memory(
             raise
 
     try:
-        existing: Final = await _find_existing()
+        existing = await _find_existing()
         if existing is not None:
             # Visibility != write authority. Make sure the caller actually
             # owns this row (their user_id matches, or it's a pure team row in
             # their team) — otherwise a teammate could overwrite a personal
             # entry through the OR-based visibility filter.
             await _assert_write_access(prisma_client, existing, user_api_key_dict)
-            row = await _memory_table(prisma_client).update(
+            row = await MemoryRepository(prisma_client).table.update(
                 where={"memory_id": existing.memory_id},
                 data=data,
             )
@@ -512,7 +458,7 @@ async def upsert_memory(
             # Omit `metadata` when None so the column defaults to SQL NULL;
             # otherwise JSON-encode for Prisma — same pattern as
             # `create_memory` above.
-            create_data: Final[dict[str, object]] = {
+            create_data: dict = {
                 "key": key,
                 "value": body.value,
                 "user_id": user_id,
@@ -523,14 +469,14 @@ async def upsert_memory(
             if body.metadata is not None:
                 create_data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
             try:
-                row = await _memory_table(prisma_client).create(data=create_data)
+                row = await MemoryRepository(prisma_client).table.create(data=create_data)
             except Exception as e:
                 # Race: a concurrent PUT/POST created the row after our check.
                 # Re-read and fall back to an update so the PUT stays idempotent
                 # instead of surfacing a 500 on a unique-violation.
                 if not _is_unique_violation(e):
                     raise
-                existing_after_race: Final = await _find_existing()
+                existing_after_race = await _find_existing()
                 if existing_after_race is None:
                     # Row exists globally but isn't visible to this caller
                     # (owned by someone else). Treat as conflict.
@@ -540,7 +486,7 @@ async def upsert_memory(
                     )
                 # Same write-authorization check as the non-race path.
                 await _assert_write_access(prisma_client, existing_after_race, user_api_key_dict)
-                row = await _memory_table(prisma_client).update(
+                row = await MemoryRepository(prisma_client).table.update(
                     where={"memory_id": existing_after_race.memory_id},
                     data=data,
                 )
@@ -563,12 +509,12 @@ async def delete_memory(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Delete a memory entry by key, scoped to the caller."""
-    prisma_client: Final = _require_prisma()
-    row: Final = await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
+    prisma_client = _require_prisma()
+    row = await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
     # Visibility != write authority — see the upsert handler for the rationale.
     await _assert_write_access(prisma_client, row, user_api_key_dict)
     try:
-        await _memory_table(prisma_client).delete(where={"memory_id": row.memory_id})
+        await MemoryRepository(prisma_client).table.delete(where={"memory_id": row.memory_id})
     except Exception as e:
         raise _internal_error("Error deleting memory: %s", e, "Internal error deleting memory entry.")
 

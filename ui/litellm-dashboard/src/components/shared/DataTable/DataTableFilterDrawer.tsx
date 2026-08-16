@@ -20,8 +20,6 @@ interface DataTableFilterDrawerProps<TData> {
   description?: React.ReactNode;
   applyLabel?: string;
   resetLabel?: string;
-  /** Runs instead of the default "clear this table's column filters" when the reset button is pressed. */
-  onReset?: () => void;
   children: (draft: FilterDraft) => React.ReactNode;
 }
 
@@ -50,7 +48,6 @@ export function DataTableFilterDrawer<TData>({
   description,
   applyLabel = "Apply Filters",
   resetLabel = "Reset",
-  onReset,
   children,
 }: DataTableFilterDrawerProps<TData>) {
   const [draft, setDraft] = React.useState<Record<string, unknown>>(() => toDraft(table.getState().columnFilters));
@@ -75,10 +72,6 @@ export function DataTableFilterDrawer<TData>({
 
   const reset = () => {
     setDraft({});
-    if (onReset !== undefined) {
-      onReset();
-      return;
-    }
     table.setColumnFilters([]);
   };
 

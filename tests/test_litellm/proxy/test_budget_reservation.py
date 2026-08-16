@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -611,12 +610,12 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
 
 
 @pytest.mark.asyncio
-async def test_should_not_reserve_user_budget_counter_for_team_key(spend_counter_state):
-    """The reservation path mirrors the read path: no personal user counter for a team key.
+async def test_should_reserve_user_budget_counter_for_team_key(spend_counter_state):
+    """A user's personal budget must be reserved even when the key belongs to a team.
 
-    A team-scoped key reserves against the key and team counters only, so the key
-    owner's personal max_budget never gates a team request. Fails if the user
-    counter is reserved for team keys again.
+    Regression for GitHub issue #12905: previously the reservation path skipped the
+    user spend counter whenever the key had a team, so a team key could overshoot the
+    user's personal max_budget under concurrency.
     """
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
@@ -645,29 +644,25 @@ async def test_should_not_reserve_user_budget_counter_for_team_key(spend_counter
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team") is None
+    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team") == pytest.approx(0.3)
 
     await release_budget_reservation(reservation)
 
 
 @pytest.mark.asyncio
-async def test_should_reserve_user_budget_counter_for_team_key_when_flag_enabled(spend_counter_state):
-    """apply_user_budget_to_team_keys must widen the reservation path too.
-
-    Read-time enforcement alone leaks budget under concurrency, so the opt-in has
-    to reserve against the personal counter as well or a burst of team-key
-    requests slips past the owner's max_budget.
-    """
+async def test_should_skip_user_budget_counter_for_team_key_when_flag_set(spend_counter_state):
+    """skip_user_budget_on_team_key=True restores the legacy behavior where a user's
+    personal budget is not reserved for a team key."""
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
-        token="key-user-on-team-flagged",
+        token="key-user-on-team-skip",
         spend=0.0,
-        user_id="user-on-team-flagged",
-        team_id="team-no-budget",
+        user_id="user-on-team-skip",
+        team_id="team-no-budget-skip",
     )
-    team_object = LiteLLM_TeamTable(team_id="team-no-budget", spend=0.0, max_budget=None)
-    user_object = LiteLLM_UserTable(user_id="user-on-team-flagged", spend=0.0, max_budget=5.0)
+    team_object = LiteLLM_TeamTable(team_id="team-no-budget-skip", spend=0.0, max_budget=None)
+    user_object = LiteLLM_UserTable(user_id="user-on-team-skip", spend=0.0, max_budget=5.0)
 
     with patch(
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
@@ -683,10 +678,10 @@ async def test_should_reserve_user_budget_counter_for_team_key_when_flag_enabled
             prisma_client=None,
             user_api_key_cache=key_cache,
             proxy_logging_obj=proxy_logging_obj,
-            apply_user_budget_to_team_keys=True,
+            skip_user_budget_on_team_key=True,
         )
 
-    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team-flagged") == pytest.approx(0.3)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team-skip") is None
 
     await release_budget_reservation(reservation)
 
@@ -1564,100 +1559,6 @@ async def test_should_skip_reservation_when_counter_increment_fails(
             key="spend:key:key-budget-reserve-unavailable"
         )
         is None
-    )
-
-
-@pytest.mark.asyncio
-async def test_should_raise_503_when_counter_increment_fails_and_fail_closed(
-    spend_counter_state,
-    monkeypatch,
-):
-    """#33923: with fail_closed_budget_enforcement on, a failed reservation write
-    must reject instead of silently degrading to read-time-only enforcement."""
-    counter_cache, key_cache = spend_counter_state
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-budget-reserve-fail-closed",
-        spend=0.0,
-        max_budget=1.0,
-    )
-
-    async def fail_increment_cache(*args, **kwargs):
-        raise RuntimeError("counter unavailable")
-
-    monkeypatch.setattr(counter_cache, "async_increment_cache", fail_increment_cache)
-
-    with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=0.5,
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await reserve_budget_for_request(
-                request_body=_request_body(),
-                route="/chat/completions",
-                llm_router=None,
-                valid_token=valid_token,
-                team_object=None,
-                user_object=None,
-                prisma_client=None,
-                user_api_key_cache=key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-                fail_closed_budget_enforcement=True,
-            )
-
-    assert exc_info.value.status_code == 503
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-reserve-fail-closed"
-        )
-        is None
-    )
-
-
-@pytest.mark.asyncio
-async def test_fail_closed_releases_earlier_counters_before_503(
-    spend_counter_state,
-):
-    """#33923: when a later counter's reservation write fails in strict mode, the
-    counters that already reserved must be released before the 503 propagates."""
-    counter_cache, key_cache = spend_counter_state
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-budget-fail-closed-release",
-        spend=0.0,
-        max_budget=1.0,
-        budget_limits=[
-            {
-                "budget_duration": "1h",
-                "max_budget": 1.0,
-            }
-        ],
-    )
-
-    with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=0.5,
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await reserve_budget_for_request(
-                request_body=_request_body(),
-                route="/chat/completions",
-                llm_router=None,
-                valid_token=valid_token,
-                team_object=None,
-                user_object=None,
-                prisma_client=None,
-                user_api_key_cache=key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-                fail_closed_budget_enforcement=True,
-            )
-
-    assert exc_info.value.status_code == 503
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-fail-closed-release"
-        )
-        == 0.0
     )
 
 

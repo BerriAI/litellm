@@ -22,7 +22,6 @@ SEARCH_PROVIDERS = [
     "serper",
     "apiserpent",
     "tinyfish",
-    "nimble",
 ]
 
 ALLOWED_FILES_IN_LLMS_FOLDER = [

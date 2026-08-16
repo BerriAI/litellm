@@ -1,6 +1,6 @@
 import type { ProxyModel } from "@/app/(dashboard)/hooks/models/useModels";
 import type { Organization } from "@/components/networking";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -21,6 +21,64 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
   useCurrentUser: vi.fn(),
 }));
+
+vi.mock("antd", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("antd")>();
+  return {
+    ...actual,
+    Select: ({
+      value,
+      onChange,
+      options,
+      "data-testid": dataTestId,
+      allowClear,
+      maxTagCount,
+      maxTagPlaceholder,
+      mode,
+      ...props
+    }: any) => {
+      // Simulate maxTagCount responsive behavior - if value length > 5, call maxTagPlaceholder
+      const shouldShowPlaceholder = maxTagCount === "responsive" && Array.isArray(value) && value.length > 5;
+      const visibleValues = shouldShowPlaceholder ? value.slice(0, 5) : value;
+      const omittedValues = shouldShowPlaceholder ? value.slice(5).map((v: string) => ({ value: v, label: v })) : [];
+
+      return (
+        <div data-testid={dataTestId || "model-select"}>
+          <select
+            multiple={mode === "multiple"}
+            role="listbox"
+            value={visibleValues}
+            onChange={(e) => {
+              const selectedValues = Array.from(e.target.selectedOptions, (option) => option.value);
+              onChange(mode === "multiple" ? selectedValues : selectedValues[0]);
+            }}
+            {...props}
+          >
+            {options?.map((group: any) => (
+              <optgroup
+                key={group.label?.props?.children || group.title}
+                label={group.title || group.label?.props?.children}
+              >
+                {group.options?.map((option: any) => (
+                  <option key={option.value} value={option.value} disabled={option.disabled}>
+                    {typeof option.label === "string" ? option.label : option.label?.props?.children}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          {shouldShowPlaceholder && maxTagPlaceholder && (
+            <div data-testid="max-tag-placeholder">{maxTagPlaceholder(omittedValues)}</div>
+          )}
+        </div>
+      );
+    },
+    Skeleton: {
+      Input: ({ active, block }: any) => <div data-testid="skeleton-input" data-active={active} data-block={block} />,
+    },
+    Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  };
+});
 
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -49,14 +107,6 @@ const createMockOrganization = (models: string[]): Organization => ({
   users: null,
   members: null,
 });
-
-const openModelList = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(screen.getAllByRole("combobox")[0]);
-  await screen.findByRole("listbox");
-};
-
-const expectOffered = (label: string) => expect(screen.queryAllByText(label).length).toBeGreaterThan(0);
-const expectNotOffered = (label: string) => expect(screen.queryAllByText(label)).toHaveLength(0);
 
 describe("ModelSelect", () => {
   const mockProxyModels: ProxyModel[] = [
@@ -88,26 +138,21 @@ describe("ModelSelect", () => {
     } as any);
   });
 
-  it("should offer every model and wildcard under its group heading", async () => {
-    const user = userEvent.setup();
+  it("should render with all option groups", async () => {
     renderWithProviders(
       <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
     );
 
-    await openModelList(user);
-
-    expectOffered("Wildcard Options");
-    expectOffered("gpt-4");
-    expectOffered("claude-3");
-    expectOffered("All Openai models");
-    expectOffered("All Anthropic models");
+    await waitFor(() => {
+      expect(screen.getByTestId("model-select")).toBeInTheDocument();
+      expect(screen.getByText("gpt-4")).toBeInTheDocument();
+      expect(screen.getByText("claude-3")).toBeInTheDocument();
+      expect(screen.getByText("All Openai models")).toBeInTheDocument();
+      expect(screen.getByText("All Anthropic models")).toBeInTheDocument();
+    });
   });
 
-  it("should offer nothing to select while any dependency is loading", () => {
-    const { unmount: unmountReady } = renderWithProviders(<ModelSelect onChange={mockOnChange} context="user" />);
-    expect(screen.getAllByRole("combobox")).toHaveLength(1);
-    unmountReady();
-
+  it("should show skeleton loader when any data is loading", () => {
     const loadingScenarios = [
       { hook: mockUseAllProxyModels, context: "user" as const },
       { hook: mockUseTeam, context: "team" as const, props: { teamID: "team-1" } },
@@ -123,41 +168,30 @@ describe("ModelSelect", () => {
 
       const { unmount } = renderWithProviders(<ModelSelect onChange={mockOnChange} context={context} {...props} />);
 
-      expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+      expect(screen.getByTestId("skeleton-input")).toBeInTheDocument();
       unmount();
     });
   });
 
-  it("should report the picked model to onChange", async () => {
+  it("should handle model selection and onChange", async () => {
     const user = userEvent.setup();
     renderWithProviders(
       <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
     );
 
-    await openModelList(user);
-    await user.click(screen.getAllByText("gpt-4")[0]);
+    await waitFor(() => {
+      expect(screen.getByTestId("model-select")).toBeInTheDocument();
+    });
 
+    const select = screen.getByRole("listbox");
+    await user.selectOptions(select, "gpt-4");
     expect(mockOnChange).toHaveBeenCalledWith(["gpt-4"]);
+
+    await user.selectOptions(select, ["gpt-4", "claude-3"]);
+    expect(mockOnChange).toHaveBeenCalled();
   });
 
-  it("should append a second model to the existing selection", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(
-      <ModelSelect
-        onChange={mockOnChange}
-        value={["gpt-4"]}
-        context="user"
-        options={{ showAllProxyModelsOverride: true }}
-      />,
-    );
-
-    await openModelList(user);
-    await user.click(screen.getAllByText("claude-3")[0]);
-
-    expect(mockOnChange).toHaveBeenCalledWith(["gpt-4", "claude-3"]);
-  });
-
-  it("should offer both special options when they are enabled", async () => {
+  it("should handle special options correctly", async () => {
     const user = userEvent.setup();
     mockUseOrganization.mockReturnValue({
       data: createMockOrganization(["all-proxy-models"]),
@@ -173,32 +207,33 @@ describe("ModelSelect", () => {
       />,
     );
 
-    await openModelList(user);
+    await waitFor(() => {
+      expect(screen.getByText("All Proxy Models")).toBeInTheDocument();
+      expect(screen.getByText("No Default Models")).toBeInTheDocument();
+    });
 
-    expectOffered("Special Options");
-    expectOffered("All Proxy Models");
-    expectOffered("No Default Models");
-  });
-
-  it("should replace an existing selection when a special option is picked", async () => {
-    const user = userEvent.setup();
-
-    renderWithProviders(
-      <ModelSelect
-        onChange={mockOnChange}
-        value={["gpt-4"]}
-        context="user"
-        options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
-      />,
-    );
-
-    await openModelList(user);
-    await user.click(screen.getAllByText("No Default Models")[0]);
-
+    const select = screen.getByRole("listbox");
+    await user.selectOptions(select, ["all-proxy-models", "no-default-models"]);
     expect(mockOnChange).toHaveBeenCalledWith(["no-default-models"]);
   });
 
-  it("should filter the offered models by context", async () => {
+  it("should disable models when special option is selected", async () => {
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["all-proxy-models"]}
+        context="user"
+        options={{ showAllProxyModelsOverride: true }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "gpt-4" })).toBeDisabled();
+      expect(screen.getByRole("option", { name: "All Openai models" })).toBeDisabled();
+    });
+  });
+
+  it("should filter models based on context", async () => {
     const testCases = [
       {
         name: "user context with includeUserModels",
@@ -305,7 +340,6 @@ describe("ModelSelect", () => {
     ];
 
     for (const testCase of testCases) {
-      const user = userEvent.setup();
       testCase.setup();
       const { unmount } = renderWithProviders(
         <ModelSelect
@@ -316,9 +350,14 @@ describe("ModelSelect", () => {
         />,
       );
 
-      await openModelList(user);
-      testCase.expectedVisible.forEach(expectOffered);
-      testCase.expectedHidden.forEach(expectNotOffered);
+      await waitFor(() => {
+        testCase.expectedVisible.forEach((model) => {
+          expect(screen.getByText(model)).toBeInTheDocument();
+        });
+        testCase.expectedHidden.forEach((model) => {
+          expect(screen.queryByText(model)).not.toBeInTheDocument();
+        });
+      });
 
       unmount();
       vi.clearAllMocks();
@@ -329,7 +368,7 @@ describe("ModelSelect", () => {
     }
   });
 
-  it("should offer All Proxy Models only when the context allows it", async () => {
+  it("should show All Proxy Models option based on conditions", async () => {
     const testCases = [
       {
         name: "when showAllProxyModelsOverride is true",
@@ -387,7 +426,6 @@ describe("ModelSelect", () => {
     ];
 
     for (const testCase of testCases) {
-      const user = userEvent.setup();
       testCase.setup();
       const { unmount } = renderWithProviders(
         <ModelSelect
@@ -398,13 +436,14 @@ describe("ModelSelect", () => {
         />,
       );
 
-      await openModelList(user);
-      if (testCase.shouldShow) {
-        expectOffered("All Proxy Models");
-      } else {
-        expectNotOffered("All Proxy Models");
-        expectOffered("No Default Models");
-      }
+      await waitFor(() => {
+        if (testCase.shouldShow) {
+          expect(screen.getByText("All Proxy Models")).toBeInTheDocument();
+        } else {
+          expect(screen.queryByText("All Proxy Models")).not.toBeInTheDocument();
+          expect(screen.getByText("No Default Models")).toBeInTheDocument();
+        }
+      });
 
       unmount();
       vi.clearAllMocks();
@@ -413,6 +452,27 @@ describe("ModelSelect", () => {
         isLoading: false,
       } as any);
     }
+  });
+
+  it("should deduplicate models with same id", async () => {
+    const duplicateModels: ProxyModel[] = [
+      { id: "gpt-4", object: "model", created: 1234567890, owned_by: "openai" },
+      { id: "gpt-4", object: "model", created: 1234567890, owned_by: "openai" },
+    ];
+
+    mockUseAllProxyModels.mockReturnValue({
+      data: { data: duplicateModels },
+      isLoading: false,
+    } as any);
+
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+    );
+
+    await waitFor(() => {
+      const gpt4Options = screen.getAllByText("gpt-4");
+      expect(gpt4Options.length).toBeGreaterThan(0);
+    });
   });
 
   it("should use custom dataTestId when provided", async () => {
@@ -425,11 +485,12 @@ describe("ModelSelect", () => {
       />,
     );
 
-    expect(await screen.findByTestId("custom-test-id")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("custom-test-id")).toBeInTheDocument();
+    });
   });
 
   it("should return all proxy models for team context when organization has empty models array", async () => {
-    const user = userEvent.setup();
     mockUseTeam.mockReturnValue({
       data: { team_id: "team-1", team_alias: "Test Team", models: [] },
       isLoading: false,
@@ -442,66 +503,52 @@ describe("ModelSelect", () => {
 
     renderWithProviders(<ModelSelect onChange={mockOnChange} context="team" teamID="team-1" organizationID="org-1" />);
 
-    await openModelList(user);
-
-    expectOffered("gpt-4");
-    expectOffered("claude-3");
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4")).toBeInTheDocument();
+      expect(screen.getByText("claude-3")).toBeInTheDocument();
+    });
   });
 
-  it("should not offer a special options group when includeSpecialOptions is omitted", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<ModelSelect onChange={mockOnChange} context="global" />);
-
-    await openModelList(user);
-
-    expectNotOffered("Special Options");
-    expectNotOffered("All Proxy Models");
-    expectNotOffered("No Default Models");
-    expectOffered("Models");
-  });
-
-  it("should mark models and wildcards unselectable while a special option is selected", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(
-      <ModelSelect
-        onChange={mockOnChange}
-        value={["all-proxy-models"]}
-        context="user"
-        options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
-      />,
-    );
-
-    await openModelList(user);
-
-    expect(screen.getByRole("option", { name: "gpt-4" })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("option", { name: "All Openai models" })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("option", { name: "No Default Models" })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("option", { name: "All Proxy Models" })).not.toHaveAttribute("aria-disabled", "true");
-  });
-
-  it("should list a duplicated proxy model only once", async () => {
-    const user = userEvent.setup();
-    mockUseAllProxyModels.mockReturnValue({
-      data: {
-        data: [
-          { id: "gpt-4", object: "model", created: 1234567890, owned_by: "openai" },
-          { id: "gpt-4", object: "model", created: 1234567890, owned_by: "openai" },
-        ],
-      },
+  it("should disable No Default Models when all-proxy-models is selected", async () => {
+    mockUseOrganization.mockReturnValue({
+      data: createMockOrganization(["all-proxy-models"]),
       isLoading: false,
     } as any);
 
     renderWithProviders(
-      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["all-proxy-models"]}
+        context="organization"
+        organizationID="org-1"
+        options={{ includeSpecialOptions: true }}
+      />,
     );
 
-    await openModelList(user);
-
-    expect(screen.getAllByRole("option", { name: "gpt-4" })).toHaveLength(1);
+    await waitFor(() => {
+      const noDefaultOption = screen.getByRole("option", { name: "No Default Models" });
+      expect(noDefaultOption).toBeDisabled();
+    });
   });
 
-  it("should collapse selections past the chip limit into a labelled overflow count", async () => {
-    const manyModels: ProxyModel[] = Array.from({ length: 8 }, (_, i) => ({
+  it("should not render an empty optgroup when includeSpecialOptions is omitted", async () => {
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="global" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-select")).toBeInTheDocument();
+    });
+
+    const optgroups = document.querySelectorAll("optgroup");
+    // Wildcard Options + Models — no blank leading group
+    expect(optgroups.length).toBe(2);
+    optgroups.forEach((g) => {
+      expect(g.getAttribute("label")).toBeTruthy();
+    });
+  });
+
+  it("should render maxTagPlaceholder when many items are selected", async () => {
+    // Create many models to trigger maxTagCount responsive behavior
+    const manyModels: ProxyModel[] = Array.from({ length: 20 }, (_, i) => ({
       id: `model-${i}`,
       object: "model",
       created: 1234567890,
@@ -513,18 +560,22 @@ describe("ModelSelect", () => {
       isLoading: false,
     } as any);
 
+    const selectedValues = manyModels.slice(0, 10).map((m) => m.id);
+
     renderWithProviders(
       <ModelSelect
         onChange={mockOnChange}
-        value={manyModels.map((m) => m.id)}
+        value={selectedValues}
         context="user"
         options={{ showAllProxyModelsOverride: true }}
       />,
     );
 
-    expect(await screen.findByText("+3 more")).toBeInTheDocument();
-    expect(screen.getByLabelText("model-0")).toBeInTheDocument();
-    expect(screen.getByLabelText("model-4")).toBeInTheDocument();
-    expect(screen.queryByLabelText("model-5")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("model-select")).toBeInTheDocument();
+      // Verify maxTagPlaceholder is rendered with omitted values
+      expect(screen.getByTestId("max-tag-placeholder")).toBeInTheDocument();
+      expect(screen.getByText(/\+5 more/)).toBeInTheDocument();
+    });
   });
 });

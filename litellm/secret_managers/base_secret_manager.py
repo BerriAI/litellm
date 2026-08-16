@@ -1,12 +1,12 @@
 import re
 from abc import ABC, abstractmethod
-from typing import Any, Final
+from typing import Any, Dict, Optional, Union
 
 import httpx
 
 from litellm import verbose_logger
 
-_UNSAFE_SECRET_NAME_PATTERN: Final = re.compile(r"(^|/)\.\.(/|$)|[\x00-\x1f\x7f-\x9f  ]")
+_UNSAFE_SECRET_NAME_PATTERN = re.compile(r"(^|/)\.\.(/|$)|[\x00-\x1f\x7f-\x9f  ]")
 
 
 def raise_if_unsafe_secret_name(secret_name: str) -> None:
@@ -30,9 +30,9 @@ class BaseSecretManager(ABC):
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
-        timeout: float | httpx.Timeout | None = None,
-    ) -> str | None:
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
         """
         Asynchronously read a secret from the secret manager.
 
@@ -44,14 +44,15 @@ class BaseSecretManager(ABC):
         Returns:
             Optional[str]: The secret value if found, None otherwise
         """
+        pass
 
     @abstractmethod
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
-        timeout: float | httpx.Timeout | None = None,
-    ) -> str | None:
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
         """
         Synchronously read a secret from the secret manager.
 
@@ -63,17 +64,18 @@ class BaseSecretManager(ABC):
         Returns:
             Optional[str]: The secret value if found, None otherwise
         """
+        pass
 
     @abstractmethod
     async def async_write_secret(
         self,
         secret_name: str,
         secret_value: str,
-        description: str | None = None,
-        optional_params: dict | None = None,
-        timeout: float | httpx.Timeout | None = None,
-        tags: dict | list | None = None,
-    ) -> dict[str, Any]:
+        description: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tags: Optional[Union[dict, list]] = None,
+    ) -> Dict[str, Any]:
         """
         Asynchronously write a secret to the secret manager.
 
@@ -89,14 +91,15 @@ class BaseSecretManager(ABC):
         Returns:
             Dict[str, Any]: Response from the secret manager containing write operation details
         """
+        pass
 
     @abstractmethod
     async def async_delete_secret(
         self,
         secret_name: str,
-        recovery_window_in_days: int | None = 7,
-        optional_params: dict | None = None,
-        timeout: float | httpx.Timeout | None = None,
+        recovery_window_in_days: Optional[int] = 7,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> dict:
         """
         Async function to delete a secret from the secret manager
@@ -110,14 +113,15 @@ class BaseSecretManager(ABC):
         Returns:
             dict: Response from the secret manager containing deletion details
         """
+        pass
 
     async def async_rotate_secret(
         self,
         current_secret_name: str,
         new_secret_name: str,
         new_secret_value: str,
-        optional_params: dict | None = None,
-        timeout: float | httpx.Timeout | None = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> dict:
         """
         Async function to rotate a secret by creating a new one and deleting the old one.
@@ -138,7 +142,7 @@ class BaseSecretManager(ABC):
         """
         try:
             # First verify the old secret exists
-            old_secret: Final = await self.async_read_secret(
+            old_secret = await self.async_read_secret(
                 secret_name=current_secret_name,
                 optional_params=optional_params,
                 timeout=timeout,
@@ -148,7 +152,7 @@ class BaseSecretManager(ABC):
                 raise ValueError(f"Current secret {current_secret_name} not found")
 
             # Create new secret with new name and value
-            create_response: Final = await self.async_write_secret(
+            create_response = await self.async_write_secret(
                 secret_name=new_secret_name,
                 secret_value=new_secret_value,
                 description=f"Rotated from {current_secret_name}",
@@ -157,7 +161,7 @@ class BaseSecretManager(ABC):
             )
 
             # Verify new secret was created successfully
-            new_secret: Final = await self.async_read_secret(
+            new_secret = await self.async_read_secret(
                 secret_name=new_secret_name,
                 optional_params=optional_params,
                 timeout=timeout,

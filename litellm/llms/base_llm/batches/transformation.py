@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 from httpx import Headers
@@ -38,6 +38,7 @@ class BaseBatchesConfig(ABC):
     @abstractmethod
     def custom_llm_provider(self) -> LlmProviders:
         """Return the LLM provider type for this configuration."""
+        pass
 
     @classmethod
     def get_config(cls):
@@ -64,11 +65,11 @@ class BaseBatchesConfig(ABC):
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         """
         Validate and prepare environment-specific headers and parameters.
@@ -85,15 +86,16 @@ class BaseBatchesConfig(ABC):
         Returns:
             Updated headers dictionary
         """
+        pass
 
     @abstractmethod
     def get_complete_batch_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Dict,
+        litellm_params: Dict,
         data: CreateBatchRequest,
     ) -> str:
         """
@@ -110,6 +112,7 @@ class BaseBatchesConfig(ABC):
         Returns:
             Complete URL for the batch request
         """
+        pass
 
     @abstractmethod
     def transform_create_batch_request(
@@ -118,7 +121,7 @@ class BaseBatchesConfig(ABC):
         create_batch_data: CreateBatchRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> bytes | str | dict[str, Any]:
+    ) -> Union[bytes, str, Dict[str, Any]]:
         """
         Transform the batch creation request to provider-specific format.
 
@@ -131,11 +134,12 @@ class BaseBatchesConfig(ABC):
         Returns:
             Transformed request data
         """
+        pass
 
     @abstractmethod
     def transform_create_batch_response(
         self,
-        model: str | None,
+        model: Optional[str],
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
@@ -152,6 +156,7 @@ class BaseBatchesConfig(ABC):
         Returns:
             LiteLLM batch object
         """
+        pass
 
     @abstractmethod
     def transform_retrieve_batch_request(
@@ -159,7 +164,7 @@ class BaseBatchesConfig(ABC):
         batch_id: str,
         optional_params: dict,
         litellm_params: dict,
-    ) -> bytes | str | dict[str, Any]:
+    ) -> Union[bytes, str, Dict[str, Any]]:
         """
         Transform the batch retrieval request to provider-specific format.
 
@@ -171,11 +176,12 @@ class BaseBatchesConfig(ABC):
         Returns:
             Transformed request data
         """
+        pass
 
     @abstractmethod
     def transform_retrieve_batch_response(
         self,
-        model: str | None,
+        model: Optional[str],
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
@@ -192,9 +198,12 @@ class BaseBatchesConfig(ABC):
         Returns:
             LiteLLM batch object
         """
+        pass
 
     @abstractmethod
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> "BaseLLMException":
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[Dict, Headers]
+    ) -> "BaseLLMException":
         """
         Get the appropriate error class for this provider.
 
@@ -206,3 +215,4 @@ class BaseBatchesConfig(ABC):
         Returns:
             Provider-specific exception class
         """
+        pass

@@ -8,8 +8,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 
 import copy
 import json
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Union
 
 from fastapi import HTTPException
 
@@ -34,37 +33,11 @@ if TYPE_CHECKING:
     # Imported lazily at runtime (inside the streaming hook) to avoid a
     # module-level cyclic import with litellm.integrations.custom_guardrail.
     from litellm.integrations.custom_guardrail import ModifyResponseException
-    from litellm.llms.base_llm.guardrail_translation.base_translation import (
-        BaseTranslation,
-    )
 
 # Call types that use NDJSON streaming (A2A); guardrail HTTPException is emitted as in-stream error
-A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
+A2A_CALL_TYPES = (CallTypes.asend_message, CallTypes.send_message)
 
-GUARDRAIL_NAME: Final = "unified_llm_guardrails"
-
-
-class _EndpointTranslation(Protocol):
-    @property
-    def process_input_messages(self) -> "Callable[..., Awaitable[dict[str, object]]]": ...
-
-    @property
-    def process_output_response(self) -> "Callable[..., Awaitable[object]]": ...
-
-    @property
-    def process_output_streaming_response(self) -> "Callable[..., Awaitable[object]]": ...
-
-    @property
-    def build_block_sse_chunks(self) -> "Callable[..., Sequence[bytes] | None]": ...
-
-
-def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTranslation:
-    return translation
-
-
-def _chunk_choices(item: object) -> Sequence[object]:
-    choices: Final[Sequence[object]] = getattr(item, "choices", None) or []
-    return choices
+GUARDRAIL_NAME = "unified_llm_guardrails"
 
 
 class _StreamTerminated(Exception):
@@ -72,7 +45,7 @@ class _StreamTerminated(Exception):
     its terminal chunks (block message or in-stream error) and must stop."""
 
 
-def _get_a2a_request_id(responses_so_far: Sequence[object], request_data: dict) -> str | None:
+def _get_a2a_request_id(responses_so_far: List[Any], request_data: dict) -> str | None:
     """Get JSON-RPC request id from first A2A chunk or request body for in-stream error reporting."""
     for item in responses_so_far:
         if isinstance(item, dict) and "id" in item:
@@ -84,7 +57,7 @@ def _get_a2a_request_id(responses_so_far: Sequence[object], request_data: dict) 
                     return obj.get("id")
             except (json.JSONDecodeError, TypeError):
                 continue
-    body: Final = request_data.get("body") or request_data.get("data") or {}
+    body = request_data.get("body") or request_data.get("data") or {}
     if isinstance(body, dict):
         return body.get("id")
     return None
@@ -100,7 +73,7 @@ def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> N
             BaseTranslation,
         )
 
-        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+        user_metadata = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
         if user_metadata:
             data["litellm_metadata"] = user_metadata
 
@@ -126,7 +99,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Union[Exception, str, dict, None]:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -140,7 +113,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         verbose_proxy_logger.debug("Running UnifiedLLMGuardrails pre-call hook")
 
-        guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
+        guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
         if guardrail_to_apply is None:
             return data
 
@@ -164,9 +137,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         except ValueError:
             return data  # handle unmapped call types
 
-        endpoint_translation: Final = _as_endpoint_translation(
-            endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
-        )
+        endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
@@ -176,15 +147,13 @@ class UnifiedLLMGuardrails(CustomLogger):
             litellm_logging_obj=data.get("litellm_logging_obj"),
         )
 
-        if not guardrail_to_apply.records_own_guardrail_information:
-            add_guardrail_to_applied_guardrails_header(
-                request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
-            )
+        # Add guardrail to applied guardrails header
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_to_apply.guardrail_name)
         return data
 
     async def async_moderation_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, call_type: CallTypesLiteral
-    ) -> object:
+    ) -> Any:
         """
         Runs in parallel to LLM API call
         Runs on only Input
@@ -195,7 +164,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         verbose_proxy_logger.debug("Running UnifiedLLMGuardrails moderation hook")
 
-        guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
+        guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
         if guardrail_to_apply is None:
             return data
 
@@ -215,9 +184,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         if call_type is not None and CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
             return data
 
-        endpoint_translation: Final = _as_endpoint_translation(
-            endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
-        )
+        endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
@@ -232,7 +199,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response,
-    ) -> object:
+    ) -> Any:
         """
         Runs on response from LLM API call
 
@@ -241,15 +208,16 @@ class UnifiedLLMGuardrails(CustomLogger):
         Uses Enkrypt AI guardrails to check the response for policy violations, PII, and injection attacks
         """
         global endpoint_guardrail_translation_mappings
-        # Local import avoids a module-level cyclic import with
-        # litellm.integrations.custom_guardrail.
-        from litellm.integrations.custom_guardrail import ModifyResponseException
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
         from litellm.types.guardrails import GuardrailEventHooks
 
-        guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
+        # Local import avoids a module-level cyclic import with
+        # litellm.integrations.custom_guardrail.
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
+        guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
 
         if guardrail_to_apply is None:
             return
@@ -261,16 +229,16 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         call_type: CallTypesLiteral | None = None
         if user_api_key_dict.request_route is not None:
-            call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
-            if call_types is not None and len(call_types) > 0:
-                call_type = call_types[0]
+            call_types = get_call_types_for_route(user_api_key_dict.request_route)
+            if call_types is not None and len(call_types) > 0:  # type: ignore
+                call_type = call_types[0]  # type: ignore
         if call_type is None:
-            call_type = _infer_call_type(call_type=None, completion_response=response)
+            call_type = _infer_call_type(call_type=None, completion_response=response)  # type: ignore
 
         # Fallback: resolve call_type from logging_obj for pass-through endpoints
         if call_type is None:
-            litellm_logging_obj: Final = data.get("litellm_logging_obj")
-            logging_call_type: Final = (
+            litellm_logging_obj = data.get("litellm_logging_obj")
+            logging_call_type = (
                 getattr(litellm_logging_obj, "call_type", None) if litellm_logging_obj is not None else None
             )
             if logging_call_type in (
@@ -280,34 +248,19 @@ class UnifiedLLMGuardrails(CustomLogger):
                 call_type = logging_call_type
 
         if call_type is None:
-            verbose_proxy_logger.warning(
-                "Guardrail '%s' selected for route '%s' but its call type could not be resolved; "
-                "skipping post-call scanning. Add the route to API_ROUTE_TO_CALL_TYPES.",
-                guardrail_to_apply.guardrail_name,
-                user_api_key_dict.request_route,
-            )
             return response
 
         if endpoint_guardrail_translation_mappings is None:
             endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
 
         if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
-            verbose_proxy_logger.warning(
-                "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; "
-                "skipping post-call scanning.",
-                guardrail_to_apply.guardrail_name,
-                user_api_key_dict.request_route,
-                call_type,
-            )
             return response
 
-        endpoint_translation: Final = _as_endpoint_translation(
-            endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
-        )
+        endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
 
         try:
             response = await endpoint_translation.process_output_response(
-                response=response,
+                response=response,  # type: ignore
                 guardrail_to_apply=guardrail_to_apply,
                 litellm_logging_obj=data.get("litellm_logging_obj"),
                 user_api_key_dict=user_api_key_dict,
@@ -321,20 +274,18 @@ class UnifiedLLMGuardrails(CustomLogger):
             if e.original_response is None:
                 e.original_response = response
             raise
-        if not guardrail_to_apply.records_own_guardrail_information:
-            add_guardrail_to_applied_guardrails_header(
-                request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
-            )
+        # Add guardrail to applied guardrails header
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_to_apply.guardrail_name)
 
         return response
 
     async def _handle_streaming_block(
         self,
         exc: "ModifyResponseException",
-        endpoint_translation: _EndpointTranslation,
+        endpoint_translation: Any,
         stream_started: bool,
-        responses_so_far: Sequence[object],
-    ) -> AsyncGenerator[object, None]:
+        responses_so_far: list[Any],
+    ) -> AsyncGenerator[Any, None]:
         """
         Terminate a streamed response cleanly when a guardrail blocks it.
 
@@ -344,7 +295,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         format has no safe terminator the handler returns None and we re-raise
         ``exc`` so the proxy can surface a clean error.
         """
-        block_chunks: Final = endpoint_translation.build_block_sse_chunks(
+        block_chunks = endpoint_translation.build_block_sse_chunks(
             exc, stream_started=stream_started, responses_so_far=responses_so_far
         )
         if block_chunks is None:
@@ -355,7 +306,7 @@ class UnifiedLLMGuardrails(CustomLogger):
     @staticmethod
     def _resolve_transform_call_type(
         user_api_key_dict: UserAPIKeyAuth,
-        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+        mappings: dict,
     ) -> str | None:
         """Resolve the call type for the incremental_diff path, or None if the
         route is unresolvable / unsupported.
@@ -371,15 +322,15 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         if user_api_key_dict.request_route is None:
             return None
-        call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
+        call_types = get_call_types_for_route(user_api_key_dict.request_route)
         if not call_types:
             return None
-        call_type: Final = call_types[0].value
+        call_type = call_types[0].value
         try:
-            mapped: Final = CallTypes(call_type)
+            mapped = CallTypes(call_type)
         except ValueError:
             return None
-        handler_cls: Final = mappings.get(mapped)
+        handler_cls = mappings.get(mapped)
         if handler_cls is None or not issubclass(handler_cls, OpenAIChatCompletionsHandler):
             return None
         return call_type
@@ -388,17 +339,17 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         exc: HTTPException,
         call_type: str | None,
-        responses_so_far: Sequence[object],
+        responses_so_far: list[Any],
         request_data: dict,
-    ) -> AsyncGenerator[object, None]:
+    ) -> AsyncGenerator[Any, None]:
         """Surface a mid-stream HTTPException. For A2A (NDJSON) call types the
         response has already started, so emit an in-stream JSON-RPC error chunk;
         otherwise re-raise so the proxy can report it.
         """
         if call_type is not None and CallTypes(call_type) in A2A_CALL_TYPES:
-            request_id: Final = _get_a2a_request_id(responses_so_far, request_data)
-            detail: Final = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
-            error_chunk: Final = (
+            request_id = _get_a2a_request_id(responses_so_far, request_data)
+            detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+            error_chunk = (
                 json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -419,7 +370,7 @@ class UnifiedLLMGuardrails(CustomLogger):
     def _build_transform_chunk(
         self,
         *,
-        reference_chunk: object,
+        reference_chunk: Any,
         mutated_text_per_choice: dict[int, str],
         emitted_text_per_choice: dict[int, str],
         holdback_per_choice: dict[int, int],
@@ -448,7 +399,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             # needs to reach the client, even if the guardrail returned no text
             # to emit. Build a terminator chunk carrying finish_reason per choice.
             if is_final and finish_reason_per_choice:
-                terminator_choices: Final[list[StreamingChoices]] = []
+                terminator_choices: list[StreamingChoices] = []
                 for choice_idx, finish_reason in finish_reason_per_choice.items():
                     if finish_reason is None:
                         continue
@@ -468,7 +419,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     )
             return None
 
-        deltas: Final[dict[int, str]] = {}
+        deltas: dict[int, str] = {}
         for choice_idx, text in mutated_text_per_choice.items():
             already = emitted_text_per_choice.get(choice_idx, "")
             if not text.startswith(already):
@@ -494,7 +445,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         # taken per choice from the accumulated map (a choice can finish in an
         # earlier chunk than the stream's last one); tool_calls are dropped since
         # v1 does not transform streamed tool calls (they pass through raw).
-        synthetic_choices: Final[list[StreamingChoices]] = []
+        synthetic_choices: list[StreamingChoices] = []
         for choice_idx in mutated_text_per_choice:
             delta_text = deltas.get(choice_idx, "")
             finish_reason = finish_reason_per_choice.get(choice_idx) if is_final else None
@@ -532,18 +483,18 @@ class UnifiedLLMGuardrails(CustomLogger):
     async def _emit_transform_round(
         self,
         *,
-        endpoint_translation: _EndpointTranslation,
+        endpoint_translation: Any,
         guardrail_to_apply: CustomGuardrail,
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
-        reference_chunk: object,
-        responses_so_far: Sequence[object],
-        responses_yielded: list[object],
+        reference_chunk: Any,
+        responses_so_far: list[Any],
+        responses_yielded: list[Any],
         emitted_text_per_choice: dict[int, str],
         finish_reason_per_choice: dict[int, str | None],
         is_final: bool,
-    ) -> AsyncGenerator[object, None]:
+    ) -> AsyncGenerator[Any, None]:
         """Run one guardrail processing round and emit the resulting diff chunk.
 
         Raises ``_StreamTerminated`` (after emitting the terminal block message or
@@ -554,7 +505,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             StreamTransformSink,
         )
 
-        sink: Final = StreamTransformSink()
+        sink = StreamTransformSink()
         try:
             await endpoint_translation.process_output_streaming_response(
                 responses_so_far=responses_so_far,
@@ -564,7 +515,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 request_data=request_data,
                 stream_transform_sink=sink,
             )
-            synthetic: Final = self._build_transform_chunk(
+            synthetic = self._build_transform_chunk(
                 reference_chunk=reference_chunk,
                 mutated_text_per_choice=sink.mutated_text_per_choice,
                 emitted_text_per_choice=emitted_text_per_choice,
@@ -596,14 +547,14 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         *,
         guardrail_to_apply: CustomGuardrail,
-        response: AsyncIterable[object],
+        response: Any,
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         sampling_rate: int,
         end_of_stream_only: bool,
-        mappings: Mapping[CallTypes, type["BaseTranslation"]],
-    ) -> AsyncGenerator[object, None]:
+        mappings: dict,
+    ) -> AsyncGenerator[Any, None]:
         """Emit guardrail text transformations as new deltas on the stream.
 
         Raw chunks are withheld and accumulated; on each sampled processing round
@@ -612,15 +563,15 @@ class UnifiedLLMGuardrails(CustomLogger):
         synthetic chunk. A BLOCK terminates the stream via the shared block
         handler; an underflow surfaces as an HTTPException.
         """
-        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
-        responses_so_far: Final[list[object]] = []
-        responses_yielded: Final[list[object]] = []
-        emitted_text_per_choice: Final[dict[int, str]] = {}
-        finish_reason_per_choice: Final[dict[int, str | None]] = {}
+        endpoint_translation = mappings[CallTypes(call_type)]()
+        responses_so_far: list[Any] = []
+        responses_yielded: list[Any] = []
+        emitted_text_per_choice: dict[int, str] = {}
+        finish_reason_per_choice: dict[int, str | None] = {}
         chunk_counter = 0
-        last_chunk: object | None = None
+        last_chunk: Any | None = None
 
-        def _round(reference_chunk: object, is_final: bool) -> AsyncGenerator[object, None]:
+        def _round(reference_chunk: Any, is_final: bool) -> AsyncGenerator[Any, None]:
             return self._emit_transform_round(
                 endpoint_translation=endpoint_translation,
                 guardrail_to_apply=guardrail_to_apply,
@@ -726,13 +677,13 @@ class UnifiedLLMGuardrails(CustomLogger):
     async def _inspect_full_response_for_block(
         self,
         *,
-        endpoint_translation: _EndpointTranslation,
+        endpoint_translation: Any,
         guardrail_to_apply: CustomGuardrail,
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        responses_so_far: Sequence[object],
-        responses_yielded: Sequence[object],
-    ) -> AsyncGenerator[object, None]:
+        responses_so_far: list[Any],
+        responses_yielded: list[Any],
+    ) -> AsyncGenerator[Any, None]:
         """Run the block-only guardrail inspection over the full assembled
         response (text + tool calls) so nothing bypasses the block decision.
 
@@ -766,17 +717,17 @@ class UnifiedLLMGuardrails(CustomLogger):
             raise _StreamTerminated()
 
     @staticmethod
-    def _chunk_has_tool_calls(item: object) -> bool:
-        for choice in _chunk_choices(item):
+    def _chunk_has_tool_calls(item: Any) -> bool:
+        for choice in getattr(item, "choices", None) or []:
             delta = getattr(choice, "delta", None)
             if getattr(delta, "tool_calls", None):
                 return True
         return False
 
     @staticmethod
-    def _chunk_carries_text(item: object) -> bool:
+    def _chunk_carries_text(item: Any) -> bool:
         """True if any choice in this chunk has non-empty string ``delta.content``."""
-        for choice in _chunk_choices(item):
+        for choice in getattr(item, "choices", None) or []:
             delta = getattr(choice, "delta", None)
             content = getattr(delta, "content", None)
             if isinstance(content, str) and content != "":
@@ -785,7 +736,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
     @staticmethod
     def _tool_call_passthrough_chunk(
-        item: object,
+        item: Any,
         finish_reason_per_choice: "dict[int, str | None] | None" = None,
     ) -> ModelResponseStream:
         """Copy of a chunk carrying tool calls with all text content stripped.
@@ -803,8 +754,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         ``finish_reason`` and silently drop the guardrailed text, defeating the
         redaction purpose.
         """
-        synthetic_choices: Final[list[StreamingChoices]] = []
-        for choice in _chunk_choices(item):
+        synthetic_choices: list[StreamingChoices] = []
+        for choice in getattr(item, "choices", None) or []:
             delta = getattr(choice, "delta", None)
             idx = getattr(choice, "index", 0) or 0
             original_finish = getattr(choice, "finish_reason", None)
@@ -833,15 +784,15 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
 
     @staticmethod
-    def _record_finish_reasons(item: object, finish_reason_per_choice: dict[int, str | None]) -> None:
-        for choice in _chunk_choices(item):
+    def _record_finish_reasons(item: Any, finish_reason_per_choice: dict[int, str | None]) -> None:
+        for choice in getattr(item, "choices", None) or []:
             finish_reason = getattr(choice, "finish_reason", None)
             if finish_reason is not None:
                 finish_reason_per_choice[getattr(choice, "index", 0) or 0] = finish_reason
 
     @staticmethod
-    def _chunk_has_finish_reason(item: object) -> bool:
-        choices: Final = _chunk_choices(item)
+    def _chunk_has_finish_reason(item: Any) -> bool:
+        choices = getattr(item, "choices", None) or []
         return any(getattr(choice, "finish_reason", None) is not None for choice in choices)
 
     async def async_post_call_streaming_iterator_hook(
@@ -849,8 +800,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-        guardrail_to_apply: CustomGuardrail | None = None,
-        buffer_until_moderated_default: bool = False,
     ) -> AsyncGenerator[Any, None]:
         """
         Passes the entire stream to the guardrail
@@ -871,28 +820,27 @@ class UnifiedLLMGuardrails(CustomLogger):
         # litellm.integrations.custom_guardrail.
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
-        if guardrail_to_apply is None:
-            guardrail_to_apply = request_data.pop("guardrail_to_apply", None)
+        guardrail_to_apply: CustomGuardrail = request_data.pop("guardrail_to_apply", None)
 
         # Get streaming configuration. Resolution order (later wins): default
         # < guardrail attribute < guardrail_config dict < this callback's
         # optional_params.
-        def _streaming_flag(name: str, default: object) -> Any:
+        def _streaming_flag(name: str, default: Any) -> Any:
             value = default
             if guardrail_to_apply is not None:
                 value = getattr(guardrail_to_apply, name, value)
-                config: Final[Mapping[str, object]] = getattr(guardrail_to_apply, "guardrail_config", {})
+                config = getattr(guardrail_to_apply, "guardrail_config", {})
                 if isinstance(config, dict):
                     value = config.get(name, value)
             return self.optional_params.get(name, value)
 
-        sampling_rate: Final[int] = _streaming_flag("streaming_sampling_rate", 5)
+        sampling_rate = _streaming_flag("streaming_sampling_rate", 5)
         # Only apply the guardrail at end of stream (not per chunk).
-        end_of_stream_only: bool = _streaming_flag("streaming_end_of_stream_only", False)
+        end_of_stream_only = _streaming_flag("streaming_end_of_stream_only", False)
         # "block_only" (default) drops guardrail text rewrites on the streaming
         # path; "incremental_diff" emits them as synthetic deltas (see
         # _run_incremental_transform_stream).
-        streaming_transform_mode: Final[str] = _streaming_flag("streaming_transform_mode", "block_only")
+        streaming_transform_mode = _streaming_flag("streaming_transform_mode", "block_only")
         # Withhold every chunk until end-of-stream moderation passes, then
         # release the original chunks (clean) or only the block message
         # (blocked) -- moderating the whole response *before* any content
@@ -900,9 +848,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         # release the original chunks are replayed as-is, so a
         # content-rewriting guardrail (e.g. PII masking) would leak
         # unredacted content. Guarded below via mask_response_content.
-        buffer_until_moderated: bool = _streaming_flag(
-            "streaming_buffer_until_moderated", buffer_until_moderated_default
-        )
+        buffer_until_moderated = _streaming_flag("streaming_buffer_until_moderated", False)
 
         if (
             buffer_until_moderated
@@ -927,7 +873,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield item
             return
 
-        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.post_call
+        event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
         if guardrail_to_apply.should_run_guardrail(data=request_data, event_type=event_type) is not True:
             verbose_proxy_logger.debug(
                 "UnifiedLLMGuardrails: Post-call streaming scanning disabled for %s",
@@ -946,7 +892,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         # can resolve up front to an OpenAI-chat handler (the only supported v1
         # surface); anything else falls back to the block_only behavior below.
         if streaming_transform_mode == "incremental_diff":
-            transform_call_type: Final = self._resolve_transform_call_type(
+            transform_call_type = self._resolve_transform_call_type(
                 user_api_key_dict=user_api_key_dict,
                 mappings=endpoint_guardrail_translation_mappings,
             )
@@ -973,9 +919,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         # Infer call type from first chunk
         call_type = None
         chunk_counter = 0
-        responses_so_far: Final[list[object]] = []
-        responses_yielded: Final[list[object]] = []
-        pending_end_of_stream_items: Final[list[object]] = []
+        responses_so_far: List[Any] = []
+        responses_yielded: list[Any] = []
+        pending_end_of_stream_items: list[Any] = []
         # Whether any real response chunk has been forwarded to the client.
         # Drives how a block terminates the stream: continue the in-progress
         # message (True) vs emit a standalone block message (False, buffered).
@@ -992,7 +938,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     call_type = call_types[0].value
 
             if call_type is None:
-                call_type = _infer_call_type(call_type=None, completion_response=item)
+                call_type = _infer_call_type(call_type=None, completion_response=item)  # type: ignore
 
             # If call type not supported, just pass through all chunks
             if call_type is None or CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
@@ -1117,7 +1063,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             # the chunks themselves are replayed verbatim -- so we only need to
             # preserve the list, not clone every chunk (deepcopy would double
             # peak memory for large responses).
-            buffered_items: Final = list(responses_so_far) if buffer_until_moderated else None
+            buffered_items = list(responses_so_far) if buffer_until_moderated else None
 
             try:
                 await endpoint_translation.process_output_streaming_response(

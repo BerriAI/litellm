@@ -1,13 +1,13 @@
-from typing import Any, Final, TypedDict
+from typing import Any, Dict, TypedDict
 
-POSTHOG_MAX_BATCH_SIZE: Final = 100
+POSTHOG_MAX_BATCH_SIZE = 100
 
 
 class PostHogEventPayload(TypedDict):
     """PostHog event payload structure"""
 
     event: str  # "$ai_generation" or "$ai_embedding"
-    properties: dict[str, Any]
+    properties: Dict[str, Any]
     distinct_id: str
 
 

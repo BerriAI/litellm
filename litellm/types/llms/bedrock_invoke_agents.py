@@ -4,7 +4,7 @@ Type definitions for AWS Bedrock Invoke Agent API responses.
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_InvokeAgent.html
 """
 
-from typing import Any, Final
+from typing import Any, Dict, List, Optional, Union
 
 from typing_extensions import TypedDict
 
@@ -22,58 +22,58 @@ class InvokeAgentUsage(TypedDict):
 
     inputTokens: int
     outputTokens: int
-    model: str | None
+    model: Optional[str]
 
 
 class InvokeAgentMetadata(TypedDict, total=False):
     """Metadata from model invocation."""
 
-    clientRequestId: str | None
-    endTime: str | None
-    startTime: str | None
-    totalTimeMs: int | None
-    usage: InvokeAgentUsage | None
+    clientRequestId: Optional[str]
+    endTime: Optional[str]
+    startTime: Optional[str]
+    totalTimeMs: Optional[int]
+    usage: Optional[InvokeAgentUsage]
 
 
 class InvokeAgentModelInvocationInput(TypedDict, total=False):
     """Model invocation input details."""
 
-    foundationModel: str | None
-    inferenceConfiguration: dict[str, Any] | None
-    text: str | None
-    traceId: str | None
-    type: str | None
+    foundationModel: Optional[str]
+    inferenceConfiguration: Optional[Dict[str, Any]]
+    text: Optional[str]
+    traceId: Optional[str]
+    type: Optional[str]
 
 
 class InvokeAgentModelInvocationOutput(TypedDict, total=False):
     """Model invocation output details."""
 
-    metadata: InvokeAgentMetadata | None
-    parsedResponse: dict[str, Any] | None
-    rawResponse: dict[str, Any] | None
-    reasoningContent: dict[str, Any] | None
-    traceId: str | None
+    metadata: Optional[InvokeAgentMetadata]
+    parsedResponse: Optional[Dict[str, Any]]
+    rawResponse: Optional[Dict[str, Any]]
+    reasoningContent: Optional[Dict[str, Any]]
+    traceId: Optional[str]
 
 
 class InvokeAgentOrchestrationTrace(TypedDict, total=False):
     """Orchestration trace information."""
 
-    modelInvocationInput: InvokeAgentModelInvocationInput | None
-    modelInvocationOutput: InvokeAgentModelInvocationOutput | None
+    modelInvocationInput: Optional[InvokeAgentModelInvocationInput]
+    modelInvocationOutput: Optional[InvokeAgentModelInvocationOutput]
 
 
 class InvokeAgentPreProcessingTrace(TypedDict, total=False):
     """Pre-processing trace information."""
 
-    modelInvocationInput: InvokeAgentModelInvocationInput | None
-    modelInvocationOutput: InvokeAgentModelInvocationOutput | None
+    modelInvocationInput: Optional[InvokeAgentModelInvocationInput]
+    modelInvocationOutput: Optional[InvokeAgentModelInvocationOutput]
 
 
 class InvokeAgentTrace(TypedDict, total=False):
     """Trace information container."""
 
-    orchestrationTrace: InvokeAgentOrchestrationTrace | None
-    preProcessingTrace: InvokeAgentPreProcessingTrace | None
+    orchestrationTrace: Optional[InvokeAgentOrchestrationTrace]
+    preProcessingTrace: Optional[InvokeAgentPreProcessingTrace]
 
 
 class InvokeAgentCallerChain(TypedDict, total=False):
@@ -88,7 +88,7 @@ class InvokeAgentTracePayload(TypedDict, total=False):
     agentAliasId: str
     agentId: str
     agentVersion: str
-    callerChain: list[InvokeAgentCallerChain]
+    callerChain: List[InvokeAgentCallerChain]
     eventTime: str
     sessionId: str
     trace: InvokeAgentTrace
@@ -104,26 +104,26 @@ class InvokeAgentEventPayload(TypedDict, total=False):
     """Union type for different event payload types."""
 
     # Trace event fields
-    agentAliasId: str | None
-    agentId: str | None
-    agentVersion: str | None
-    callerChain: list[InvokeAgentCallerChain] | None
-    eventTime: str | None
-    sessionId: str | None
-    trace: InvokeAgentTrace | None
+    agentAliasId: Optional[str]
+    agentId: Optional[str]
+    agentVersion: Optional[str]
+    callerChain: Optional[List[InvokeAgentCallerChain]]
+    eventTime: Optional[str]
+    sessionId: Optional[str]
+    trace: Optional[InvokeAgentTrace]
 
     # Chunk event fields
-    bytes: str | None
+    bytes: Optional[str]
 
 
 class InvokeAgentEvent(TypedDict, total=False):
     """Complete event structure for AWS Invoke Agent responses."""
 
     headers: InvokeAgentEventHeaders
-    payload: InvokeAgentEventPayload | None
+    payload: Optional[InvokeAgentEventPayload]
 
 
 # Type aliases for convenience
-InvokeAgentEventList = list[InvokeAgentEvent]
-InvokeAgentTraceEvent: Final = InvokeAgentEvent  # When headers.event_type == 'trace'
-InvokeAgentChunkEvent: Final = InvokeAgentEvent  # When headers.event_type == 'chunk'
+InvokeAgentEventList = List[InvokeAgentEvent]
+InvokeAgentTraceEvent = InvokeAgentEvent  # When headers.event_type == 'trace'
+InvokeAgentChunkEvent = InvokeAgentEvent  # When headers.event_type == 'chunk'

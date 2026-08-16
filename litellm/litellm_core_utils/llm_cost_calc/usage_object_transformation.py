@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional, Union
 
 from litellm.types.utils import (
     PromptTokensDetailsWrapper,
@@ -19,8 +19,8 @@ class TranscriptionUsageObjectTransformation:
 
     @staticmethod
     def transform_transcription_usage_object(
-        usage_object: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject,
-    ) -> Usage | None:
+        usage_object: Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject],
+    ) -> Optional[Usage]:
         if isinstance(usage_object, TranscriptionUsageDurationObject):
             return None
         elif isinstance(usage_object, TranscriptionUsageTokensObject):

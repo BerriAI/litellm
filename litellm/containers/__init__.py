@@ -23,20 +23,22 @@ from .main import (
 )
 
 __all__ = [
+    # Core container operations
     "acreate_container",
     "adelete_container",
-    "adelete_container_file",
-    "alist_container_files",
     "alist_containers",
     "aretrieve_container",
-    "aretrieve_container_file",
-    "aretrieve_container_file_content",
     "create_container",
     "delete_container",
-    "delete_container_file",
-    "list_container_files",
     "list_containers",
     "retrieve_container",
+    # Container file operations (auto-generated from endpoints.json)
+    "adelete_container_file",
+    "alist_container_files",
+    "aretrieve_container_file",
+    "aretrieve_container_file_content",
+    "delete_container_file",
+    "list_container_files",
     "retrieve_container_file",
     "retrieve_container_file_content",
 ]

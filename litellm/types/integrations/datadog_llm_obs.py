@@ -4,7 +4,7 @@ Payloads for Datadog LLM Observability Service (LLMObs)
 API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=example#api-standards
 """
 
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from typing_extensions import TypedDict
 
@@ -12,21 +12,21 @@ from litellm.types.integrations.custom_logger import StandardCustomLoggerInitPar
 
 
 class InputMeta(TypedDict):
-    messages: list[
-        dict[str, Any]  # changed to fit with tool calls
+    messages: List[
+        Dict[str, Any]  # changed to fit with tool calls
     ]  # Relevant Issue: https://github.com/BerriAI/litellm/issues/9494
 
 
 class OutputMeta(TypedDict):
-    messages: list[Any]
+    messages: List[Any]
 
 
 class DDLLMObsError(TypedDict, total=False):
     """Error information on the span according to DD LLM Obs API spec"""
 
     message: str  # The error message
-    stack: str | None  # The stack trace
-    type: str | None  # The error type
+    stack: Optional[str]  # The stack trace
+    type: Optional[str]  # The error type
 
 
 class Meta(TypedDict, total=False):
@@ -34,8 +34,8 @@ class Meta(TypedDict, total=False):
     kind: Literal["llm", "tool", "task", "embedding", "retrieval"]
     input: InputMeta  # The span's input information.
     output: OutputMeta  # The span's output information.
-    metadata: dict[str, Any]
-    error: DDLLMObsError | None  # Error information on the span
+    metadata: Dict[str, Any]
+    error: Optional[DDLLMObsError]  # Error information on the span
 
 
 class LLMMetrics(TypedDict, total=False):
@@ -57,14 +57,14 @@ class LLMObsPayload(TypedDict, total=False):
     start_ns: int
     duration: int
     metrics: LLMMetrics
-    tags: list
+    tags: List
     status: Literal["ok", "error"]  # Error status ("ok" or "error"). Defaults to "ok".
 
 
 class DDSpanAttributes(TypedDict):
     ml_app: str
-    tags: list[str]
-    spans: list[LLMObsPayload]
+    tags: List[str]
+    spans: List[LLMObsPayload]
 
 
 class DDIntakePayload(TypedDict):
@@ -76,6 +76,8 @@ class DatadogLLMObsInitParams(StandardCustomLoggerInitParams):
     """
     Params for initializing a DatadogLLMObs logger on litellm
     """
+
+    pass
 
 
 class DDLLMObsLatencyMetrics(TypedDict, total=False):

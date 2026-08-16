@@ -1,5 +1,5 @@
 import json
-from typing import Final, Literal
+from typing import Literal, Optional, Union
 
 import httpx
 
@@ -18,7 +18,7 @@ from litellm.types.utils import EmbeddingResponse
 
 from .transformation import VertexAIMultimodalEmbeddingConfig
 
-vertex_multimodal_embedding_handler: Final = VertexAIMultimodalEmbeddingConfig()
+vertex_multimodal_embedding_handler = VertexAIMultimodalEmbeddingConfig()
 
 
 class VertexMultimodalEmbedding(VertexLLM):
@@ -32,21 +32,21 @@ class VertexMultimodalEmbedding(VertexLLM):
     def multimodal_embedding(
         self,
         model: str,
-        input: list | str,
+        input: Union[list, str],
         print_verbose,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         headers: dict = {},
         encoding=None,
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        aembedding: bool | None = False,
+        aembedding: Optional[bool] = False,
         timeout=300,
         client=None,
     ) -> EmbeddingResponse:
@@ -71,19 +71,19 @@ class VertexMultimodalEmbedding(VertexLLM):
         )
 
         if client is None:
-            _params: Final = {}
+            _params = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
-                    _httpx_timeout: Final = httpx.Timeout(timeout)
+                    _httpx_timeout = httpx.Timeout(timeout)
                     _params["timeout"] = _httpx_timeout
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            sync_handler: HTTPHandler = HTTPHandler(**_params)
+            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
         else:
-            sync_handler = client
+            sync_handler = client  # type: ignore
 
-        request_data: Final = vertex_multimodal_embedding_handler.transform_embedding_request(
+        request_data = vertex_multimodal_embedding_handler.transform_embedding_request(
             model, input, optional_params, headers
         )
 
@@ -109,7 +109,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         )
 
         if aembedding is True:
-            return self.async_multimodal_embedding(
+            return self.async_multimodal_embedding(  # type: ignore
                 model=model,
                 api_base=url,
                 data=request_data,
@@ -123,7 +123,7 @@ class VertexMultimodalEmbedding(VertexLLM):
                 api_key=api_key,
             )
 
-        response: Final = sync_handler.post(
+        response = sync_handler.post(
             url=url,
             headers=headers,
             data=json.dumps(request_data),
@@ -148,14 +148,14 @@ class VertexMultimodalEmbedding(VertexLLM):
         litellm_params: dict,
         data: dict,
         model_response: EmbeddingResponse,
-        timeout: float | httpx.Timeout | None,
+        timeout: Optional[Union[float, httpx.Timeout]],
         logging_obj: LiteLLMLoggingObj,
         headers={},
-        client: AsyncHTTPHandler | None = None,
-        api_key: str | None = None,
+        client: Optional[AsyncHTTPHandler] = None,
+        api_key: Optional[str] = None,
     ) -> EmbeddingResponse:
         if client is None:
-            _params: Final = {}
+            _params = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
@@ -165,13 +165,13 @@ class VertexMultimodalEmbedding(VertexLLM):
                 params={"timeout": timeout},
             )
         else:
-            client = client
+            client = client  # type: ignore
 
         try:
-            response: Final = await client.post(api_base, headers=headers, json=data)
+            response = await client.post(api_base, headers=headers, json=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
+            error_code = err.response.status_code
             raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")

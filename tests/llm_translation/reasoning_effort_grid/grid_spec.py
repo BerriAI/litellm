@@ -168,13 +168,6 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
         ),
     ),
     ModelEntry(
-        alias="claude-opus-5",
-        model="anthropic/claude-opus-5",
-        mode="adaptive",
-        required_env=_ANTHROPIC_REQ,
-        caps=_CAPS_XHIGH_MAX,
-    ),
-    ModelEntry(
         alias="claude-opus-4-8",
         model="anthropic/claude-opus-4-8",
         mode="adaptive",

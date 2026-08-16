@@ -1,17 +1,17 @@
-from .chat import ChatClient
 from .client import Client
-from .exceptions import UnauthorizedError
-from .health import HealthManagementClient
-from .model_groups import ModelGroupsManagementClient
+from .chat import ChatClient
 from .models import ModelsManagementClient
+from .model_groups import ModelGroupsManagementClient
+from .exceptions import UnauthorizedError
 from .users import UsersManagementClient
+from .health import HealthManagementClient
 
 __all__ = [
-    "ChatClient",
     "Client",
-    "HealthManagementClient",
-    "ModelGroupsManagementClient",
+    "ChatClient",
     "ModelsManagementClient",
-    "UnauthorizedError",
+    "ModelGroupsManagementClient",
     "UsersManagementClient",
+    "UnauthorizedError",
+    "HealthManagementClient",
 ]

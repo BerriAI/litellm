@@ -1,10 +1,9 @@
 import json
 import time
 import types
-from collections.abc import Callable
-from typing import Final
+from typing import Callable, Optional
 
-import httpx
+import httpx  # type: ignore
 
 import litellm
 from litellm.utils import Choices, Message, ModelResponse, Usage
@@ -74,73 +73,73 @@ class AlephAlphaConfig:
     - `control_log_additive` (boolean; default value: true): Method of applying control to attention scores.
     """
 
-    maximum_tokens: int | None = litellm.max_tokens  # aleph alpha requires max tokens
-    minimum_tokens: int | None = None
-    echo: bool | None = None
-    temperature: int | None = None
-    top_k: int | None = None
-    top_p: int | None = None
-    presence_penalty: int | None = None
-    frequency_penalty: int | None = None
-    sequence_penalty: int | None = None
-    sequence_penalty_min_length: int | None = None
-    repetition_penalties_include_prompt: bool | None = None
-    repetition_penalties_include_completion: bool | None = None
-    use_multiplicative_presence_penalty: bool | None = None
-    use_multiplicative_frequency_penalty: bool | None = None
-    use_multiplicative_sequence_penalty: bool | None = None
-    penalty_bias: str | None = None
-    penalty_exceptions_include_stop_sequences: bool | None = None
-    best_of: int | None = None
-    n: int | None = None
-    logit_bias: dict | None = None
-    log_probs: int | None = None
-    stop_sequences: list | None = None
-    tokens: bool | None = None
-    raw_completion: bool | None = None
-    disable_optimizations: bool | None = None
-    completion_bias_inclusion: list | None = None
-    completion_bias_exclusion: list | None = None
-    completion_bias_inclusion_first_token_only: bool | None = None
-    completion_bias_exclusion_first_token_only: bool | None = None
-    contextual_control_threshold: int | None = None
-    control_log_additive: bool | None = None
+    maximum_tokens: Optional[int] = litellm.max_tokens  # aleph alpha requires max tokens
+    minimum_tokens: Optional[int] = None
+    echo: Optional[bool] = None
+    temperature: Optional[int] = None
+    top_k: Optional[int] = None
+    top_p: Optional[int] = None
+    presence_penalty: Optional[int] = None
+    frequency_penalty: Optional[int] = None
+    sequence_penalty: Optional[int] = None
+    sequence_penalty_min_length: Optional[int] = None
+    repetition_penalties_include_prompt: Optional[bool] = None
+    repetition_penalties_include_completion: Optional[bool] = None
+    use_multiplicative_presence_penalty: Optional[bool] = None
+    use_multiplicative_frequency_penalty: Optional[bool] = None
+    use_multiplicative_sequence_penalty: Optional[bool] = None
+    penalty_bias: Optional[str] = None
+    penalty_exceptions_include_stop_sequences: Optional[bool] = None
+    best_of: Optional[int] = None
+    n: Optional[int] = None
+    logit_bias: Optional[dict] = None
+    log_probs: Optional[int] = None
+    stop_sequences: Optional[list] = None
+    tokens: Optional[bool] = None
+    raw_completion: Optional[bool] = None
+    disable_optimizations: Optional[bool] = None
+    completion_bias_inclusion: Optional[list] = None
+    completion_bias_exclusion: Optional[list] = None
+    completion_bias_inclusion_first_token_only: Optional[bool] = None
+    completion_bias_exclusion_first_token_only: Optional[bool] = None
+    contextual_control_threshold: Optional[int] = None
+    control_log_additive: Optional[bool] = None
 
     def __init__(
         self,
-        maximum_tokens: int | None = None,
-        minimum_tokens: int | None = None,
-        echo: bool | None = None,
-        temperature: int | None = None,
-        top_k: int | None = None,
-        top_p: int | None = None,
-        presence_penalty: int | None = None,
-        frequency_penalty: int | None = None,
-        sequence_penalty: int | None = None,
-        sequence_penalty_min_length: int | None = None,
-        repetition_penalties_include_prompt: bool | None = None,
-        repetition_penalties_include_completion: bool | None = None,
-        use_multiplicative_presence_penalty: bool | None = None,
-        use_multiplicative_frequency_penalty: bool | None = None,
-        use_multiplicative_sequence_penalty: bool | None = None,
-        penalty_bias: str | None = None,
-        penalty_exceptions_include_stop_sequences: bool | None = None,
-        best_of: int | None = None,
-        n: int | None = None,
-        logit_bias: dict | None = None,
-        log_probs: int | None = None,
-        stop_sequences: list | None = None,
-        tokens: bool | None = None,
-        raw_completion: bool | None = None,
-        disable_optimizations: bool | None = None,
-        completion_bias_inclusion: list | None = None,
-        completion_bias_exclusion: list | None = None,
-        completion_bias_inclusion_first_token_only: bool | None = None,
-        completion_bias_exclusion_first_token_only: bool | None = None,
-        contextual_control_threshold: int | None = None,
-        control_log_additive: bool | None = None,
+        maximum_tokens: Optional[int] = None,
+        minimum_tokens: Optional[int] = None,
+        echo: Optional[bool] = None,
+        temperature: Optional[int] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[int] = None,
+        presence_penalty: Optional[int] = None,
+        frequency_penalty: Optional[int] = None,
+        sequence_penalty: Optional[int] = None,
+        sequence_penalty_min_length: Optional[int] = None,
+        repetition_penalties_include_prompt: Optional[bool] = None,
+        repetition_penalties_include_completion: Optional[bool] = None,
+        use_multiplicative_presence_penalty: Optional[bool] = None,
+        use_multiplicative_frequency_penalty: Optional[bool] = None,
+        use_multiplicative_sequence_penalty: Optional[bool] = None,
+        penalty_bias: Optional[str] = None,
+        penalty_exceptions_include_stop_sequences: Optional[bool] = None,
+        best_of: Optional[int] = None,
+        n: Optional[int] = None,
+        logit_bias: Optional[dict] = None,
+        log_probs: Optional[int] = None,
+        stop_sequences: Optional[list] = None,
+        tokens: Optional[bool] = None,
+        raw_completion: Optional[bool] = None,
+        disable_optimizations: Optional[bool] = None,
+        completion_bias_inclusion: Optional[list] = None,
+        completion_bias_exclusion: Optional[list] = None,
+        completion_bias_inclusion_first_token_only: Optional[bool] = None,
+        completion_bias_exclusion_first_token_only: Optional[bool] = None,
+        contextual_control_threshold: Optional[int] = None,
+        control_log_additive: Optional[bool] = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -165,7 +164,7 @@ class AlephAlphaConfig:
 
 
 def validate_environment(api_key):
-    headers: Final = {
+    headers = {
         "accept": "application/json",
         "content-type": "application/json",
     }
@@ -188,17 +187,17 @@ def completion(
     logger_fn=None,
     default_max_tokens_to_sample=None,
 ):
-    headers: Final = validate_environment(api_key)
+    headers = validate_environment(api_key)
 
     ## Load Config
-    config: Final = litellm.AlephAlphaConfig.get_config()
+    config = litellm.AlephAlphaConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
         ):  # completion(top_k=3) > aleph_alpha_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    completion_url: Final = api_base
+    completion_url = api_base
     model = model
     prompt = ""
     if "control" in model:  # follow the ###Instruction / ###Response format
@@ -217,7 +216,7 @@ def completion(
                 prompt += f"{message['content']}"
     else:
         prompt = " ".join(message["content"] for message in messages)
-    data: Final = {
+    data = {
         "model": model,
         "prompt": prompt,
         **optional_params,
@@ -230,7 +229,7 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    response: Final = litellm.module_level_client.post(
+    response = litellm.module_level_client.post(
         completion_url,
         headers=headers,
         data=json.dumps(data),
@@ -248,7 +247,7 @@ def completion(
         )
         print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
-        completion_response: Final = response.json()
+        completion_response = response.json()
         if "error" in completion_response:
             raise AlephAlphaError(
                 message=completion_response["error"],
@@ -256,7 +255,7 @@ def completion(
             )
         else:
             try:
-                choices_list: Final = []
+                choices_list = []
                 for idx, item in enumerate(completion_response["completions"]):
                     if len(item["completion"]) > 0:
                         message_obj = Message(content=item["completion"])
@@ -268,7 +267,7 @@ def completion(
                         message=message_obj,
                     )
                     choices_list.append(choice_obj)
-                model_response.choices = choices_list
+                model_response.choices = choices_list  # type: ignore
             except Exception:
                 raise AlephAlphaError(
                     message=json.dumps(completion_response),
@@ -276,8 +275,8 @@ def completion(
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens: Final = len(encoding.encode(prompt))
-        completion_tokens: Final = len(
+        prompt_tokens = len(encoding.encode(prompt))
+        completion_tokens = len(
             encoding.encode(
                 model_response["choices"][0]["message"]["content"],
                 disallowed_special=(),
@@ -286,7 +285,7 @@ def completion(
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage: Final = Usage(
+        usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,

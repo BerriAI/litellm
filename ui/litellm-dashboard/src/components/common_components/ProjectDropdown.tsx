@@ -1,5 +1,6 @@
 import React from "react";
-import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Select, Spin } from "antd";
+import { LoadingOutlined } from "@ant-design/icons";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
 interface ProjectDropdownProps {
@@ -10,38 +11,42 @@ interface ProjectDropdownProps {
   loading?: boolean;
   /** When set, only show projects belonging to this team */
   teamId?: string | null;
-  id?: string;
 }
 
-const ProjectDropdown: React.FC<ProjectDropdownProps> = ({
-  projects,
-  value,
-  onChange,
-  disabled,
-  loading,
-  teamId,
-  id,
-}) => {
+const ProjectDropdown: React.FC<ProjectDropdownProps> = ({ projects, value, onChange, disabled, loading, teamId }) => {
   const filtered = teamId ? projects?.filter((p) => p.team_id === teamId) : projects;
 
   return (
-    <SearchSelect
-      options={
-        loading
-          ? []
-          : (filtered ?? []).map((project) => ({
-              label: project.project_alias || project.project_id,
-              value: project.project_id,
-              sublabel: project.project_id,
-            }))
-      }
-      value={value}
-      onValueChange={(projectId) => onChange?.(projectId)}
+    <Select
+      showSearch
       placeholder="Search or select a project"
-      emptyText={loading ? "Loading projects…" : "No projects found"}
+      value={value}
+      onChange={onChange}
       disabled={disabled}
-      inputId={id}
-    />
+      loading={loading}
+      allowClear
+      notFoundContent={loading ? <Spin indicator={<LoadingOutlined spin />} size="small" /> : undefined}
+      filterOption={(input, option) => {
+        if (!option) return false;
+        const project = filtered?.find((p) => p.project_id === option.key);
+        if (!project) return false;
+
+        const searchTerm = input.toLowerCase().trim();
+        const alias = (project.project_alias || "").toLowerCase();
+        const id = (project.project_id || "").toLowerCase();
+
+        return alias.includes(searchTerm) || id.includes(searchTerm);
+      }}
+      optionFilterProp="children"
+    >
+      {!loading &&
+        filtered?.map((project) => (
+          <Select.Option key={project.project_id} value={project.project_id}>
+            <span className="font-medium">{project.project_alias || project.project_id}</span>{" "}
+            <span className="text-gray-500">({project.project_id})</span>
+          </Select.Option>
+        ))}
+    </Select>
   );
 };
 

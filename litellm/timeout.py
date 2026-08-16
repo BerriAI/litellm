@@ -16,7 +16,6 @@ from concurrent import futures
 from functools import wraps
 from inspect import iscoroutinefunction
 from threading import Thread
-from typing import Final
 
 from litellm.exceptions import Timeout
 
@@ -42,19 +41,19 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
             async def async_func():
                 return func(*args, **kwargs)
 
-            thread: Final = _LoopWrapper()
+            thread = _LoopWrapper()
             thread.start()
-            future: Final = asyncio.run_coroutine_threadsafe(async_func(), thread.loop)
+            future = asyncio.run_coroutine_threadsafe(async_func(), thread.loop)
             local_timeout_duration = timeout_duration
             if "force_timeout" in kwargs and kwargs["force_timeout"] is not None:
                 local_timeout_duration = kwargs["force_timeout"]
             elif "request_timeout" in kwargs and kwargs["request_timeout"] is not None:
                 local_timeout_duration = kwargs["request_timeout"]
             try:
-                result: Final = future.result(timeout=local_timeout_duration)
+                result = future.result(timeout=local_timeout_duration)
             except futures.TimeoutError:
                 thread.stop_loop()
-                model: Final = args[0] if len(args) > 0 else kwargs["model"]
+                model = args[0] if len(args) > 0 else kwargs["model"]
                 raise exception_to_raise(
                     f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).",
                     model=model,  # [TODO]: replace with logic for parsing out llm provider from model name
@@ -71,10 +70,10 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
             elif "request_timeout" in kwargs and kwargs["request_timeout"] is not None:
                 local_timeout_duration = kwargs["request_timeout"]
             try:
-                value: Final = await asyncio.wait_for(func(*args, **kwargs), timeout=timeout_duration)
+                value = await asyncio.wait_for(func(*args, **kwargs), timeout=timeout_duration)
                 return value
             except asyncio.TimeoutError:
-                model: Final = args[0] if len(args) > 0 else kwargs["model"]
+                model = args[0] if len(args) > 0 else kwargs["model"]
                 raise exception_to_raise(
                     f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).",
                     model=model,  # [TODO]: replace with logic for parsing out llm provider from model name

@@ -1,13 +1,9 @@
-import googleLogo from "../../../../../public/assets/logos/google.svg";
-import microsoftAzureLogo from "../../../../../public/assets/logos/microsoft_azure.svg";
-
 // SSO Provider logos
 export const ssoProviderLogoMap: Record<string, string> = {
-  google: googleLogo.src,
-  microsoft: microsoftAzureLogo.src,
+  google: "https://artificialanalysis.ai/img/logos/google_small.svg",
+  microsoft: "https://upload.wikimedia.org/wikipedia/commons/a/a8/Microsoft_Azure_Logo.svg",
   okta: "https://www.okta.com/sites/default/files/Okta_Logo_BrightBlue_Medium.png",
   generic: "",
-  saml: "",
 };
 
 // SSO Provider display names (consistent between select dropdown and table)
@@ -16,7 +12,6 @@ export const ssoProviderDisplayNames: Record<string, string> = {
   microsoft: "Microsoft SSO",
   okta: "Okta / Auth0 SSO",
   generic: "Generic SSO",
-  saml: "SAML SSO",
 };
 
 export const defaultRoleDisplayNames: Record<string, string> = {

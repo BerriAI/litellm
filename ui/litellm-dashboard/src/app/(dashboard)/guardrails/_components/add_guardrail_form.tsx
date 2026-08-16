@@ -1,4 +1,4 @@
-import { Form, Input, Modal, Select, Tag, Button } from "antd";
+import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
@@ -12,10 +12,10 @@ import { type CompetitorIntentConfig } from "./content_filter/CompetitorIntentCo
 import {
   choiceToSkipSystemForCreate,
   choiceToSkipToolForCreate,
-  getGuardrailLogo,
   getGuardrailProviders,
   getSupportedModesForProvider,
   guardrail_provider_map,
+  guardrailLogoMap,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
   shouldRenderContentFilterConfigSettings,
@@ -23,13 +23,14 @@ import {
   shouldRenderPIIConfigSettings,
   toModeArray,
 } from "./guardrail_info_helpers";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
 import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
+const { Title, Text, Link } = Typography;
 const { Option } = Select;
 
 // Define human-friendly descriptions for each mode
@@ -40,7 +41,6 @@ const modeDescriptions = {
   logging_only: "Logging Only - Only runs on logging callbacks without affecting the LLM call",
   pre_mcp_call: "Before MCP Tool Call - Runs before MCP tool execution and validates tool calls",
   during_mcp_call: "During MCP Tool Call - Runs in parallel with MCP tool execution for monitoring",
-  post_mcp_call: "After MCP Tool Call - Runs after MCP tool execution and checks the tool result",
 };
 
 interface GuardrailPreset {
@@ -161,6 +161,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [selectedActions, setSelectedActions] = useState<{ [key: string]: string }>({});
   const [currentStep, setCurrentStep] = useState(0);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
+
+  // Azure Text Moderation state
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [globalSeverityThreshold, setGlobalSeverityThreshold] = useState<number>(2);
+  const [categorySpecificThresholds, setCategorySpecificThresholds] = useState<{ [key: string]: number }>({});
 
   // Content Filter state
   const [selectedPatterns, setSelectedPatterns] = useState<ContentFilterPattern[]>([]);
@@ -291,6 +296,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedEntities([]);
     setSelectedActions({});
 
+    // Reset Azure Text Moderation selections when changing provider
+    setSelectedCategories([]);
+    setGlobalSeverityThreshold(2);
+    setCategorySpecificThresholds({});
+
     // Reset Content Filter selections
     setSelectedPatterns([]);
     setBlockedWords([]);
@@ -321,6 +331,24 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedActions((prev) => ({
       ...prev,
       [entity]: action,
+    }));
+  };
+
+  // Azure Text Moderation handlers
+  const handleCategorySelect = (category: string) => {
+    setSelectedCategories((prev) =>
+      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category],
+    );
+  };
+
+  const handleGlobalSeverityChange = (threshold: number) => {
+    setGlobalSeverityThreshold(threshold);
+  };
+
+  const handleCategorySeverityChange = (category: string, threshold: number) => {
+    setCategorySpecificThresholds((prev) => ({
+      ...prev,
+      [category]: threshold,
     }));
   };
 
@@ -359,11 +387,53 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setCurrentStep(currentStep - 1);
   };
 
+  const handleAddAndContinue = (competitorIntentOnly?: boolean) => {
+    // Competitor intent only: just advance to next step (no category to add)
+    if (competitorIntentOnly) {
+      setCurrentStep(currentStep + 1);
+      return;
+    }
+
+    if (!pendingCategorySelection || !guardrailSettings) return;
+
+    const contentFilterSettings = guardrailSettings.content_filter_settings;
+    if (!contentFilterSettings) return;
+
+    const category = contentFilterSettings.content_categories?.find((c) => c.name === pendingCategorySelection);
+    if (!category) return;
+
+    // Check if already added
+    if (selectedContentCategories.some((c) => c.category === pendingCategorySelection)) {
+      setPendingCategorySelection("");
+      setCurrentStep(currentStep + 1);
+      return;
+    }
+
+    // Add the category
+    setSelectedContentCategories([
+      ...selectedContentCategories,
+      {
+        id: `category-${Date.now()}`,
+        category: category.name,
+        display_name: category.display_name,
+        action: category.default_action as "BLOCK" | "MASK",
+        severity_threshold: "medium",
+      },
+    ]);
+
+    // Clear pending selection and advance to next step
+    setPendingCategorySelection("");
+    setCurrentStep(currentStep + 1);
+  };
+
   const resetForm = () => {
     form.resetFields();
     setSelectedProvider(null);
     setSelectedEntities([]);
     setSelectedActions({});
+    setSelectedCategories([]);
+    setGlobalSeverityThreshold(2);
+    setCategorySpecificThresholds({});
     setSelectedPatterns([]);
     setBlockedWords([]);
     setSelectedContentCategories([]);
@@ -655,19 +725,53 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             dropdownRender={(menu) => menu}
             showSearch={true}
           >
-            {Object.entries(getGuardrailProviders()).map(([key, value]) => {
-              const optionContent = (
+            {Object.entries(getGuardrailProviders()).map(([key, value]) => (
+              <Option
+                key={key}
+                value={key}
+                label={
+                  <div style={{ display: "flex", alignItems: "center" }}>
+                    {guardrailLogoMap[value] && (
+                      <img
+                        src={resolveLogoSrc(guardrailLogoMap[value])}
+                        alt=""
+                        style={{
+                          height: "20px",
+                          width: "20px",
+                          marginRight: "8px",
+                          objectFit: "contain",
+                        }}
+                        onError={(e) => {
+                          // Hide broken image icon if image fails to load
+                          e.currentTarget.style.display = "none";
+                        }}
+                      />
+                    )}
+                    <span>{value}</span>
+                  </div>
+                }
+              >
                 <div style={{ display: "flex", alignItems: "center" }}>
-                  <Logo src={getGuardrailLogo(value)} label={value} className="h-5 w-5 mr-2 object-contain shrink-0" />
+                  {guardrailLogoMap[value] && (
+                    <img
+                      src={resolveLogoSrc(guardrailLogoMap[value])}
+                      alt=""
+                      style={{
+                        height: "20px",
+                        width: "20px",
+                        marginRight: "8px",
+                        objectFit: "contain",
+                      }}
+                      onError={(e) => {
+                        // Hide broken image icon if image fails to load
+                        e.currentTarget.style.display = "none";
+                      }}
+                    />
+                  )}
                   <span>{value}</span>
                 </div>
-              );
-              return (
-                <Option key={key} value={key} label={optionContent}>
-                  {optionContent}
-                </Option>
-              );
-            })}
+              </Option>
+            ))}
           </Select>
         </Form.Item>
 
@@ -892,6 +996,48 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       default:
         return null;
     }
+  };
+
+  const renderStepButtons = () => {
+    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 5 : 2;
+    const isLastStep = currentStep === totalSteps - 1;
+    const isCategoriesStep = shouldRenderContentFilterConfigSettings(selectedProvider) && currentStep === 1;
+    const hasPendingCategory = pendingCategorySelection !== "";
+    const hasCompetitorIntentConfigured =
+      competitorIntentEnabled && (competitorIntentConfig?.brand_self?.length ?? 0) > 0;
+    const canContinueFromCategoriesStep = hasPendingCategory || hasCompetitorIntentConfigured;
+
+    return (
+      <div className="flex justify-end space-x-2 mt-4">
+        {currentStep > 0 && <Button onClick={prevStep}>Previous</Button>}
+        {isCategoriesStep ? (
+          <>
+            <Button onClick={nextStep}>Skip</Button>
+            <Button
+              type="primary"
+              onClick={() => handleAddAndContinue(hasCompetitorIntentConfigured)}
+              disabled={!canContinueFromCategoriesStep}
+            >
+              {hasPendingCategory ? "Add & Continue →" : "Continue →"}
+            </Button>
+          </>
+        ) : (
+          <>
+            {!isLastStep && (
+              <Button type="primary" onClick={nextStep}>
+                Next
+              </Button>
+            )}
+            {isLastStep && (
+              <Button type="primary" onClick={handleSubmit} loading={loading}>
+                Create Guardrail
+              </Button>
+            )}
+          </>
+        )}
+        <Button onClick={handleClose}>Cancel</Button>
+      </div>
+    );
   };
 
   const renderEndpointSettings = () => {

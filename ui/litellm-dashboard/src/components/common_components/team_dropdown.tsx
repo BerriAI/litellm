@@ -1,7 +1,12 @@
-import React, { useMemo, useState } from "react";
-import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
+import React, { useMemo, useState, type UIEvent } from "react";
+import { Select, Typography } from "antd";
+import { LoadingOutlined } from "@ant-design/icons";
+import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { Team } from "../key_team_helpers/key_list";
+
+const { Text } = Typography;
 
 interface TeamDropdownProps {
   value?: string;
@@ -12,8 +17,9 @@ interface TeamDropdownProps {
   /** Filter teams by organization. */
   organizationId?: string | null;
   pageSize?: number;
-  id?: string;
 }
+
+const SCROLL_THRESHOLD = 0.8;
 
 const TeamDropdown: React.FC<TeamDropdownProps> = ({
   value,
@@ -22,13 +28,15 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   disabled,
   organizationId,
   pageSize = 20,
-  id,
 }) => {
-  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
+    wait: DEBOUNCE_WAIT_MS,
+  });
 
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
     pageSize,
-    search || undefined,
+    debouncedSearch || undefined,
     organizationId,
   );
 
@@ -46,35 +54,59 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     return result;
   }, [data]);
 
-  const handleChange = (teamId: string) => {
-    onChange?.(teamId);
+  const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const scrollRatio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
+    if (scrollRatio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
+      fetchNextPage();
+    }
+  };
+
+  const handleSearch = (val: string) => {
+    setSearchInput(val);
+    setDebouncedSearch(val);
+  };
+
+  const handleChange = (teamId: string | undefined) => {
+    onChange?.(teamId ?? "");
     if (onTeamSelect) {
-      onTeamSelect(teamId ? teams.find((t) => t.team_id === teamId) ?? null : null);
+      const team = teamId ? teams.find((t) => t.team_id === teamId) ?? null : null;
+      onTeamSelect(team);
     }
   };
 
   return (
-    <div data-testid="team-dropdown">
-      <PaginatedSearchSelect
-        options={teams.map((team) => ({
-          label: team.team_alias || team.team_id,
-          value: team.team_id,
-          sublabel: team.team_id,
-        }))}
-        value={value || undefined}
-        onValueChange={handleChange}
-        onSearchChange={setSearch}
-        onLoadMore={fetchNextPage}
-        hasNextPage={hasNextPage}
-        isLoading={isLoading}
-        isFetchingNextPage={isFetchingNextPage}
-        placeholder="Search or select a team"
-        emptyText="No teams found"
-        loadingText="Loading teams…"
-        disabled={disabled}
-        inputId={id}
-      />
-    </div>
+    <Select
+      showSearch
+      placeholder="Search or select a team"
+      value={value || undefined}
+      onChange={handleChange}
+      disabled={disabled}
+      allowClear
+      filterOption={false}
+      onSearch={handleSearch}
+      searchValue={searchInput}
+      onPopupScroll={handlePopupScroll}
+      loading={isLoading}
+      notFoundContent={isLoading ? <LoadingOutlined spin /> : "No teams found"}
+      data-testid="team-dropdown"
+      popupRender={(menu) => (
+        <>
+          {menu}
+          {isFetchingNextPage && (
+            <div style={{ textAlign: "center", padding: 8 }}>
+              <LoadingOutlined spin />
+            </div>
+          )}
+        </>
+      )}
+    >
+      {teams.map((team) => (
+        <Select.Option key={team.team_id} value={team.team_id}>
+          <span className="font-medium">{team.team_alias}</span> <Text type="secondary">({team.team_id})</Text>
+        </Select.Option>
+      ))}
+    </Select>
   );
 };
 

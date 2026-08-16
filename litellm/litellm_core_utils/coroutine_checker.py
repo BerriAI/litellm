@@ -1,9 +1,8 @@
 # CoroutineChecker utility for checking if functions/callables are coroutines or coroutine functions
 
 import inspect
-from typing import Any, Final
+from typing import Any
 from weakref import WeakKeyDictionary
-
 from litellm.constants import (
     COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY,
 )
@@ -26,7 +25,7 @@ class CoroutineChecker:
         """
         # Fast path: check cache first (most common case)
         try:
-            cached: Final = self._cache.get(callback)
+            cached = self._cache.get(callback)
             if cached is not None:
                 return cached
         except Exception:
@@ -36,7 +35,7 @@ class CoroutineChecker:
         target = callback
         if not inspect.isfunction(target) and not inspect.ismethod(target):
             try:
-                call_attr: Final = getattr(target, "__call__", None)
+                call_attr = getattr(target, "__call__", None)
                 if call_attr is not None:
                     target = call_attr
             except Exception:
@@ -62,4 +61,4 @@ class CoroutineChecker:
 
 
 # Global instance for backward compatibility and convenience
-coroutine_checker: Final = CoroutineChecker()
+coroutine_checker = CoroutineChecker()

@@ -1,3 +1,5 @@
+from typing import Optional
+
 from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
 
 from .chat import ChatClient
@@ -15,7 +17,7 @@ class Client:
     def __init__(
         self,
         base_url: str,
-        api_key: str | None = None,
+        api_key: Optional[str] = None,
         timeout: int = 30,
     ):
         """

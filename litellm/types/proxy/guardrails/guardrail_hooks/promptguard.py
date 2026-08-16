@@ -1,10 +1,12 @@
+from typing import Optional
+
 from pydantic import Field
 
 from .base import GuardrailConfigModel
 
 
 class PromptGuardConfigModel(GuardrailConfigModel):
-    api_key: str | None = Field(
+    api_key: Optional[str] = Field(
         default=None,
         description=(
             "API key for PromptGuard authentication. "
@@ -12,7 +14,7 @@ class PromptGuardConfigModel(GuardrailConfigModel):
             "environment variable is used."
         ),
     )
-    api_base: str | None = Field(
+    api_base: Optional[str] = Field(
         default=None,
         description=(
             "PromptGuard API base URL. "
@@ -20,7 +22,7 @@ class PromptGuardConfigModel(GuardrailConfigModel):
             "Falls back to PROMPTGUARD_API_BASE env var."
         ),
     )
-    block_on_error: bool | None = Field(
+    block_on_error: Optional[bool] = Field(
         default=None,
         description=(
             "Whether to block the request when the "

@@ -26,14 +26,14 @@ from litellm.interactions.agents.main import (
 )
 
 __all__ = [
-    "acreate",
-    "adelete",
-    "aget",
-    "alist",
-    "alist_versions",
     "create",
-    "delete",
-    "get",
+    "acreate",
     "list",
+    "alist",
+    "get",
+    "aget",
+    "delete",
+    "adelete",
     "list_versions",
+    "alist_versions",
 ]

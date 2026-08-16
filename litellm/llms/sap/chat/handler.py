@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
-from typing import Final
+from typing import AsyncIterator, Iterator, Optional
 
 import httpx
 
@@ -47,11 +46,11 @@ class _StreamParser:
     """Normalize orchestration streaming events into OpenAI-like chunks."""
 
     @staticmethod
-    def _from_orchestration_result(evt: dict) -> OpenAIChatCompletionChunk | None:
+    def _from_orchestration_result(evt: dict) -> Optional[OpenAIChatCompletionChunk]:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
         """
-        orc: Final = evt.get("orchestration_result") or {}
+        orc = evt.get("orchestration_result") or {}
         if not orc:
             return None
 
@@ -73,7 +72,7 @@ class _StreamParser:
         )
 
     @staticmethod
-    def to_openai_chunk(event_obj: dict) -> OpenAIChatCompletionChunk | None:
+    def to_openai_chunk(event_obj: dict) -> Optional[OpenAIChatCompletionChunk]:
         """
         Accepts:
           - {"final_result": <openai-style CHUNK>}   (IMPORTANT: this is just another chunk, NOT terminal)
@@ -89,7 +88,7 @@ class _StreamParser:
 
         # FINAL RESULT IS *NOT* TERMINAL: treat it as the next chunk
         if "final_result" in event_obj:
-            fr: Final = event_obj["final_result"] or {}
+            fr = event_obj["final_result"] or {}
             # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"
@@ -140,7 +139,7 @@ class SAPStreamIterator:
             if not line:
                 continue
 
-            payload = line.removeprefix(self._prefix)
+            payload = line[len(self._prefix) :] if line.startswith(self._prefix) else line
             if payload == self._final:
                 self._safe_close()
                 raise StopIteration
@@ -212,7 +211,7 @@ class AsyncSAPStreamIterator:
                 continue
 
             # now = lambda: int(time.time() * 1000)
-            payload = line.removeprefix(self._prefix)
+            payload = line[len(self._prefix) :] if line.startswith(self._prefix) else line
             if payload == self._final:
                 await self._aclose()
                 raise StopAsyncIteration

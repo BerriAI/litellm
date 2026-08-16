@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -17,24 +17,24 @@ class SupportedPromptIntegrations(str, Enum):
 
 class PromptInfo(BaseModel):
     prompt_type: Literal["config", "db"]
-    environment: str | None = "development"
+    environment: Optional[str] = "development"
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
 class PromptLiteLLMParams(BaseModel):
-    prompt_id: str | None = None
+    prompt_id: Optional[str] = None
     prompt_integration: str
 
-    api_base: str | None = None
-    api_key: str | None = None
+    api_base: Optional[str] = None
+    api_key: Optional[str] = None
 
-    provider_specific_query_params: dict[str, Any] | None = None
+    provider_specific_query_params: Optional[Dict[str, Any]] = None
 
-    ignore_prompt_manager_model: bool | None = False
-    ignore_prompt_manager_optional_params: bool | None = False
+    ignore_prompt_manager_model: Optional[bool] = False
+    ignore_prompt_manager_optional_params: Optional[bool] = False
 
-    dotprompt_content: str | None = None
+    dotprompt_content: Optional[str] = None
     """
     allows saving the dotprompt file content
     """
@@ -46,13 +46,13 @@ class PromptSpec(BaseModel):
     prompt_id: str
     litellm_params: PromptLiteLLMParams
     prompt_info: PromptInfo
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    version: int | None = None  # Version number for version history
-    environment: str | None = "development"
-    created_by: str | None = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    version: Optional[int] = None  # Version number for version history
+    environment: Optional[str] = "development"
+    created_by: Optional[str] = None
 
-    def __init__(self, **data) -> None:
+    def __init__(self, **data):
         if "prompt_info" not in data:
             data["prompt_info"] = PromptInfo(prompt_type="config")
         elif "prompt_info" in data:
@@ -64,14 +64,14 @@ class PromptSpec(BaseModel):
 class PromptTemplateBase(BaseModel):
     litellm_prompt_id: str
     content: str
-    metadata: dict[str, Any] | None = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class PromptInfoResponse(BaseModel):
     prompt_spec: PromptSpec
-    raw_prompt_template: PromptTemplateBase | None = None
-    environments: list[str] | None = None  # All environments this prompt is deployed to
+    raw_prompt_template: Optional[PromptTemplateBase] = None
+    environments: Optional[List[str]] = None  # All environments this prompt is deployed to
 
 
 class ListPromptsResponse(BaseModel):
-    prompts: list[PromptSpec]
+    prompts: List[PromptSpec]

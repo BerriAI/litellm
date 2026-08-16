@@ -1,8 +1,8 @@
 import React from "react";
-import { Badge } from "@/components/ui/badge";
+import { Tag } from "antd";
 import { CogIcon, BanIcon } from "@heroicons/react/outline";
 import { callbackInfo, callback_map, reverse_callback_map } from "./callback_info_helpers";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
 interface LoggingConfig {
   callback_name: string;
@@ -29,16 +29,16 @@ export function LoggingSettingsView({
     return callbackDisplayName || callbackName;
   };
 
-  const getEventTypeVariant = (eventType: string): React.ComponentProps<typeof Badge>["variant"] => {
+  const getEventTypeColor = (eventType: string): string | undefined => {
     switch (eventType) {
       case "success":
-        return "default";
+        return "green";
       case "failure":
-        return "destructive";
+        return "red";
       case "success_and_failure":
-        return "secondary";
+        return "blue";
       default:
-        return "outline";
+        return undefined;
     }
   };
 
@@ -62,13 +62,14 @@ export function LoggingSettingsView({
         <div className="flex items-center gap-2">
           <CogIcon className="h-4 w-4 text-blue-600" />
           <span className="font-semibold text-gray-900">Logging Integrations</span>
-          <Badge variant="secondary">{loggingConfigs.length}</Badge>
+          <Tag color="blue">{loggingConfigs.length}</Tag>
         </div>
 
         {loggingConfigs.length > 0 ? (
           <div className="space-y-3">
             {loggingConfigs.map((config, index) => {
               const displayName = getLoggingDisplayName(config.callback_name);
+              const logoUrl = resolveLogoSrc(callbackInfo[displayName]?.logo);
 
               return (
                 <div
@@ -76,11 +77,11 @@ export function LoggingSettingsView({
                   className="flex items-center justify-between p-3 rounded-lg bg-blue-50 border border-blue-200"
                 >
                   <div className="flex items-center gap-3">
-                    <Logo
-                      src={callbackInfo[displayName]?.logo}
-                      label={displayName}
-                      className="w-5 h-5 object-contain"
-                    />
+                    {logoUrl ? (
+                      <img src={logoUrl} alt={displayName} className="w-5 h-5 object-contain" />
+                    ) : (
+                      <CogIcon className="h-5 w-5 text-gray-400" />
+                    )}
                     <div>
                       <span className="block font-medium text-blue-800">{displayName}</span>
                       <span className="block text-xs text-blue-600">
@@ -88,9 +89,7 @@ export function LoggingSettingsView({
                       </span>
                     </div>
                   </div>
-                  <Badge variant={getEventTypeVariant(config.callback_type)}>
-                    {getEventTypeLabel(config.callback_type)}
-                  </Badge>
+                  <Tag color={getEventTypeColor(config.callback_type)}>{getEventTypeLabel(config.callback_type)}</Tag>
                 </div>
               );
             })}
@@ -108,7 +107,7 @@ export function LoggingSettingsView({
         <div className="flex items-center gap-2">
           <BanIcon className="h-4 w-4 text-red-600" />
           <span className="font-semibold text-gray-900">Disabled Callbacks</span>
-          <Badge variant="destructive">{disabledCallbacks.length}</Badge>
+          <Tag color="red">{disabledCallbacks.length}</Tag>
         </div>
 
         {disabledCallbacks.length > 0 ? (
@@ -116,6 +115,7 @@ export function LoggingSettingsView({
             {disabledCallbacks.map((callbackName, index) => {
               // Handle both display names and internal values
               const displayName = reverse_callback_map[callbackName] || callbackName;
+              const logoUrl = resolveLogoSrc(callbackInfo[displayName]?.logo);
 
               return (
                 <div
@@ -123,17 +123,17 @@ export function LoggingSettingsView({
                   className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-200"
                 >
                   <div className="flex items-center gap-3">
-                    <Logo
-                      src={callbackInfo[displayName]?.logo}
-                      label={displayName}
-                      className="w-5 h-5 object-contain"
-                    />
+                    {logoUrl ? (
+                      <img src={logoUrl} alt={displayName} className="w-5 h-5 object-contain" />
+                    ) : (
+                      <BanIcon className="h-5 w-5 text-gray-400" />
+                    )}
                     <div>
                       <span className="block font-medium text-red-800">{displayName}</span>
                       <span className="block text-xs text-red-600">Disabled for this key</span>
                     </div>
                   </div>
-                  <Badge variant="destructive">Disabled</Badge>
+                  <Tag color="red">Disabled</Tag>
                 </div>
               );
             })}

@@ -1,15 +1,12 @@
 import { Settings, X } from "lucide-react";
-import { useId, useState } from "react";
+import { useState } from "react";
 import { ComparisonInstance } from "../CompareUI";
 import { MessageDisplay } from "./MessageDisplay";
 import { UnifiedSelector } from "./UnifiedSelector";
 import TagSelector from "@/components/tag_management/TagSelector";
 import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Separator } from "@/components/ui/separator";
-import { Slider } from "@/components/ui/slider";
+import { Checkbox, Divider, Popover, Slider } from "antd";
 import { SelectorOption, EndpointConfig, isAgentEndpoint, getComparisonSelection } from "../endpoint_config";
 
 interface ComparisonPanelProps {
@@ -38,8 +35,6 @@ export function ComparisonPanel({
   const isA2AMode = isAgentEndpoint(endpointConfig.id);
   const currentSelection = getComparisonSelection(comparison, endpointConfig.id);
   const [popoverVisible, setPopoverVisible] = useState(false);
-  const syncId = useId();
-  const advancedParamsId = useId();
 
   const handleSyncChange = (checked: boolean) => {
     if (checked) {
@@ -108,18 +103,12 @@ export function ComparisonPanel({
       <div className="space-y-2">
         {/* Sync Checkbox */}
         <div className="flex items-center gap-2">
-          <Checkbox
-            id={syncId}
-            checked={comparison.applyAcrossModels}
-            onCheckedChange={handleSyncChange}
-            aria-label="Sync Settings Across Models"
-          />
-          <label htmlFor={syncId} className="cursor-pointer text-xs font-medium">
-            Sync Settings Across Models
-          </label>
+          <Checkbox checked={comparison.applyAcrossModels} onChange={(e) => handleSyncChange(e.target.checked)}>
+            <span className="text-xs font-medium">Sync Settings Across Models</span>
+          </Checkbox>
         </div>
 
-        <Separator className="my-3" />
+        <Divider className="border-gray-200" />
 
         {/* General Settings */}
         <div>
@@ -157,14 +146,11 @@ export function ComparisonPanel({
           <div className="space-y-2">
             <div className="flex items-center gap-2 pb-1">
               <Checkbox
-                id={advancedParamsId}
                 checked={comparison.useAdvancedParams}
-                onCheckedChange={handleAdvancedParamsChange}
-                aria-label="Use Advanced Parameters"
-              />
-              <label htmlFor={advancedParamsId} className="cursor-pointer text-sm font-medium">
-                Use Advanced Parameters
-              </label>
+                onChange={(e) => handleAdvancedParamsChange(e.target.checked)}
+              >
+                <span className="text-sm font-medium">Use Advanced Parameters</span>
+              </Checkbox>
             </div>
             <div className="space-y-2 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
               <div>
@@ -176,8 +162,8 @@ export function ComparisonPanel({
                   min={0}
                   max={2}
                   step={0.01}
-                  value={[comparison.temperature]}
-                  onValueChange={(value) => {
+                  value={comparison.temperature}
+                  onChange={(value) => {
                     const nextValue = Array.isArray(value) ? value[0] : value;
                     const clamped = Math.min(2, Math.max(0, Number(nextValue.toFixed(2))));
                     handleSettingChange("temperature", clamped);
@@ -194,8 +180,8 @@ export function ComparisonPanel({
                   min={1}
                   max={32768}
                   step={1}
-                  value={[comparison.maxTokens]}
-                  onValueChange={(value) => {
+                  value={comparison.maxTokens}
+                  onChange={(value) => {
                     const nextValue = Array.isArray(value) ? value[0] : value;
                     const clamped = Math.min(32768, Math.max(1, Math.round(nextValue)));
                     handleSettingChange("maxTokens", clamped);
@@ -223,29 +209,26 @@ export function ComparisonPanel({
           />
           <div className="flex items-center gap-2">
             <Popover
+              content={settingsContent}
+              trigger={[]}
               open={popoverVisible}
               onOpenChange={() => {
                 // Prevent automatic closing - we control it manually
               }}
+              placement="bottomRight"
+              destroyTooltipOnHide={false}
             >
-              <PopoverTrigger
-                render={
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleTogglePopover();
-                    }}
-                    className={`p-2 rounded-lg transition-colors ${
-                      popoverVisible ? "bg-gray-200 text-gray-700" : "hover:bg-gray-100 text-gray-600"
-                    }`}
-                  >
-                    <Settings size={18} />
-                  </button>
-                }
-              />
-              <PopoverContent side="bottom" align="end" className="w-auto">
-                {settingsContent}
-              </PopoverContent>
+              <button
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleTogglePopover();
+                }}
+                className={`p-2 rounded-lg transition-colors ${
+                  popoverVisible ? "bg-gray-200 text-gray-700" : "hover:bg-gray-100 text-gray-600"
+                }`}
+              >
+                <Settings size={18} />
+              </button>
             </Popover>
           </div>
         </div>

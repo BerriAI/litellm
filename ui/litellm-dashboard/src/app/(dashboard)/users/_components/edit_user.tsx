@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { TextInput, SelectItem } from "@tremor/react";
 
 import { Button as Button2, Modal, Form, Select as Select2, InputNumber } from "antd";
@@ -15,6 +15,7 @@ interface EditUserModalProps {
 }
 
 const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles, onCancel, user, onSubmit }) => {
+  const [editedUser, setEditedUser] = useState(user);
   const [form] = Form.useForm();
 
   useEffect(() => {

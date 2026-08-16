@@ -1,8 +1,7 @@
 import React, { useState } from "react";
-import { Minus, Plus } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, Space } from "antd";
+import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { TextInput } from "@tremor/react";
 
 interface QueryParamInputProps {
   value?: Record<string, string>;
@@ -30,32 +29,25 @@ const QueryParamInput: React.FC<QueryParamInputProps> = ({ value = {}, onChange 
   };
 
   return (
-    <div className="space-y-2">
+    <div>
       {pairs.map(([key, val], index) => (
-        <div key={index} className="flex items-center gap-2">
-          <Input
+        <Space key={index} style={{ display: "flex", marginBottom: 8 }} align="center">
+          <TextInput
             placeholder="Parameter Name (e.g., version)"
             value={key}
             onChange={(e) => handleChange(index, e.target.value, val)}
           />
-          <Input
+          <TextInput
             placeholder="Parameter Value (e.g., v1)"
             value={val}
             onChange={(e) => handleChange(index, key, e.target.value)}
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => handleRemove(index)}
-            aria-label={`Remove query parameter ${index + 1}`}
-          >
-            <Minus />
-          </Button>
-        </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+            <MinusCircleOutlined onClick={() => handleRemove(index)} style={{ cursor: "pointer" }} />
+          </div>
+        </Space>
       ))}
-      <Button type="button" variant="outline" onClick={handleAdd}>
-        <Plus />
+      <Button type="dashed" onClick={handleAdd} icon={<PlusOutlined />}>
         Add Query Parameter
       </Button>
     </div>

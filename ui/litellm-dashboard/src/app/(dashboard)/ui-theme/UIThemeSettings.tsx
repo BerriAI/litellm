@@ -1,9 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { Card, Title, Text, TextInput, Button } from "@tremor/react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -15,7 +11,7 @@ interface UIThemeSettingsProps {
 }
 
 const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, accessToken }) => {
-  const { setLogoUrl, setFaviconUrl } = useTheme();
+  const { logoUrl, setLogoUrl, faviconUrl, setFaviconUrl } = useTheme();
   const [logoUrlInput, setLogoUrlInput] = useState<string>("");
   const [faviconUrlInput, setFaviconUrlInput] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -117,58 +113,50 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   return (
     <div className="w-full mx-auto max-w-4xl px-6 py-8">
       <div className="mb-8">
-        <h1 className="mb-2 text-2xl font-bold">UI Theme Customization</h1>
-        <p className="text-sm text-muted-foreground">
-          Customize your LiteLLM admin dashboard with a custom logo and favicon.
-        </p>
+        <Title className="text-2xl font-bold mb-2">UI Theme Customization</Title>
+        <Text className="text-gray-600">Customize your LiteLLM admin dashboard with a custom logo and favicon.</Text>
       </div>
-      <Card>
-        <CardContent className="space-y-6">
+      <Card className="shadow-xs p-6">
+        <div className="space-y-6">
           <div>
-            <Label htmlFor="ui-theme-logo-url" className="mb-2">
-              Custom Logo URL
-            </Label>
-            <Input
-              id="ui-theme-logo-url"
+            <Text className="text-sm font-medium text-gray-700 mb-2 block">Custom Logo URL</Text>
+            <TextInput
               placeholder="https://example.com/logo.png"
               value={logoUrlInput}
-              onChange={(event) => {
-                setLogoUrlInput(event.target.value);
-                setLogoUrl(event.target.value || null);
+              onValueChange={(v) => {
+                setLogoUrlInput(v);
+                setLogoUrl(v || null);
               }}
+              className="w-full"
             />
-            <p className="mt-1 text-xs text-muted-foreground">
+            <Text className="text-xs text-gray-500 mt-1">
               Enter a URL for your custom logo or leave empty for default
-            </p>
+            </Text>
           </div>
           <div>
-            <Label htmlFor="ui-theme-favicon-url" className="mb-2">
-              Custom Favicon URL
-            </Label>
-            <Input
-              id="ui-theme-favicon-url"
+            <Text className="text-sm font-medium text-gray-700 mb-2 block">Custom Favicon URL</Text>
+            <TextInput
               placeholder="https://example.com/favicon.ico"
               value={faviconUrlInput}
-              onChange={(event) => {
-                setFaviconUrlInput(event.target.value);
-                setFaviconUrl(event.target.value || null);
+              onValueChange={(v) => {
+                setFaviconUrlInput(v);
+                setFaviconUrl(v || null);
               }}
+              className="w-full"
             />
-            <p className="mt-1 text-xs text-muted-foreground">
+            <Text className="text-xs text-gray-500 mt-1">
               Enter a URL for your custom favicon (.ico, .png, or .svg) or leave empty for default
-            </p>
+            </Text>
           </div>
           <div className="flex gap-3 pt-4">
-            <Button onClick={handleSave} disabled={loading}>
-              {loading && <UiLoadingSpinner className="size-4" />}
+            <Button onClick={handleSave} loading={loading} disabled={loading} color="indigo">
               Save Changes
             </Button>
-            <Button variant="outline" onClick={handleReset} disabled={loading}>
-              {loading && <UiLoadingSpinner className="size-4" />}
+            <Button onClick={handleReset} loading={loading} disabled={loading} variant="secondary" color="gray">
               Reset to Default
             </Button>
           </div>
-        </CardContent>
+        </div>
       </Card>
     </div>
   );

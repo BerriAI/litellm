@@ -1,7 +1,6 @@
 """Teams management client for LiteLLM proxy."""
 
-import builtins
-from typing import Any, Final
+from typing import Any, Dict, List, Optional, Union
 
 import requests
 
@@ -11,7 +10,7 @@ from .exceptions import UnauthorizedError
 class TeamsManagementClient:
     """Client for managing teams in LiteLLM proxy."""
 
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: Optional[str] = None):
         """
         Initialize the TeamsManagementClient.
 
@@ -22,23 +21,23 @@ class TeamsManagementClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> dict[str, str]:
+    def _get_headers(self) -> Dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers: Final = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
     def list(
         self,
-        user_id: str | None = None,
-        organization_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+        user_id: Optional[str] = None,
+        organization_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         List teams that the user belongs to.
 
@@ -53,14 +52,14 @@ class TeamsManagementClient:
             requests.exceptions.HTTPError: If the request fails
             UnauthorizedError: If authentication fails
         """
-        url: Final = f"{self._base_url}/team/list"
-        params: Final = {}
+        url = f"{self._base_url}/team/list"
+        params = {}
         if user_id:
             params["user_id"] = user_id
         if organization_id:
             params["organization_id"] = organization_id
 
-        response: Final = requests.get(url, headers=self._get_headers(), params=params)
+        response = requests.get(url, headers=self._get_headers(), params=params)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
@@ -70,15 +69,15 @@ class TeamsManagementClient:
 
     def list_v2(
         self,
-        user_id: str | None = None,
-        organization_id: str | None = None,
-        team_id: str | None = None,
-        team_alias: str | None = None,
+        user_id: Optional[str] = None,
+        organization_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        team_alias: Optional[str] = None,
         page: int = 1,
         page_size: int = 10,
-        sort_by: str | None = None,
+        sort_by: Optional[str] = None,
         sort_order: str = "asc",
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         """
         Get a paginated list of teams with filtering and sorting options.
 
@@ -99,8 +98,8 @@ class TeamsManagementClient:
             requests.exceptions.HTTPError: If the request fails
             UnauthorizedError: If authentication fails
         """
-        url: Final = f"{self._base_url}/v2/team/list"
-        params: Final[dict[str, str | int]] = {
+        url = f"{self._base_url}/v2/team/list"
+        params: Dict[str, Union[str, int]] = {
             "page": page,
             "page_size": page_size,
             "sort_order": sort_order,
@@ -117,7 +116,7 @@ class TeamsManagementClient:
         if sort_by:
             params["sort_by"] = sort_by
 
-        response: Final = requests.get(url, headers=self._get_headers(), params=params)
+        response = requests.get(url, headers=self._get_headers(), params=params)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
@@ -125,7 +124,7 @@ class TeamsManagementClient:
         response.raise_for_status()
         return response.json()
 
-    def get_available(self) -> builtins.list[dict[str, Any]]:
+    def get_available(self) -> List[Dict[str, Any]]:
         """
         Get list of available teams that the user can join.
 
@@ -136,9 +135,9 @@ class TeamsManagementClient:
             requests.exceptions.HTTPError: If the request fails
             UnauthorizedError: If authentication fails
         """
-        url: Final = f"{self._base_url}/team/available"
+        url = f"{self._base_url}/team/available"
 
-        response: Final = requests.get(url, headers=self._get_headers())
+        response = requests.get(url, headers=self._get_headers())
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")

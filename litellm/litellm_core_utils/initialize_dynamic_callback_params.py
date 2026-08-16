@@ -1,17 +1,16 @@
-from collections.abc import Iterator, Mapping
-from typing import Any, Final
+from typing import Any, Dict, Iterator, Optional
 
-from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+from litellm.types.utils import StandardCallbackDynamicParams
 
-_CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
+_CLIENT_CALLBACK_METADATA_SLOTS: tuple[str, ...] = ("litellm_metadata", "metadata")
 
 
 def iter_client_callback_metadata_dicts(
     kwargs: dict[str, Any],
 ) -> Iterator[tuple[str, dict[str, Any]]]:
-    litellm_params: Final = kwargs.get("litellm_params")
+    litellm_params = kwargs.get("litellm_params")
     if isinstance(litellm_params, dict):
-        nested: Final = litellm_params.get("metadata")
+        nested = litellm_params.get("metadata")
         if isinstance(nested, dict):
             yield "litellm_params.metadata", nested
     for key in _CLIENT_CALLBACK_METADATA_SLOTS:
@@ -46,7 +45,7 @@ def validate_no_callback_env_reference(param: str, value: object, *, source: str
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
-_supported_callback_params: Final = [
+_supported_callback_params = [
     "langfuse_public_key",
     "langfuse_secret",
     "langfuse_secret_key",
@@ -75,36 +74,18 @@ _supported_callback_params: Final = [
     "turn_off_message_logging",
 ]
 
-_request_blocked_callback_params: Final = frozenset(
-    {
-        "gcs_bucket_name",
-        "gcs_path_service_account",
-        "dd_api_key",
-        "dd_site",
-        "dd_agent_host",
-        "dd_agent_port",
-    }
-)
-
-
-def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple[str, str], ...]:
-    """
-    Read callback params the proxy itself stamped from admin-configured team/key callback settings.
-
-    Request-body values never reach this field: the proxy strips it from client input before
-    setting it, so callbacks can consume credentials and destinations here without re-validating.
-
-    Returned as pairs rather than a mapping because the caller keeps this on the Logging object,
-    which the proxy deep-copies; a mappingproxy is not copyable and a dict would be mutable.
-    """
-    trusted_vars: Final = kwargs.get(TRUSTED_CALLBACK_VARS_FIELD) if kwargs else None
-    if not isinstance(trusted_vars, Mapping):
-        return ()
-    return tuple((key, str(value)) for key, value in trusted_vars.items() if isinstance(key, str))
+_request_blocked_callback_params = {
+    "gcs_bucket_name",
+    "gcs_path_service_account",
+    "dd_api_key",
+    "dd_site",
+    "dd_agent_host",
+    "dd_agent_port",
+}
 
 
 def initialize_standard_callback_dynamic_params(
-    kwargs: dict | None = None,
+    kwargs: Optional[Dict] = None,
 ) -> StandardCallbackDynamicParams:
     """
     Initialize the standard callback dynamic params from the kwargs
@@ -112,7 +93,7 @@ def initialize_standard_callback_dynamic_params(
     checks supported request callback params in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
     """
 
-    standard_callback_dynamic_params: Final = StandardCallbackDynamicParams()
+    standard_callback_dynamic_params = StandardCallbackDynamicParams()
     if kwargs:
         # 1. Check top-level kwargs
         for param in _supported_callback_params:
@@ -121,7 +102,7 @@ def initialize_standard_callback_dynamic_params(
             if param in kwargs:
                 _param_value = kwargs.get(param)
                 validate_no_callback_env_reference(param, _param_value, source="request body")
-                standard_callback_dynamic_params[param] = _param_value
+                standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
         for slot_label, metadata in iter_client_callback_metadata_dicts(kwargs):
             for param in _supported_callback_params:
@@ -130,6 +111,6 @@ def initialize_standard_callback_dynamic_params(
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
                     validate_no_callback_env_reference(param, _param_value, source=slot_label)
-                    standard_callback_dynamic_params[param] = _param_value
+                    standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
     return standard_callback_dynamic_params

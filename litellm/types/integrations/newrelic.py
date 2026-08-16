@@ -5,3 +5,5 @@ class NewRelicInitParams(StandardCustomLoggerInitParams):
     """
     Params for initializing a New Relic logger on litellm
     """
+
+    pass

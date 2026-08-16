@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Dict, List, Optional, Union
 
 from typing_extensions import TypedDict
 
@@ -7,15 +7,15 @@ from litellm.types.guardrails import PiiEntityType
 
 class PresidioAnalyzeRequest(TypedDict, total=False):
     text: str
-    language: str | None
-    ad_hoc_recognizers: list[str] | None
-    entities: list[PiiEntityType | str] | None
+    language: Optional[str]
+    ad_hoc_recognizers: Optional[List[str]]
+    entities: Optional[List[Union[PiiEntityType, str]]]
 
 
 class PresidioAnalyzeResponseItem(TypedDict, total=False):
-    entity_type: PiiEntityType | str | None
-    start: int | None
-    end: int | None
-    score: float | None
-    analysis_explanation: dict[str, Any] | None
-    recognition_metadata: dict[str, Any] | None
+    entity_type: Optional[Union[PiiEntityType, str]]
+    start: Optional[int]
+    end: Optional[int]
+    score: Optional[float]
+    analysis_explanation: Optional[Dict[str, Any]]
+    recognition_metadata: Optional[Dict[str, Any]]

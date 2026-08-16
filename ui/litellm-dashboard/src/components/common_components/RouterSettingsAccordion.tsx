@@ -1,13 +1,12 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useQuery } from "@tanstack/react-query";
+import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { getRouterSettingsCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
 import { FallbackSelectionForm } from "../Settings/RouterSettings/Fallbacks/FallbackSelectionForm";
 import { FallbackGroup } from "../Settings/RouterSettings/Fallbacks/FallbackGroupConfig";
-import { fetchAvailableModels, fetchAvailableModelsForTeam, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 export interface RouterSettingsAccordionValue {
   router_settings: {
@@ -31,7 +30,6 @@ interface RouterSettingsAccordionProps {
   value?: RouterSettingsAccordionValue;
   onChange?: (value: RouterSettingsAccordionValue) => void;
   modelData?: any;
-  teamId?: string | null;
 }
 
 export interface RouterSettingsAccordionRef {
@@ -41,7 +39,7 @@ export interface RouterSettingsAccordionRef {
 const PROPAGATE_WAIT_MS = 100;
 
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
-  ({ accessToken, value, onChange, modelData, teamId }, ref) => {
+  ({ accessToken, value, onChange, modelData }, ref) => {
     const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
       routerSettings: {},
       selectedStrategy: null,
@@ -49,6 +47,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
     });
     const [fallbacks, setFallbacks] = useState<Fallbacks>([]);
     const [fallbackGroups, setFallbackGroups] = useState<FallbackGroup[]>([]);
+    const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
     const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
     const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
     const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
@@ -176,11 +175,21 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       });
     }, [accessToken]);
 
-    const { data: modelInfo = [] } = useQuery<ModelGroup[]>({
-      queryKey: ["fallbackAvailableModels", accessToken, teamId ?? null],
-      queryFn: () => (teamId ? fetchAvailableModelsForTeam(accessToken, teamId) : fetchAvailableModels(accessToken)),
-      enabled: Boolean(accessToken),
-    });
+    // Fetch available models for fallbacks
+    useEffect(() => {
+      if (!accessToken) {
+        return;
+      }
+      const loadModels = async () => {
+        try {
+          const uniqueModels = await fetchAvailableModels(accessToken);
+          setModelInfo(uniqueModels);
+        } catch (error) {
+          console.error("Error fetching model info for fallbacks:", error);
+        }
+      };
+      loadModels();
+    }, [accessToken]);
 
     // Helper function to build router_settings from current state
     const buildRouterSettings = (): RouterSettingsAccordionValue["router_settings"] => {
@@ -344,13 +353,13 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
 
     return (
       <div className="w-full">
-        <Tabs defaultValue="1" className="w-full">
-          <TabsList variant="line" className="px-8 pt-4">
-            <TabsTrigger value="1">Loadbalancing</TabsTrigger>
-            <TabsTrigger value="2">Fallbacks</TabsTrigger>
-          </TabsList>
-          <div className="px-8 py-6">
-            <TabsContent value="1" keepMounted>
+        <TabGroup className="w-full">
+          <TabList variant="line" defaultValue="1" className="px-8 pt-4">
+            <Tab value="1">Loadbalancing</Tab>
+            <Tab value="2">Fallbacks</Tab>
+          </TabList>
+          <TabPanels className="px-8 py-6">
+            <TabPanel>
               <RouterSettingsForm
                 value={formValue}
                 onChange={setFormValue}
@@ -358,17 +367,17 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
                 availableRoutingStrategies={availableRoutingStrategies}
                 routingStrategyDescriptions={routingStrategyDescriptions}
               />
-            </TabsContent>
-            <TabsContent value="2" keepMounted>
+            </TabPanel>
+            <TabPanel>
               <FallbackSelectionForm
                 groups={fallbackGroups}
                 onGroupsChange={handleFallbackGroupsChange}
                 availableModels={availableModels}
                 maxGroups={5}
               />
-            </TabsContent>
-          </div>
-        </Tabs>
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
       </div>
     );
   },

@@ -1,22 +1,12 @@
 import React, { useMemo, useState, type UIEvent } from "react";
-import { Loader2 } from "lucide-react";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import {
-  Combobox,
-  ComboboxChip,
-  ComboboxChips,
-  ComboboxChipsInput,
-  ComboboxClear,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxItem,
-  ComboboxList,
-  ComboboxValue,
-  useComboboxAnchor,
-} from "@/components/ui/combobox";
+import { Select, Typography } from "antd";
+import { LoadingOutlined } from "@ant-design/icons";
+import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { Team } from "../key_team_helpers/key_list";
+
+const { Text } = Typography;
 
 interface TeamMultiSelectProps {
   value?: string[];
@@ -37,78 +27,77 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
   pageSize = 20,
   placeholder = "Search teams by alias...",
 }) => {
-  const anchor = useComboboxAnchor();
-  const [search, setSearch] = useState("");
-  const debouncedSetSearch = useDebouncedCallback(setSearch, { wait: DEBOUNCE_WAIT_MS });
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
+    wait: DEBOUNCE_WAIT_MS,
+  });
 
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
     pageSize,
-    search || undefined,
+    debouncedSearch || undefined,
     organizationId,
   );
 
-  const teamById = useMemo(
-    () =>
-      new Map<string, Team>(
-        (data?.pages ?? []).flatMap((page) => page.teams).map((team) => [team.team_id, team] as const),
-      ),
-    [data],
-  );
-  const teamIds = useMemo(() => Array.from(teamById.keys()), [teamById]);
+  const teams = useMemo(() => {
+    if (!data?.pages) return [];
+    const seen = new Set<string>();
+    const result: Team[] = [];
+    for (const page of data.pages) {
+      for (const team of page.teams) {
+        if (seen.has(team.team_id)) continue;
+        seen.add(team.team_id);
+        result.push(team);
+      }
+    }
+    return result;
+  }, [data]);
 
-  const aliasOf = (teamId: string) => teamById.get(teamId)?.team_alias ?? teamId;
-
-  const handleScroll = (event: UIEvent<HTMLDivElement>) => {
-    const target = event.currentTarget;
-    if (target.scrollHeight === 0) return;
+  const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
     const scrollRatio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
     if (scrollRatio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
       fetchNextPage();
     }
   };
 
+  const handleSearch = (val: string) => {
+    setSearchInput(val);
+    setDebouncedSearch(val);
+  };
+
   return (
-    <Combobox
-      multiple
-      items={teamIds}
+    <Select
+      mode="multiple"
+      showSearch
+      placeholder={placeholder}
       value={value}
-      onValueChange={(next: string[]) => onChange?.(next)}
-      filter={null}
-      onInputValueChange={debouncedSetSearch}
+      onChange={(val: string[]) => onChange?.(val)}
       disabled={disabled}
-    >
-      <ComboboxChips render={<div ref={anchor} />} className="w-full" aria-busy={isLoading}>
-        <ComboboxValue>
-          {(selected: string[]) =>
-            selected.map((teamId) => (
-              <ComboboxChip key={teamId} aria-label={aliasOf(teamId)}>
-                {aliasOf(teamId)}
-              </ComboboxChip>
-            ))
-          }
-        </ComboboxValue>
-        <ComboboxChipsInput placeholder={placeholder} aria-label={placeholder} disabled={disabled} />
-        {value.length > 0 && <ComboboxClear aria-label="Clear all teams" disabled={disabled} />}
-      </ComboboxChips>
-      <ComboboxContent anchor={anchor}>
-        <ComboboxEmpty>
-          {isLoading ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : "No teams found"}
-        </ComboboxEmpty>
-        <ComboboxList onScroll={handleScroll}>
-          {(teamId: string) => (
-            <ComboboxItem key={teamId} value={teamId}>
-              <span className="font-medium">{aliasOf(teamId)}</span>{" "}
-              <span className="text-muted-foreground">({teamId})</span>
-            </ComboboxItem>
+      allowClear
+      filterOption={false}
+      onSearch={handleSearch}
+      searchValue={searchInput}
+      onPopupScroll={handlePopupScroll}
+      loading={isLoading}
+      notFoundContent={isLoading ? <LoadingOutlined spin /> : "No teams found"}
+      style={{ width: "100%" }}
+      popupRender={(menu) => (
+        <>
+          {menu}
+          {isFetchingNextPage && (
+            <div style={{ textAlign: "center", padding: 8 }}>
+              <LoadingOutlined spin />
+            </div>
           )}
-        </ComboboxList>
-        {isFetchingNextPage && (
-          <div className="flex justify-center py-2">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" />
-          </div>
-        )}
-      </ComboboxContent>
-    </Combobox>
+        </>
+      )}
+    >
+      {teams.map((team) => (
+        <Select.Option key={team.team_id} value={team.team_id}>
+          <span className="font-medium">{team.team_alias}</span> <Text type="secondary">({team.team_id})</Text>
+        </Select.Option>
+      ))}
+    </Select>
   );
 };
 

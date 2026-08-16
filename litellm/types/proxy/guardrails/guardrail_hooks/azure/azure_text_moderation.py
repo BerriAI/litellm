@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 from typing_extensions import Required, TypedDict
@@ -7,15 +7,15 @@ from ..base import GuardrailConfigModel
 from .base import AzureContentSafetyConfigModel
 
 # Shared Azure Content Safety categories
-AZURE_CONTENT_SAFETY_CATEGORIES: Final = ["Hate", "SelfHarm", "Sexual", "Violence"]
+AZURE_CONTENT_SAFETY_CATEGORIES = ["Hate", "SelfHarm", "Sexual", "Violence"]
 
 
 class AzureTextModerationRequestBodyOptionalParams(TypedDict, total=False):
     """Optional parameters for the Azure Text Moderation guardrail"""
 
-    categories: list[str] | None
-    blocklistNames: list[str] | None
-    haltOnBlocklistHit: bool | None
+    categories: Optional[List[str]]
+    blocklistNames: Optional[List[str]]
+    haltOnBlocklistHit: Optional[bool]
     outputType: Literal["FourSeverityLevels", "EightSeverityLevels"]
 
 
@@ -35,36 +35,36 @@ class AzureTextModerationGuardrailResponseCategoriesAnalysis(TypedDict):
 class AzureTextModerationGuardrailResponse(TypedDict):
     """Response from the Azure Text Moderation guardrail"""
 
-    blocklistsMatch: list[dict[str, Any]]
-    categoriesAnalysis: list[AzureTextModerationGuardrailResponseCategoriesAnalysis]
+    blocklistsMatch: List[Dict[str, Any]]
+    categoriesAnalysis: List[AzureTextModerationGuardrailResponseCategoriesAnalysis]
 
 
 AzureHarmCategories = Literal["Hate", "SelfHarm", "Sexual", "Violence"]
 
 
 class AzureTextModerationOptionalParams(BaseModel):
-    severity_threshold: int | None = Field(
+    severity_threshold: Optional[int] = Field(
         default=None,
         description="Severity threshold for the Azure Content Safety Text Moderation guardrail across all categories",
     )
-    severity_threshold_by_category: dict[AzureHarmCategories, int] | None = Field(
+    severity_threshold_by_category: Optional[Dict[AzureHarmCategories, int]] = Field(
         default=None,
         description="Severity threshold by category for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning",
     )
 
-    categories: list[AzureHarmCategories] | None = Field(
+    categories: Optional[List[AzureHarmCategories]] = Field(
         default=None,
         description="Categories to scan for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning",
     )
-    blocklistNames: list[str] | None = Field(
+    blocklistNames: Optional[List[str]] = Field(
         default=None,
         description="Blocklist names to scan for the Azure Content Safety Text Moderation guardrail. Learn more - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/quickstart-text",
     )
-    haltOnBlocklistHit: bool | None = Field(
+    haltOnBlocklistHit: Optional[bool] = Field(
         default=None,
         description="Whether to halt the request if a blocklist hit is detected",
     )
-    outputType: Literal["FourSeverityLevels", "EightSeverityLevels"] | None = Field(
+    outputType: Optional[Literal["FourSeverityLevels", "EightSeverityLevels"]] = Field(
         default=None,
         description="Output type for the Azure Content Safety Text Moderation guardrail. Learn more - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/quickstart-text",
     )

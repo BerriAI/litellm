@@ -1,7 +1,6 @@
 """Mapper protocol and attribute value types."""
 
-from collections.abc import Sequence
-from typing import Final
+from typing import Sequence
 
 from typing_extensions import Protocol, runtime_checkable
 
@@ -13,7 +12,7 @@ from litellm.integrations.otel.model.payloads import (
     ServiceSpanData,
 )
 
-AttrScalar: Final = str | bool | int | float
+AttrScalar = str | bool | int | float
 # Mirrors ``opentelemetry.util.types.AttributeValue`` (homogeneous sequences)
 # without importing the SDK, so mappers stay OTel-free.
 AttrValue = AttrScalar | Sequence[str] | Sequence[bool] | Sequence[int] | Sequence[float]

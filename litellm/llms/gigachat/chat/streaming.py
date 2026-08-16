@@ -4,7 +4,7 @@ GigaChat Streaming Response Handler
 
 import json
 import uuid
-from typing import Any, Final
+from typing import Any, Optional
 
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
@@ -20,7 +20,7 @@ class GigaChatModelResponseIterator:
         self,
         streaming_response: Any,
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: Optional[bool] = False,
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -29,11 +29,11 @@ class GigaChatModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         """Parse a single streaming chunk from GigaChat."""
         text = ""
-        tool_use: ChatCompletionToolCallChunk | None = None
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
         is_finished = False
-        finish_reason: str | None = None
+        finish_reason: Optional[str] = None
 
-        choices: Final = chunk.get("choices", [])
+        choices = chunk.get("choices", [])
         if not choices:
             return GenericStreamingChunk(
                 text="",
@@ -44,8 +44,8 @@ class GigaChatModelResponseIterator:
                 index=0,
             )
 
-        choice: Final = choices[0]
-        delta: Final = choice.get("delta", {})
+        choice = choices[0]
+        delta = choice.get("delta", {})
         finish_reason = choice.get("finish_reason")
 
         # Extract text content
@@ -53,7 +53,7 @@ class GigaChatModelResponseIterator:
 
         # Handle function_call in stream
         if finish_reason == "function_call" and delta.get("function_call"):
-            func_call: Final = delta["function_call"]
+            func_call = delta["function_call"]
             args = func_call.get("arguments", {})
 
             if isinstance(args, dict):
@@ -90,7 +90,8 @@ class GigaChatModelResponseIterator:
             chunk = self.response_iterator.__next__()
             if isinstance(chunk, str):
                 # Parse SSE format: data: {...}
-                chunk = chunk.removeprefix("data: ")
+                if chunk.startswith("data: "):
+                    chunk = chunk[6:]
                 if chunk.strip() == "[DONE]":
                     raise StopIteration
                 try:
@@ -116,7 +117,8 @@ class GigaChatModelResponseIterator:
             chunk = await self.response_iterator.__anext__()
             if isinstance(chunk, str):
                 # Parse SSE format
-                chunk = chunk.removeprefix("data: ")
+                if chunk.startswith("data: "):
+                    chunk = chunk[6:]
                 if chunk.strip() == "[DONE]":
                     raise StopAsyncIteration
                 try:

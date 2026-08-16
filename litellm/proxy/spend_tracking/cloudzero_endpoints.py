@@ -1,5 +1,4 @@
 import json
-from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -22,11 +21,11 @@ from litellm.types.proxy.cloudzero_endpoints import (
     CloudZeroSettingsView,
 )
 
-router: Final = APIRouter()
+router = APIRouter()
 
 
 # Initialize the sensitive data masker for API key masking
-_sensitive_masker: Final = SensitiveDataMasker()
+_sensitive_masker = SensitiveDataMasker()
 
 
 async def _set_cloudzero_settings(api_key: str, connection_id: str, timezone: str):
@@ -47,9 +46,9 @@ async def _set_cloudzero_settings(api_key: str, connection_id: str, timezone: st
         )
 
     # Encrypt the API key before storing
-    encrypted_api_key: Final = encrypt_value_helper(api_key)
+    encrypted_api_key = encrypt_value_helper(api_key)
 
-    cloudzero_settings: Final = {
+    cloudzero_settings = {
         "api_key": encrypted_api_key,
         "connection_id": connection_id,
         "timezone": timezone,
@@ -82,7 +81,7 @@ async def _get_cloudzero_settings():
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    cloudzero_config: Final = await ConfigRepository(prisma_client).table.find_first(
+    cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "cloudzero_settings"}
     )
     if cloudzero_config is None or cloudzero_config.param_value is None:
@@ -97,7 +96,7 @@ async def _get_cloudzero_settings():
         settings = dict(cloudzero_config.param_value)
 
     # Decrypt the API key
-    encrypted_api_key: Final = settings.get("api_key")
+    encrypted_api_key = settings.get("api_key")
     if encrypted_api_key:
         decrypted_api_key = decrypt_value_helper(encrypted_api_key, key="cloudzero_api_key", exception_type="error")
         if decrypted_api_key is None:
@@ -137,7 +136,7 @@ async def get_cloudzero_settings(
 
     try:
         # Get CloudZero settings using the accessor method
-        settings: Final = await _get_cloudzero_settings()
+        settings = await _get_cloudzero_settings()
 
         # If settings are empty, return null/empty values (consistent with other endpoints)
         if not settings:
@@ -149,7 +148,7 @@ async def get_cloudzero_settings(
             )
 
         # Use SensitiveDataMasker to mask the API key
-        masked_settings: Final = _sensitive_masker.mask_dict(settings)
+        masked_settings = _sensitive_masker.mask_dict(settings)
 
         return CloudZeroSettingsView(
             api_key_masked=masked_settings.get("api_key"),
@@ -162,10 +161,10 @@ async def get_cloudzero_settings(
         # Re-raise HTTPExceptions as-is
         raise e
     except Exception as e:
-        verbose_proxy_logger.error("Error retrieving CloudZero settings: %s", e)
+        verbose_proxy_logger.error(f"Error retrieving CloudZero settings: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to retrieve CloudZero settings: {e}"},
+            detail={"error": f"Failed to retrieve CloudZero settings: {str(e)}"},
         )
 
 
@@ -208,14 +207,14 @@ async def update_cloudzero_settings(
 
     try:
         # Get current settings
-        current_settings: Final = await _get_cloudzero_settings()
+        current_settings = await _get_cloudzero_settings()
 
         # Update only provided fields
-        updated_api_key: Final = request.api_key if request.api_key is not None else current_settings["api_key"]
-        updated_connection_id: Final = (
+        updated_api_key = request.api_key if request.api_key is not None else current_settings["api_key"]
+        updated_connection_id = (
             request.connection_id if request.connection_id is not None else current_settings["connection_id"]
         )
-        updated_timezone: Final = request.timezone if request.timezone is not None else current_settings["timezone"]
+        updated_timezone = request.timezone if request.timezone is not None else current_settings["timezone"]
 
         # Store updated settings using the setter method with encryption
         await _set_cloudzero_settings(
@@ -239,15 +238,15 @@ async def update_cloudzero_settings(
             )
         raise e
     except Exception as e:
-        verbose_proxy_logger.error("Error updating CloudZero settings: %s", e)
+        verbose_proxy_logger.error(f"Error updating CloudZero settings: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update CloudZero settings: {e}"},
+            detail={"error": f"Failed to update CloudZero settings: {str(e)}"},
         )
 
 
 # Global variable to track if CloudZero background job has been initialized
-_cloudzero_background_job_initialized: Final = False
+_cloudzero_background_job_initialized = False
 
 
 async def is_cloudzero_setup_in_db() -> bool:
@@ -268,7 +267,7 @@ async def is_cloudzero_setup_in_db() -> bool:
             return False
 
         # Check for CloudZero settings in database
-        cloudzero_config: Final = await ConfigRepository(prisma_client).table.find_first(
+        cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": "cloudzero_settings"}
         )
 
@@ -276,7 +275,7 @@ async def is_cloudzero_setup_in_db() -> bool:
         return cloudzero_config is not None and cloudzero_config.param_value is not None
 
     except Exception as e:
-        verbose_proxy_logger.error("Error checking CloudZero status: %s", e)
+        verbose_proxy_logger.error(f"Error checking CloudZero status: {str(e)}")
         return False
 
 
@@ -318,7 +317,7 @@ async def is_cloudzero_setup() -> bool:
         return False
 
     except Exception as e:
-        verbose_proxy_logger.error("Error checking CloudZero setup: %s", e)
+        verbose_proxy_logger.error(f"Error checking CloudZero setup: {str(e)}")
         return False
 
 
@@ -365,10 +364,10 @@ async def init_cloudzero_settings(
         return CloudZeroInitResponse(message="CloudZero settings initialized successfully", status="success")
 
     except Exception as e:
-        verbose_proxy_logger.error("Error initializing CloudZero settings: %s", e)
+        verbose_proxy_logger.error(f"Error initializing CloudZero settings: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to initialize CloudZero settings: {e}"},
+            detail={"error": f"Failed to initialize CloudZero settings: {str(e)}"},
         )
 
 
@@ -410,8 +409,8 @@ async def cloudzero_dry_run_export(
         from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 
         # Initialize logger with credentials directly
-        logger: Final = CloudZeroLogger()
-        dry_run_result: Final = await logger.dry_run_export_usage_data(limit=request.limit)
+        logger = CloudZeroLogger()
+        dry_run_result = await logger.dry_run_export_usage_data(limit=request.limit)
 
         verbose_proxy_logger.info("CloudZero dry run export completed successfully")
 
@@ -423,10 +422,10 @@ async def cloudzero_dry_run_export(
         )
 
     except Exception as e:
-        verbose_proxy_logger.error("Error performing CloudZero dry run export: %s", e)
+        verbose_proxy_logger.error(f"Error performing CloudZero dry run export: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to perform CloudZero dry run export: {e}"},
+            detail={"error": f"Failed to perform CloudZero dry run export: {str(e)}"},
         )
 
 
@@ -460,13 +459,13 @@ async def cloudzero_export(
 
     try:
         # Get CloudZero settings using the accessor method with decryption
-        settings: Final = await _get_cloudzero_settings()
+        settings = await _get_cloudzero_settings()
 
         # Import and initialize CloudZero logger with credentials
         from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 
         # Initialize logger with credentials directly
-        logger: Final = CloudZeroLogger(
+        logger = CloudZeroLogger(
             api_key=settings.get("api_key"),
             connection_id=settings.get("connection_id"),
             timezone=settings.get("timezone"),
@@ -488,10 +487,10 @@ async def cloudzero_export(
         )
 
     except Exception as e:
-        verbose_proxy_logger.error("Error performing CloudZero export: %s", e)
+        verbose_proxy_logger.error(f"Error performing CloudZero export: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to perform CloudZero export: {e}"},
+            detail={"error": f"Failed to perform CloudZero export: {str(e)}"},
         )
 
 
@@ -530,7 +529,7 @@ async def delete_cloudzero_settings(
             )
 
         # Check if CloudZero settings exist
-        cloudzero_config: Final = await ConfigRepository(prisma_client).table.find_first(
+        cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": "cloudzero_settings"}
         )
 
@@ -551,8 +550,8 @@ async def delete_cloudzero_settings(
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.error("Error deleting CloudZero settings: %s", e)
+        verbose_proxy_logger.error(f"Error deleting CloudZero settings: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to delete CloudZero settings: {e}"},
+            detail={"error": f"Failed to delete CloudZero settings: {str(e)}"},
         )

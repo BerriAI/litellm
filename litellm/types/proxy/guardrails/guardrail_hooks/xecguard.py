@@ -1,10 +1,10 @@
-from typing import Final, Literal
+from typing import Any, List, Literal, Optional, cast
 
 from pydantic import Field
 
 from .base import GuardrailConfigModel
 
-XECGUARD_DEFAULT_POLICY_OPTIONS: Final = [
+XECGUARD_DEFAULT_POLICY_OPTIONS = [
     "Default_Policy_SystemPromptEnforcement",
     "Default_Policy_GeneralPromptAttackProtection",
     "Default_Policy_ContentBiasProtection",
@@ -15,7 +15,7 @@ XECGUARD_DEFAULT_POLICY_OPTIONS: Final = [
 
 
 class XecGuardConfigModel(GuardrailConfigModel):
-    api_key: str | None = Field(
+    api_key: Optional[str] = Field(
         default=None,
         description=(
             "Service Token for XecGuard (prefix 'xgs_'). "
@@ -23,7 +23,7 @@ class XecGuardConfigModel(GuardrailConfigModel):
             "variable is used."
         ),
     )
-    api_base: str | None = Field(
+    api_base: Optional[str] = Field(
         default=None,
         description=(
             "XecGuard API base URL. "
@@ -31,11 +31,11 @@ class XecGuardConfigModel(GuardrailConfigModel):
             "Falls back to the XECGUARD_API_BASE env var."
         ),
     )
-    xecguard_model: str | None = Field(
+    xecguard_model: Optional[str] = Field(
         default=None,
         description=("XecGuard scanning model identifier. Defaults to 'xecguard_v2'."),
     )
-    policy_names: list[str] | None = Field(
+    policy_names: Optional[List[str]] = Field(
         default=None,
         description=(
             "XecGuard policies to apply on each scan. Select one or more "
@@ -43,12 +43,15 @@ class XecGuardConfigModel(GuardrailConfigModel):
             "the guardrail defaults to System Prompt Enforcement + "
             "Harmful Content Protection."
         ),
-        json_schema_extra={
-            "ui_type": "multiselect",
-            "options": list(XECGUARD_DEFAULT_POLICY_OPTIONS),
-        },
+        json_schema_extra=cast(
+            Any,
+            {
+                "ui_type": "multiselect",
+                "options": XECGUARD_DEFAULT_POLICY_OPTIONS,
+            },
+        ),
     )
-    block_on_error: bool | None = Field(
+    block_on_error: Optional[bool] = Field(
         default=None,
         description=(
             "Whether to block requests when the XecGuard API is "
@@ -56,7 +59,7 @@ class XecGuardConfigModel(GuardrailConfigModel):
             "Falls back to the XECGUARD_BLOCK_ON_ERROR env var."
         ),
     )
-    grounding_strictness: Literal["BALANCED", "STRICT"] | None = Field(
+    grounding_strictness: Optional[Literal["BALANCED", "STRICT"]] = Field(
         default=None,
         description=(
             "Strictness level for XecGuard context-grounding "

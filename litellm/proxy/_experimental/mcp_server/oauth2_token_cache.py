@@ -6,8 +6,7 @@ with ``client_id``, ``client_secret``, and ``token_url``.
 """
 
 import asyncio
-import hashlib
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 
 import httpx
 
@@ -23,13 +22,13 @@ from litellm.constants import (
     MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy._experimental.mcp_server.oauth_utils import (
-    build_upstream_oauth2_token_request,
-    resolve_upstream_resource,
-)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
+)
+from litellm.proxy._experimental.mcp_server.auth import token_exchange
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    build_token_endpoint_client_auth,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -39,18 +38,10 @@ if TYPE_CHECKING:
 
 class MCPOAuth2TokenCache(InMemoryCache):
     """
-    In-memory cache for OAuth2 client_credentials tokens, keyed by the identity of the token
-    request rather than by server_id alone.
-
-    A minted token is only reusable for the exact request that produced it. Keying on server_id
-    alone served a token minted under the previous configuration whenever any of those inputs
-    changed, so editing scopes, rotating the client secret, or setting ``upstream_resource``
-    silently kept handing out a token carrying the old scopes or audience until it expired. The
-    identity below covers every input ``_fetch_token`` puts on the wire, so a change to any of
-    them misses the cache and mints afresh.
+    In-memory cache for OAuth2 client_credentials tokens, keyed by server_id.
 
     Inherits from ``InMemoryCache`` for TTL-based storage and eviction.
-    Adds a per-identity ``asyncio.Lock`` to prevent duplicate concurrent fetches.
+    Adds per-server ``asyncio.Lock`` to prevent duplicate concurrent fetches.
     """
 
     def __init__(self) -> None:
@@ -58,66 +49,54 @@ class MCPOAuth2TokenCache(InMemoryCache):
             max_size_in_memory=MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
             default_ttl=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
         )
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: Dict[str, asyncio.Lock] = {}
 
-    @staticmethod
-    def _token_identity(server: "MCPServer") -> str:
-        """Cache key for the token this server's config would mint, prefixed by server_id so a
-        single server's entries stay greppable and invalidatable. The secret is hashed with the
-        rest of the identity rather than stored in a key."""
-        material: Final = "\x00".join(
-            (
-                server.token_url or "",
-                server.client_id or "",
-                server.client_secret or "",
-                " ".join(server.scopes or ()),
-                resolve_upstream_resource(server) or "",
-                server.token_endpoint_auth_method or "",
-            )
-        )
-        return f"{server.server_id}:{hashlib.sha256(material.encode()).hexdigest()}"
-
-    def _get_lock(self, identity: str) -> asyncio.Lock:
-        return self._locks.setdefault(identity, asyncio.Lock())
+    def _get_lock(self, server_id: str) -> asyncio.Lock:
+        return self._locks.setdefault(server_id, asyncio.Lock())
 
     @staticmethod
     def _has_client_credentials_config(server: "MCPServer") -> bool:
         return bool(server.client_id and server.client_secret and server.token_url)
 
-    async def async_get_token(self, server: "MCPServer") -> str | None:
+    async def async_get_token(
+        self,
+        server: "MCPServer",
+        *,
+        require_client_credentials_flow: bool = True,
+    ) -> Optional[str]:
         """Return a valid access token, fetching or refreshing as needed.
 
         Returns ``None`` when the server lacks client credentials config.
         """
-        if not server.has_client_credentials:
+        if require_client_credentials_flow and not server.has_client_credentials:
             return None
         if not self._has_client_credentials_config(server):
             return None
 
-        identity: Final = self._token_identity(server)
+        server_id = server.server_id
 
         # Fast path — cached token is still valid
-        cached = self.get_cache(identity)
+        cached = self.get_cache(server_id)
         if cached is not None:
             return cached
 
-        # Slow path — acquire per-identity lock then double-check
-        async with self._get_lock(identity):
-            cached = self.get_cache(identity)
+        # Slow path — acquire per-server lock then double-check
+        async with self._get_lock(server_id):
+            cached = self.get_cache(server_id)
             if cached is not None:
                 return cached
 
             token, ttl = await self._fetch_token(server)
-            self.set_cache(identity, token, ttl=ttl)
+            self.set_cache(server_id, token, ttl=ttl)
             return token
 
-    async def _fetch_token(self, server: "MCPServer") -> tuple[str, int]:
+    async def _fetch_token(self, server: "MCPServer") -> Tuple[str, int]:
         """POST to ``token_url`` with ``grant_type=client_credentials``.
 
         Returns ``(access_token, ttl_seconds)`` where ttl accounts for the
         expiry buffer so the cache entry expires before the real token does.
         """
-        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
         if not server.client_id or not server.client_secret or not server.token_url:
             raise ValueError(
@@ -127,15 +106,14 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"token_url={bool(server.token_url)}"
             )
 
-        token_request: Final = build_upstream_oauth2_token_request(
-            server,
+        client_auth = build_token_endpoint_client_auth(
             auth_method=server.token_endpoint_auth_method,
             client_id=server.client_id,
             client_secret=server.client_secret,
         )
-        data: Final[dict[str, str]] = {
+        data: Dict[str, str] = {
             "grant_type": "client_credentials",
-            **token_request.body,
+            **client_auth.body,
         }
         if server.scopes:
             data["scope"] = " ".join(server.scopes)
@@ -145,8 +123,9 @@ class MCPOAuth2TokenCache(InMemoryCache):
             server.server_id,
         )
 
+        post_kwargs = {"data": data, **({"headers": client_auth.headers} if client_auth.headers else {})}
         try:
-            response: Final = await client.post(server.token_url, data=data, headers=token_request.headers or None)
+            response = await client.post(server.token_url, **post_kwargs)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ValueError(
@@ -154,7 +133,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"failed with status {exc.response.status_code}"
             ) from exc
 
-        body: Final = response.json()
+        body = response.json()
 
         if not isinstance(body, dict):
             raise ValueError(
@@ -162,18 +141,18 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"returned non-object JSON (got {type(body).__name__})"
             )
 
-        access_token: Final = body.get("access_token")
+        access_token = body.get("access_token")
         if not access_token:
             raise ValueError(f"OAuth2 token response for MCP server '{server.server_id}' missing 'access_token'")
 
         # Safely parse expires_in — providers may return null or non-numeric values
-        raw_expires_in: Final = body.get("expires_in")
+        raw_expires_in = body.get("expires_in")
         try:
             expires_in = int(raw_expires_in) if raw_expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
         except (TypeError, ValueError):
             expires_in = MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
 
-        ttl: Final = max(
+        ttl = max(
             expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
             MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
         )
@@ -186,20 +165,14 @@ class MCPOAuth2TokenCache(InMemoryCache):
         return access_token, ttl
 
     def invalidate(self, server_id: str) -> None:
-        """Remove every cached token for a server (e.g. after a 401).
-
-        Entries are keyed by token identity, so one server can hold more than one entry across a
-        config change; a 401 invalidates all of them rather than only the current configuration's.
-        """
-        prefix: Final = f"{server_id}:"
-        for key in [k for k in self.cache_dict if isinstance(k, str) and k.startswith(prefix)]:
-            self.delete_cache(key)
+        """Remove a cached token (e.g. after a 401)."""
+        self.delete_cache(server_id)
 
 
-mcp_oauth2_token_cache: Final = MCPOAuth2TokenCache()
+mcp_oauth2_token_cache = MCPOAuth2TokenCache()
 
 
-def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> int:
+def _compute_per_user_token_ttl(server: "MCPServer", expires_in: Optional[int]) -> int:
     """Compute Redis TTL for a per-user token.
 
     Uses server.token_storage_ttl_seconds when configured, capped at the token's
@@ -207,7 +180,7 @@ def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> 
     outlives the token itself; otherwise derives TTL from expires_in minus the
     expiry buffer; falls back to the default TTL.
     """
-    lifetime_bound: Final = expires_in - MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS if expires_in is not None else None
+    lifetime_bound = expires_in - MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS if expires_in is not None else None
     if server.token_storage_ttl_seconds is not None:
         if lifetime_bound is None:
             return max(server.token_storage_ttl_seconds, 1)
@@ -231,16 +204,16 @@ class MCPPerUserTokenCache:
     def _cache_key(self, user_id: str, server_id: str) -> str:
         return f"{MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX}:{user_id}:{server_id}"
 
-    async def get(self, user_id: str, server_id: str) -> str | None:
+    async def get(self, user_id: str, server_id: str) -> Optional[str]:
         """Return the plaintext access_token, or None on miss/error."""
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-            key: Final = self._cache_key(user_id, server_id)
-            encrypted: Final = await user_api_key_cache.async_get_cache(key)
+            key = self._cache_key(user_id, server_id)
+            encrypted = await user_api_key_cache.async_get_cache(key)
             if encrypted is None:
                 return None
-            plaintext: Final = decrypt_value_helper(
+            plaintext = decrypt_value_helper(
                 encrypted,
                 key="mcp_per_user_token",
                 exception_type="debug",
@@ -266,8 +239,8 @@ class MCPPerUserTokenCache:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-            key: Final = self._cache_key(user_id, server_id)
-            encrypted: Final = encrypt_value_helper(access_token)
+            key = self._cache_key(user_id, server_id)
+            encrypted = encrypt_value_helper(access_token)
             await user_api_key_cache.async_set_cache(key, encrypted, ttl=ttl)
             verbose_logger.debug(
                 "MCPPerUserTokenCache.set: cached token for user=%s server=%s ttl=%ds",
@@ -288,7 +261,7 @@ class MCPPerUserTokenCache:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-            key: Final = self._cache_key(user_id, server_id)
+            key = self._cache_key(user_id, server_id)
             await user_api_key_cache.async_delete_cache(key)
         except Exception as exc:
             verbose_logger.debug(
@@ -299,22 +272,42 @@ class MCPPerUserTokenCache:
             )
 
 
-mcp_per_user_token_cache: Final = MCPPerUserTokenCache()
+mcp_per_user_token_cache = MCPPerUserTokenCache()
 
 
 async def resolve_mcp_auth(
     server: "MCPServer",
-    mcp_auth_header: str | dict[str, str] | None = None,
-) -> str | dict[str, str] | None:
+    mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+    subject_token: Optional[str] = None,
+) -> Optional[Union[str, Dict[str, str]]]:
     """Resolve the auth value for an MCP server.
 
     Priority:
     1. ``mcp_auth_header`` — per-request/per-user override
-    2. OAuth2 client_credentials token — auto-fetched and cached
-    3. ``server.authentication_token`` — static token from config/DB
+    2. OAuth2 Token Exchange (OBO / RFC 8693) — exchange user token for scoped token
+    3. OAuth2 client_credentials token — auto-fetched and cached
+    4. ``server.authentication_token`` — static token from config/DB
     """
     if mcp_auth_header:
         return mcp_auth_header
+    if server.has_token_exchange_config:
+        if subject_token:
+            return await token_exchange.mcp_token_exchange_handler.exchange_token(subject_token, server)
+        # No subject_token — fall back to client_credentials using the same client
+        # credentials and token_url so M2M scenarios still work.
+        if server.client_id and server.client_secret and server.token_url:
+            return await mcp_oauth2_token_cache.async_get_token(
+                server,
+                require_client_credentials_flow=False,
+            )
+        # OBO configured but no subject_token and missing client credentials — warn
+        # rather than silently proceeding unauthenticated.
+        verbose_logger.warning(
+            "MCP server '%s' is configured for token exchange (OBO) but no subject_token "
+            "was provided and client credentials (client_id/client_secret/token_url) are "
+            "incomplete. The request will proceed without authentication.",
+            server.server_id,
+        )
     if server.has_client_credentials:
         return await mcp_oauth2_token_cache.async_get_token(server)
     return server.authentication_token

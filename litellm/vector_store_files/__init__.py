@@ -14,16 +14,16 @@ from .main import (
 )
 
 __all__ = [
-    "acreate",
-    "adelete",
-    "alist",
-    "aretrieve",
-    "aretrieve_content",
-    "aupdate",
     "create",
-    "delete",
+    "acreate",
     "list",
+    "alist",
     "retrieve",
+    "aretrieve",
     "retrieve_content",
+    "aretrieve_content",
     "update",
+    "aupdate",
+    "delete",
+    "adelete",
 ]

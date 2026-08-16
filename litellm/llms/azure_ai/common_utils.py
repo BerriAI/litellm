@@ -1,4 +1,4 @@
-from typing import Final, Literal
+from typing import List, Literal, Optional
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -9,7 +9,7 @@ from litellm.types.llms.openai import AllMessageValues
 class AzureFoundryModelInfo(BaseLLMModelInfo):
     """Model info for Azure AI / Azure Foundry models."""
 
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: Optional[str] = None):
         self._model = model
 
     @staticmethod
@@ -27,7 +27,7 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         if "agents/" in model:
             return "agents"
         # Detect model router by prefix (model_router/<name>) or by name containing "model-router"/"model_router"
-        model_lower: Final = model.lower()
+        model_lower = model.lower()
         if (
             "model_router/" in model_lower
             or "model-router/" in model_lower
@@ -38,19 +38,19 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         return "default"
 
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str | None:
+    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         return api_base or litellm.api_base or get_secret_str("AZURE_AI_API_BASE")
 
     @staticmethod
-    def get_api_key(api_key: str | None = None) -> str | None:
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
         return api_key or litellm.api_key or litellm.openai_key or get_secret_str("AZURE_AI_API_KEY")
 
     @property
-    def api_version(self, api_version: str | None = None) -> str | None:
+    def api_version(self, api_version: Optional[str] = None) -> Optional[str]:
         api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
         return api_version
 
-    def get_token_counter(self) -> BaseTokenCounter | None:
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
         Factory method to create a token counter for Azure AI.
 
@@ -66,7 +66,7 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
             return AzureAIAnthropicTokenCounter()
         return None
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         """
         Returns a list of models supported by Azure AI.
 
@@ -132,7 +132,7 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         Returns:
             The appropriate config instance
         """
-        azure_ai_route: Final = AzureFoundryModelInfo.get_azure_ai_route(model)
+        azure_ai_route = AzureFoundryModelInfo.get_azure_ai_route(model)
 
         if azure_ai_route == "model_router":
             from litellm.llms.azure_ai.azure_model_router.transformation import (
@@ -155,11 +155,11 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         """Azure Foundry sends api key in query params"""
         raise NotImplementedError("Azure Foundry does not support environment validation")

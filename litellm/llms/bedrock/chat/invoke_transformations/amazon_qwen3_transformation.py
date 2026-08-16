@@ -6,7 +6,7 @@ Inherits from `AmazonInvokeConfig`
 Qwen3 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
-from typing import Any, Final
+from typing import Any, List, Optional
 
 import httpx
 
@@ -26,27 +26,27 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
     Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
     """
 
-    max_tokens: int | None = None
-    temperature: float | None = None
-    top_p: float | None = None
-    top_k: int | None = None
-    stop: list[str] | None = None
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    stop: Optional[List[str]] = None
 
     def __init__(
         self,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-        top_p: float | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        stop: Optional[List[str]] = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
         AmazonInvokeConfig.__init__(self)
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> List[str]:
         return [
             "max_tokens",
             "temperature",
@@ -81,7 +81,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -90,10 +90,10 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         Transform OpenAI format to Qwen3 Bedrock invoke format
         """
         # Convert messages to prompt format
-        prompt: Final = self._convert_messages_to_prompt(messages)
+        prompt = self._convert_messages_to_prompt(messages)
 
         # Build the request body
-        request_body: Final = {
+        request_body = {
             "prompt": prompt,
         }
 
@@ -111,12 +111,12 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
 
         return request_body
 
-    def _convert_messages_to_prompt(self, messages: list[AllMessageValues]) -> str:
+    def _convert_messages_to_prompt(self, messages: List[AllMessageValues]) -> str:
         """
         Convert OpenAI messages format to Qwen3 prompt format
         Supports tool calls, multimodal content, and various message types
         """
-        prompt_parts: Final = []
+        prompt_parts = []
 
         for message in messages:
             role = message.get("role", "")
@@ -164,35 +164,37 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         """
         Transform Qwen3 Bedrock response to OpenAI format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data = raw_response.json()
 
             # Extract the generated text - Qwen3 uses "generation" field
             generated_text = response_data.get("generation", "")
 
             # Clean up the response (remove assistant start token if present)
-            generated_text = generated_text.removeprefix("<|im_start|>assistant\n")
-            generated_text = generated_text.removesuffix("<|im_end|>")
+            if generated_text.startswith("<|im_start|>assistant\n"):
+                generated_text = generated_text[len("<|im_start|>assistant\n") :]
+            if generated_text.endswith("<|im_end|>"):
+                generated_text = generated_text[: -len("<|im_end|>")]
 
             # Set the content in the existing model_response structure
             if hasattr(model_response, "choices") and len(model_response.choices) > 0:
-                choice: Final = model_response.choices[0]
+                choice = model_response.choices[0]
                 choice.message.content = generated_text
                 choice.finish_reason = "stop"
 
             # Set usage information if available in response
             if "usage" in response_data:
-                usage_data: Final = response_data["usage"]
+                usage_data = response_data["usage"]
                 setattr(
                     model_response,
                     "usage",

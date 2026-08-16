@@ -1,6 +1,5 @@
 import types
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
@@ -32,13 +31,13 @@ class VertexAILlama3Config(OpenAIGPTConfig):
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
-    max_tokens: int | None = None
+    max_tokens: Optional[int] = None
 
     def __init__(
         self,
-        max_tokens: int | None = None,
+        max_tokens: Optional[int] = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key == "max_tokens" and value is None:
                 value = self.max_tokens
@@ -64,7 +63,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         }
 
     def get_supported_openai_params(self, model: str):
-        supported_params: Final = super().get_supported_openai_params(model=model)
+        supported_params = super().get_supported_openai_params(model=model)
         try:
             supported_params.remove("max_retries")
         except KeyError:
@@ -89,9 +88,9 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: Optional[bool] = False,
     ) -> Any:
         return VertexAILlama3StreamingHandler(
             streaming_response=streaming_response,
@@ -106,12 +105,12 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -123,11 +122,11 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = OpenAIChatCompletionResponse(**raw_response.json())
+            completion_response = OpenAIChatCompletionResponse(**raw_response.json())  # type: ignore
         except Exception as e:
-            response_headers: Final = getattr(raw_response, "headers", None)
+            response_headers = getattr(raw_response, "headers", None)
             raise VertexAIError(
-                message=f"Unable to get json response - {e}, Original Response: {raw_response.text}",
+                message="Unable to get json response - {}, Original Response: {}".format(str(e), raw_response.text),
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
@@ -136,7 +135,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         model_response.created = completion_response.get("created", 0)
         setattr(model_response, "usage", Usage(**completion_response.get("usage", {})))
 
-        model_response.choices = self._transform_choices(
+        model_response.choices = self._transform_choices(  # type: ignore
             choices=completion_response["choices"],
             json_mode=json_mode,
         )
@@ -161,13 +160,13 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.sent_role = False
-        self._pending_chunk: ModelResponseStream | None = None
+        self._pending_chunk: Optional[ModelResponseStream] = None
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
-        result: Final = super().chunk_parser(chunk)
+        result = super().chunk_parser(chunk)
         if not self.sent_role and result.choices:
-            delta: Final = result.choices[0].delta
-            finish_reason: Final = result.choices[0].finish_reason
+            delta = result.choices[0].delta
+            finish_reason = result.choices[0].finish_reason
 
             # If this is both the first chunk AND the final chunk (has finish_reason),
             # we need to split it into two chunks to match OpenAI format
@@ -187,7 +186,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
                     ],
                 )
                 # Modify current chunk to be the first chunk with role but no finish_reason
-                result.choices[0].finish_reason = None
+                result.choices[0].finish_reason = None  # type: ignore[assignment]
                 delta.role = "assistant"
                 # Ensure content is empty string for first chunk, not None
                 if delta.content is None:
@@ -207,7 +206,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     def __next__(self):
         # First return any pending chunk from a previous split
         if self._pending_chunk is not None:
-            chunk: Final = self._pending_chunk
+            chunk = self._pending_chunk
             self._pending_chunk = None
             return chunk
         return super().__next__()
@@ -215,7 +214,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     async def __anext__(self):
         # First return any pending chunk from a previous split
         if self._pending_chunk is not None:
-            chunk: Final = self._pending_chunk
+            chunk = self._pending_chunk
             self._pending_chunk = None
             return chunk
         return await super().__anext__()

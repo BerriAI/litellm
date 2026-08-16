@@ -4,7 +4,7 @@ Calls Firecrawl's /search endpoint to search the web.
 Firecrawl API Reference: https://docs.firecrawl.dev/api-reference/endpoint/search
 """
 
-from typing import Final, TypedDict
+from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
 
@@ -30,14 +30,14 @@ class FirecrawlSearchRequest(_FirecrawlSearchRequestRequired, total=False):
     """
 
     limit: int  # Optional - maximum number of results to return (default 5, max 100)
-    sources: list[str]  # Optional - sources to search ('web', 'images', 'news'), default ['web']
-    categories: list[dict[str, str]]  # Optional - categories to filter by (github, research, pdf)
+    sources: List[str]  # Optional - sources to search ('web', 'images', 'news'), default ['web']
+    categories: List[Dict[str, str]]  # Optional - categories to filter by (github, research, pdf)
     tbs: str  # Optional - time-based search parameter
     location: str  # Optional - location parameter for geo-targeting
     country: str  # Optional - ISO country code (default 'US')
     timeout: int  # Optional - timeout in milliseconds (default 60000)
     ignoreInvalidURLs: bool  # Optional - exclude invalid URLs (default false)
-    scrapeOptions: dict  # Optional - options for scraping search results
+    scrapeOptions: Dict  # Optional - options for scraping search results
 
 
 class FirecrawlSearchConfig(BaseSearchConfig):
@@ -49,11 +49,11 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        headers: Dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Validate environment and return headers.
         """
@@ -72,9 +72,9 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
-        data: dict | list[dict] | None = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -90,10 +90,10 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: str | list[str],
+        query: Union[str, List[str]],
         optional_params: dict,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Transform Search request to Firecrawl API format.
 
@@ -117,7 +117,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
             # Firecrawl only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: Final[FirecrawlSearchRequest] = {
+        request_data: FirecrawlSearchRequest = {
             "query": query,
         }
 
@@ -129,7 +129,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
             request_data["country"] = optional_params["country"]
 
         # Convert to dict before dynamic key assignments
-        result_data: Final = dict(request_data)
+        result_data = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -170,12 +170,12 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json = raw_response.json()
 
         # Transform results to SearchResult objects
-        results: Final = []
+        results = []
 
-        data: Final = response_json.get("data", {})
+        data = response_json.get("data", {})
 
         if isinstance(data, list):
             # Self-hosted Firecrawl (v1) format: data is a flat list of results
@@ -191,7 +191,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
                 results.append(search_result)
         elif isinstance(data, dict):
             # Firecrawl Cloud (v2) format: data is a dict with web/news keys
-            web_results: Final = data.get("web", [])
+            web_results = data.get("web", [])
 
             for result in web_results:
                 # Use markdown if available, otherwise fall back to description
@@ -207,7 +207,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
                 results.append(search_result)
 
             # Process news results if available (they have date field)
-            news_results: Final = data.get("news", [])
+            news_results = data.get("news", [])
             for result in news_results:
                 snippet = result.get("markdown") or result.get("snippet", "")
 

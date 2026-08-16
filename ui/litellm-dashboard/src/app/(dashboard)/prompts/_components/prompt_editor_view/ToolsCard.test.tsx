@@ -71,7 +71,7 @@ describe("ToolsCard", () => {
     const mockOnRemoveTool = vi.fn();
     render(<ToolsCard {...defaultProps} tools={mockTools} onRemoveTool={mockOnRemoveTool} />);
 
-    const removeButtons = screen.getAllByRole("button", { name: /remove/i });
+    const removeButtons = screen.getAllByRole("button", { name: "" });
     act(() => {
       fireEvent.click(removeButtons[0]);
     });

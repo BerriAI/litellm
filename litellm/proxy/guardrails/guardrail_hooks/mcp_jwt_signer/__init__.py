@@ -1,6 +1,6 @@
 """MCP JWT Signer guardrail — built-in LiteLLM guardrail for zero trust MCP auth."""
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -13,27 +13,27 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> MCPJWTSigner:
     import litellm
 
-    guardrail_name: Final = guardrail.get("guardrail_name")
+    guardrail_name = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("MCPJWTSigner guardrail requires a guardrail_name")
 
-    mode: Final = litellm_params.mode
+    mode = litellm_params.mode
     if mode != "pre_mcp_call":
         raise ValueError(
             f"MCPJWTSigner guardrail '{guardrail_name}' has mode='{mode}' but must use "
             "mode='pre_mcp_call'. JWT injection only fires for MCP tool calls."
         )
 
-    optional_params: Final = getattr(litellm_params, "optional_params", None)
+    optional_params = getattr(litellm_params, "optional_params", None)
 
-    def _get(key):
+    def _get(key):  # type: ignore[no-untyped-def]
         if optional_params is not None:
-            v: Final = getattr(optional_params, key, None)
+            v = getattr(optional_params, key, None)
             if v is not None:
                 return v
         return getattr(litellm_params, key, None)
 
-    signer: Final = MCPJWTSigner(
+    signer = MCPJWTSigner(
         guardrail_name=guardrail_name,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
@@ -67,16 +67,16 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return signer
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.MCP_JWT_SIGNER.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {
+guardrail_class_registry = {
     SupportedGuardrailIntegrations.MCP_JWT_SIGNER.value: MCPJWTSigner,
 }
 
 __all__ = [
     "MCPJWTSigner",
-    "get_mcp_jwt_signer",
     "initialize_guardrail",
+    "get_mcp_jwt_signer",
 ]

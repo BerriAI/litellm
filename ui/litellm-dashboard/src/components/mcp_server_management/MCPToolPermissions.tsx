@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool, MCPServer } from "../mcp_tools/types";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { Text } from "@tremor/react";
+import { Spin, Radio } from "antd";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
 import { classifyToolOp } from "../../utils/mcpToolCrudClassification";
@@ -121,27 +121,22 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b bg-white rounded-t-lg">
               <div>
-                <p className="text-sm font-semibold text-gray-900">{serverName}</p>
-                {server.description && <p className="text-sm text-gray-500">{server.description}</p>}
+                <Text className="font-semibold text-gray-900">{serverName}</Text>
+                {server.description && <Text className="text-sm text-gray-500">{server.description}</Text>}
               </div>
               <div className="flex items-center gap-3">
                 {!disabled && tools.length > 0 && (
-                  <RadioGroup
+                  <Radio.Group
                     value={viewMode}
-                    onValueChange={(next) =>
-                      setViewModes((prev) => ({ ...prev, [server.server_id]: next as "crud" | "flat" }))
-                    }
-                    className="flex w-auto items-center gap-4"
-                  >
-                    <label className="flex items-center gap-2 text-sm">
-                      <RadioGroupItem value="crud" />
-                      Risk Groups
-                    </label>
-                    <label className="flex items-center gap-2 text-sm">
-                      <RadioGroupItem value="flat" />
-                      Flat List
-                    </label>
-                  </RadioGroup>
+                    onChange={(e) => setViewModes((prev) => ({ ...prev, [server.server_id]: e.target.value }))}
+                    size="small"
+                    optionType="button"
+                    buttonStyle="solid"
+                    options={[
+                      { label: "Risk Groups", value: "crud" },
+                      { label: "Flat List", value: "flat" },
+                    ]}
+                  />
                 )}
                 {!disabled && (
                   <>
@@ -171,16 +166,16 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {/* Loading */}
               {isLoading && (
                 <div className="flex items-center justify-center py-8">
-                  <UiLoadingSpinner />
-                  <p className="ml-3 text-sm text-gray-500">Loading tools...</p>
+                  <Spin size="large" />
+                  <Text className="ml-3 text-gray-500">Loading tools...</Text>
                 </div>
               )}
 
               {/* Error */}
               {error && !isLoading && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-center">
-                  <p className="text-sm text-red-600 font-medium">Unable to load tools</p>
-                  <p className="text-sm text-red-500 mt-1">{error}</p>
+                  <Text className="text-red-600 font-medium">Unable to load tools</Text>
+                  <Text className="text-sm text-red-500 mt-1">{error}</Text>
                 </div>
               )}
 
@@ -203,7 +198,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                       <div key={tool.name} className="flex items-start gap-2">
                         <input
                           type="checkbox"
-                          aria-label={tool.name}
                           checked={isSelected}
                           onChange={() => {
                             if (disabled) return;
@@ -217,8 +211,8 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <p className="text-sm font-medium text-gray-900">{tool.name}</p>
-                            <p className="text-sm text-gray-500">- {tool.description || "No description"}</p>
+                            <Text className="font-medium text-gray-900">{tool.name}</Text>
+                            <Text className="text-sm text-gray-500">- {tool.description || "No description"}</Text>
                           </div>
                         </div>
                       </div>
@@ -230,7 +224,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {/* Empty State */}
               {!isLoading && !error && tools.length === 0 && (
                 <div className="text-center py-6">
-                  <p className="text-sm text-gray-500">No tools available</p>
+                  <Text className="text-gray-500">No tools available</Text>
                 </div>
               )}
             </div>

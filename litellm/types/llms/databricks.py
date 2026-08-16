@@ -1,27 +1,34 @@
-from typing import Any, Literal
+import json
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 from typing_extensions import (
+    Protocol,
     Required,
+    Self,
     TypedDict,
+    TypeGuard,
+    get_origin,
+    override,
+    runtime_checkable,
 )
 
-from .openai import ChatCompletionUsageBlock
+from .openai import ChatCompletionToolCallChunk, ChatCompletionUsageBlock
 
 
 class GenericStreamingChunk(TypedDict, total=False):
     text: Required[str]
     is_finished: Required[bool]
-    finish_reason: Required[str | None]
-    logprobs: BaseModel | None
-    original_chunk: BaseModel | None
-    usage: BaseModel | None
+    finish_reason: Required[Optional[str]]
+    logprobs: Optional[BaseModel]
+    original_chunk: Optional[BaseModel]
+    usage: Optional[BaseModel]
 
 
 class DatabricksTextContent(TypedDict, total=False):
     type: Literal["text"]
     text: Required[str]
-    citations: list[dict[str, Any]] | None
+    citations: Optional[List[Dict[str, Any]]]
 
 
 class DatabricksReasoningSummary(TypedDict):
@@ -32,18 +39,18 @@ class DatabricksReasoningSummary(TypedDict):
 
 class DatabricksReasoningContent(TypedDict, total=False):
     type: Literal["reasoning"]
-    summary: Required[list[DatabricksReasoningSummary]]
-    citations: list[dict[str, Any]] | None
+    summary: Required[List[DatabricksReasoningSummary]]
+    citations: Optional[List[Dict[str, Any]]]
 
 
-AllDatabricksContentListValues = DatabricksTextContent | DatabricksReasoningContent
+AllDatabricksContentListValues = Union[DatabricksTextContent, DatabricksReasoningContent]
 
-AllDatabricksContentValues = str | list[AllDatabricksContentListValues]
+AllDatabricksContentValues = Union[str, List[AllDatabricksContentListValues]]
 
 
 class DatabricksFunction(TypedDict, total=False):
     name: Required[str]
-    description: dict | str
+    description: Union[dict, str]
     parameters: dict
     strict: bool
 
@@ -56,13 +63,13 @@ class DatabricksTool(TypedDict):
 class DatabricksMessage(TypedDict, total=False):
     role: Required[str]
     content: Required[AllDatabricksContentValues]
-    tool_calls: list[DatabricksTool] | None
+    tool_calls: Optional[List[DatabricksTool]]
 
 
 class DatabricksChoice(TypedDict, total=False):
     index: Required[int]
     message: Required[DatabricksMessage]
-    finish_reason: Required[str | None]
+    finish_reason: Required[Optional[str]]
     extra_fields: str
 
 
@@ -71,5 +78,5 @@ class DatabricksResponse(TypedDict):
     object: str
     created: int
     model: str
-    choices: list[DatabricksChoice]
+    choices: List[DatabricksChoice]
     usage: ChatCompletionUsageBlock

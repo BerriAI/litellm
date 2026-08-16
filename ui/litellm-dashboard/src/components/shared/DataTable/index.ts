@@ -1,9 +1,8 @@
 import "./columnMeta";
 
-export { DataTable } from "./DataTable";
+export { DataTable, DataTableConfigError, validateDataTableConfig } from "./DataTable";
 export { DataTableFilterDrawer, DataTableFilterField, type FilterDraft } from "./DataTableFilterDrawer";
 export { DataTablePagination, DEFAULT_PAGE_SIZE_OPTIONS } from "./DataTablePagination";
-export { createSelectionColumn } from "./DataTableSelectionColumn";
 export { DataTableToolbar } from "./DataTableToolbar";
 export { DataTableViewOptions } from "./DataTableViewOptions";
 export {
@@ -17,7 +16,6 @@ export type {
   ColumnPinnedSide,
   ColumnResizeMode,
   DataTableProps,
-  DataTableResolvedProps,
   DataTableSize,
   FilterMode,
   PaginationMode,

@@ -12,11 +12,10 @@ import sys
 
 # ruff: noqa: T201
 from dataclasses import dataclass
+from typing import List, Optional, Tuple
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
-
-from typing import Final
 
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.config import ComplexityTier
@@ -29,14 +28,14 @@ class EvalCase:
     prompt: str
     expected_tier: ComplexityTier
     description: str
-    system_prompt: str | None = None
+    system_prompt: Optional[str] = None
     # Allow some flexibility - if actual tier is in acceptable_tiers, still passes
-    acceptable_tiers: list[ComplexityTier] | None = None
+    acceptable_tiers: Optional[List[ComplexityTier]] = None
 
 
 # ─── Evaluation Dataset ───
 
-EVAL_CASES: Final[list[EvalCase]] = [
+EVAL_CASES: List[EvalCase] = [
     # === SIMPLE tier cases ===
     EvalCase(
         prompt="Hello!",
@@ -231,7 +230,7 @@ EVAL_CASES: Final[list[EvalCase]] = [
 ]
 
 
-def run_eval() -> tuple[int, int, list[dict]]:
+def run_eval() -> Tuple[int, int, List[dict]]:
     """
     Run the evaluation suite.
 
@@ -239,15 +238,15 @@ def run_eval() -> tuple[int, int, list[dict]]:
         Tuple of (passed, total, failures)
     """
     # Create router with default config
-    mock_router: Final = MagicMock()
-    router: Final = ComplexityRouter(
+    mock_router = MagicMock()
+    router = ComplexityRouter(
         model_name="eval-router",
         litellm_router_instance=mock_router,
     )
 
     passed = 0
-    total: Final = len(EVAL_CASES)
-    failures: Final = []
+    total = len(EVAL_CASES)
+    failures = []
 
     print("=" * 70)
     print("COMPLEXITY ROUTER EVALUATION")
@@ -313,7 +312,7 @@ def main():
     passed, total, failures = run_eval()
 
     # Exit with error code if too many failures
-    pass_rate: Final = passed / total
+    pass_rate = passed / total
     if pass_rate < 0.80:
         print(f"\n❌ EVAL FAILED: Pass rate {pass_rate:.1%} is below 80% threshold")
         sys.exit(1)

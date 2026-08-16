@@ -1,5 +1,6 @@
-import { Button } from "@/components/ui/button";
-import { Inbox } from "lucide-react";
+import { Empty, Typography, Button } from "antd";
+
+const { Title, Paragraph } = Typography;
 
 interface CloudZeroEmptyPlaceholderProps {
   startCreation: () => void;
@@ -7,17 +8,22 @@ interface CloudZeroEmptyPlaceholderProps {
 
 export default function CloudZeroEmptyPlaceholder({ startCreation }: CloudZeroEmptyPlaceholderProps) {
   return (
-    <div className="mx-auto mt-8 max-w-2xl rounded-lg border border-dashed border-border bg-card p-12 text-center">
-      <div className="flex flex-col items-center gap-2">
-        <Inbox className="size-10 text-muted-foreground" aria-hidden />
-        <h4 className="text-base font-semibold">No CloudZero Integration Found</h4>
-        <p className="mx-auto max-w-md text-sm text-muted-foreground">
-          Connect your CloudZero account to start tracking and analyzing your cloud costs directly from LiteLLM.
-        </p>
-        <Button size="lg" onClick={startCreation} className="mt-4">
+    <div className="bg-white p-12 rounded-lg border border-dashed border-gray-300 text-center max-w-2xl mx-auto mt-8">
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description={
+          <div className="space-y-2">
+            <Title level={4}>No CloudZero Integration Found</Title>
+            <Paragraph type="secondary" className="max-w-md mx-auto">
+              Connect your CloudZero account to start tracking and analyzing your cloud costs directly from LiteLLM.
+            </Paragraph>
+          </div>
+        }
+      >
+        <Button type="primary" size="large" onClick={startCreation} className="flex items-center gap-2 mx-auto mt-4">
           Add CloudZero Integration
         </Button>
-      </div>
+      </Empty>
     </div>
   );
 }

@@ -1,11 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { MessageType } from "@/components/chat_ui/types";
 import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
-import { buildMcpToolBlocks } from "@/components/llm_calls/mcp_tool_blocks";
-import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 
 export async function makeAnthropicMessagesRequest(
   messages: MessageType[],
@@ -21,11 +18,8 @@ export async function makeAnthropicMessagesRequest(
   vector_store_ids?: string[],
   guardrails?: string[],
   policies?: string[],
-  selectedMCPServers?: string[],
+  selectedMCPTools?: string[],
   customBaseUrl?: string,
-  mcpServers?: MCPServer[],
-  mcpServerToolRestrictions?: Record<string, string[]>,
-  mcpToolsets?: MCPToolset[],
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -64,13 +58,6 @@ export async function makeAnthropicMessagesRequest(
       litellm_trace_id: traceId,
     };
 
-    const tools = buildMcpToolBlocks({
-      selectedMCPServers,
-      mcpServers,
-      mcpToolsets,
-      mcpServerToolRestrictions,
-    });
-    if (tools.length > 0) requestBody.tools = tools;
     if (vector_store_ids) requestBody.vector_store_ids = vector_store_ids;
     if (guardrails) requestBody.guardrails = guardrails;
     if (policies) requestBody.policies = policies;
@@ -110,7 +97,6 @@ export async function makeAnthropicMessagesRequest(
           completionTokens: usage.output_tokens,
           promptTokens: usage.input_tokens,
           totalTokens: usage.input_tokens + usage.output_tokens,
-          ...extractPromptCacheTokens(usage),
         };
         onUsageData(usageData);
       }

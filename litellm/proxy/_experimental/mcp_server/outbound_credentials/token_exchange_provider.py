@@ -9,8 +9,6 @@ call), so it needs no lazy wrapper.
 
 from __future__ import annotations
 
-from typing import Final
-
 import httpx
 
 from litellm._logging import verbose_logger
@@ -31,7 +29,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger
 
 # RFC 6749 5.2 error codes that mean the gateway's own request/credentials are wrong (not the
 # caller's subject token), so they surface as a 500 the caller can't fix by re-authenticating.
-_GATEWAY_FAULT_OAUTH_ERRORS: Final = frozenset(
+_GATEWAY_FAULT_OAUTH_ERRORS = frozenset(
     {"invalid_client", "unauthorized_client", "unsupported_grant_type", "invalid_target", "invalid_scope"}
 )
 
@@ -46,13 +44,13 @@ def _oauth_error_fields(response: httpx.Response) -> tuple[str | None, str | Non
     it can carry IdP internals and must never reach the caller.
     """
     try:
-        body: Final[object] = response.json()
+        body: object = response.json()
     except Exception:  # noqa: BLE001
         return None, None
     if not isinstance(body, dict):
         return None, None
-    code: Final = body.get("error")
-    claims: Final = body.get("claims")
+    code = body.get("error")
+    claims = body.get("claims")
     return (
         code if isinstance(code, str) else None,
         claims if isinstance(claims, str) and claims else None,
@@ -71,14 +69,14 @@ async def _post_exchange_endpoint(
     # object and the exchanger validates each field, so the untyped boundary is contained here.
     # A 4xx is the IdP rejecting the subject (non-retryable -> 401 via SubjectTokenRejected); any
     # other failure is a miss (-> None -> upstream_unavailable -> 503), matching v1's fail-closed.
-    headers: Final = {"Accept": "application/json", **client_auth_headers}
+    headers = {"Accept": "application/json", **client_auth_headers}
     try:
-        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
-        response: Final = await client.post(url, headers=headers, data=form)  # pyright: ignore
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
+        response = await client.post(url, headers=headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
-        parsed: Final[object] = response.json()  # pyright: ignore
+        parsed: object = response.json()  # pyright: ignore
     except httpx.HTTPStatusError as status_err:
-        status_code: Final = status_err.response.status_code
+        status_code = status_err.response.status_code
         if 400 <= status_code < 500:
             oauth_error, claims = _oauth_error_fields(status_err.response)
             if oauth_error in _GATEWAY_FAULT_OAUTH_ERRORS:

@@ -2087,9 +2087,6 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def async_failure_handler(self, *args, **kwargs):
             return None
 
-        async def dispatch_failure_handlers(self, *args, **kwargs):
-            return None
-
     async def failing_make_call(client=None, **kwargs):
         raise VertexAIError(status_code=400, message="bad input", headers={})
 
@@ -2276,8 +2273,82 @@ def test_is_gemini_3_or_newer():
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
 
 
-def _tool_call_messages(tool_call_id: str):
-    return [
+def test_forward_gemini_function_call_id_vertex_vs_google_ai_studio():
+    """Vertex AI rejects `id` on function_call/function_response; Google AI Studio accepts it on Gemini 3.5+."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    model = "gemini-3.5-flash"
+    assert (
+        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai") is False
+    )
+    assert (
+        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai_beta")
+        is False
+    )
+    assert VertexGeminiConfig._forward_gemini_function_call_id(model, "gemini") is True
+    assert VertexGeminiConfig._forward_gemini_function_call_id(model, None) is False
+    assert (
+        VertexGeminiConfig._forward_gemini_function_call_id(
+            "gemini-2.5-flash", "gemini"
+        )
+        is False
+    )
+
+
+def test_vertex_ai_gemini_35_tool_calls_omit_function_call_id():
+    """Regression: Vertex must not send OpenAI tool_call id inside Gemini function_call parts."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {"role": "user", "content": "Explore this directory"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_50e7e0fe0989464a89f188eda443",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"filePath": "/tmp"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_50e7e0fe0989464a89f188eda443",
+            "content": "ok",
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages,
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+    )
+
+    for content in contents:
+        for part in content.get("parts", []):
+            fc = part.get("function_call")
+            if fc is not None:
+                assert "id" not in fc, f"Vertex payload must not include id: {fc}"
+            fr = part.get("function_response")
+            if fr is not None:
+                assert "id" not in fr, f"Vertex payload must not include id: {fr}"
+
+
+def test_google_ai_studio_gemini_35_tool_calls_include_function_call_id():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    tool_call_id = "call_50e7e0fe0989464a89f188eda443"
+    messages = [
         {"role": "user", "content": "hi"},
         {
             "role": "assistant",
@@ -2300,8 +2371,12 @@ def _tool_call_messages(tool_call_id: str):
         },
     ]
 
+    contents = _gemini_convert_messages_with_history(
+        messages=messages,
+        model="gemini-3.5-flash",
+        custom_llm_provider="gemini",
+    )
 
-def _collect_function_call_ids(contents):
     function_call_ids = []
     function_response_ids = []
     for content in contents:
@@ -2312,120 +2387,9 @@ def _collect_function_call_ids(contents):
             fr = part.get("function_response")
             if fr is not None:
                 function_response_ids.append(fr.get("id"))
-    return function_call_ids, function_response_ids
 
-
-def test_forward_gemini_function_call_id_is_gated_on_model_version_only():
-    """Gemini 3+ takes `id` on Vertex AI and Google AI Studio alike; older models reject it."""
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
-
-    assert VertexGeminiConfig._forward_gemini_function_call_id("gemini-3.5-flash") is True
-    assert VertexGeminiConfig._forward_gemini_function_call_id("gemini-3-pro") is True
-    assert VertexGeminiConfig._forward_gemini_function_call_id("gemini-2.5-flash") is False
-    assert VertexGeminiConfig._forward_gemini_function_call_id("gemini-2.0-flash") is False
-
-
-@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "vertex_ai_beta", "gemini"])
-def test_gemini_35_tool_calls_include_function_call_id(custom_llm_provider):
-    """Vertex AI accepts `id` on Gemini 3+, so it must be sent there and not just on AI Studio.
-
-    Both parts are asserted together: Vertex pairs a result to its call by id, so emitting one
-    side without the other would break strict tool-call matching.
-    """
-    from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
-    )
-
-    tool_call_id = "call_50e7e0fe0989464a89f188eda443"
-    contents = _gemini_convert_messages_with_history(
-        messages=_tool_call_messages(tool_call_id),
-        model="gemini-3.5-flash",
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    assert _collect_function_call_ids(contents) == ([tool_call_id], [tool_call_id])
-
-
-@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
-def test_gemini_25_tool_calls_omit_function_call_id(custom_llm_provider):
-    """Regression: models older than Gemini 3 reject `id`, so the key must be absent entirely."""
-    from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
-    )
-
-    contents = _gemini_convert_messages_with_history(
-        messages=_tool_call_messages("call_50e7e0fe0989464a89f188eda443"),
-        model="gemini-2.5-flash",
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    for content in contents:
-        for part in content.get("parts", []):
-            fc = part.get("function_call")
-            if fc is not None:
-                assert "id" not in fc, f"gemini-2.5 payload must not include id: {fc}"
-            fr = part.get("function_response")
-            if fr is not None:
-                assert "id" not in fr, f"gemini-2.5 payload must not include id: {fr}"
-
-
-def test_vertex_ai_forwarded_function_call_id_strips_thought_signature_suffix():
-    """The thought signature rides along on the OpenAI id but must not reach Vertex.
-
-    Vertex now sees this code path for the first time, so the suffix has to be stripped here too.
-    """
-    from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
-    )
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        THOUGHT_SIGNATURE_SEPARATOR,
-    )
-
-    bare_id = "call_50e7e0fe0989464a89f188eda443"
-    contents = _gemini_convert_messages_with_history(
-        messages=_tool_call_messages(f"{bare_id}{THOUGHT_SIGNATURE_SEPARATOR}sig123"),
-        model="gemini-3.5-flash",
-        custom_llm_provider="vertex_ai",
-    )
-
-    _, function_response_ids = _collect_function_call_ids(contents)
-    assert function_response_ids == [bare_id]
-
-
-@pytest.mark.parametrize("model", ["gemini-3.5-flash", "gemini-2.5-flash"])
-def test_tool_response_without_matching_tool_call_is_rejected(model):
-    """An unpairable tool result must raise, not ship a functionResponse with no matching call."""
-    from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
-    )
-
-    messages = [
-        {"role": "user", "content": "hi"},
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call_50e7e0fe0989464a89f188eda443",
-                    "type": "function",
-                    "function": {
-                        "name": "read",
-                        "arguments": '{"filePath": "/tmp"}',
-                    },
-                }
-            ],
-        },
-        {"role": "tool", "content": "ok"},
-    ]
-
-    with pytest.raises(Exception, match="Missing corresponding tool call"):
-        _gemini_convert_messages_with_history(
-            messages=messages,
-            model=model,
-            custom_llm_provider="vertex_ai",
-        )
+    assert function_call_ids == [tool_call_id]
+    assert function_response_ids == [tool_call_id]
 
 
 def test_reasoning_effort_maps_to_thinking_level_gemini_3():
@@ -5440,116 +5404,3 @@ def test_process_candidates_merges_thought_signatures_and_server_side_tools():
     fields = model_response.choices[-1].message.provider_specific_fields
     assert fields["thought_signatures"] == ["sig-text"]
     assert fields["server_side_tool_invocations"][0]["id"] == "tool-1"
-
-
-def _accumulating_gemini_iterator():
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        ModelResponseIterator,
-    )
-
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
-    )
-    iterator.chunk_type = "accumulated_json"
-    return iterator
-
-
-def test_accumulated_json_chunk_multi_value_buffer_does_not_wedge():
-    """Two complete Gemini objects buffered together must both surface.
-
-    A whole-buffer json.loads raises "Extra data" on concatenated values and, since
-    the buffer was never reset on failure, returned None forever while growing without
-    bound. Peeling one value from the front keeps the remainder for the next call.
-    """
-    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
-    iterator = _accumulating_gemini_iterator()
-
-    first = iterator.handle_accumulated_json_chunk(chunk=obj + obj)
-    assert first is not None
-    assert first.choices[0].delta.content == "a"
-
-    second = iterator.handle_accumulated_json_chunk(chunk="")
-    assert second is not None
-    assert second.choices[0].delta.content == "a"
-
-    assert iterator.accumulated_json.strip() == ""
-
-
-def test_accumulated_json_end_of_stream_drains_all_buffered_values():
-    """End of stream must drain every buffered value and then terminate.
-
-    With concatenated values a whole-buffer parse never succeeds, so __next__ kept
-    returning None without shrinking the buffer - an unrecoverable per-request spin.
-    The bounded loop asserts the iterator both surfaces all values and terminates.
-    """
-    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
-    iterator = _accumulating_gemini_iterator()
-    iterator.response_iterator = iter([])
-    iterator.accumulated_json = obj + obj + obj
-
-    out = []
-    terminated = False
-    for _ in range(100):
-        try:
-            chunk = iterator.__next__()
-        except StopIteration:
-            terminated = True
-            break
-        if chunk is not None:
-            out.append(chunk)
-
-    assert terminated, "iterator did not terminate - accumulated buffer wedged"
-    assert len(out) == 3
-    assert iterator.accumulated_json.strip() == ""
-
-
-def test_accumulated_json_end_of_stream_surfaces_leading_value_before_truncated_tail():
-    """A complete leading value must survive a truncated trailing value at end of stream.
-
-    The mid-stream perf guard only inspects the buffer's last byte, so a complete leading
-    object followed by a truncated one (a server that cut the stream mid-object, last byte
-    not a closer) would keep the guard from ever parsing and drop the complete value. At end
-    of stream the drain ignores that guard, surfaces the complete value, and discards only
-    the truncated tail.
-    """
-    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
-    iterator = _accumulating_gemini_iterator()
-    iterator.response_iterator = iter([])
-    iterator.accumulated_json = obj + '{"candidates":'
-
-    out = []
-    for _ in range(100):
-        try:
-            chunk = iterator.__next__()
-        except StopIteration:
-            break
-        if chunk is not None:
-            out.append(chunk)
-
-    assert len(out) == 1
-    assert out[0].choices[0].delta.content == "a"
-
-
-def test_accumulated_json_skips_non_dict_leading_value():
-    """A non-dict value at the front must not block the dict values behind it.
-
-    raw_decode advances past a decoded value, so a leading non-dict (a JSON array or scalar,
-    which Gemini never emits but a malformed stream could) must be consumed and skipped. If
-    the drain stopped on it, the trailing objects would be lost at end of stream.
-    """
-    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
-    iterator = _accumulating_gemini_iterator()
-    iterator.response_iterator = iter([])
-    iterator.accumulated_json = "[1, 2]" + obj
-
-    out = []
-    for _ in range(100):
-        try:
-            chunk = iterator.__next__()
-        except StopIteration:
-            break
-        if chunk is not None:
-            out.append(chunk)
-
-    assert len(out) == 1
-    assert out[0].choices[0].delta.content == "a"

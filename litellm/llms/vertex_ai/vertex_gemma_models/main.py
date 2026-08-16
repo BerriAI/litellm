@@ -19,10 +19,9 @@ The API expects a custom endpoint URL format:
 https://{ENDPOINT_NUMBER}.{location}-{REGION_NUMBER}.prediction.vertexai.goog/v1/projects/{PROJECT_ID}/locations/{location}/endpoints/{ENDPOINT_ID}:predict
 """
 
-from collections.abc import Callable
-from typing import Final
+from typing import Callable, Optional, Union
 
-import httpx
+import httpx  # type: ignore
 
 from litellm.utils import ModelResponse
 
@@ -42,11 +41,11 @@ class VertexAIGemmaModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: dict | None,
-        timeout: float | httpx.Timeout,
+        headers: Optional[dict],
+        timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,
@@ -86,10 +85,10 @@ class VertexAIGemmaModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            gemma_transformation: Final = VertexGemmaConfig()
+            gemma_transformation = VertexGemmaConfig()
 
             ## CONSTRUCT API BASE
-            stream: Final[bool] = optional_params.get("stream", False) or False
+            stream: bool = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
 
             # If api_base is not provided, it should be set as an environment variable

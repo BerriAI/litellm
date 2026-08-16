@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
@@ -34,15 +34,15 @@ else:
 class GoogleImageGenConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
 
-    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Google AI Imagen API supported parameters
         https://ai.google.dev/gemini-api/docs/imagen
         """
-        supported_params: Final = ["n", "size"]
+        supported_params = ["n", "size"]
         if is_gemini_image_model(model):
             supported_params.extend(["imageConfig", "tools", "web_search_options"])
-        return supported_params
+        return supported_params  # type: ignore[return-value]
 
     def map_openai_params(
         self,
@@ -63,12 +63,12 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -93,13 +93,13 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
-        final_api_key: Final[str | None] = api_key or get_secret_str("GEMINI_API_KEY")
+        final_api_key: Optional[str] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
 
@@ -134,7 +134,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         # For Gemini Flash Image Preview models, use standard Gemini format
         if is_gemini_image_model(model):
-            request_body: Final[dict] = {
+            request_body: dict = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": get_gemini_image_generation_config(
                     model=model,
@@ -153,7 +153,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 GeminiImageGenerationParameters,
             )
 
-            request_body_obj: Final[GeminiImageGenerationRequest] = GeminiImageGenerationRequest(
+            request_body_obj: GeminiImageGenerationRequest = GeminiImageGenerationRequest(
                 instances=[GeminiImageGenerationInstance(prompt=prompt)],
                 parameters=GeminiImageGenerationParameters(**optional_params),
             )
@@ -172,14 +172,14 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ImageResponse:
         """
         Transform Google AI Imagen response to litellm ImageResponse format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -193,7 +193,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         # Handle different response formats based on model
         if is_gemini_image_model(model):
             # Gemini Flash Image Preview models return in candidates format
-            candidates: Final = response_data.get("candidates", [])
+            candidates = response_data.get("candidates", [])
             for candidate in candidates:
                 content = candidate.get("content", {})
                 parts = content.get("parts", [])
@@ -216,12 +216,12 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             # Extract usage metadata for Gemini models
             if "usageMetadata" in response_data:
                 model_response.usage = transform_gemini_image_usage(response_data["usageMetadata"])
-            web_search_requests: Final = get_gemini_image_web_search_requests(response_data)
+            web_search_requests = get_gemini_image_web_search_requests(response_data)
             if web_search_requests and model_response.usage is not None:
                 setattr(model_response.usage, "web_search_requests", web_search_requests)
         else:
             # Original Imagen format - predictions with generated images
-            predictions: Final = response_data.get("predictions", [])
+            predictions = response_data.get("predictions", [])
             for prediction in predictions:
                 # Google AI returns base64 encoded images in the prediction
                 model_response.data.append(

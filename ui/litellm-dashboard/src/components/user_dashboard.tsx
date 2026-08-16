@@ -1,11 +1,18 @@
 "use client";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
+import { Col, Grid } from "@tremor/react";
 import { jwtDecode } from "jwt-decode";
 import React, { useEffect, useState } from "react";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { KeyResponse, Team } from "./key_team_helpers/key_list";
-import { effectiveSessionRole } from "@/utils/roles";
-import { getProxyBaseUrl, keyInfoCall, modelAvailableCall, Organization, userGetInfoV2 } from "./networking";
+import {
+  getProxyBaseUrl,
+  getProxyUISettings,
+  keyInfoCall,
+  modelAvailableCall,
+  Organization,
+  userGetInfoV2,
+} from "./networking";
 import CreateKey, { CreateKeyPrefillData } from "./organisms/create_key_button";
 import { VirtualKeysTable } from "./VirtualKeysPage/VirtualKeysTable";
 
@@ -42,6 +49,12 @@ interface UserDashboardProps {
   prefillData?: CreateKeyPrefillData;
 }
 
+type TeamInterface = {
+  models: any[];
+  team_id: null;
+  team_alias: string;
+};
+
 const UserDashboard: React.FC<UserDashboardProps> = ({
   userID,
   userRole,
@@ -59,12 +72,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   prefillData,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
-  const [currentOrg] = useState<Organization | null>(null);
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
 
   const token = getCookie("token");
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [selectedTeam] = useState<any | null>(null);
+  const [teamSpend, setTeamSpend] = useState<number | null>(null);
+  const [userModels, setUserModels] = useState<string[]>([]);
+  const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
+  const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
 
   // Clear session storage on page unload so next load fetches fresh data.
   // Note: MCP auth tokens are persistent and should not be cleared on page refresh
@@ -81,6 +97,32 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
+  function formatUserRole(userRole: string) {
+    if (!userRole) {
+      return "Undefined Role";
+    }
+    switch (userRole.toLowerCase()) {
+      case "app_owner":
+        return "App Owner";
+      case "demo_app_owner":
+        return "App Owner";
+      case "app_admin":
+        return "Admin";
+      case "proxy_admin":
+        return "Admin";
+      case "proxy_admin_viewer":
+        return "Admin Viewer";
+      case "app_user":
+        return "App User";
+      case "internal_user":
+        return "Internal User";
+      case "internal_user_viewer":
+        return "Internal Viewer";
+      default:
+        return "Unknown Role";
+    }
+  }
+
   // console.log(`selectedTeam: ${Object.entries(selectedTeam)}`);
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
@@ -94,7 +136,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
         // check if userRole is defined
         if (decoded.user_role) {
-          setUserRole(effectiveSessionRole(decoded.user_role));
+          const formattedUserRole = formatUserRole(decoded.user_role);
+          setUserRole(formattedUserRole);
         } else {
         }
 
@@ -106,9 +149,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
     if (userID && accessToken && userRole && !userSpendData) {
       const cachedUserModels = sessionStorage.getItem("userModels" + userID);
-      if (!cachedUserModels) {
+      if (cachedUserModels) {
+        setUserModels(JSON.parse(cachedUserModels));
+      } else {
         const fetchData = async () => {
           try {
+            const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
+            setProxySettings(proxy_settings);
+
             const response = await userGetInfoV2(accessToken, userID);
 
             setUserSpendData(response);
@@ -118,6 +166,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             const model_available = await modelAvailableCall(accessToken, userID, userRole);
             // loop through model_info["data"] and create an array of element.model_name
             let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
+            setUserModels(available_model_names);
 
             sessionStorage.setItem("userModels" + userID, JSON.stringify(available_model_names));
           } catch (error: any) {
@@ -139,7 +188,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     if (accessToken) {
       const fetchKeyInfo = async () => {
         try {
-          await keyInfoCall(accessToken, [accessToken]);
+          const keyInfo = await keyInfoCall(accessToken, [accessToken]);
         } catch (error: any) {
           if (error.message.includes("Invalid proxy server token passed")) {
             gotoLogin();
@@ -155,6 +204,26 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
     }
   }, [currentOrg]);
+
+  useEffect(() => {
+    // This code will run every time selectedTeam changes
+    if (keys !== null && selectedTeam !== null && selectedTeam !== undefined && selectedTeam.team_id !== null) {
+      let sum = 0;
+      for (const key of keys) {
+        if (selectedTeam.hasOwnProperty("team_id") && key.team_id !== null && key.team_id === selectedTeam.team_id) {
+          sum += key.spend;
+        }
+      }
+      setTeamSpend(sum);
+    } else if (keys !== null) {
+      // sum the keys which don't have team-id set (default team)
+      let sum = 0;
+      for (const key of keys) {
+        sum += key.spend;
+      }
+      setTeamSpend(sum);
+    }
+  }, [selectedTeam]);
 
   function gotoLogin() {
     // Clear token cookies using the utility function
@@ -217,8 +286,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   return (
     <div className="mx-4 h-[75vh]">
-      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
-        <div className="col-span-1 flex flex-col gap-2">
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
+        <Col numColSpan={1} className="flex flex-col gap-2">
           <VirtualKeysTable
             headerActions={
               canCreateKey ? (
@@ -234,8 +303,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               ) : undefined
             }
           />
-        </div>
-      </div>
+        </Col>
+      </Grid>
     </div>
   );
 };

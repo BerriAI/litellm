@@ -4,7 +4,7 @@ Calls Tavily's /search endpoint to search the web.
 Tavily API Reference: https://docs.tavily.com/documentation/api-reference/endpoint/search
 """
 
-from typing import Final, TypedDict
+from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
 
@@ -30,12 +30,12 @@ class TavilySearchRequest(_TavilySearchRequestRequired, total=False):
     """
 
     max_results: int  # Optional - maximum number of results (0-20), default 5
-    include_domains: list[str]  # Optional - list of domains to include (max 300)
-    exclude_domains: list[str]  # Optional - list of domains to exclude (max 150)
+    include_domains: List[str]  # Optional - list of domains to include (max 300)
+    exclude_domains: List[str]  # Optional - list of domains to exclude (max 150)
     topic: str  # Optional - category of search ('general', 'news', 'finance'), default 'general'
     search_depth: str  # Optional - depth of search ('basic', 'advanced'), default 'basic'
-    include_answer: bool | str  # Optional - include LLM-generated answer
-    include_raw_content: bool | str  # Optional - include raw HTML content
+    include_answer: Union[bool, str]  # Optional - include LLM-generated answer
+    include_raw_content: Union[bool, str]  # Optional - include raw HTML content
     include_images: bool  # Optional - perform image search
     include_image_descriptions: bool  # Optional - add descriptions for images
     include_favicon: bool  # Optional - include favicon URL
@@ -54,11 +54,11 @@ class TavilySearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        headers: Dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Validate environment and return headers.
         """
@@ -77,9 +77,9 @@ class TavilySearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
-        data: dict | list[dict] | None = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -95,10 +95,10 @@ class TavilySearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: str | list[str],
+        query: Union[str, List[str]],
         optional_params: dict,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Transform Search request to Tavily API format.
 
@@ -127,7 +127,7 @@ class TavilySearchConfig(BaseSearchConfig):
             # Tavily only supports single string queries
             query = " ".join(query)
 
-        request_data: Final[TavilySearchRequest] = {
+        request_data: TavilySearchRequest = {
             "query": query,
         }
 
@@ -143,7 +143,7 @@ class TavilySearchConfig(BaseSearchConfig):
             request_data["country"] = optional_params["country"].lower()
 
         # Convert to dict before dynamic key assignments
-        result_data: Final = dict(request_data)
+        result_data = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -174,10 +174,10 @@ class TavilySearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json = raw_response.json()
 
         # Transform results to SearchResult objects
-        results: Final = []
+        results = []
         for result in response_json.get("results", []):
             search_result = SearchResult(
                 title=result.get("title", ""),

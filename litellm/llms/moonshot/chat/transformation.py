@@ -2,8 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final, Literal, cast, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -19,20 +18,20 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 class MoonshotChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> list[AllMessageValues]: ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Moonshot text-only models don't support content in list format.
         Multimodal models (kimi-k2.5, kimi-latest, etc.) accept the
@@ -59,20 +58,20 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             return super()._transform_messages(messages=messages, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
-        self, api_base: str | None, api_key: str | None
-    ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
-        dynamic_api_key: Final = api_key or get_secret_str("MOONSHOT_API_KEY")
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("MOONSHOT_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         If api_base is not provided, use the default Moonshot AI /chat/completions endpoint.
@@ -94,14 +93,14 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - tool_choice doesn't support "required" value
         - kimi-thinking-preview doesn't support tool calls at all
         """
-        excluded_params: Final[list[str]] = ["functions"]
+        excluded_params: List[str] = ["functions"]
 
         # kimi-thinking-preview has additional limitations
         if "kimi-thinking-preview" in model:
             excluded_params.extend(["tools", "tool_choice"])
 
-        base_openai_params: Final = super().get_supported_openai_params(model=model)
-        final_params: Final[list[str]] = []
+        base_openai_params = super().get_supported_openai_params(model=model)
+        final_params: List[str] = []
         for param in base_openai_params:
             if param not in excluded_params:
                 final_params.append(param)
@@ -122,7 +121,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - tool_choice doesn't support "required" value
         - Temperature <0.3 limitation for n>1
         """
-        supported_openai_params: Final = self.get_supported_openai_params(model)
+        supported_openai_params = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
@@ -140,12 +139,13 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         if supports_reasoning(model=model, custom_llm_provider="moonshot"):
             optional_params.pop("temperature", None)
         elif "temperature" in optional_params:
-            optional_params["temperature"] = min(optional_params["temperature"], 1)
+            if optional_params["temperature"] > 1:
+                optional_params["temperature"] = 1
             if optional_params["temperature"] < 0.3 and optional_params.get("n", 1) > 1:
                 optional_params["temperature"] = 0.3
         return optional_params
 
-    def fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
+    def fill_reasoning_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
         """
         Moonshot reasoning models require `reasoning_content` on every assistant
         message that contains tool_calls (multi-turn tool-calling flows).
@@ -159,7 +159,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         Messages that already carry the field, or are not assistant/tool-call messages,
         are appended as-is (no copy made).
         """
-        result: Final[list[AllMessageValues]] = []
+        result: List[AllMessageValues] = []
         for msg in messages:
             if (
                 msg.get("role") == "assistant"
@@ -194,7 +194,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -225,8 +225,8 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         )
 
     def _add_tool_choice_required_message(
-        self, messages: list[AllMessageValues], optional_params: dict
-    ) -> list[AllMessageValues]:
+        self, messages: List[AllMessageValues], optional_params: dict
+    ) -> List[AllMessageValues]:
         """
         Add a message to the messages list to indicate that the tool choice is required.
 

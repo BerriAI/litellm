@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    _dynamoai_callback: Final = DynamoAIGuardrails(
+    _dynamoai_callback = DynamoAIGuardrails(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         guardrail_name=guardrail.get("guardrail_name", ""),
@@ -23,11 +23,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _dynamoai_callback
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.DYNAMOAI.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry: Final = {
+guardrail_class_registry = {
     SupportedGuardrailIntegrations.DYNAMOAI.value: DynamoAIGuardrails,
 }

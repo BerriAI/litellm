@@ -6,6 +6,7 @@ Canonical definition for ``litellm_projecttable``. Re-exported from
 """
 
 from datetime import datetime
+from typing import List, Optional
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
@@ -16,24 +17,24 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
     """Database model representation for project"""
 
     project_id: str
-    project_alias: str | None = None
-    description: str | None = None
-    team_id: str | None = None
-    budget_id: str | None = None
-    metadata: dict | None = None
-    models: list[str] = []
+    project_alias: Optional[str] = None
+    description: Optional[str] = None
+    team_id: Optional[str] = None
+    budget_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    models: List[str] = []
     spend: float = 0.0
-    model_spend: dict | None = None
-    model_rpm_limit: dict | None = None
-    model_tpm_limit: dict | None = None
+    model_spend: Optional[dict] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
     blocked: bool = False
-    object_permission_id: str | None = None
-    created_by: str | None = None
-    updated_by: str | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    litellm_budget_table: LiteLLM_BudgetTable | None = None
-    object_permission: LiteLLM_ObjectPermissionTable | None = None
+    object_permission_id: Optional[str] = None
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     @property
     def is_blocked(self) -> bool:

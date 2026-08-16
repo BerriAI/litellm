@@ -5,3 +5,5 @@ class AzureFoundryGPTImageGenerationConfig(GPTImageGenerationConfig):
     """
     Azure gpt-image-1 image generation config
     """
+
+    pass

@@ -5,21 +5,20 @@ This module provides cached import functionality to avoid repeated imports
 inside functions that are critical to performance.
 """
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Type
 
 # Type annotations for cached imports
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.coroutine_checker import CoroutineChecker
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.coroutine_checker import CoroutineChecker
 
 # Global cache variables
-_LiteLLMLogging: type["Logging"] | None = None
+_LiteLLMLogging: Optional[Type["Logging"]] = None
 _coroutine_checker: Optional["CoroutineChecker"] = None
-_set_callbacks: Callable | None = None
+_set_callbacks: Optional[Callable] = None
 
 
-def get_litellm_logging_class() -> type["Logging"]:
+def get_litellm_logging_class() -> Type["Logging"]:
     """Get the cached LiteLLM Logging class, initializing if needed."""
     global _LiteLLMLogging
     if _LiteLLMLogging is not None:

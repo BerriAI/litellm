@@ -4,7 +4,7 @@ Calls Serper's /search endpoint to search Google.
 Serper API Reference: https://serper.dev
 """
 
-from typing import Final, TypedDict
+from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
 
@@ -47,11 +47,11 @@ class SerperSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        headers: Dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Validate environment and return headers.
         """
@@ -70,9 +70,9 @@ class SerperSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
-        data: dict | list[dict] | None = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -88,10 +88,10 @@ class SerperSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: str | list[str],
+        query: Union[str, List[str]],
         optional_params: dict,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Transform Search request to Serper API format.
 
@@ -108,7 +108,7 @@ class SerperSearchConfig(BaseSearchConfig):
         if isinstance(query, list):
             query = " ".join(query)
 
-        request_data: Final[SerperSearchRequest] = {
+        request_data: SerperSearchRequest = {
             "q": query,
         }
 
@@ -119,13 +119,13 @@ class SerperSearchConfig(BaseSearchConfig):
             request_data["gl"] = optional_params["country"].lower()
 
         if "search_domain_filter" in optional_params:
-            domains: Final = optional_params["search_domain_filter"]
+            domains = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
-                domain_clauses: Final = " OR ".join(f"site:{d}" for d in domains)
+                domain_clauses = " OR ".join(f"site:{d}" for d in domains)
                 request_data["q"] = f"({request_data['q']}) ({domain_clauses})"
 
         # Convert to dict before dynamic key assignments
-        result_data: Final = dict(request_data)
+        result_data = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -156,9 +156,9 @@ class SerperSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json = raw_response.json()
 
-        results: Final = []
+        results = []
         for result in response_json.get("organic", []):
             search_result = SearchResult(
                 title=result.get("title", ""),

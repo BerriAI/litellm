@@ -1,18 +1,17 @@
 "use client";
 
 import React, { useState } from "react";
-import useCan from "@/app/(dashboard)/hooks/useCan";
 import { ToolDetail } from "@/components/ToolDetail";
-import { ToolPoliciesPanel } from "@/components/ToolPolicies/ToolPoliciesPanel";
+import { ToolPolicies } from "@/components/ToolPolicies";
 
 type View = { type: "overview" } | { type: "detail"; toolName: string };
 
 interface ToolPoliciesViewProps {
   accessToken: string | null;
+  userRole?: string;
 }
 
-export default function ToolPoliciesView({ accessToken }: ToolPoliciesViewProps) {
-  const canViewToolPolicies = useCan("viewToolPolicies");
+export default function ToolPoliciesView({ accessToken, userRole }: ToolPoliciesViewProps) {
   const [view, setView] = useState<View>({ type: "overview" });
 
   const handleSelectTool = (toolName: string) => {
@@ -23,21 +22,12 @@ export default function ToolPoliciesView({ accessToken }: ToolPoliciesViewProps)
     setView({ type: "overview" });
   };
 
-  if (!canViewToolPolicies) {
-    return (
-      <div className="p-6 w-full min-w-0 flex-1">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-2">Tool Policies</h1>
-        <p className="text-sm text-gray-500">Tool Policies is only available to admin users.</p>
-      </div>
-    );
-  }
-
   return (
     <div className="p-6 w-full min-w-0 flex-1">
       {view.type === "detail" ? (
         <ToolDetail toolName={view.toolName} onBack={handleBack} accessToken={accessToken} />
       ) : (
-        <ToolPoliciesPanel accessToken={accessToken} onSelectTool={handleSelectTool} />
+        <ToolPolicies accessToken={accessToken} userRole={userRole} onSelectTool={handleSelectTool} />
       )}
     </div>
   );

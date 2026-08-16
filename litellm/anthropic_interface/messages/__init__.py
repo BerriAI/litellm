@@ -10,8 +10,7 @@ This is an __init__.py file to allow the following interface
 
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any
+from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, List, Optional, Union
 
 from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     anthropic_messages as _async_anthropic_messages,
@@ -26,21 +25,21 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 
 async def acreate(
     max_tokens: int,
-    messages: list[dict],
+    messages: List[Dict],
     model: str,
-    metadata: dict | None = None,
-    stop_sequences: list[str] | None = None,
-    stream: bool | None = False,
-    system: str | None = None,
-    temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
-    tools: list[dict] | None = None,
-    top_k: int | None = None,
-    top_p: float | None = None,
-    container: dict | None = None,
+    metadata: Optional[Dict] = None,
+    stop_sequences: Optional[List[str]] = None,
+    stream: Optional[bool] = False,
+    system: Optional[str] = None,
+    temperature: Optional[float] = None,
+    thinking: Optional[Dict] = None,
+    tool_choice: Optional[Dict] = None,
+    tools: Optional[List[Dict]] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    container: Optional[Dict] = None,
     **kwargs,
-) -> AnthropicMessagesResponse | AsyncIterator:
+) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
     Async wrapper for Anthropic's messages API
 
@@ -85,26 +84,26 @@ async def acreate(
 
 def create(
     max_tokens: int,
-    messages: list[dict],
+    messages: List[Dict],
     model: str,
-    metadata: dict | None = None,
-    stop_sequences: list[str] | None = None,
-    stream: bool | None = False,
-    system: str | None = None,
-    temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
-    tools: list[dict] | None = None,
-    top_k: int | None = None,
-    top_p: float | None = None,
-    container: dict | None = None,
+    metadata: Optional[Dict] = None,
+    stop_sequences: Optional[List[str]] = None,
+    stream: Optional[bool] = False,
+    system: Optional[str] = None,
+    temperature: Optional[float] = None,
+    thinking: Optional[Dict] = None,
+    tool_choice: Optional[Dict] = None,
+    tools: Optional[List[Dict]] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    container: Optional[Dict] = None,
     **kwargs,
-) -> (
-    AnthropicMessagesResponse
-    | Iterator[bytes]
-    | AsyncIterator[Any]
-    | Coroutine[Any, Any, AnthropicMessagesResponse | AsyncIterator[Any] | Iterator[bytes]]
-):
+) -> Union[
+    AnthropicMessagesResponse,
+    Iterator[bytes],
+    AsyncIterator[Any],
+    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]],
+]:
     """
     Async wrapper for Anthropic's messages API
 

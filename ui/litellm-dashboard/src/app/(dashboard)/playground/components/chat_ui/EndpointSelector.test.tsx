@@ -7,9 +7,9 @@ import { ENDPOINT_OPTIONS } from "./chatConstants";
 describe("EndpointSelector", () => {
   Object.values(ENDPOINT_OPTIONS).forEach((endpointType) => {
     it(`should render the endpoint selector for ${endpointType.value}`, async () => {
-      render(<EndpointSelector endpointType={endpointType.value} onEndpointChange={() => {}} />);
+      const { getByText } = render(<EndpointSelector endpointType={endpointType.value} onEndpointChange={() => {}} />);
       await waitFor(() => {
-        expect(screen.getByRole("combobox")).toHaveValue(endpointType.label);
+        expect(getByText(endpointType.label)).toBeInTheDocument();
       });
     });
   });
@@ -18,9 +18,10 @@ describe("EndpointSelector", () => {
     const user = userEvent.setup();
     render(<EndpointSelector endpointType={ENDPOINT_OPTIONS[0].value} onEndpointChange={() => {}} />);
 
-    const input = screen.getByRole("combobox");
-    await user.click(input);
-    await user.clear(input);
+    const combobox = screen.getByRole("combobox");
+    await user.click(combobox);
+
+    const input = await screen.findByRole("combobox");
     await user.type(input, "audio");
 
     expect(await screen.findByText("/v1/audio/speech")).toBeInTheDocument();

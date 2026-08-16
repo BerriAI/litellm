@@ -1,11 +1,10 @@
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from pydantic import ConfigDict
 from semantic_router.encoders import DenseEncoder
 from semantic_router.encoders.base import AsymmetricDenseMixin
 
 import litellm
-from litellm._logging import verbose_router_logger
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -50,8 +49,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         self,
         litellm_router_instance: "Router",
         model_name: str,
-        score_threshold: float | None = None,
-        max_input_chars: int = 0,
+        score_threshold: Union[float, None] = None,
     ):
         """Initialize the LiteLLMEncoder.
 
@@ -62,13 +60,6 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         :type model_name: str
         :param score_threshold: The score threshold for the embeddings.
         :type score_threshold: float
-        :param max_input_chars: Longest doc, in characters, sent to the embedding model; anything
-            longer is cut to this length. Opt-in, defaulting to 0 (send docs whole), because a
-            caller that has to see the entire text to be correct must not be cut silently: a
-            semantic guard that inspects only a prefix can be walked past with a benign opener.
-            Callers that only rank text against short utterances, such as the auto-router, pass a
-            limit so the encoder's context window cannot fail their request.
-        :type max_input_chars: int
         """
         super().__init__(
             name=model_name,
@@ -76,23 +67,6 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         )
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
-        self.max_input_chars = max_input_chars
-
-    def _clamp(self, docs: list[str]) -> list[str]:  # mutable-ok: embedding() takes `input: str | list`
-        """Cut every doc to `max_input_chars`, keeping the head, or return them whole when unset.
-
-        The head carries the ask often enough to place it against a route, and a cut prompt still
-        routes where an over-long one just errors out.
-        """
-        limit: Final = self.max_input_chars
-        if limit <= 0:
-            return docs
-        clamped: Final = [doc[:limit] for doc in docs]  # mutable-ok: embedding() takes `input: str | list`
-        if clamped != docs:
-            verbose_router_logger.debug(
-                "LiteLLMRouterEncoder: cut input to %s chars for embedding model %s", limit, self.model_name
-            )
-        return clamped
 
     def __call__(self, docs: list[Any], **kwargs) -> list[list[float]]:
         """Encode a list of text documents into embeddings using LiteLLM.
@@ -112,9 +86,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds: Final = self.litellm_router_instance.embedding(
-                input=self._clamp(docs), model=self.model_name, **kwargs
-            )
+            embeds = self.litellm_router_instance.embedding(input=docs, model=self.model_name, **kwargs)
             return litellm_to_list(embeds)
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
@@ -123,9 +95,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds: Final = self.litellm_router_instance.embedding(
-                input=self._clamp(docs), model=self.model_name, **kwargs
-            )
+            embeds = self.litellm_router_instance.embedding(input=docs, model=self.model_name, **kwargs)
             return litellm_to_list(embeds)
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
@@ -134,9 +104,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds: Final = await self.litellm_router_instance.aembedding(
-                input=self._clamp(docs), model=self.model_name, **kwargs
-            )
+            embeds = await self.litellm_router_instance.aembedding(input=docs, model=self.model_name, **kwargs)
             return litellm_to_list(embeds)
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
@@ -145,9 +113,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds: Final = await self.litellm_router_instance.aembedding(
-                input=self._clamp(docs), model=self.model_name, **kwargs
-            )
+            embeds = await self.litellm_router_instance.aembedding(input=docs, model=self.model_name, **kwargs)
             return litellm_to_list(embeds)
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e

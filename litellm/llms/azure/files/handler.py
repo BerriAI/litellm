@@ -1,5 +1,4 @@
-from collections.abc import Coroutine
-from typing import Any, Final, cast
+from typing import Any, Coroutine, Optional, Union, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -35,7 +34,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         Removes expires_after if None to match SDK's Omit pattern.
         SDK expects file_create_params.ExpiresAfter | Omit, but FileExpiresAfter works at runtime.
         """
-        data: Final = dict(create_file_data)
+        data = dict(create_file_data)
         if data.get("expires_after") is None:
             data.pop("expires_after", None)
         return data
@@ -43,10 +42,10 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
     async def acreate_file(
         self,
         create_file_data: CreateFileRequest,
-        openai_client: AsyncAzureOpenAI | AsyncOpenAI,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> OpenAIFileObject:
         verbose_logger.debug("create_file_data=%s", create_file_data)
-        response = await openai_client.files.create(**self._prepare_create_file_data(create_file_data))
+        response = await openai_client.files.create(**self._prepare_create_file_data(create_file_data))  # type: ignore[arg-type]
         verbose_logger.debug("create_file_response=%s", response)
         return OpenAIFileObject(**response.model_dump())
 
@@ -54,21 +53,23 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         self,
         _is_async: bool,
         create_file_data: CreateFileRequest,
-        api_base: str | None,
-        api_key: str | None,
-        api_version: str | None,
-        timeout: float | httpx.Timeout,
-        max_retries: int | None,
-        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
-    ) -> OpenAIFileObject | Coroutine[Any, Any, OpenAIFileObject]:
-        openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
-            litellm_params=litellm_params or {},
-            api_key=api_key,
-            api_base=api_base,
-            api_version=api_version,
-            client=client,
-            _is_async=_is_async,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        api_version: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        litellm_params: Optional[dict] = None,
+    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
+        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = (
+            self.get_azure_openai_client(
+                litellm_params=litellm_params or {},
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                client=client,
+                _is_async=_is_async,
+            )
         )
         if openai_client is None:
             raise ValueError(
@@ -81,38 +82,40 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
             return self.acreate_file(create_file_data=create_file_data, openai_client=openai_client)
-        response: Final = cast(AzureOpenAI | OpenAI, openai_client).files.create(
+        response = cast(Union[AzureOpenAI, OpenAI], openai_client).files.create(
             **self._prepare_create_file_data(create_file_data)
-        )
+        )  # type: ignore[arg-type]
         return OpenAIFileObject(**response.model_dump())
 
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
-        openai_client: AsyncAzureOpenAI | AsyncOpenAI,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> HttpxBinaryResponseContent:
-        response: Final = await openai_client.files.content(**file_content_request)
+        response = await openai_client.files.content(**file_content_request)
         return HttpxBinaryResponseContent(response=response.response)
 
     def file_content(
         self,
         _is_async: bool,
         file_content_request: FileContentRequest,
-        api_base: str | None,
-        api_key: str | None,
-        timeout: float | httpx.Timeout,
-        max_retries: int | None,
-        api_version: str | None = None,
-        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
-        openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
-            litellm_params=litellm_params or {},
-            api_key=api_key,
-            api_base=api_base,
-            api_version=api_version,
-            client=client,
-            _is_async=_is_async,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        api_version: Optional[str] = None,
+        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        litellm_params: Optional[dict] = None,
+    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = (
+            self.get_azure_openai_client(
+                litellm_params=litellm_params or {},
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                client=client,
+                _is_async=_is_async,
+            )
         )
         if openai_client is None:
             raise ValueError(
@@ -124,41 +127,43 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                 raise ValueError(
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
-            return self.afile_content(
+            return self.afile_content(  # type: ignore
                 file_content_request=file_content_request,
                 openai_client=openai_client,
             )
-        response: Final = cast(AzureOpenAI | OpenAI, openai_client).files.content(**file_content_request)
+        response = cast(Union[AzureOpenAI, OpenAI], openai_client).files.content(**file_content_request)
 
         return HttpxBinaryResponseContent(response=response.response)
 
     async def aretrieve_file(
         self,
         file_id: str,
-        openai_client: AsyncAzureOpenAI | AsyncOpenAI,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> FileObject:
-        response: Final = await openai_client.files.retrieve(file_id=file_id)
+        response = await openai_client.files.retrieve(file_id=file_id)
         return response
 
     def retrieve_file(
         self,
         _is_async: bool,
         file_id: str,
-        api_base: str | None,
-        api_key: str | None,
-        timeout: float | httpx.Timeout,
-        max_retries: int | None,
-        api_version: str | None = None,
-        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        api_version: Optional[str] = None,
+        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        litellm_params: Optional[dict] = None,
     ):
-        openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
-            litellm_params=litellm_params or {},
-            api_key=api_key,
-            api_base=api_base,
-            api_version=api_version,
-            client=client,
-            _is_async=_is_async,
+        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = (
+            self.get_azure_openai_client(
+                litellm_params=litellm_params or {},
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                client=client,
+                _is_async=_is_async,
+            )
         )
         if openai_client is None:
             raise ValueError(
@@ -170,20 +175,20 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                 raise ValueError(
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
-            return self.aretrieve_file(
+            return self.aretrieve_file(  # type: ignore
                 file_id=file_id,
                 openai_client=openai_client,
             )
-        response: Final = openai_client.files.retrieve(file_id=file_id)
+        response = openai_client.files.retrieve(file_id=file_id)
 
         return response
 
     async def adelete_file(
         self,
         file_id: str,
-        openai_client: AsyncAzureOpenAI | AsyncOpenAI,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> FileDeleted:
-        response: Final = await openai_client.files.delete(file_id=file_id)
+        response = await openai_client.files.delete(file_id=file_id)
 
         if not isinstance(response, FileDeleted):  # azure returns an empty string
             return FileDeleted(id=file_id, deleted=True, object="file")
@@ -193,22 +198,24 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         self,
         _is_async: bool,
         file_id: str,
-        api_base: str | None,
-        api_key: str | None,
-        timeout: float | httpx.Timeout,
-        max_retries: int | None,
-        organization: str | None = None,
-        api_version: str | None = None,
-        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str] = None,
+        api_version: Optional[str] = None,
+        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        litellm_params: Optional[dict] = None,
     ):
-        openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
-            litellm_params=litellm_params or {},
-            api_key=api_key,
-            api_base=api_base,
-            api_version=api_version,
-            client=client,
-            _is_async=_is_async,
+        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = (
+            self.get_azure_openai_client(
+                litellm_params=litellm_params or {},
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                client=client,
+                _is_async=_is_async,
+            )
         )
         if openai_client is None:
             raise ValueError(
@@ -220,11 +227,11 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                 raise ValueError(
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
-            return self.adelete_file(
+            return self.adelete_file(  # type: ignore
                 file_id=file_id,
                 openai_client=openai_client,
             )
-        response: Final = openai_client.files.delete(file_id=file_id)
+        response = openai_client.files.delete(file_id=file_id)
 
         if not isinstance(response, FileDeleted):  # azure returns an empty string
             return FileDeleted(id=file_id, deleted=True, object="file")
@@ -233,8 +240,8 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
 
     async def alist_files(
         self,
-        openai_client: AsyncAzureOpenAI | AsyncOpenAI,
-        purpose: str | None = None,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
+        purpose: Optional[str] = None,
     ):
         if isinstance(purpose, str):
             response = await openai_client.files.list(purpose=purpose)
@@ -245,22 +252,24 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
     def list_files(
         self,
         _is_async: bool,
-        api_base: str | None,
-        api_key: str | None,
-        timeout: float | httpx.Timeout,
-        max_retries: int | None,
-        purpose: str | None = None,
-        api_version: str | None = None,
-        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        purpose: Optional[str] = None,
+        api_version: Optional[str] = None,
+        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
+        litellm_params: Optional[dict] = None,
     ):
-        openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
-            litellm_params=litellm_params or {},
-            api_key=api_key,
-            api_base=api_base,
-            api_version=api_version,
-            client=client,
-            _is_async=_is_async,
+        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = (
+            self.get_azure_openai_client(
+                litellm_params=litellm_params or {},
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                client=client,
+                _is_async=_is_async,
+            )
         )
         if openai_client is None:
             raise ValueError(
@@ -272,7 +281,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                 raise ValueError(
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
-            return self.alist_files(
+            return self.alist_files(  # type: ignore
                 purpose=purpose,
                 openai_client=openai_client,
             )

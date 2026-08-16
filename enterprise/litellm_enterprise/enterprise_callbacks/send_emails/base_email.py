@@ -99,7 +99,6 @@ class BaseEmailLogger(CustomLogger):
         email_html_content = USER_INVITATION_EMAIL_TEMPLATE.format(
             email_logo_url=email_params.logo_url,
             recipient_email=email_params.recipient_email,
-            invitation_link=email_params.base_url,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
             email_footer=email_params.signature,
@@ -827,15 +826,10 @@ class BaseEmailLogger(CustomLogger):
         """
         # Early validation
         if not user_id:
-            verbose_proxy_logger.warning(
-                "No user_id provided for invitation link. Email will link to base URL instead of onboarding page"
-            )
+            verbose_proxy_logger.debug("No user_id provided for invitation link")
             return base_url
 
         if not await self._is_prisma_client_available():
-            verbose_proxy_logger.warning(
-                "Prisma client not available. Email will link to base URL instead of onboarding page"
-            )
             return base_url
 
         # Wait for any concurrent invitation creation to complete
@@ -845,15 +839,11 @@ class BaseEmailLogger(CustomLogger):
         invitation = await self._get_or_create_invitation(user_id)
         if not invitation:
             verbose_proxy_logger.warning(
-                f"Failed to get/create invitation for user_id: {user_id}. Email will link to base URL instead of onboarding page"
+                f"Failed to get/create invitation for user_id: {user_id}"
             )
             return base_url
 
-        invitation_link = self._construct_invitation_link(invitation.id, base_url)
-        verbose_proxy_logger.info(
-            f"Successfully created invitation link for user_id: {user_id}"
-        )
-        return invitation_link
+        return self._construct_invitation_link(invitation.id, base_url)
 
     async def _is_prisma_client_available(self) -> bool:
         """Check if Prisma client is available"""
@@ -931,9 +921,7 @@ class BaseEmailLogger(CustomLogger):
 
         # http://localhost:4000/ui/onboarding?invitation_id=7a096b3a-37c6-440f-9dd1-ba22e8043f6b
         """
-        base_url = base_url.rstrip("/")
-        invitation_link = f"{base_url}/ui/onboarding?invitation_id={invitation_id}"
-        return invitation_link
+        return f"{base_url}/ui/onboarding?invitation_id={invitation_id}"
 
     async def send_email(
         self,

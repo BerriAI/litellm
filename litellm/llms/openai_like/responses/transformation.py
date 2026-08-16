@@ -6,7 +6,7 @@ Inherits everything from OpenAIResponsesAPIConfig; subclasses only override
 provider-specific resolution (slug, API key env var, base URL).
 """
 
-from typing import Final
+from typing import Optional, Union
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -24,24 +24,24 @@ class OpenAILikeResponsesConfig(OpenAIResponsesAPIConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> str | LlmProviders:
+    def custom_llm_provider(self) -> Union[str, LlmProviders]:  # type: ignore[override]
         return "openai_like"
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        litellm_params: GenericLiteLLMParams | None,
+        litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key: Final = litellm_params.api_key or get_secret_str("OPENAI_LIKE_API_KEY")
+        api_key = litellm_params.api_key or get_secret_str("OPENAI_LIKE_API_KEY")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
         api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")

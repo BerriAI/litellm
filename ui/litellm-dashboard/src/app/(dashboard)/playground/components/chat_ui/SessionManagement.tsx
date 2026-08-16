@@ -1,10 +1,8 @@
 import React from "react";
-import { Copy, Info } from "lucide-react";
+import { Switch, Tooltip } from "antd";
+import { InfoCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface SessionManagementProps {
   endpointType: string;
@@ -23,14 +21,10 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
     return null;
   }
 
-  const handleCopySessionId = async () => {
+  const handleCopySessionId = () => {
     if (responsesSessionId) {
-      try {
-        await navigator.clipboard.writeText(responsesSessionId);
-        NotificationsManager.success("Response ID copied to clipboard!");
-      } catch {
-        NotificationsManager.error("Unable to copy response ID");
-      }
+      navigator.clipboard.writeText(responsesSessionId);
+      NotificationsManager.success("Response ID copied to clipboard!");
     }
   };
 
@@ -62,26 +56,17 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-gray-700">Session Management</span>
-          <Tooltip>
-            <TooltipTrigger aria-label="About session management">
-              <Info className="size-3 text-gray-400" />
-            </TooltipTrigger>
-            <TooltipContent>
-              Choose between LiteLLM API session management (using previous_response_id) or UI-based session management
-              (using chat history)
-            </TooltipContent>
+          <Tooltip title="Choose between LiteLLM API session management (using previous_response_id) or UI-based session management (using chat history)">
+            <InfoCircleOutlined className="text-gray-400" style={{ fontSize: "12px" }} />
           </Tooltip>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-600">
-          <span aria-hidden="true">UI</span>
-          <Switch
-            checked={useApiSessionManagement}
-            onCheckedChange={onToggleSessionManagement}
-            aria-label="Use API session management"
-            size="sm"
-          />
-          <span aria-hidden="true">API</span>
-        </div>
+        <Switch
+          checked={useApiSessionManagement}
+          onChange={onToggleSessionManagement}
+          checkedChildren="API"
+          unCheckedChildren="UI"
+          size="small"
+        />
       </div>
 
       {/* Session Status Indicator */}
@@ -94,26 +79,12 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1">
-            <Info className="size-3" />
+            <InfoCircleOutlined style={{ fontSize: "12px" }} />
             {getSessionDisplay()}
           </div>
           {responsesSessionId && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={handleCopySessionId}
-                    aria-label="Copy response ID"
-                    className="ml-2 hover:bg-green-100"
-                  />
-                }
-              >
-                <Copy className="size-3" />
-              </TooltipTrigger>
-              <TooltipContent className="max-w-lg">
+            <Tooltip
+              title={
                 <div className="text-xs">
                   <div className="mb-1">Copy response ID to continue session:</div>
                   <div className="bg-gray-800 text-gray-100 p-2 rounded-sm font-mono text-xs whitespace-pre-wrap">
@@ -128,7 +99,15 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
   }'`}
                   </div>
                 </div>
-              </TooltipContent>
+              }
+              overlayStyle={{ maxWidth: "500px" }}
+            >
+              <button
+                onClick={handleCopySessionId}
+                className="ml-2 p-1 hover:bg-green-100 rounded-sm transition-colors"
+              >
+                <CopyOutlined style={{ fontSize: "12px" }} />
+              </button>
             </Tooltip>
           )}
         </div>

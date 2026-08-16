@@ -253,6 +253,7 @@ async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity():
                 user_api_key_dict=user,
                 priority="high",
                 saturation=0.0,
+                data={},
             )
             return "OK"
         except Exception as e:
@@ -331,6 +332,7 @@ async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment():
         user_api_key_dict=user,
         priority="high",
         saturation=0.0,
+        data={},
     )
 
     assert atomic_descriptors_observed, (
@@ -480,6 +482,7 @@ async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor():
             user_api_key_dict=user,
             priority="high",
             saturation=0.0,
+            data={},
         )
     assert (
         exc.value.status_code == 429

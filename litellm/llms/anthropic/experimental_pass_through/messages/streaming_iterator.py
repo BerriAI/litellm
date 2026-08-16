@@ -1,8 +1,7 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, Final, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, List, Protocol, Union, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter
@@ -16,9 +15,9 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
-GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
+GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
-INCOMPLETE_STREAM_ERROR_MESSAGE: Final = (
+INCOMPLETE_STREAM_ERROR_MESSAGE = (
     "Provider stream ended before emitting a message_stop event; "
     "the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated."
 )
@@ -45,7 +44,7 @@ def _is_terminal_stream_chunk(chunk: object) -> bool:
 
 
 def _incomplete_stream_error_sse_event() -> bytes:
-    payload: Final = json.dumps(
+    payload = json.dumps(
         {
             "type": "error",
             "error": {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE},
@@ -68,7 +67,7 @@ async def aclose_if_supported(stream: object) -> None:
         await stream.aclose()
 
 
-_RESPONSE_HEADERS_ADAPTER: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
+_RESPONSE_HEADERS_ADAPTER: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, str])
 
 
 def anthropic_messages_stream_hidden_params(
@@ -122,13 +121,13 @@ class BaseAnthropicMessagesStreamingIterator:
         self.start_time = datetime.now()
         self.completion_start_time: datetime | None = None
 
-    async def _handle_streaming_logging(self, collected_chunks: list[bytes]):
+    async def _handle_streaming_logging(self, collected_chunks: List[bytes]):
         """Handle the logging after all chunks have been collected."""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
 
-        end_time: Final = datetime.now()
+        end_time = datetime.now()
         # Set completion_start_time so TTFT is calculated from the first
         # chunk rather than falling back to end_time in async_success_handler.
         if self.completion_start_time is not None:
@@ -169,7 +168,7 @@ class BaseAnthropicMessagesStreamingIterator:
             url_route="/v1/messages",
         )
 
-    def _convert_chunk_to_sse_format(self, chunk: dict | Any) -> bytes:
+    def _convert_chunk_to_sse_format(self, chunk: Union[dict, Any]) -> bytes:
         """
         Convert a chunk to Server-Sent Events format.
 
@@ -177,8 +176,8 @@ class BaseAnthropicMessagesStreamingIterator:
         chunk formatting logic.
         """
         if isinstance(chunk, dict):
-            event_type: Final[str] = str(chunk.get("type", "message"))
-            payload: Final = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+            event_type: str = str(chunk.get("type", "message"))
+            payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
             return payload.encode()
         else:
             # For non-dict chunks, return as is
@@ -186,7 +185,7 @@ class BaseAnthropicMessagesStreamingIterator:
 
     async def async_sse_wrapper(
         self,
-        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
+        completion_stream: AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]],
     ) -> AsyncIterator[bytes]:
         """
         Generic async SSE wrapper that converts streaming chunks to SSE format
@@ -194,7 +193,7 @@ class BaseAnthropicMessagesStreamingIterator:
 
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
-        collected_chunks: Final = []
+        collected_chunks = []
         saw_terminal_event = False
 
         async for chunk in completion_stream:

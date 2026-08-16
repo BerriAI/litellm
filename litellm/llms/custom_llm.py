@@ -8,10 +8,14 @@
 - async_streaming
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Iterator,
+    Optional,
     Union,
 )
 
@@ -58,8 +62,8 @@ class CustomLLM(BaseLLM):
         litellm_params=None,
         logger_fn=None,
         headers={},
-        timeout: float | httpx.Timeout | None = None,
-        client: HTTPHandler | None = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
@@ -79,8 +83,8 @@ class CustomLLM(BaseLLM):
         litellm_params=None,
         logger_fn=None,
         headers={},
-        timeout: float | httpx.Timeout | None = None,
-        client: HTTPHandler | None = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
     ) -> Iterator[GenericStreamingChunk]:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
@@ -100,9 +104,12 @@ class CustomLLM(BaseLLM):
         litellm_params=None,
         logger_fn=None,
         headers={},
-        timeout: float | httpx.Timeout | None = None,
-        client: AsyncHTTPHandler | None = None,
-    ) -> Coroutine[Any, Any, Union[ModelResponse, "CustomStreamWrapper"]] | Union[ModelResponse, "CustomStreamWrapper"]:
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> Union[
+        Coroutine[Any, Any, Union[ModelResponse, "CustomStreamWrapper"]],
+        Union[ModelResponse, "CustomStreamWrapper"],
+    ]:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def astreaming(
@@ -121,8 +128,8 @@ class CustomLLM(BaseLLM):
         litellm_params=None,
         logger_fn=None,
         headers={},
-        timeout: float | httpx.Timeout | None = None,
-        client: AsyncHTTPHandler | None = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
     ) -> AsyncIterator[GenericStreamingChunk]:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
@@ -130,13 +137,13 @@ class CustomLLM(BaseLLM):
         self,
         model: str,
         prompt: str,
-        api_key: str | None,
-        api_base: str | None,
+        api_key: Optional[str],
+        api_base: Optional[str],
         model_response: ImageResponse,
         optional_params: dict,
         logging_obj: Any,
-        timeout: float | httpx.Timeout | None = None,
-        client: HTTPHandler | None = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
     ) -> ImageResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
@@ -145,12 +152,12 @@ class CustomLLM(BaseLLM):
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        api_key: str | None,  # dynamically set api_key - https://docs.litellm.ai/docs/set_keys#api_key
-        api_base: str | None,  # dynamically set api_base - https://docs.litellm.ai/docs/set_keys#api_base
+        api_key: Optional[str],  # dynamically set api_key - https://docs.litellm.ai/docs/set_keys#api_key
+        api_base: Optional[str],  # dynamically set api_base - https://docs.litellm.ai/docs/set_keys#api_base
         optional_params: dict,
         logging_obj: Any,
-        timeout: float | httpx.Timeout | None = None,
-        client: AsyncHTTPHandler | None = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
     ) -> ImageResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
@@ -162,9 +169,9 @@ class CustomLLM(BaseLLM):
         print_verbose: Callable,
         logging_obj: Any,
         optional_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-        timeout: float | httpx.Timeout | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         litellm_params=None,
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
@@ -177,9 +184,9 @@ class CustomLLM(BaseLLM):
         print_verbose: Callable,
         logging_obj: Any,
         optional_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-        timeout: float | httpx.Timeout | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         litellm_params=None,
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
@@ -188,14 +195,14 @@ class CustomLLM(BaseLLM):
         self,
         model: str,
         image: Any,
-        prompt: str | None,
+        prompt: Optional[str],
         model_response: ImageResponse,
-        api_key: str | None,
-        api_base: str | None,
+        api_key: Optional[str],
+        api_base: Optional[str],
         optional_params: dict,
         logging_obj: Any,
-        timeout: float | httpx.Timeout | None = None,
-        client: HTTPHandler | None = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
     ) -> ImageResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
@@ -203,19 +210,19 @@ class CustomLLM(BaseLLM):
         self,
         model: str,
         image: Any,
-        prompt: str | None,
+        prompt: Optional[str],
         model_response: ImageResponse,
-        api_key: str | None,
-        api_base: str | None,
+        api_key: Optional[str],
+        api_base: Optional[str],
         optional_params: dict,
         logging_obj: Any,
-        timeout: float | httpx.Timeout | None = None,
-        client: AsyncHTTPHandler | None = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
     ) -> ImageResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
 
-def custom_chat_llm_router(async_fn: bool, stream: bool | None, custom_llm: CustomLLM):
+def custom_chat_llm_router(async_fn: bool, stream: Optional[bool], custom_llm: CustomLLM):
     """
     Routes call to CustomLLM completion/acompletion/streaming/astreaming functions, based on call type
 

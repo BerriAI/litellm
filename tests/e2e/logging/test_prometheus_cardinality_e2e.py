@@ -9,11 +9,8 @@ stamping ``api_key_alias`` (or collapses every key onto one series) would drop
 the aliases and fail here.
 
 Scraping goes through ``transport.probe`` (raw text) and is parsed with
-prometheus_client. ``/metrics`` is per-pod behind a round-robin LB and the metric
-is eventually consistent (it increments on the success-logging callback), so the
-poll unions the aliases seen across scrapes until the deadline: counters persist
-on whichever pod served the driver call, so repeated scrapes converge without
-re-sending any billable traffic.
+prometheus_client; the metric is eventually consistent (it increments on the
+success-logging callback), so the scrape polls to a deadline.
 """
 
 from __future__ import annotations
@@ -61,14 +58,13 @@ class TestPrometheusPerKeyCardinality:
         deadline = time.monotonic() + client.proxy.poll_timeout
         seen: frozenset[str] = frozenset()
         while time.monotonic() < deadline:
-            seen = seen | _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
+            seen = _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
             if wanted <= seen:
                 break
             time.sleep(client.proxy.poll_interval)
 
         missing = wanted - seen
         assert not missing, (
-            f"{REQUESTS_METRIC} never exposed a per-key series for aliases {sorted(missing)} "
-            f"on any scraped pod within the deadline; "
+            f"{REQUESTS_METRIC} is missing a per-key series for aliases {sorted(missing)}; "
             f"each distinct {ALIAS_LABEL} must grow its own series"
         )

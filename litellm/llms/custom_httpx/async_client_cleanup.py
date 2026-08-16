@@ -3,7 +3,6 @@ Utility functions for cleaning up async HTTP clients to prevent resource leaks.
 """
 
 import asyncio
-from typing import Final
 
 
 async def close_litellm_async_clients():
@@ -18,7 +17,7 @@ async def close_litellm_async_clients():
     import litellm
     from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 
-    cache_dict: Final = getattr(litellm.in_memory_llm_clients_cache, "cache_dict", {})
+    cache_dict = getattr(litellm.in_memory_llm_clients_cache, "cache_dict", {})
 
     for key, handler in cache_dict.items():
         # Handle BaseLLMAIOHTTPHandler instances (aiohttp_openai provider)
@@ -30,8 +29,8 @@ async def close_litellm_async_clients():
                 pass
 
         # Handle AsyncHTTPHandler instances (used by Gemini and other providers)
-        elif hasattr(handler, "_client") or hasattr(handler, "client"):
-            client = handler._client if hasattr(handler, "_client") else handler.client
+        elif hasattr(handler, "client"):
+            client = handler.client
             # Check if the httpx client has an aiohttp transport
             if hasattr(client, "_transport") and hasattr(client._transport, "aclose"):
                 try:
@@ -58,7 +57,7 @@ async def close_litellm_async_clients():
     # Close the global base_llm_aiohttp_handler instance (issue #12443)
     # This is used by Gemini and other providers that use aiohttp
     if hasattr(litellm, "base_llm_aiohttp_handler"):
-        base_handler: Final = getattr(litellm, "base_llm_aiohttp_handler", None)
+        base_handler = getattr(litellm, "base_llm_aiohttp_handler", None)
         if isinstance(base_handler, BaseLLMAIOHTTPHandler) and hasattr(base_handler, "close"):
             try:
                 await base_handler.close()
@@ -85,7 +84,7 @@ def register_async_client_cleanup():
         try:
             # Always create a fresh event loop at exit time
             # Don't use get_event_loop() - it may be closed or unavailable
-            loop: Final = asyncio.new_event_loop()
+            loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(close_litellm_async_clients())

@@ -7,7 +7,7 @@ These are HTTP (not WebSocket) endpoints used by the WebRTC flow:
 """
 
 from abc import ABC, abstractmethod
-from typing import Final
+from typing import Optional, Union
 
 import httpx
 
@@ -26,7 +26,7 @@ class BaseRealtimeHTTPConfig(ABC):
     @abstractmethod
     def get_api_base(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         **kwargs,
     ) -> str:
         """
@@ -39,7 +39,7 @@ class BaseRealtimeHTTPConfig(ABC):
     @abstractmethod
     def get_api_key(
         self,
-        api_key: str | None,
+        api_key: Optional[str],
         **kwargs,
     ) -> str:
         """
@@ -54,13 +54,16 @@ class BaseRealtimeHTTPConfig(ABC):
     # ------------------------------------------------------------------ #
 
     @abstractmethod
-    def get_complete_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+    def get_complete_url(self, api_base: Optional[str], model: str, api_version: Optional[str] = None) -> str:
         """Return the full URL for POST /realtime/client_secrets."""
 
-    def get_transcription_session_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+    def get_transcription_session_url(
+        self, api_base: Optional[str], model: str, api_version: Optional[str] = None
+    ) -> str:
         """Return the full URL for POST /realtime/transcription_sessions."""
         base = (api_base or "").rstrip("/")
-        base = base.removesuffix("/v1")
+        if base.endswith("/v1"):
+            base = base[:-3]
         return f"{base}/v1/realtime/transcription_sessions"
 
     @abstractmethod
@@ -68,7 +71,7 @@ class BaseRealtimeHTTPConfig(ABC):
         self,
         headers: dict,
         model: str,
-        api_key: str | None = None,
+        api_key: Optional[str] = None,
     ) -> dict:
         """
         Build and return the request headers for the client_secrets call.
@@ -81,9 +84,9 @@ class BaseRealtimeHTTPConfig(ABC):
     # realtime_calls endpoint                                              #
     # ------------------------------------------------------------------ #
 
-    def get_realtime_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+    def get_realtime_calls_url(self, api_base: Optional[str], model: str, api_version: Optional[str] = None) -> str:
         """Return the full URL for POST /realtime/calls (SDP exchange)."""
-        base: Final = (api_base or "").rstrip("/")
+        base = (api_base or "").rstrip("/")
         return f"{base}/v1/realtime/calls"
 
     def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
@@ -101,7 +104,7 @@ class BaseRealtimeHTTPConfig(ABC):
     # Error handling                                                      #
     # ------------------------------------------------------------------ #
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers):
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]):
         """
         Map HTTP errors to LiteLLM exception types.
 

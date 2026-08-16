@@ -23,12 +23,11 @@ model, spend > 0), correlated by the x-litellm-call-id header.
 """
 
 import os
-import time
 
 import pytest
 from pydantic import BaseModel
 
-from e2e_config import settle_propagation, unique_marker
+from e2e_config import unique_marker
 from e2e_http import NoBody, require_successful_call, unwrap
 from lifecycle import ResourceManager
 from models import SpendLogRow
@@ -91,14 +90,7 @@ class _ModelDeleteBody(BaseModel):
 def _add_vertex_passthrough_model(
     client: PassthroughClient, model_name: str, project: str, credentials: str
 ) -> str:
-    """Register the passthrough deployment and settle before the caller uses it.
-
-    This body carries `use_in_pass_through` and a pinned `model_info.id`, so it
-    cannot go through ProxyClient.create_model -- but it needs that helper's
-    propagation settle just the same, or the passthrough call can land on a replica
-    that has not reloaded yet.
-    """
-    model_id = unwrap(
+    return unwrap(
         client.proxy.transport.post(
             "/model/new",
             headers=client.proxy.transport.master,
@@ -116,8 +108,6 @@ def _add_vertex_passthrough_model(
             response_type=_ModelNewResponse,
         )
     ).model_id
-    settle_propagation(time.monotonic())
-    return model_id
 
 
 def _delete_model(client: PassthroughClient, model_id: str) -> None:

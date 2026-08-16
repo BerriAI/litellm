@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -25,12 +25,12 @@ class BaseRealtimeConfig(ABC):
         self,
         headers: dict,
         model: str,
-        api_key: str | None = None,
+        api_key: Optional[str] = None,
     ) -> dict:
         pass
 
     @abstractmethod
-    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
+    def get_complete_url(self, api_base: Optional[str], model: str, api_key: Optional[str] = None) -> str:
         """
         OPTIONAL
 
@@ -40,7 +40,9 @@ class BaseRealtimeConfig(ABC):
         """
         return api_base or ""
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
         raise BaseLLMException(
             status_code=status_code,
             message=error_message,
@@ -52,8 +54,8 @@ class BaseRealtimeConfig(ABC):
         self,
         message: str,
         model: str,
-        session_configuration_request: str | None = None,
-    ) -> list[str]:
+        session_configuration_request: Optional[str] = None,
+    ) -> List[str]:
         pass
 
     def is_setup_message(self, msg_obj: dict) -> bool:
@@ -67,15 +69,15 @@ class BaseRealtimeConfig(ABC):
     ) -> bool:  # initial configuration message sent to setup the realtime session
         return False
 
-    def session_configuration_request(self, model: str) -> str | None:  # message sent to setup the realtime session
+    def session_configuration_request(self, model: str) -> Optional[str]:  # message sent to setup the realtime session
         return None
 
     def transform_session_created_event(
         self,
         model: str,
         logging_session_id: str,
-        session_configuration_request: str | None = None,
-    ) -> dict | OpenAIRealtimeStreamSessionEvents | None:
+        session_configuration_request: Optional[str] = None,
+    ) -> Optional[Union[dict, OpenAIRealtimeStreamSessionEvents]]:
         """
         Optional hook for providers that defer session setup until client `session.update`.
 
@@ -87,7 +89,7 @@ class BaseRealtimeConfig(ABC):
     @abstractmethod
     def transform_realtime_response(
         self,
-        message: str | bytes,
+        message: Union[str, bytes],
         model: str,
         logging_obj: LiteLLMLoggingObj,
         realtime_response_transform_input: RealtimeResponseTransformInput,
@@ -95,3 +97,4 @@ class BaseRealtimeConfig(ABC):
         """
         Keep this state less - leave the state management (e.g. tracking current_output_item_id, current_response_id, current_conversation_id, current_delta_chunks) to the caller.
         """
+        pass

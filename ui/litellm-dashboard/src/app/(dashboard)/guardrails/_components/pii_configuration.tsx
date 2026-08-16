@@ -1,6 +1,9 @@
+import { Typography } from "antd";
 import React, { useState } from "react";
 import { CategoryFilter, PiiEntityList, QuickActions } from "./pii_components";
 import { PiiConfigurationProps } from "@/components/guardrails/types";
+
+const { Title, Text } = Typography;
 
 /**
  * A reusable component for rendering PII entity selection and action configuration
@@ -54,9 +57,11 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
     <div className="pii-configuration">
       <div className="flex justify-between items-center mb-5">
         <div className="flex items-center">
-          <h4 className="m-0 text-lg font-semibold text-foreground">Configure PII Protection</h4>
+          <Title level={4} className="m-0! font-semibold text-gray-800">
+            Configure PII Protection
+          </Title>
         </div>
-        <span className="text-muted-foreground">{selectedEntities.length} items selected</span>
+        <Text className="text-gray-500">{selectedEntities.length} items selected</Text>
       </div>
 
       <div className="mb-6">

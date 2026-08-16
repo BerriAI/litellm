@@ -18,16 +18,16 @@ from .main import (
 )
 
 __all__ = [
-    "acancel_eval",
     "acreate_eval",
-    "adelete_eval",
-    "aget_eval",
     "alist_evals",
+    "aget_eval",
     "aupdate_eval",
-    "cancel_eval",
+    "adelete_eval",
+    "acancel_eval",
     "create_eval",
-    "delete_eval",
-    "get_eval",
     "list_evals",
+    "get_eval",
     "update_eval",
+    "delete_eval",
+    "cancel_eval",
 ]

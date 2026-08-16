@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -30,24 +30,24 @@ class AudioTranscriptionRequestData:
         content_type: Optional content type override
     """
 
-    data: dict | bytes
-    files: dict | None = None
-    content_type: str | None = None
+    data: Union[dict, bytes]
+    files: Optional[dict] = None
+    content_type: Optional[str] = None
 
 
 class BaseAudioTranscriptionConfig(BaseConfig, ABC):
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         pass
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         OPTIONAL
@@ -81,7 +81,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -97,12 +97,12 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a response transformation for audio transcription models"
@@ -112,7 +112,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         self,
         model: str,
         optional_params: dict,
-        openai_params: list[OpenAIAudioTranscriptionOptionalParams],
+        openai_params: List[OpenAIAudioTranscriptionOptionalParams],
     ) -> dict:
         """
         Get provider specific parameters that are not OpenAI compatible
@@ -120,7 +120,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         eg. if user passes `diarize=True`, we need to pass `diarize` to the provider
         but `diarize` is not an OpenAI parameter, so we need to handle it here
         """
-        provider_specific_params: Final = {}
+        provider_specific_params = {}
         for key, value in optional_params.items():
             # Skip None values
             if value is None:
@@ -154,7 +154,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
             True if the parameter should be excluded
         """
         # Parameters that are handled elsewhere or not relevant to Deepgram API
-        excluded_params: Final = {
+        excluded_params = {
             "model",  # Already in the URL path
             "OPENAI_TRANSCRIPTION_PARAMS",  # Internal litellm parameter
         }

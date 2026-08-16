@@ -1,11 +1,9 @@
 import React from "react";
-import { Trash2 } from "lucide-react";
-import type { ColumnDef } from "@tanstack/react-table";
-import { DataTable } from "@/components/shared/DataTable";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ACTION_ITEMS, SEVERITY_ITEMS } from "./action_options";
+import { Typography, Select, Table, Tag, Button } from "antd";
+import { DeleteOutlined } from "@ant-design/icons";
+
+const { Text } = Typography;
+const { Option } = Select;
 
 interface ContentCategory {
   id: string;
@@ -30,76 +28,70 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
   onRemove,
   readOnly = false,
 }) => {
-  const columns: ColumnDef<ContentCategory>[] = [
+  const columns = [
     {
-      header: "Category",
-      accessorKey: "display_name",
-      cell: ({ row }) => {
-        const { category, display_name: displayName } = row.original;
-        return (
-          <div>
-            <span className="font-semibold">{displayName}</span>
-            {displayName !== category && <div className="text-xs text-muted-foreground">{category}</div>}
-          </div>
-        );
-      },
+      title: "Category",
+      dataIndex: "display_name",
+      key: "display_name",
+      render: (displayName: string, record: ContentCategory) => (
+        <div>
+          <Text strong>{displayName}</Text>
+          {displayName !== record.category && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {record.category}
+              </Text>
+            </div>
+          )}
+        </div>
+      ),
     },
     {
-      header: "Severity Threshold",
-      accessorKey: "severity_threshold",
-      size: 180,
-      cell: ({ row }) => {
-        const { id, severity_threshold: severity } = row.original;
+      title: "Severity Threshold",
+      dataIndex: "severity_threshold",
+      key: "severity_threshold",
+      width: 180,
+      render: (severity: string, record: ContentCategory) => {
         if (readOnly) {
-          return <Badge variant={severity === "high" ? "destructive" : "secondary"}>{severity.toUpperCase()}</Badge>;
+          const colorMap = {
+            high: "red",
+            medium: "orange",
+            low: "yellow",
+          } as const;
+          return <Tag color={colorMap[severity as keyof typeof colorMap]}>{severity.toUpperCase()}</Tag>;
         }
         return (
           <Select
-            items={SEVERITY_ITEMS}
             value={severity}
-            onValueChange={(value: string | null) =>
-              value && onSeverityChange?.(id, value as "high" | "medium" | "low")
-            }
+            onChange={(value) => onSeverityChange?.(record.id, value as "high" | "medium" | "low")}
+            style={{ width: 150 }}
+            size="small"
           >
-            <SelectTrigger size="sm" className="w-[150px]" aria-label="Severity Threshold">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false}>
-              {SEVERITY_ITEMS.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
+            <Option value="high">High</Option>
+            <Option value="medium">Medium</Option>
+            <Option value="low">Low</Option>
           </Select>
         );
       },
     },
     {
-      header: "Action",
-      accessorKey: "action",
-      size: 150,
-      cell: ({ row }) => {
-        const { action, id } = row.original;
+      title: "Action",
+      dataIndex: "action",
+      key: "action",
+      width: 150,
+      render: (action: string, record: ContentCategory) => {
         if (readOnly) {
-          return <Badge variant={action === "BLOCK" ? "destructive" : "secondary"}>{action}</Badge>;
+          return <Tag color={action === "BLOCK" ? "red" : "blue"}>{action}</Tag>;
         }
         return (
           <Select
-            items={ACTION_ITEMS}
             value={action}
-            onValueChange={(value: string | null) => value && onActionChange?.(id, value as "BLOCK" | "MASK")}
+            onChange={(value) => onActionChange?.(record.id, value as "BLOCK" | "MASK")}
+            style={{ width: 120 }}
+            size="small"
           >
-            <SelectTrigger size="sm" className="w-[120px]" aria-label="Action">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false}>
-              {ACTION_ITEMS.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
+            <Option value="BLOCK">Block</Option>
+            <Option value="MASK">Mask</Option>
           </Select>
         );
       },
@@ -108,23 +100,22 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
 
   if (!readOnly) {
     columns.push({
-      header: "",
-      id: "actions",
-      size: 100,
-      cell: ({ row }) => (
-        <Button variant="ghost" size="sm" onClick={() => onRemove?.(row.original.id)}>
-          <Trash2 />
+      title: "",
+      key: "actions",
+      width: 100,
+      render: (_: any, record: ContentCategory) => (
+        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove?.(record.id)}>
           Delete
         </Button>
       ),
-    });
+    } as any);
   }
 
   if (categories.length === 0) {
-    return <div className="py-10 text-center text-muted-foreground">No categories configured.</div>;
+    return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No categories configured.</div>;
   }
 
-  return <DataTable data={categories} columns={columns} getRowId={(row) => row.id} size="compact" />;
+  return <Table dataSource={categories} columns={columns} rowKey="id" pagination={false} size="small" />;
 };
 
 export default CategoryTable;

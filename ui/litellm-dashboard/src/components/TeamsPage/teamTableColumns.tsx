@@ -209,14 +209,7 @@ export const getTeamTableColumns = ({
       header: "Spend / Budget",
       size: 200,
       enableSorting: false,
-      cell: ({ row }) => (
-        <SpendBudgetCell
-          spend={row.original.spend}
-          maxBudget={row.original.max_budget}
-          spendDecimals={2}
-          budgetDecimals={2}
-        />
-      ),
+      cell: ({ row }) => <SpendBudgetCell spend={row.original.spend} maxBudget={row.original.max_budget} />,
     },
     {
       id: "created_at",

@@ -1,11 +1,9 @@
 import React, { useState } from "react";
+import { Select, Typography, Spin } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { SearchSelect } from "@/components/shared/SearchSelect";
-import { ArrowLeft, MoreVertical, Plus } from "lucide-react";
+import { Button, TextInput } from "@tremor/react";
+import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
+import { DotsVerticalIcon } from "@heroicons/react/solid";
 import {
   GuardrailPipeline,
   PipelineStep,
@@ -34,6 +32,8 @@ function getPromptsForTestSource(source: string): CompliancePrompt[] {
   const fw = getFrameworks().find((f) => f.name === source);
   return fw ? fw.categories.flatMap((c) => c.prompts) : [];
 }
+
+const { Text } = Typography;
 
 const ACTION_OPTIONS = [
   { label: "Next Step", value: "next" },
@@ -241,7 +241,7 @@ const Connector: React.FC<ConnectorProps> = ({ onInsert }) => (
       }}
       title="Insert step"
     >
-      <Plus style={{ width: 12, height: 12, color: "#9ca3af" }} />
+      <PlusIcon style={{ width: 12, height: 12, color: "#9ca3af" }} />
     </button>
     <div style={{ width: 1, flex: 1, backgroundColor: "#d1d5db" }} />
   </div>
@@ -316,7 +316,7 @@ const StepCard: React.FC<StepCardProps> = ({
             }}
             title="Delete step"
           >
-            <MoreVertical style={{ width: 16, height: 16, color: "#9ca3af" }} />
+            <DotsVerticalIcon style={{ width: 16, height: 16, color: "#9ca3af" }} />
           </button>
         </div>
       </div>
@@ -326,12 +326,14 @@ const StepCard: React.FC<StepCardProps> = ({
         <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
           Guardrail
         </label>
-        <SearchSelect
-          options={guardrailOptions}
-          value={step.guardrail || undefined}
-          onValueChange={(value) => onChange({ guardrail: value })}
+        <Select
+          showSearch
+          style={{ width: "100%" }}
           placeholder="Select a guardrail"
-          emptyText="No guardrails found"
+          value={step.guardrail || undefined}
+          onChange={(value) => onChange({ guardrail: value })}
+          options={guardrailOptions}
+          filterOption={(input, option) => (option?.label ?? "").toString().toLowerCase().includes(input.toLowerCase())}
         />
       </div>
 
@@ -344,24 +346,18 @@ const StepCard: React.FC<StepCardProps> = ({
         <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
           Action
         </label>
-        <Select value={step.on_pass} onValueChange={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}>
-          <SelectTrigger className="w-full">
-            <SelectValue>{ACTION_LABELS[step.on_pass] || step.on_pass}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {ACTION_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Select
+          style={{ width: "100%" }}
+          value={step.on_pass}
+          onChange={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}
+          options={ACTION_OPTIONS}
+        />
         {step.on_pass === "modify_response" && (
           <div style={{ marginTop: 8 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
               Custom Response Message
             </label>
-            <Input
+            <TextInput
               placeholder="Enter custom response..."
               value={step.modify_response_message || ""}
               onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
@@ -379,24 +375,18 @@ const StepCard: React.FC<StepCardProps> = ({
         <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
           Action
         </label>
-        <Select value={step.on_fail} onValueChange={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}>
-          <SelectTrigger className="w-full">
-            <SelectValue>{ACTION_LABELS[step.on_fail] || step.on_fail}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {ACTION_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Select
+          style={{ width: "100%" }}
+          value={step.on_fail}
+          onChange={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}
+          options={ACTION_OPTIONS}
+        />
         {step.on_fail === "modify_response" && (
           <div style={{ marginTop: 8 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
               Custom Response Message
             </label>
-            <Input
+            <TextInput
               placeholder="Enter custom response..."
               value={step.modify_response_message || ""}
               onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
@@ -415,31 +405,23 @@ const StepCard: React.FC<StepCardProps> = ({
           Action
         </label>
         <Select
-          value={step.on_error ?? null}
-          onValueChange={(value) =>
-            onChange({ on_error: value === null ? undefined : (value as PipelineStep["on_error"]) })
+          style={{ width: "100%" }}
+          placeholder="Same as ON FAIL"
+          allowClear
+          value={step.on_error ?? undefined}
+          onChange={(value) =>
+            onChange({
+              on_error: value === undefined || value === null ? undefined : (value as PipelineStep["on_error"]),
+            })
           }
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue>
-              {step.on_error != null ? ACTION_LABELS[step.on_error] || step.on_error : "Same as ON FAIL"}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={null}>Same as ON FAIL</SelectItem>
-            {ACTION_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          options={ACTION_OPTIONS}
+        />
         {step.on_error === "modify_response" && step.on_fail !== "modify_response" && (
           <div style={{ marginTop: 8 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
               Custom Response Message
             </label>
-            <Input
+            <TextInput
               placeholder="Enter custom response..."
               value={step.modify_response_message || ""}
               onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
@@ -841,20 +823,13 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
         <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
           Test with
         </label>
-        <Select value={testSource} onValueChange={(value) => value !== null && setTestSource(value)}>
-          <SelectTrigger className="mb-3 w-full">
-            <SelectValue>
-              {testSourceOptions.find((option) => option.value === testSource)?.label ?? testSource}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {testSourceOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Select
+          value={testSource}
+          onChange={setTestSource}
+          options={testSourceOptions}
+          style={{ width: "100%", marginBottom: 12 }}
+          size="middle"
+        />
         {isQuickChat && (
           <>
             <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
@@ -893,7 +868,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
               : `Run pipeline against ${promptsForSource.length} prompts from "${testSource}".`}
           </div>
         )}
-        <Button onClick={handleRunTest} disabled={isRunning} style={{ marginTop: 8, width: "100%" }}>
+        <Button onClick={handleRunTest} loading={isRunning} style={{ marginTop: 8, width: "100%" }}>
           Run Test
         </Button>
       </div>
@@ -1182,13 +1157,14 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
           <Button
             onClick={onNewVersion}
             disabled={!accessToken || isCreatingVersion}
+            loading={isCreatingVersion}
             style={{ width: "100%", marginBottom: 12 }}
           >
             + New Version
           </Button>
           {isLoading ? (
             <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>
-              <UiLoadingSpinner className="size-4" />
+              <Spin size="small" />
             </div>
           ) : versions.length === 0 ? (
             <span style={{ fontSize: 13, color: "#9ca3af" }}>No versions found</span>
@@ -1243,6 +1219,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
                     variant="secondary"
                     onClick={onPublish}
                     disabled={!accessToken || isUpdatingStatus}
+                    loading={isUpdatingStatus}
                     style={{ width: "100%", marginBottom: 8 }}
                   >
                     Publish
@@ -1265,6 +1242,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
                   <Button
                     onClick={onPromoteToProduction}
                     disabled={!accessToken || isUpdatingStatus}
+                    loading={isUpdatingStatus}
                     style={{ width: "100%", marginBottom: 8 }}
                   >
                     Promote to production
@@ -1554,11 +1532,11 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
               alignItems: "center",
             }}
           >
-            <ArrowLeft style={{ width: 18, height: 18, color: "#6b7280" }} />
+            <ArrowLeftIcon style={{ width: 18, height: 18, color: "#6b7280" }} />
           </button>
           <span style={{ fontSize: 14, color: "#6b7280" }}>Policies</span>
           <span style={{ fontSize: 14, color: "#d1d5db" }}>/</span>
-          <Input
+          <TextInput
             placeholder="Policy name..."
             value={policyName}
             onChange={(e) => setPolicyName(e.target.value)}
@@ -1586,7 +1564,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           <Button variant="secondary" onClick={() => setShowTestPanel(!showTestPanel)}>
             {showTestPanel ? "Hide Test" : "Test Pipeline"}
           </Button>
-          <Button onClick={handleSave} disabled={isSubmitting}>
+          <Button onClick={handleSave} loading={isSubmitting}>
             {isEditing ? "Update Policy" : "Save Policy"}
           </Button>
         </div>
@@ -1601,7 +1579,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           flexShrink: 0,
         }}
       >
-        <Input
+        <TextInput
           placeholder="Add a description (optional)..."
           value={description}
           onChange={(e) => setDescription(e.target.value)}

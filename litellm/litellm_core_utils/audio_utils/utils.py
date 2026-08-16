@@ -5,7 +5,7 @@ Utils used for litellm.transcription() and litellm.atranscription()
 import hashlib
 import os
 from dataclasses import dataclass
-from typing import Final
+from typing import Optional
 
 from litellm.types.files import get_file_mime_type_from_extension
 from litellm.types.utils import FileTypes
@@ -66,7 +66,7 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
     elif isinstance(audio_file, os.PathLike):
         # File path or PathLike — PathLike is a Python-level type that
         # HTTP form values can't fabricate.
-        file_path: Final = str(audio_file)
+        file_path = str(audio_file)
         with open(file_path, "rb") as f:
             file_content = f.read()
         filename = file_path.split("/")[-1]
@@ -74,7 +74,7 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
         # Tuple format: (filename, content, content_type) or (filename, content)
         if len(audio_file) >= 2:
             filename = audio_file[0] or "audio.wav"
-            content: Final = audio_file[1]
+            content = audio_file[1]
             if isinstance(content, (bytes, bytearray)):
                 file_content = bytes(content)
             elif isinstance(content, str):
@@ -99,10 +99,10 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
     elif hasattr(audio_file, "read") and not isinstance(audio_file, (str, bytes, bytearray, tuple, os.PathLike)):
         # File-like object (IO) - check this after all other types
         filename = getattr(audio_file, "name", "audio.wav")
-        file_content = audio_file.read()
+        file_content = audio_file.read()  # type: ignore
         # Reset file pointer if possible
         if hasattr(audio_file, "seek"):
-            audio_file.seek(0)
+            audio_file.seek(0)  # type: ignore
     else:
         raise ValueError(f"Unsupported audio_file type: {type(audio_file)}")
 
@@ -114,7 +114,7 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
     if filename:
         try:
             # Extract extension from filename
-            extension: Final = filename.split(".")[-1].lower() if "." in filename else "wav"
+            extension = filename.split(".")[-1].lower() if "." in filename else "wav"
             content_type = get_file_mime_type_from_extension(extension)
         except ValueError:
             # If extension is not recognized, fallback to audio/wav
@@ -123,7 +123,7 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
     return ProcessedAudioFile(file_content=file_content, filename=filename, content_type=content_type)
 
 
-BARE_ISO_639_1_TO_BCP47: Final = {
+BARE_ISO_639_1_TO_BCP47 = {
     "en": "en-US",
     "es": "es-ES",
     "de": "de-DE",
@@ -174,13 +174,12 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
     Compute SHA-256 hash of audio file content for cache keys.
     Falls back to filename hash if content extraction fails.
     """
-    file_content: bytes | None = None
-    fallback_filename: str | None = None
+    file_content: Optional[bytes] = None
+    fallback_filename: Optional[str] = None
 
     if isinstance(file_obj, tuple):
         if len(file_obj) < 2:
             fallback_filename = str(file_obj[0]) if len(file_obj) > 0 else None
-            file_content_obj = None
         else:
             fallback_filename = str(file_obj[0]) if file_obj[0] is not None else None
             file_content_obj = file_obj[1]
@@ -204,18 +203,18 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
                     file_content = f.read()
                 if fallback_filename is None:
                     fallback_filename = str(file_content_obj)
-            except OSError:
+            except (OSError, IOError):
                 fallback_filename = str(file_content_obj)
                 file_content = None
-        elif file_content_obj is not None and hasattr(file_content_obj, "read"):
+        elif hasattr(file_content_obj, "read"):
             try:
-                current_position: Final = file_content_obj.tell() if hasattr(file_content_obj, "tell") else None
+                current_position = file_content_obj.tell() if hasattr(file_content_obj, "tell") else None
                 if hasattr(file_content_obj, "seek"):
                     file_content_obj.seek(0)
-                file_content = file_content_obj.read()
+                file_content = file_content_obj.read()  # type: ignore
                 if current_position is not None and hasattr(file_content_obj, "seek"):
-                    file_content_obj.seek(current_position)
-            except (OSError, AttributeError):
+                    file_content_obj.seek(current_position)  # type: ignore
+            except (OSError, IOError, AttributeError):
                 file_content = None
         else:
             file_content = None
@@ -233,7 +232,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
         hash_object = hashlib.sha256(fallback_filename.encode("utf-8"))
         return hash_object.hexdigest()
 
-    file_obj_str: Final = str(file_obj)
+    file_obj_str = str(file_obj)
     hash_object = hashlib.sha256(file_obj_str.encode("utf-8"))
     return hash_object.hexdigest()
 
@@ -244,12 +243,12 @@ def get_audio_file_for_health_check() -> FileTypes:
 
     Returns the content of `audio_health_check.wav` in the same directory as this file
     """
-    pwd: Final = os.path.dirname(os.path.realpath(__file__))
-    file_path: Final = os.path.join(pwd, "audio_health_check.wav")
+    pwd = os.path.dirname(os.path.realpath(__file__))
+    file_path = os.path.join(pwd, "audio_health_check.wav")
     return open(file_path, "rb")
 
 
-def calculate_request_duration(file: FileTypes) -> float | None:
+def calculate_request_duration(file: FileTypes) -> Optional[float]:
     """
     Calculate audio duration from file content.
 
@@ -269,7 +268,7 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         import io
 
         # Handle different file input types
-        file_content: bytes | None = None
+        file_content: Optional[bytes] = None
 
         if isinstance(file, (bytes, bytearray)):
             # Raw bytes
@@ -288,12 +287,12 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         elif isinstance(file, tuple):
             # Tuple format: (filename, content, optional content_type)
             if len(file) >= 2:
-                content: Final = file[1]
+                content = file[1]
                 if isinstance(content, bytes):
                     file_content = content
                 elif hasattr(content, "read") and not isinstance(content, (str, os.PathLike)):
                     # File-like object in tuple
-                    current_pos: Final = getattr(content, "tell", lambda: None)()
+                    current_pos = getattr(content, "tell", lambda: None)()
                     # Seek to start to ensure we read the entire content
                     if hasattr(content, "seek"):
                         content.seek(0)
@@ -302,7 +301,7 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                         content.seek(current_pos)
         elif hasattr(file, "read") and not isinstance(file, tuple):
             # File-like object (including BytesIO)
-            current_position: Final = file.tell() if hasattr(file, "tell") else None
+            current_position = file.tell() if hasattr(file, "tell") else None
             # Seek to start to ensure we read the entire content
             if hasattr(file, "seek"):
                 file.seek(0)
@@ -315,9 +314,9 @@ def calculate_request_duration(file: FileTypes) -> float | None:
             return None
 
         # Extract duration using soundfile
-        file_object: Final = io.BytesIO(file_content)
+        file_object = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            duration: Final = len(audio) / audio.samplerate
+            duration = len(audio) / audio.samplerate
             return duration
 
     except Exception:

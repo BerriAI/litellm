@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-mm.html
 """
 
-from typing import Final
+from typing import List, Optional
 
 from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingConfig,
@@ -30,7 +30,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self) -> list[str]:
+    def get_supported_openai_params(self) -> List[str]:
         return ["dimensions"]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
@@ -41,27 +41,27 @@ class AmazonTitanMultimodalEmbeddingG1Config:
 
     def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanMultimodalEmbeddingRequest:
         ## check if b64 encoded str or not ##
-        is_encoded: Final = is_base64_encoded(input)
+        is_encoded = is_base64_encoded(input)
         if is_encoded:  # check if string is b64 encoded image or not
-            b64_str: Final = get_base64_str(input)
+            b64_str = get_base64_str(input)
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputImage=b64_str)
         else:
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputText=input)
 
         for k, v in inference_params.items():
-            transformed_request[k] = v
+            transformed_request[k] = v  # type: ignore
         return transformed_request
 
     def _transform_response(
         self,
-        response_list: list[dict],
+        response_list: List[dict],
         model: str,
-        batch_data: list[dict] | None = None,
+        batch_data: Optional[List[dict]] = None,
     ) -> EmbeddingResponse:
         total_prompt_tokens = 0
-        transformed_responses: Final[list[Embedding]] = []
+        transformed_responses: List[Embedding] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)
+            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)  # type: ignore
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],
@@ -78,13 +78,13 @@ class AmazonTitanMultimodalEmbeddingG1Config:
                 if "inputImage" in request_data:
                     image_count += 1
 
-        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if image_count > 0:
             prompt_tokens_details = PromptTokensDetailsWrapper(
                 image_count=image_count,
             )
 
-        usage: Final = Usage(
+        usage = Usage(
             prompt_tokens=total_prompt_tokens,
             completion_tokens=0,
             total_tokens=total_prompt_tokens,

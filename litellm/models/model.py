@@ -7,6 +7,7 @@ Canonical definition for ``litellm_proxymodeltable``. Re-exported from
 
 import json
 from datetime import datetime
+from typing import Optional
 
 from pydantic import ConfigDict, model_validator
 
@@ -17,12 +18,12 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
     model_id: str
     model_name: str
     litellm_params: dict
-    model_info: dict | None = None
+    model_info: Optional[dict] = None
     blocked: bool = False
-    created_at: datetime | None = None
-    created_by: str | None = None
-    updated_at: datetime | None = None
-    updated_by: str | None = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -46,13 +47,13 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
         return self.blocked
 
     @property
-    def team_id(self) -> str | None:
+    def team_id(self) -> Optional[str]:
         if self.model_info:
             return self.model_info.get("team_id")
         return None
 
     @property
-    def team_public_model_name(self) -> str | None:
+    def team_public_model_name(self) -> Optional[str]:
         if self.model_info:
             return self.model_info.get("team_public_model_name")
         return None

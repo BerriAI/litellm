@@ -1,9 +1,9 @@
-from typing import Final
+from typing import List, Optional
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
-def is_proxy_admin(user_api_key_dict: UserAPIKeyAuth | None) -> bool:
+def is_proxy_admin(user_api_key_dict: Optional[UserAPIKeyAuth]) -> bool:
     if user_api_key_dict is None:
         return False
 
@@ -14,8 +14,8 @@ def is_proxy_admin(user_api_key_dict: UserAPIKeyAuth | None) -> bool:
 
 
 def get_resource_owner_scopes(
-    user_api_key_dict: UserAPIKeyAuth | None,
-) -> list[str]:
+    user_api_key_dict: Optional[UserAPIKeyAuth],
+) -> List[str]:
     """
     Return ownership scopes that may access a user-created proxy resource.
 
@@ -32,9 +32,9 @@ def get_resource_owner_scopes(
     if user_api_key_dict is None:
         return []
 
-    scopes: Final[list[str]] = []
+    scopes: List[str] = []
 
-    def _add(scope: str | None) -> None:
+    def _add(scope: Optional[str]) -> None:
         if scope and scope not in scopes:
             scopes.append(scope)
 
@@ -54,8 +54,8 @@ def get_resource_owner_scopes(
 
 
 def get_primary_resource_owner_scope(
-    user_api_key_dict: UserAPIKeyAuth | None,
-) -> str | None:
+    user_api_key_dict: Optional[UserAPIKeyAuth],
+) -> Optional[str]:
     """Return the canonical owner scope to stamp on newly-created rows.
 
     ``None`` for identity-less callers — callers that depend on a primary
@@ -80,8 +80,8 @@ def get_primary_resource_owner_scope(
 
 
 def user_can_access_resource_owner(
-    owner: str | None,
-    user_api_key_dict: UserAPIKeyAuth | None,
+    owner: Optional[str],
+    user_api_key_dict: Optional[UserAPIKeyAuth],
 ) -> bool:
     if user_api_key_dict is None:
         return True

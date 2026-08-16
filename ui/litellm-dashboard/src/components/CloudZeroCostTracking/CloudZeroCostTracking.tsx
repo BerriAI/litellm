@@ -1,6 +1,6 @@
 import { useCloudZeroSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, Typography } from "antd";
 import CloudZeroEmptyPlaceholder from "./CloudZeroEmptyPlaceholder";
 import { useState } from "react";
 import CloudZeroCreationModal from "./CloudZeroCreateModal";
@@ -28,9 +28,7 @@ export default function CloudZeroCostTracking() {
   if (isLoading) {
     return (
       <Card>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">Loading CloudZero settings...</p>
-        </CardContent>
+        <Typography.Text>Loading CloudZero settings...</Typography.Text>
       </Card>
     );
   }
@@ -38,11 +36,9 @@ export default function CloudZeroCostTracking() {
   if (error) {
     return (
       <Card>
-        <CardContent>
-          <p className="text-sm text-destructive">
-            Error loading CloudZero settings: {error instanceof Error ? error.message : String(error)}
-          </p>
-        </CardContent>
+        <Typography.Text className="text-red-600">
+          Error loading CloudZero settings: {error instanceof Error ? error.message : String(error)}
+        </Typography.Text>
       </Card>
     );
   }

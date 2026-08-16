@@ -1,5 +1,4 @@
 import type { MCPEvent } from "../mcp_tools/types";
-import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 export type { MCPEvent };
 
 export interface ChatMessage {
@@ -12,15 +11,8 @@ export interface ChatMessage {
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
-  timeToFirstToken?: number;
-  totalLatency?: number;
-  usage?: TokenUsage;
   timestamp: number;
 }
-
-export type AssistantMessageUpdate = Partial<
-  Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents" | "timeToFirstToken" | "totalLatency" | "usage">
->;
 
 export interface Conversation {
   id: string;

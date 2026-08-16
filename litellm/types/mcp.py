@@ -1,5 +1,5 @@
 import enum
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -47,12 +47,12 @@ class MCPAuth(str, enum.Enum):
 # "use this default"; it is applied at every egress build site via this single
 # constant rather than a DB-level DEFAULT (Prisma writes explicit values on
 # insert, so a column default would rarely apply anyway).
-DEFAULT_SUBJECT_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:access_token"
+DEFAULT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
 MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
-MCPAuthType = (
+MCPAuthType = Optional[
     Literal[
         MCPAuth.none,
         MCPAuth.api_key,
@@ -67,8 +67,7 @@ MCPAuthType = (
         MCPAuth.true_passthrough,
         MCPAuth.oauth_delegate,
     ]
-    | None
-)
+]
 
 
 class MCPPublicServer(BaseModel):
@@ -78,12 +77,12 @@ class MCPPublicServer(BaseModel):
 
     server_id: str
     name: str
-    alias: str | None = None
-    server_name: str | None = None
+    alias: Optional[str] = None
+    server_name: Optional[str] = None
     transport: MCPTransportType
-    spec_path: str | None = None
-    auth_type: MCPAuthType | None = None
-    mcp_info: dict[str, Any] | None = None
+    spec_path: Optional[str] = None
+    auth_type: Optional[MCPAuthType] = None
+    mcp_info: Optional[Dict[str, Any]] = None
 
 
 # OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).
@@ -91,49 +90,49 @@ MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"
 
 
 class MCPCredentials(TypedDict, total=False):
-    auth_value: str | None
+    auth_value: Optional[str]
     """
     Authentication value
     """
 
-    client_id: str | None
+    client_id: Optional[str]
     """
     OAuth 2.0 client identifier used when auth_type is oauth2
     """
 
-    client_secret: str | None
+    client_secret: Optional[str]
     """
     OAuth 2.0 client secret used when auth_type is oauth2
     """
 
-    scopes: list[str] | None
+    scopes: Optional[List[str]]
     """
     OAuth 2.0 scopes to request when exchanging the client credentials
     """
 
     # AWS SigV4 fields
-    aws_access_key_id: str | None
+    aws_access_key_id: Optional[str]
     """AWS access key ID for SigV4 signing. Optional — falls back to boto3 credential chain."""
 
-    aws_secret_access_key: str | None
+    aws_secret_access_key: Optional[str]
     """AWS secret access key for SigV4 signing. Optional — falls back to boto3 credential chain."""
 
-    aws_session_token: str | None
+    aws_session_token: Optional[str]
     """AWS session token for temporary STS credentials. Optional."""
 
-    aws_region_name: str | None
+    aws_region_name: Optional[str]
     """AWS region for SigV4 signing (e.g., 'us-east-1'). Not a secret — stored unencrypted."""
 
-    aws_service_name: str | None
+    aws_service_name: Optional[str]
     """AWS service name for SigV4 signing (e.g., 'bedrock-agentcore'). Not a secret — stored unencrypted."""
 
-    aws_role_name: str | None
+    aws_role_name: Optional[str]
     """IAM role ARN for STS AssumeRole (e.g., 'arn:aws:iam::123456789012:role/MyRole'). Not a secret — stored unencrypted."""
 
-    aws_session_name: str | None
+    aws_session_name: Optional[str]
     """Session name for STS AssumeRole (used in CloudTrail). Not a secret — stored unencrypted."""
 
-    audience: str | None
+    audience: Optional[str]
     """
     Target audience for OAuth 2.0 Token Exchange (RFC 8693).
 
@@ -143,7 +142,7 @@ class MCPCredentials(TypedDict, total=False):
     stripped from the stored blob. Prefer the top-level request field.
     """
 
-    token_exchange_endpoint: str | None
+    token_exchange_endpoint: Optional[str]
     """
     IDP token endpoint for OAuth 2.0 Token Exchange (RFC 8693).
 
@@ -152,7 +151,7 @@ class MCPCredentials(TypedDict, total=False):
     authoritative. Prefer the top-level request field.
     """
 
-    subject_token_type: str | None
+    subject_token_type: Optional[str]
     """
     Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
     Default: DEFAULT_SUBJECT_TOKEN_TYPE (urn:ietf:params:oauth:token-type:access_token).
@@ -162,47 +161,38 @@ class MCPCredentials(TypedDict, total=False):
     the top-level request field.
     """
 
-    id_jag_resource_token_endpoint: str | None
+    id_jag_resource_token_endpoint: Optional[str]
     """
     Resource authorization server JWT-bearer (RFC 7523) endpoint for ID-JAG leg 2
     """
 
-    id_jag_resource: str | None
+    id_jag_resource: Optional[str]
     """
     Optional RFC 8707 resource indicator sent on ID-JAG leg 1
     """
 
-    upstream_resource: str | None
-    """
-    Optional RFC 8707 resource indicator sent on the upstream oauth2 legs (authorize, both token
-    grants, and the client_credentials fetch). Omitted when unset, which is the default; "auto"
-    derives the canonical URI from the server's url; any other value is sent verbatim.
-    Distinct from ``id_jag_resource``, which is the same parameter on the ID-JAG exchange, and from
-    ``audience``, which is the RFC 8693 token-exchange parameter.
-    """
-
-    client_private_key: str | None
+    client_private_key: Optional[str]
     """
     PEM private key used to sign the private-key-JWT client_assertion (RFC 7523)
     """
 
-    client_private_key_id: str | None
+    client_private_key_id: Optional[str]
     """
     Key id (kid) advertised in the client_assertion JWT header
     """
 
-    client_assertion_signing_alg: str | None
+    client_assertion_signing_alg: Optional[str]
     """
     Signing algorithm for the client_assertion JWT. Default: RS256
     """
 
-    token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None
+    token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod]
     """
     How the gateway authenticates to the upstream token endpoint. "client_secret_basic"
     sends HTTP Basic; defaults to "client_secret_post" when unset.
     """
 
-    redirect_uris: list[str] | None
+    redirect_uris: Optional[List[str]]
     """
     The redirect URIs a dynamically registered (RFC 7591) OAuth client was bound to at
     registration time. Lets a later registration detect that the proxy's public origin no
@@ -211,7 +201,7 @@ class MCPCredentials(TypedDict, total=False):
     this field existed. Not a secret; stored unencrypted.
     """
 
-    token_exchange_profile: str | None
+    token_exchange_profile: Optional[str]
     """
     Token exchange wire dialect: "rfc8693" (default, the standard token-exchange grant) or
     "entra_obo" (Microsoft Entra On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use
@@ -223,18 +213,13 @@ class MCPCredentials(TypedDict, total=False):
     """
 
 
-MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("upstream_resource",)
-"""Non-secret credential keys returned on read so the admin form can show and clear them. Mirrors
-``ADMIN_CONFIG_CREDENTIAL_KEYS`` in ``ui/litellm-dashboard/src/components/mcp_tools/types.tsx``."""
-
-
 class MCPServerCostInfo(TypedDict, total=False):
-    default_cost_per_query: float | None
+    default_cost_per_query: Optional[float]
     """
     Default cost per query for the MCP server tool call
     """
 
-    tool_name_to_cost_per_query: dict[str, float] | None
+    tool_name_to_cost_per_query: Optional[Dict[str, float]]
     """
     Granular, set a custom cost for each tool in the MCP server
     """
@@ -246,12 +231,12 @@ class MCPStdioConfig(TypedDict, total=False):
     Command to run the MCP server (e.g., 'npx', 'python', 'node')
     """
 
-    args: list[str]
+    args: List[str]
     """
     Arguments to pass to the command
     """
 
-    env: dict[str, str] | None
+    env: Optional[Dict[str, str]]
     """
     Environment variables to set when running the command
     """
@@ -263,9 +248,9 @@ class MCPPreCallRequestObject(BaseModel):
     """
 
     tool_name: str
-    arguments: dict[str, Any]
-    server_name: str | None = None
-    user_api_key_auth: dict[str, Any] | None = None
+    arguments: Dict[str, Any]
+    server_name: Optional[str] = None
+    user_api_key_auth: Optional[Dict[str, Any]] = None
     hidden_params: HiddenParams = HiddenParams()
 
 
@@ -275,8 +260,8 @@ class MCPPreCallResponseObject(BaseModel):
     """
 
     should_proceed: bool = True
-    modified_arguments: dict[str, Any] | None = None
-    error_message: str | None = None
+    modified_arguments: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
     hidden_params: HiddenParams = HiddenParams()
 
 
@@ -286,9 +271,9 @@ class MCPDuringCallRequestObject(BaseModel):
     """
 
     tool_name: str
-    arguments: dict[str, Any]
-    server_name: str | None = None
-    start_time: float | None = None
+    arguments: Dict[str, Any]
+    server_name: Optional[str] = None
+    start_time: Optional[float] = None
     hidden_params: HiddenParams = HiddenParams()
 
 
@@ -298,7 +283,7 @@ class MCPDuringCallResponseObject(BaseModel):
     """
 
     should_continue: bool = True
-    error_message: str | None = None
+    error_message: Optional[str] = None
     hidden_params: HiddenParams = HiddenParams()
 
 
@@ -307,5 +292,5 @@ class MCPPostCallResponseObject(BaseModel):
     Pydantic object used for MCP post_call_hook response
     """
 
-    mcp_tool_call_response: list[MCPTextContent | MCPImageContent | MCPEmbeddedResource]
+    mcp_tool_call_response: List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]
     hidden_params: HiddenParams

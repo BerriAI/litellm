@@ -1,3 +1,5 @@
+from typing import Optional
+
 import litellm
 
 
@@ -35,10 +37,10 @@ class Rules:
                         message="LLM Response failed post-call-rule check",
                         llm_provider="",
                         model=model,
-                    )
+                    )  # type: ignore
         return True
 
-    def post_call_rules(self, input: str | None, model: str) -> bool:
+    def post_call_rules(self, input: Optional[str], model: str) -> bool:
         if input is None:
             return True
         for rule in litellm.post_call_rules:
@@ -50,10 +52,10 @@ class Rules:
                             message="LLM Response failed post-call-rule check",
                             llm_provider="",
                             model=model,
-                        )
+                        )  # type: ignore
                 elif isinstance(decision, dict):
                     decision_val = decision.get("decision", True)
                     decision_message = decision.get("message", "LLM Response failed post-call-rule check")
                     if decision_val is False:
-                        raise litellm.APIResponseValidationError(message=decision_message, llm_provider="", model=model)
+                        raise litellm.APIResponseValidationError(message=decision_message, llm_provider="", model=model)  # type: ignore
         return True

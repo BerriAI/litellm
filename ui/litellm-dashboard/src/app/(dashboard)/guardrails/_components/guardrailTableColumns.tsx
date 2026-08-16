@@ -16,7 +16,6 @@ import {
 import { cn } from "@/lib/cva.config";
 
 import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
-import { Logo } from "@/components/molecules/logo/Logo";
 
 const CONFIG_DELETE_HINT = "Config guardrails are defined in the config file and cannot be deleted from the dashboard.";
 
@@ -24,7 +23,16 @@ function GuardrailProviderCell({ provider }: { provider: string }) {
   const { logo, displayName } = getGuardrailLogoAndName(provider);
   return (
     <div className="flex items-center gap-2">
-      <Logo src={logo} label={displayName} className="size-4 shrink-0" />
+      {logo ? (
+        <img
+          src={logo}
+          alt=""
+          className="size-4 shrink-0"
+          onError={(event) => {
+            (event.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ) : null}
       <span className="truncate text-sm">{displayName}</span>
     </div>
   );

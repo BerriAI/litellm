@@ -2,7 +2,7 @@
 Base Search transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import urlsplit
 
 import httpx
@@ -18,16 +18,6 @@ else:
     LiteLLMLoggingObj = Any
 
 
-_PERPLEXITY_UNIFIED_PARAMS: Final[frozenset[str]] = frozenset(
-    (
-        "max_results",
-        "search_domain_filter",
-        "country",
-        "max_tokens_per_page",
-    )
-)
-
-
 def _search_host(url: str) -> str:
     return urlsplit(url).netloc.lower()
 
@@ -37,10 +27,10 @@ def _is_trusted_search_api_base(
     default_api_base: str | None,
     base_env_var: str | None,
 ) -> bool:
-    candidate: Final = _search_host(caller_api_base)
+    candidate = _search_host(caller_api_base)
     if not candidate:
         return False
-    trusted: Final = {
+    trusted = {
         _search_host(base)
         for base in (
             default_api_base,
@@ -57,8 +47,8 @@ class SearchResult(LiteLLMPydanticObjectBase):
     title: str
     url: str
     snippet: str
-    date: str | None = None
-    last_updated: str | None = None
+    date: Optional[str] = None
+    last_updated: Optional[str] = None
 
     model_config = {"extra": "allow"}
 
@@ -69,7 +59,7 @@ class SearchResponse(LiteLLMPydanticObjectBase):
     Standardized to Perplexity Search format - other providers should transform to this format.
     """
 
-    results: list[SearchResult]
+    results: List[SearchResult]
     object: str = "search"
 
     model_config = {"extra": "allow"}
@@ -106,7 +96,7 @@ class BaseSearchConfig:
         return "POST"
 
     @staticmethod
-    def get_supported_perplexity_optional_params() -> frozenset[str]:
+    def get_supported_perplexity_optional_params() -> set:
         """
         Get the set of Perplexity unified search parameters.
         These are the standard parameters that providers should transform from.
@@ -114,7 +104,12 @@ class BaseSearchConfig:
         Returns:
             Set of parameter names that are part of the unified spec
         """
-        return _PERPLEXITY_UNIFIED_PARAMS
+        return {
+            "max_results",
+            "search_domain_filter",
+            "country",
+            "max_tokens_per_page",
+        }
 
     def _assert_trusted_api_base_for_server_credential(
         self,
@@ -159,7 +154,7 @@ class BaseSearchConfig:
         """
         if caller_api_key:
             return caller_api_key
-        server_key: Final = next(
+        server_key = next(
             (key for key in (get_secret_str(var) for var in key_env_vars) if key),
             None,
         )
@@ -172,11 +167,11 @@ class BaseSearchConfig:
 
     def validate_environment(
         self,
-        headers: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        headers: Dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Validate environment and return headers.
         Override in provider-specific implementations.
@@ -185,9 +180,9 @@ class BaseSearchConfig:
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
-        data: dict | list[dict] | None = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -212,10 +207,10 @@ class BaseSearchConfig:
 
     def transform_search_request(
         self,
-        query: str | list[str],
+        query: Union[str, List[str]],
         optional_params: dict,
         **kwargs,
-    ) -> dict | list[dict]:
+    ) -> Union[Dict, List[Dict]]:
         """
         Transform Search request to provider-specific format.
         Override in provider-specific implementations.

@@ -4,6 +4,8 @@ A2A Protocol Exceptions.
 Custom exception types for A2A protocol operations, following LiteLLM's exception pattern.
 """
 
+from typing import Optional
+
 import httpx
 
 
@@ -19,11 +21,11 @@ class A2AError(Exception):
         message: str,
         status_code: int = 500,
         llm_provider: str = "a2a_agent",
-        model: str | None = None,
-        response: httpx.Response | None = None,
-        litellm_debug_info: str | None = None,
-        max_retries: int | None = None,
-        num_retries: int | None = None,
+        model: Optional[str] = None,
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
     ):
         self.status_code = status_code
         self.message = f"litellm.A2AError: {message}"
@@ -63,12 +65,12 @@ class A2AConnectionError(A2AError):
     def __init__(
         self,
         message: str,
-        url: str | None = None,
-        model: str | None = None,
-        response: httpx.Response | None = None,
-        litellm_debug_info: str | None = None,
-        max_retries: int | None = None,
-        num_retries: int | None = None,
+        url: Optional[str] = None,
+        model: Optional[str] = None,
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
     ):
         self.url = url
         super().__init__(
@@ -96,10 +98,10 @@ class A2AAgentCardError(A2AError):
     def __init__(
         self,
         message: str,
-        url: str | None = None,
-        model: str | None = None,
-        response: httpx.Response | None = None,
-        litellm_debug_info: str | None = None,
+        url: Optional[str] = None,
+        model: Optional[str] = None,
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
     ):
         self.url = url
         super().__init__(
@@ -130,8 +132,8 @@ class A2ALocalhostURLError(A2AConnectionError):
         self,
         localhost_url: str,
         base_url: str,
-        original_error: Exception | None = None,
-        model: str | None = None,
+        original_error: Optional[Exception] = None,
+        model: Optional[str] = None,
     ):
         self.localhost_url = localhost_url
         self.base_url = base_url

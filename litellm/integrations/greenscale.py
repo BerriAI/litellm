@@ -1,7 +1,6 @@
 import json
 import traceback
 from datetime import datetime, timezone
-from typing import Final
 
 import litellm
 
@@ -19,8 +18,8 @@ class GreenscaleLogger:
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
-            response_json: Final = response_obj.model_dump() if response_obj else {}
-            data: Final = {
+            response_json = response_obj.model_dump() if response_obj else {}
+            data = {
                 "modelId": kwargs.get("model"),
                 "inputTokenCount": response_json.get("usage", {}).get("prompt_tokens"),
                 "outputTokenCount": response_json.get("usage", {}).get("completion_tokens"),
@@ -31,8 +30,8 @@ class GreenscaleLogger:
                 data["invocationLatency"] = int((end_time - start_time).total_seconds() * 1000)
 
             # Add additional metadata keys to tags
-            tags: Final = []
-            metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
+            tags = []
+            metadata = kwargs.get("litellm_params", {}).get("metadata", {})
             for key, value in metadata.items():
                 if key.startswith("greenscale"):
                     if key == "greenscale_project":
@@ -47,7 +46,7 @@ class GreenscaleLogger:
             if self.greenscale_logging_url is None:
                 raise Exception("Greenscale Logger Error - No logging URL found")
 
-            response: Final = litellm.module_level_client.post(
+            response = litellm.module_level_client.post(
                 self.greenscale_logging_url,
                 headers=self.headers,
                 data=json.dumps(data, default=str),
@@ -58,3 +57,4 @@ class GreenscaleLogger:
                 print_verbose(f"Greenscale Logger Succeeded - {response.text}")
         except Exception as e:
             print_verbose(f"Greenscale Logger Error - {e}, Stack trace: {traceback.format_exc()}")
+            pass

@@ -2,7 +2,6 @@ import json
 import os
 import sys
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,7 +9,6 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import litellm
 from litellm.anthropic_interface import messages
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
@@ -37,68 +35,6 @@ def test_anthropic_experimental_pass_through_messages_handler():
             print(f"Error: {e}")
         mock_responses.assert_called_once()
         assert mock_responses.call_args.kwargs["api_key"] == "test-api-key"
-
-
-@pytest.mark.asyncio
-async def test_openai_model_does_not_forward_stream_options_to_responses_api():
-    """
-    Regression test for LIT-4779. `always_include_stream_usage` injects
-    stream_options={'include_usage': True} into every streaming request, but OpenAI
-    models on /v1/messages go to the Responses API, which 400s on that param.
-    """
-    responses_payload = {
-        "id": "resp_stream_options",
-        "object": "response",
-        "created_at": 1734366691,
-        "status": "completed",
-        "model": "gpt-5.5",
-        "output": [
-            {
-                "type": "message",
-                "id": "msg_1",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
-            }
-        ],
-        "parallel_tool_calls": True,
-        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        "error": None,
-        "incomplete_details": None,
-        "instructions": None,
-        "metadata": None,
-        "temperature": None,
-        "tool_choice": "auto",
-        "tools": [],
-        "top_p": None,
-        "max_output_tokens": None,
-        "previous_response_id": None,
-        "reasoning": None,
-        "truncation": None,
-        "user": None,
-    }
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = json.dumps(responses_payload)
-    mock_response.headers = httpx.Headers({})
-    mock_response.json.return_value = responses_payload
-
-    with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock) as mock_post:
-        mock_post.return_value = mock_response
-
-        await litellm.anthropic.messages.acreate(
-            max_tokens=100,
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-            model="openai/gpt-5.5",
-            api_key="test-api-key",
-            stream_options={"include_usage": True},
-        )
-
-    mock_post.assert_called_once()
-    post_kwargs = mock_post.call_args.kwargs
-    request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
-    assert "stream_options" not in request_body
 
 
 def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_and_api_base_and_custom_values():
@@ -651,26 +587,6 @@ class TestThinkingSummaryPreservation:
             "reasoning_effort": {"effort": "high", "summary": "concise"}
         }
 
-    def test_translate_thinking_for_model_disabled_stays_plain_string_when_auto_summary_enabled(self):
-        """Disabled thinking must stay a plain string even when reasoning_auto_summary is on."""
-        import litellm
-        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
-            LiteLLMAnthropicMessagesAdapter,
-        )
-
-        original = litellm.reasoning_auto_summary
-        try:
-            litellm.reasoning_auto_summary = True
-            thinking = {"type": "disabled"}
-            result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
-                thinking=thinking,
-                model="openai/gpt-5.2",
-            )
-        finally:
-            litellm.reasoning_auto_summary = original
-
-        assert result == {"reasoning_effort": "none"}
-
 
 # ---------------------------------------------------------------------------
 # Parity tests: redundant empty-text-block sanitization scan removal.
@@ -730,61 +646,6 @@ def test_handler_skips_strip_when_presanitized():
         )
     assert spy.call_count == 0  # skipped the redundant scan
     assert result is not None
-
-
-def test_handler_flattens_replayed_unencrypted_web_search_results():
-    """Synthesized search blocks replayed as history must reach the provider as text."""
-    from litellm.llms.anthropic.experimental_pass_through.messages import handler
-
-    captured = {}
-
-    def fake_base_handler(*args, **kwargs):
-        captured.update(kwargs)
-        return "stub"
-
-    with patch.object(
-        handler.base_llm_http_handler,
-        "anthropic_messages_handler",
-        side_effect=fake_base_handler,
-    ):
-        handler.anthropic_messages_handler(
-            max_tokens=10,
-            messages=[
-                {"role": "user", "content": "latest litellm version?"},
-                {
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "server_tool_use",
-                            "id": "srvtoolu_1",
-                            "name": "web_search",
-                            "input": {"query": "latest litellm version"},
-                        },
-                        {
-                            "type": "web_search_tool_result",
-                            "tool_use_id": "srvtoolu_1",
-                            "content": [
-                                {
-                                    "type": "web_search_result",
-                                    "url": "https://github.com/BerriAI/litellm/releases",
-                                    "title": "Releases",
-                                    "page_age": None,
-                                    "encrypted_content": "",
-                                    "snippet": "Latest release v1.95.0",
-                                }
-                            ],
-                        },
-                    ],
-                },
-                {"role": "user", "content": "which version?"},
-            ],
-            model="anthropic/claude-3-5-sonnet-20241022",
-            custom_llm_provider="anthropic",
-        )
-
-    replayed = captured["messages"][1]["content"]
-    assert [b["type"] for b in replayed] == ["text"]
-    assert "Snippet: Latest release v1.95.0" in replayed[0]["text"]
 
 
 def test_presanitized_flag_not_leaked_to_provider_params():

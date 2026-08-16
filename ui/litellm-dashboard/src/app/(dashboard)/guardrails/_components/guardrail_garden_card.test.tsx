@@ -53,28 +53,15 @@ describe("GuardrailCard", () => {
     expect(screen.queryByText(/F1:/)).not.toBeInTheDocument();
   });
 
-  it("should render the logo through the shared Logo component with the card src", () => {
-    render(<GuardrailCard card={baseCard} onClick={vi.fn()} />);
-    const img = screen.getByAltText("Test Guardrail logo");
-    expect(img.getAttribute("src")).toContain("/logos/test.svg");
-  });
-
-  it("should pass a bundled static-import src through unchanged", () => {
-    const bundledCard: GuardrailCardInfo = { ...baseCard, logo: "/_next/static/media/akto.svg" };
-    render(<GuardrailCard card={bundledCard} onClick={vi.fn()} />);
-    expect(screen.getByAltText("Test Guardrail logo")).toHaveAttribute("src", "/_next/static/media/akto.svg");
-  });
-
   it("should show fallback initial when logo fails to load", () => {
     render(<GuardrailCard card={baseCard} onClick={vi.fn()} />);
-    const img = screen.getByAltText("Test Guardrail logo");
+    const img = screen.getByRole("presentation");
 
     act(() => {
       fireEvent.error(img);
     });
 
     expect(screen.getByText("T")).toBeInTheDocument();
-    expect(screen.queryByAltText("Test Guardrail logo")).not.toBeInTheDocument();
   });
 
   it("should show fallback initial when logo src is empty", () => {

@@ -1,10 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Save, Plus, X } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { Select, Button, Card, Typography, Spin, Tag } from "antd";
+import { SaveOutlined, PlusOutlined } from "@ant-design/icons";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import {
   getGeneralSettingsCall,
@@ -12,6 +8,8 @@ import {
   deleteConfigFieldSetting,
   fetchMCPClientIp,
 } from "@/components/networking";
+
+const { Text } = Typography;
 
 interface MCPNetworkSettingsProps {
   accessToken: string | null;
@@ -31,7 +29,6 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   const [saving, setSaving] = useState(false);
   const [privateRanges, setPrivateRanges] = useState<string[]>([]);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
-  const [rangeDraft, setRangeDraft] = useState("");
 
   useEffect(() => {
     loadSettings();
@@ -85,22 +82,10 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     }
   };
 
-  // Commas separate entries, matching the old tokenised input.
-  const commitDraft = () => {
-    const added = rangeDraft
-      .split(",")
-      .map((r) => r.trim())
-      .filter((r) => r !== "" && !privateRanges.includes(r));
-    if (added.length > 0) {
-      setPrivateRanges([...privateRanges, ...added]);
-    }
-    setRangeDraft("");
-  };
-
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <UiLoadingSpinner className="size-6 text-muted-foreground" />
+        <Spin />
       </div>
     );
   }
@@ -111,76 +96,55 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     <div className="space-y-6 p-4">
       <DeprecationBanner featureName="MCP Network Settings and the internal-network-only flag" />
       <div>
-        <p className="text-lg font-semibold">Private IP Ranges</p>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <Text className="text-lg font-semibold">Private IP Ranges</Text>
+        <p className="text-sm text-gray-500 mt-1">
           Define which IP ranges are part of your private network. Callers from these IPs can see all MCP servers.
           Callers from any other IP can only see servers marked &quot;Available on Public Internet&quot;.
         </p>
       </div>
 
-      <Card className="p-6">
+      <Card>
         {currentIp && (
-          <div className="mb-4 rounded-lg bg-muted p-3">
-            <p className="text-sm">
+          <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+            <Text className="text-sm text-blue-700">
               Your current IP: <span className="font-mono font-medium">{currentIp}</span>
-            </p>
+            </Text>
             {suggestedRange && !privateRanges.includes(suggestedRange) && (
-              <div className="mt-1 flex items-center gap-2">
-                <p className="text-sm">Suggested range: </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="font-mono"
+              <div className="mt-1">
+                <Text className="text-sm text-blue-600">Suggested range: </Text>
+                <Tag
+                  className="cursor-pointer font-mono"
+                  color="blue"
+                  icon={<PlusOutlined />}
                   onClick={() => addSuggestedRange(suggestedRange)}
                 >
-                  <Plus />
                   {suggestedRange}
-                </Button>
+                </Tag>
               </div>
             )}
           </div>
         )}
 
-        <div className="mb-2 flex items-center">
-          <p className="text-sm font-medium">Your Private Network Ranges</p>
+        <div className="flex items-center mb-2">
+          <Text className="font-medium">Your Private Network Ranges</Text>
         </div>
-        {privateRanges.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {privateRanges.map((range) => (
-              <Badge key={range} variant="secondary" className="font-mono">
-                {range}
-                <button
-                  type="button"
-                  aria-label={`Remove ${range}`}
-                  onClick={() => setPrivateRanges(privateRanges.filter((r) => r !== range))}
-                  className="ml-1 cursor-pointer"
-                >
-                  <X className="size-3" />
-                </button>
-              </Badge>
-            ))}
-          </div>
-        )}
-        <Input
-          value={rangeDraft}
+        <Select
+          mode="tags"
+          value={privateRanges}
+          onChange={setPrivateRanges}
           placeholder="Leave empty to use defaults: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8"
-          onChange={(e) => setRangeDraft(e.target.value)}
-          onBlur={commitDraft}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === ",") {
-              e.preventDefault();
-              commitDraft();
-            }
-          }}
+          tokenSeparators={[","]}
+          className="w-full"
+          size="large"
+          allowClear
         />
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="text-xs text-gray-400 mt-2">
           Enter CIDR ranges (e.g., 10.0.0.0/8). When empty, standard private IP ranges are used.
         </p>
       </Card>
 
       <div className="flex justify-end">
-        <Button onClick={handleSave} disabled={saving}>
-          <Save />
+        <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
           Save
         </Button>
       </div>

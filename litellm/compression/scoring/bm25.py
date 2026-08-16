@@ -7,21 +7,21 @@ No external dependencies — uses only stdlib.
 import math
 import re
 from collections import Counter
-from typing import Final
+from typing import Dict, List
 
 
-def _tokenize(text: str) -> list[str]:
+def _tokenize(text: str) -> List[str]:
     """Split text into lowercase tokens on word boundaries."""
     return re.findall(r"[a-z0-9_]+", text.lower())
 
 
 def _extract_content(message: dict) -> str:
     """Extract text content from a message dict."""
-    content: Final = message.get("content", "")
+    content = message.get("content", "")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: Final = []
+        parts = []
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
                 parts.append(part.get("text", ""))
@@ -33,10 +33,10 @@ def _extract_content(message: dict) -> str:
 
 def bm25_score_messages(
     query: str,
-    messages: list[dict],
+    messages: List[dict],
     k1: float = 1.5,
     b: float = 0.75,
-) -> list[float]:
+) -> List[float]:
     """
     Score each message's relevance to the query using BM25 (Okapi BM25).
 
@@ -49,32 +49,32 @@ def bm25_score_messages(
     Returns:
         List of float scores, one per message. Higher = more relevant.
     """
-    query_terms: Final = _tokenize(query)
+    query_terms = _tokenize(query)
     if not query_terms:
         return [0.0] * len(messages)
 
     # Tokenize all documents
-    doc_tokens: Final[list[list[str]]] = []
+    doc_tokens: List[List[str]] = []
     for msg in messages:
         doc_tokens.append(_tokenize(_extract_content(msg)))
 
-    n: Final = len(doc_tokens)
+    n = len(doc_tokens)
     if n == 0:
         return []
 
     # Average document length
-    doc_lengths: Final = [len(dt) for dt in doc_tokens]
-    avgdl: Final = sum(doc_lengths) / n if n > 0 else 1.0
+    doc_lengths = [len(dt) for dt in doc_tokens]
+    avgdl = sum(doc_lengths) / n if n > 0 else 1.0
 
     # Document frequency for each term
-    df: Final[dict[str, int]] = {}
+    df: Dict[str, int] = {}
     for dt in doc_tokens:
         seen = set(dt)
         for term in seen:
             df[term] = df.get(term, 0) + 1
 
     # IDF for query terms
-    idf: Final[dict[str, float]] = {}
+    idf: Dict[str, float] = {}
     for term in set(query_terms):
         term_df = df.get(term, 0)
         # Standard BM25 IDF: log((N - df + 0.5) / (df + 0.5) + 1)
@@ -84,9 +84,9 @@ def bm25_score_messages(
     # document tokens that start with that term (min 4 chars match).  This lets
     # "cook" match "cooking" and "auth" match "authentication" without a full
     # stemmer dependency.
-    def _expand_tf(query_term: str, tf_counts: Counter) -> int:
+    def _expand_tf(query_term: str, tf_counts: Counter) -> int:  # type: ignore[type-arg]
         """Sum TF across all doc tokens that are prefixed by query_term."""
-        exact: Final = tf_counts.get(query_term, 0)
+        exact = tf_counts.get(query_term, 0)
         if exact:
             return exact
         if len(query_term) < 4:
@@ -94,7 +94,7 @@ def bm25_score_messages(
         return sum(count for token, count in tf_counts.items() if token != query_term and token.startswith(query_term))
 
     # Score each document
-    scores: Final[list[float]] = []
+    scores: List[float] = []
     for i, dt in enumerate(doc_tokens):
         if not dt:
             scores.append(0.0)

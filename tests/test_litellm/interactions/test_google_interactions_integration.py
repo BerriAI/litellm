@@ -55,10 +55,17 @@ class TestGoogleInteractionsCreate:
             print(f"Usage: {response.usage}")
 
     def test_create_with_content_list(self, api_key):
-        """Test creating an interaction with a structured content list (Content[] input)."""
+        """Test creating an interaction with a structured content list (Turn format)."""
         response = interactions.create(
             model="gemini/gemini-2.5-flash",
-            input=[{"type": "text", "text": "What is the capital of France?"}],
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is the capital of France?"}
+                    ],
+                }
+            ],
             api_key=api_key,
         )
 
@@ -162,25 +169,25 @@ class TestGoogleInteractionsStreaming:
 
 
 class TestGoogleInteractionsMultiTurn:
-    """Tests for multi-turn conversations using Step[] input."""
+    """Tests for multi-turn conversations using Turn[] input."""
 
     def test_multi_turn_conversation(self, api_key):
-        """Test a multi-turn conversation per OpenAPI spec (Step[] format)."""
+        """Test a multi-turn conversation per OpenAPI spec (Turn[] format)."""
         response = interactions.create(
             model="gemini/gemini-2.5-flash",
             input=[
                 {
-                    "type": "user_input",
+                    "role": "user",
                     "content": [{"type": "text", "text": "My name is Alice."}],
                 },
                 {
-                    "type": "model_output",
+                    "role": "model",
                     "content": [
                         {"type": "text", "text": "Hello Alice! Nice to meet you."}
                     ],
                 },
                 {
-                    "type": "user_input",
+                    "role": "user",
                     "content": [{"type": "text", "text": "What is my name?"}],
                 },
             ],

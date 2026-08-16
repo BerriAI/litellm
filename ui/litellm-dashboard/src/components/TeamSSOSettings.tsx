@@ -1,31 +1,13 @@
-import { Edit, Save } from "lucide-react";
-import React, { useEffect, useState } from "react";
-
-import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Combobox,
-  ComboboxChip,
-  ComboboxChips,
-  ComboboxChipsInput,
-  ComboboxContent,
-  ComboboxItem,
-  ComboboxList,
-  ComboboxValue,
-  useComboboxAnchor,
-} from "@/components/ui/combobox";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { Input } from "@/components/ui/input";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-
-import { getDefaultTeamSettings, updateDefaultTeamSettings, Organization } from "./networking";
+import React, { useState, useEffect } from "react";
+import { Card, Button, InputNumber, Typography, Spin, Select, Tag, Row, Col } from "antd";
+import { EditOutlined, SaveOutlined } from "@ant-design/icons";
+import { getDefaultTeamSettings, updateDefaultTeamSettings } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import NotificationsManager from "./molecules/notifications_manager";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
-import OrganizationDropdown from "./common_components/OrganizationDropdown";
+
+const { Title, Text } = Typography;
 
 interface TeamSSOSettingsProps {
   accessToken: string | null;
@@ -59,35 +41,30 @@ interface SettingRowProps {
 }
 
 const SettingRow: React.FC<SettingRowProps> = ({ label, description, isEditing, viewContent, editContent }) => (
-  <div className="grid grid-cols-1 gap-3 border-b border-border py-5 last:border-b-0 md:grid-cols-3">
-    <div className="pr-6">
-      <p className="text-sm font-semibold text-foreground">{label}</p>
-      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
-    </div>
-    <div className="flex items-center md:col-span-2">
+  <Row className="py-5 border-b border-gray-100 last:border-0">
+    <Col span={8} className="pr-6">
+      <div className="text-sm font-semibold text-gray-900">{label}</div>
+      <div className="text-xs text-gray-500 mt-1 leading-relaxed">{description}</div>
+    </Col>
+    <Col span={16} className="flex items-center">
       <div className="w-full">{isEditing ? editContent : viewContent}</div>
-    </div>
-  </div>
+    </Col>
+  </Row>
 );
 
-const NotSet = () => <span className="italic text-muted-foreground">Not set</span>;
+const NotSet = () => <Text className="text-gray-400 italic">Not set</Text>;
 
 const renderTags = (values: string[], displayFn?: (v: string) => string) => {
   if (!values || values.length === 0) return <NotSet />;
   return (
     <div className="flex flex-wrap gap-2">
       {values.map((v) => (
-        <Badge key={v} variant="secondary">
+        <Tag key={v} color="blue">
           {displayFn ? displayFn(v) : v}
-        </Badge>
+        </Tag>
       ))}
     </div>
   );
-};
-
-const getOrganizationLabel = (organizationId: string, organizations: Organization[] | undefined): string => {
-  const organization = organizations?.find((org) => org.organization_id === organizationId);
-  return organization?.organization_alias ? `${organization.organization_alias} (${organizationId})` : organizationId;
 };
 
 interface SettingsValues {
@@ -97,7 +74,6 @@ interface SettingsValues {
   rpm_limit: number | null;
   models: string[];
   team_member_permissions: string[];
-  organization_id: string | null;
 }
 
 const DEFAULT_VALUES: SettingsValues = {
@@ -107,18 +83,15 @@ const DEFAULT_VALUES: SettingsValues = {
   rpm_limit: null,
   models: [],
   team_member_permissions: [],
-  organization_id: null,
 };
 
 const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
-  const anchor = useComboboxAnchor();
   const [loading, setLoading] = useState<boolean>(true);
   const [values, setValues] = useState<SettingsValues>(DEFAULT_VALUES);
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [editedValues, setEditedValues] = useState<SettingsValues>(DEFAULT_VALUES);
   const [saving, setSaving] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<boolean>(false);
-  const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -174,8 +147,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center" aria-busy="true">
-        <UiLoadingSpinner aria-label="Loading default team settings" />
+      <div className="flex justify-center items-center h-64">
+        <Spin size="large" />
       </div>
     );
   }
@@ -183,76 +156,63 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
   if (fetchError) {
     return (
       <Card>
-        <CardContent>
-          <p>No team settings available or you do not have permission to view them.</p>
-        </CardContent>
+        <Text>No team settings available or you do not have permission to view them.</Text>
       </Card>
     );
   }
 
   return (
-    <Card className="gap-0">
-      <CardHeader className="gap-4 border-b border-border pb-6">
+    <Card styles={{ body: { padding: 32 } }}>
+      {/* Header */}
+      <div className="flex justify-between items-start mb-2">
         <div>
-          <CardTitle>
-            <h3 className="text-lg font-semibold text-foreground">Default Team Settings</h3>
-          </CardTitle>
-          <CardDescription className="mt-1">
+          <Title level={3} className="m-0 text-gray-900">
+            Default Team Settings
+          </Title>
+          <Text className="text-gray-500 mt-1 block">
             These settings will be applied by default when creating new teams.
-          </CardDescription>
+          </Text>
         </div>
-        <CardAction>
+        <div>
           {isEditing ? (
             <div className="flex gap-3">
-              <Button type="button" variant="outline" onClick={handleCancel} disabled={saving}>
+              <Button onClick={handleCancel} disabled={saving}>
                 Cancel
               </Button>
-              <Button type="button" onClick={handleSave} disabled={saving}>
-                {saving ? (
-                  <UiLoadingSpinner className="size-4" aria-hidden="true" />
-                ) : (
-                  <Save data-icon="inline-start" />
-                )}
+              <Button type="primary" onClick={handleSave} loading={saving} icon={<SaveOutlined />}>
                 Save Changes
               </Button>
             </div>
           ) : (
-            <Button type="button" variant="outline" onClick={() => setIsEditing(true)}>
-              <Edit data-icon="inline-start" />
+            <Button onClick={() => setIsEditing(true)} icon={<EditOutlined />}>
               Edit Settings
             </Button>
           )}
-        </CardAction>
-      </CardHeader>
+        </div>
+      </div>
 
-      <CardContent className="pt-8">
-        <section className="mb-8">
-          <h4 className="mb-2 text-xs font-bold tracking-wider text-muted-foreground uppercase">
-            Budget & Rate Limits
-          </h4>
-          <div className="border-t border-border">
+      <div className="mt-8">
+        {/* Budget & Rate Limits */}
+        <div className="mb-8">
+          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Budget & Rate Limits</div>
+          <div className="border-t border-gray-100">
             <SettingRow
               label="Max Budget"
               description="Maximum budget (in USD) for new automatically created teams."
               isEditing={isEditing}
               viewContent={
-                values.max_budget != null ? <span>${Number(values.max_budget).toLocaleString()}</span> : <NotSet />
+                values.max_budget != null ? <Text>${Number(values.max_budget).toLocaleString()}</Text> : <NotSet />
               }
               editContent={
-                <InputGroup className="max-w-80">
-                  <InputGroupAddon>$</InputGroupAddon>
-                  <InputGroupInput
-                    type="number"
-                    step="any"
-                    min={0}
-                    value={editedValues.max_budget ?? ""}
-                    onChange={(event) =>
-                      update("max_budget", event.target.value === "" ? null : Number(event.target.value))
-                    }
-                    placeholder="Not set"
-                    aria-label="Max Budget"
-                  />
-                </InputGroup>
+                <InputNumber
+                  className="w-full"
+                  style={{ maxWidth: 320 }}
+                  value={editedValues.max_budget}
+                  onChange={(v) => update("max_budget", v)}
+                  placeholder="Not set"
+                  prefix="$"
+                  min={0}
+                />
               }
             />
 
@@ -261,13 +221,13 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               description="How frequently the team's budget resets."
               isEditing={isEditing}
               viewContent={
-                values.budget_duration ? <span>{getBudgetDurationLabel(values.budget_duration)}</span> : <NotSet />
+                values.budget_duration ? <Text>{getBudgetDurationLabel(values.budget_duration)}</Text> : <NotSet />
               }
               editContent={
                 <BudgetDurationDropdown
                   value={editedValues.budget_duration || null}
-                  onChange={(v) => update("budget_duration", v ?? null)}
-                  className="max-w-80"
+                  onChange={(v) => update("budget_duration", v)}
+                  style={{ maxWidth: 320 }}
                 />
               }
             />
@@ -276,19 +236,15 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               label="TPM Limit"
               description="Maximum tokens per minute allowed across all models."
               isEditing={isEditing}
-              viewContent={values.tpm_limit != null ? <span>{values.tpm_limit.toLocaleString()}</span> : <NotSet />}
+              viewContent={values.tpm_limit != null ? <Text>{values.tpm_limit.toLocaleString()}</Text> : <NotSet />}
               editContent={
-                <Input
-                  className="max-w-80"
-                  type="number"
-                  step={1}
-                  value={editedValues.tpm_limit ?? ""}
-                  onChange={(event) =>
-                    update("tpm_limit", event.target.value === "" ? null : Number(event.target.value))
-                  }
+                <InputNumber
+                  className="w-full"
+                  style={{ maxWidth: 320 }}
+                  value={editedValues.tpm_limit}
+                  onChange={(v) => update("tpm_limit", v)}
                   placeholder="Not set"
                   min={0}
-                  aria-label="TPM Limit"
                 />
               }
             />
@@ -297,68 +253,38 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               label="RPM Limit"
               description="Maximum requests per minute allowed across all models."
               isEditing={isEditing}
-              viewContent={values.rpm_limit != null ? <span>{values.rpm_limit.toLocaleString()}</span> : <NotSet />}
+              viewContent={values.rpm_limit != null ? <Text>{values.rpm_limit.toLocaleString()}</Text> : <NotSet />}
               editContent={
-                <Input
-                  className="max-w-80"
-                  type="number"
-                  step={1}
-                  value={editedValues.rpm_limit ?? ""}
-                  onChange={(event) =>
-                    update("rpm_limit", event.target.value === "" ? null : Number(event.target.value))
-                  }
+                <InputNumber
+                  className="w-full"
+                  style={{ maxWidth: 320 }}
+                  value={editedValues.rpm_limit}
+                  onChange={(v) => update("rpm_limit", v)}
                   placeholder="Not set"
                   min={0}
-                  aria-label="RPM Limit"
                 />
               }
             />
           </div>
-        </section>
+        </div>
 
-        <section>
-          <h4 className="mb-2 text-xs font-bold tracking-wider text-muted-foreground uppercase">
-            Access & Permissions
-          </h4>
-          <div className="border-t border-border">
-            <SettingRow
-              label="Default Organization"
-              description="Teams created without an explicit organization are assigned to this organization."
-              isEditing={isEditing}
-              viewContent={
-                values.organization_id ? (
-                  <span>{getOrganizationLabel(values.organization_id, organizations)}</span>
-                ) : (
-                  <NotSet />
-                )
-              }
-              editContent={
-                <div className="max-w-80 *:w-full">
-                  <OrganizationDropdown
-                    organizations={organizations}
-                    loading={isOrganizationsLoading}
-                    value={editedValues.organization_id ?? undefined}
-                    onChange={(organizationId) => update("organization_id", organizationId || null)}
-                    placeholder="Select an organization"
-                  />
-                </div>
-              }
-            />
-
+        {/* Access & Permissions */}
+        <div className="mb-8">
+          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Access & Permissions</div>
+          <div className="border-t border-gray-100">
             <SettingRow
               label="Models"
               description="Default list of models that new teams can access."
               isEditing={isEditing}
               viewContent={renderTags(values.models, getModelDisplayName)}
               editContent={
-                <div className="*:w-full">
-                  <ModelSelect
-                    value={editedValues.models || []}
-                    onChange={(v) => update("models", v)}
-                    context="global"
-                    options={{ includeSpecialOptions: true }}
-                  />
-                </div>
+                <ModelSelect
+                  value={editedValues.models || []}
+                  onChange={(v) => update("models", v)}
+                  context="global"
+                  style={{ width: "100%" }}
+                  options={{ includeSpecialOptions: true }}
+                />
               }
             />
 
@@ -368,39 +294,29 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               isEditing={isEditing}
               viewContent={renderTags(values.team_member_permissions)}
               editContent={
-                <Combobox
-                  multiple
-                  items={PERMISSION_OPTIONS}
+                <Select
+                  mode="multiple"
+                  style={{ width: "100%" }}
                   value={editedValues.team_member_permissions || []}
-                  onValueChange={(permissions: string[]) => update("team_member_permissions", permissions)}
+                  onChange={(v) => update("team_member_permissions", v)}
+                  placeholder="Select permissions"
+                  tagRender={({ label, closable, onClose }) => (
+                    <Tag color="blue" closable={closable} onClose={onClose} className="mr-1 mt-1 mb-1">
+                      {label}
+                    </Tag>
+                  )}
                 >
-                  <ComboboxChips render={<div ref={anchor} />}>
-                    <ComboboxValue>
-                      {(permissions: string[]) =>
-                        permissions.map((permission) => (
-                          <ComboboxChip key={permission} aria-label={permission}>
-                            {permission}
-                          </ComboboxChip>
-                        ))
-                      }
-                    </ComboboxValue>
-                    <ComboboxChipsInput placeholder="Select permissions" aria-label="Team Member Permissions" />
-                  </ComboboxChips>
-                  <ComboboxContent anchor={anchor}>
-                    <ComboboxList>
-                      {(permission: string) => (
-                        <ComboboxItem key={permission} value={permission}>
-                          {permission}
-                        </ComboboxItem>
-                      )}
-                    </ComboboxList>
-                  </ComboboxContent>
-                </Combobox>
+                  {PERMISSION_OPTIONS.map((option) => (
+                    <Select.Option key={option} value={option}>
+                      {option}
+                    </Select.Option>
+                  ))}
+                </Select>
               }
             />
           </div>
-        </section>
-      </CardContent>
+        </div>
+      </div>
     </Card>
   );
 };

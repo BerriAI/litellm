@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Icon, Button, Col, Text, Grid } from "@tremor/react";
+import { RefreshIcon } from "@heroicons/react/outline";
 import TagInfoView from "./tag_info";
 import { modelInfoCall } from "@/components/networking";
 import { tagCreateCall, tagListCall, tagDeleteCall } from "@/components/networking";
@@ -139,18 +139,22 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
           editTag={editTag}
         />
       ) : (
-        <div className="mt-2 h-[75vh] w-full gap-2 p-8">
-          <div className="mt-2 mb-4 flex w-full items-center justify-between">
+        <div className="gap-2 p-8 h-[75vh] w-full mt-2">
+          <div className="flex justify-between mt-2 w-full items-center mb-4">
             <h1>Tag Management</h1>
             <div className="flex items-center space-x-2">
-              {lastRefreshed && <p className="text-sm">Last Refreshed: {lastRefreshed}</p>}
-              <Button variant="outline" size="icon-sm" aria-label="Refresh tags" onClick={handleRefreshClick}>
-                <RefreshCw />
-              </Button>
+              {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+              <Icon
+                icon={RefreshIcon}
+                variant="shadow"
+                size="xs"
+                className="self-center cursor-pointer"
+                onClick={handleRefreshClick}
+              />
             </div>
           </div>
 
-          <div className="mb-4 text-sm">
+          <Text className="mb-4">
             Click on a tag name to view and edit its details.
             <p>
               You can use tags to restrict the usage of certain LLMs based on tags passed in the request. Read more
@@ -160,14 +164,14 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
               </a>
               .
             </p>
-          </div>
+          </Text>
 
           <Button className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
             + Create New Tag
           </Button>
 
-          <div className="mt-2 grid h-[75vh] w-full grid-cols-1 gap-2 pt-2 pb-2">
-            <div>
+          <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
+            <Col numColSpan={1}>
               <TagTable
                 data={tags}
                 isLoading={isLoadingTags}
@@ -178,8 +182,8 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
                 onDelete={handleDelete}
                 onSelectTag={setSelectedTagId}
               />
-            </div>
-          </div>
+            </Col>
+          </Grid>
 
           {/* Create Tag Modal */}
           <CreateTagModal

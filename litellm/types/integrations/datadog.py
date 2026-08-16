@@ -1,12 +1,12 @@
 from enum import Enum
-from typing import Final
+from typing import Optional
 
 from typing_extensions import NotRequired, TypedDict
 
 from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
 
-DD_MAX_BATCH_SIZE: Final = 1000
-DD_MAX_PAYLOAD_SIZE_BYTES: Final = 4_000_000
+DD_MAX_BATCH_SIZE = 1000
+DD_MAX_PAYLOAD_SIZE_BYTES = 4_000_000
 
 
 class DataDogStatus(str, Enum):
@@ -40,10 +40,12 @@ class DatadogInitParams(StandardCustomLoggerInitParams):
     Params for initializing a DataDog logger on litellm
     """
 
+    pass
+
 
 class DatadogProxyFailureHookJsonMessage(TypedDict, total=False):
     exception: str
     error_class: str
-    status_code: int | None
+    status_code: Optional[int]
     traceback: str
     user_api_key_dict: dict

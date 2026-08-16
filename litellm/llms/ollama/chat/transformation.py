@@ -1,13 +1,21 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final, cast
+from litellm._uuid import uuid
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Iterator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
-from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,
@@ -81,42 +89,42 @@ class OllamaChatConfig(BaseConfig):
     - `template` (string): the full prompt or prompt template (overrides what is defined in the Modelfile)
     """
 
-    mirostat: int | None = None
-    mirostat_eta: float | None = None
-    mirostat_tau: float | None = None
-    num_ctx: int | None = None
-    num_gqa: int | None = None
-    num_thread: int | None = None
-    repeat_last_n: int | None = None
-    repeat_penalty: float | None = None
-    seed: int | None = None
-    tfs_z: float | None = None
-    num_predict: int | None = None
-    top_k: int | None = None
-    system: str | None = None
-    template: str | None = None
+    mirostat: Optional[int] = None
+    mirostat_eta: Optional[float] = None
+    mirostat_tau: Optional[float] = None
+    num_ctx: Optional[int] = None
+    num_gqa: Optional[int] = None
+    num_thread: Optional[int] = None
+    repeat_last_n: Optional[int] = None
+    repeat_penalty: Optional[float] = None
+    seed: Optional[int] = None
+    tfs_z: Optional[float] = None
+    num_predict: Optional[int] = None
+    top_k: Optional[int] = None
+    system: Optional[str] = None
+    template: Optional[str] = None
 
     def __init__(
         self,
-        mirostat: int | None = None,
-        mirostat_eta: float | None = None,
-        mirostat_tau: float | None = None,
-        num_ctx: int | None = None,
-        num_gqa: int | None = None,
-        num_thread: int | None = None,
-        repeat_last_n: int | None = None,
-        repeat_penalty: float | None = None,
-        temperature: float | None = None,
-        seed: int | None = None,
-        stop: list | None = None,
-        tfs_z: float | None = None,
-        num_predict: int | None = None,
-        top_k: int | None = None,
-        top_p: float | None = None,
-        system: str | None = None,
-        template: str | None = None,
+        mirostat: Optional[int] = None,
+        mirostat_eta: Optional[float] = None,
+        mirostat_tau: Optional[float] = None,
+        num_ctx: Optional[int] = None,
+        num_gqa: Optional[int] = None,
+        num_thread: Optional[int] = None,
+        repeat_last_n: Optional[int] = None,
+        repeat_penalty: Optional[float] = None,
+        temperature: Optional[float] = None,
+        seed: Optional[int] = None,
+        stop: Optional[list] = None,
+        tfs_z: Optional[float] = None,
+        num_predict: Optional[int] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        system: Optional[str] = None,
+        template: Optional[str] = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -191,11 +199,11 @@ class OllamaChatConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if api_key is not None and "Authorization" not in headers:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -203,12 +211,12 @@ class OllamaChatConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         OPTIONAL
@@ -229,31 +237,31 @@ class OllamaChatConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        stream: Final = optional_params.pop("stream", False)
-        format: Final = optional_params.pop("format", None)
-        keep_alive: Final = optional_params.pop("keep_alive", None)
-        think: Final = optional_params.pop("think", None)
-        function_name: Final = optional_params.pop("function_name", None)
+        stream = optional_params.pop("stream", False)
+        format = optional_params.pop("format", None)
+        keep_alive = optional_params.pop("keep_alive", None)
+        think = optional_params.pop("think", None)
+        function_name = optional_params.pop("function_name", None)
         litellm_params["function_name"] = function_name
-        tools: Final = optional_params.pop("tools", None)
+        tools = optional_params.pop("tools", None)
 
-        new_messages: Final = []
+        new_messages = []
         for m in messages:
             if isinstance(
                 m, BaseModel
             ):  # avoid message serialization issues - https://github.com/BerriAI/litellm/issues/5319
                 m = m.model_dump(exclude_none=True)
             tool_calls = m.get("tool_calls")
-            new_tools: list[OllamaToolCall] | None = None
+            new_tools: Optional[List[OllamaToolCall]] = None
             if tool_calls is not None and isinstance(tool_calls, list):
                 new_tools = []
                 for tool in tool_calls:
-                    typed_tool = ChatCompletionAssistantToolCall(**tool)
+                    typed_tool = ChatCompletionAssistantToolCall(**tool)  # type: ignore
                     if typed_tool["type"] == "function":
                         arguments = {}
                         if "arguments" in typed_tool["function"]:
@@ -287,12 +295,12 @@ class OllamaChatConfig(BaseConfig):
             new_messages.append(ollama_message)
 
         # Load Config
-        config: Final = self.get_config()
+        config = self.get_config()
         for k, v in config.items():
             if k not in optional_params:
                 optional_params[k] = v
 
-        data: Final = {
+        data = {
             "model": model,
             "messages": new_messages,
             "options": optional_params,
@@ -316,12 +324,12 @@ class OllamaChatConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: str,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -334,12 +342,12 @@ class OllamaChatConfig(BaseConfig):
             },
         )
 
-        response_json: Final = raw_response.json()
+        response_json = raw_response.json()
 
         ## RESPONSE OBJECT
-        _done_reason: Final = map_finish_reason(response_json.get("done_reason") or "stop")
+        _done_reason = map_finish_reason(response_json.get("done_reason") or "stop")
         model_response.choices[0].finish_reason = _done_reason
-        response_json_message: Final = response_json.get("message")
+        response_json_message = response_json.get("message")
         if response_json_message is not None:
             if "thinking" in response_json_message:
                 # remap 'thinking' to 'reasoning_content'
@@ -360,12 +368,12 @@ class OllamaChatConfig(BaseConfig):
             and litellm_params.get("function_name") is not None
             and response_json_message is not None
         ):
-            function_call: Final = json.loads(response_json_message["content"])
-            message: Final = litellm.Message(
+            function_call = json.loads(response_json_message["content"])
+            message = litellm.Message(
                 content=None,
                 tool_calls=[
                     {
-                        "id": f"call_{uuid.uuid4()}",
+                        "id": f"call_{str(uuid.uuid4())}",
                         "function": {
                             "name": function_call.get("name", litellm_params.get("function_name")),
                             "arguments": json.dumps(function_call.get("arguments", function_call)),
@@ -375,19 +383,19 @@ class OllamaChatConfig(BaseConfig):
                 ],
                 reasoning_content=response_json_message.get("reasoning_content"),
             )
-            model_response.choices[0].message = message
+            model_response.choices[0].message = message  # type: ignore
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-            _message: Final = litellm.Message(**response_json_message)
-            model_response.choices[0].message = _message
+            _message = litellm.Message(**response_json_message)
+            model_response.choices[0].message = _message  # type: ignore
             # Set finish_reason to "tool_calls" when tool_calls are present
             # Fixes: https://github.com/BerriAI/litellm/issues/18922
             if _message.tool_calls:
                 model_response.choices[0].finish_reason = "tool_calls"
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
-        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))
-        completion_tokens: Final = response_json.get(
+        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
+        completion_tokens = response_json.get(
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
         )
@@ -402,14 +410,14 @@ class OllamaChatConfig(BaseConfig):
         )
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
         return OllamaError(status_code=status_code, message=error_message, headers=headers)
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: Optional[bool] = False,
     ):
         return OllamaChatCompletionResponseIterator(
             streaming_response=streaming_response,
@@ -422,7 +430,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
 
-    def _is_function_call_complete(self, function_args: str | dict) -> bool:
+    def _is_function_call_complete(self, function_args: Union[str, dict]) -> bool:
         if isinstance(function_args, dict):
             return True
         try:
@@ -464,7 +472,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             from litellm.types.utils import Delta, StreamingChoices
 
             # process tool calls - if complete function arg - add id to tool call
-            tool_calls: Final = chunk["message"].get("tool_calls")
+            tool_calls = chunk["message"].get("tool_calls")
             if tool_calls is not None:
                 for tool_call in tool_calls:
                     function_args = tool_call.get("function").get("arguments")
@@ -474,8 +482,8 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                             tool_call["id"] = str(uuid.uuid4())
 
             # PROCESS REASONING CONTENT
-            reasoning_content: str | None = None
-            content: str | None = None
+            reasoning_content: Optional[str] = None
+            content: Optional[str] = None
             if chunk["message"].get("thinking"):
                 reasoning_content = chunk["message"].get("thinking")
                 self.started_reasoning_content = True
@@ -498,7 +506,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                 else:
                     content = message_content
 
-            delta: Final = Delta(
+            delta = Delta(
                 content=content,
                 reasoning_content=reasoning_content,
                 tool_calls=tool_calls,
@@ -523,7 +531,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                     )
                 ]
 
-            usage: Final = ChatCompletionUsageBlock(
+            usage = ChatCompletionUsageBlock(
                 prompt_tokens=chunk.get("prompt_eval_count", 0),
                 completion_tokens=chunk.get("eval_count", 0),
                 total_tokens=chunk.get("prompt_eval_count", 0) + chunk.get("eval_count", 0),

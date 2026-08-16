@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -16,7 +16,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             "GuardrailsAIException - Please pass the Guardrails AI guard name via 'litellm_params::guard_name'"
         )
 
-    _guardrails_ai_callback: Final = GuardrailsAI(
+    _guardrails_ai_callback = GuardrailsAI(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         guardrail_name=guardrail.get("guardrail_name", ""),
@@ -30,11 +30,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _guardrails_ai_callback
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.GUARDRAILS_AI.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry: Final = {
+guardrail_class_registry = {
     SupportedGuardrailIntegrations.GUARDRAILS_AI.value: GuardrailsAI,
 }

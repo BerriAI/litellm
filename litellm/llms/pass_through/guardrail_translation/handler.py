@@ -6,7 +6,7 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -31,8 +31,8 @@ class PassThroughEndpointHandler(BaseTranslation):
     def _get_guardrail_settings(
         self,
         litellm_logging_obj: Optional["LiteLLMLoggingObj"],
-        guardrail_name: str | None,
-    ) -> PassThroughGuardrailSettings | None:
+        guardrail_name: Optional[str],
+    ) -> Optional[PassThroughGuardrailSettings]:
         """
         Get the guardrail settings for a specific guardrail from logging_obj.
         """
@@ -43,7 +43,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         if litellm_logging_obj is None:
             return None
 
-        passthrough_config: Final = getattr(litellm_logging_obj, "passthrough_guardrails_config", None)
+        passthrough_config = getattr(litellm_logging_obj, "passthrough_guardrails_config", None)
         if not passthrough_config or not guardrail_name:
             return None
 
@@ -52,7 +52,7 @@ class PassThroughEndpointHandler(BaseTranslation):
     def _extract_text_for_guardrail(
         self,
         data: dict,
-        field_expressions: list[str] | None,
+        field_expressions: Optional[List[str]],
     ) -> str:
         """
         Extract text from data for guardrail processing.
@@ -65,7 +65,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         )
 
         if field_expressions:
-            text: Final = JsonPathExtractor.extract_fields(
+            text = JsonPathExtractor.extract_fields(
                 data=data,
                 jsonpath_expressions=field_expressions,
             )
@@ -78,7 +78,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         # Use entire payload, excluding internal fields
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        payload_to_check: Final = {
+        payload_to_check = {
             k: v for k, v in data.items() if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
         }
         verbose_proxy_logger.debug("PassThroughEndpointHandler: Using full payload for guardrail")
@@ -93,30 +93,30 @@ class PassThroughEndpointHandler(BaseTranslation):
         """
         Process input by applying guardrails to targeted fields or full payload.
         """
-        guardrail_name: Final = guardrail_to_apply.guardrail_name
+        guardrail_name = guardrail_to_apply.guardrail_name
         verbose_proxy_logger.debug(
             "PassThroughEndpointHandler: Processing input for guardrail=%s",
             guardrail_name,
         )
 
         # Get field targeting settings for this guardrail
-        settings: Final = self._get_guardrail_settings(litellm_logging_obj, guardrail_name)
-        field_expressions: Final = settings.request_fields if settings else None
+        settings = self._get_guardrail_settings(litellm_logging_obj, guardrail_name)
+        field_expressions = settings.request_fields if settings else None
 
         # Extract text to check
-        text_to_check: Final = self._extract_text_for_guardrail(data, field_expressions)
+        text_to_check = self._extract_text_for_guardrail(data, field_expressions)
 
         if not text_to_check:
             verbose_proxy_logger.debug("PassThroughEndpointHandler: No text to check, skipping guardrail")
             return data
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
-        inputs: Final = GenericGuardrailAPIInputs(texts=[text_to_check])
+        inputs = GenericGuardrailAPIInputs(texts=[text_to_check])
         # Include model information if available
-        model: Final = data.get("model")
+        model = data.get("model")
         if model:
             inputs["model"] = model
-        _guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
+        _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=data,
             input_type="request",
@@ -130,8 +130,8 @@ class PassThroughEndpointHandler(BaseTranslation):
         response: Any,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Any | None = None,
-        request_data: dict | None = None,
+        user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to targeted fields.
@@ -146,18 +146,18 @@ class PassThroughEndpointHandler(BaseTranslation):
             verbose_proxy_logger.debug("PassThroughEndpointHandler: Response is not a dict, skipping")
             return response
 
-        guardrail_name: Final = guardrail_to_apply.guardrail_name
+        guardrail_name = guardrail_to_apply.guardrail_name
         verbose_proxy_logger.debug(
             "PassThroughEndpointHandler: Processing output for guardrail=%s",
             guardrail_name,
         )
 
         # Get field targeting settings for this guardrail
-        settings: Final = self._get_guardrail_settings(litellm_logging_obj, guardrail_name)
-        field_expressions: Final = settings.response_fields if settings else None
+        settings = self._get_guardrail_settings(litellm_logging_obj, guardrail_name)
+        field_expressions = settings.response_fields if settings else None
 
         # Extract text to check
-        text_to_check: Final = self._extract_text_for_guardrail(response, field_expressions)
+        text_to_check = self._extract_text_for_guardrail(response, field_expressions)
 
         if not text_to_check:
             return response
@@ -172,17 +172,17 @@ class PassThroughEndpointHandler(BaseTranslation):
 
         # Add user API key metadata with prefixed keys
         if "litellm_metadata" not in request_data:
-            user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
-        inputs: Final = GenericGuardrailAPIInputs(texts=[text_to_check])
+        inputs = GenericGuardrailAPIInputs(texts=[text_to_check])
         # Include model information from the response if available
-        response_model: Final = response.get("model") if isinstance(response, dict) else None
+        response_model = response.get("model") if isinstance(response, dict) else None
         if response_model:
             inputs["model"] = response_model
-        _guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
+        _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
             input_type="response",
@@ -192,10 +192,10 @@ class PassThroughEndpointHandler(BaseTranslation):
         return response
 
 
-_PROVIDER_HANDLERS: dict[str, type[BaseTranslation]] = {}
+_PROVIDER_HANDLERS: Dict[str, Type[BaseTranslation]] = {}
 
 
-def _get_provider_handlers() -> dict[str, type[BaseTranslation]]:
+def _get_provider_handlers() -> Dict[str, Type[BaseTranslation]]:
     global _PROVIDER_HANDLERS
     if not _PROVIDER_HANDLERS:
         from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
@@ -220,8 +220,8 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> Any:
-        provider: Final = data.get("custom_llm_provider")
-        handler_cls: Final = _get_provider_handlers().get(provider or "")
+        provider = data.get("custom_llm_provider")
+        handler_cls = _get_provider_handlers().get(provider or "")
         if handler_cls is None:
             verbose_proxy_logger.debug(
                 "LlmPassthroughRouteHandler: no handler for provider=%s, skipping guardrail",
@@ -239,11 +239,11 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         response: Any,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Any | None = None,
-        request_data: dict | None = None,
+        user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
-        provider: Final = (request_data or {}).get("custom_llm_provider")
-        handler_cls: Final = _get_provider_handlers().get(provider or "")
+        provider = (request_data or {}).get("custom_llm_provider")
+        handler_cls = _get_provider_handlers().get(provider or "")
         if handler_cls is None:
             verbose_proxy_logger.debug(
                 "LlmPassthroughRouteHandler: no handler for provider=%s, skipping guardrail",
@@ -259,30 +259,30 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         )
 
     @staticmethod
-    def is_event_stream_response(provider: str | None, content_type: str) -> bool:
-        handler_cls: Final = _get_provider_handlers().get(provider or "")
-        detector: Final = getattr(handler_cls, "is_event_stream_content_type", None)
+    def is_event_stream_response(provider: Optional[str], content_type: str) -> bool:
+        handler_cls = _get_provider_handlers().get(provider or "")
+        detector = getattr(handler_cls, "is_event_stream_content_type", None)
         if detector is None:
             return False
         return detector(content_type)
 
     @staticmethod
-    def event_stream_media_type(provider: str | None) -> str | None:
-        handler_cls: Final = _get_provider_handlers().get(provider or "")
-        getter: Final = getattr(handler_cls, "event_stream_media_type", None)
+    def event_stream_media_type(provider: Optional[str]) -> Optional[str]:
+        handler_cls = _get_provider_handlers().get(provider or "")
+        getter = getattr(handler_cls, "event_stream_media_type", None)
         if getter is None:
             return None
         return getter()
 
     @staticmethod
-    def _resolve_event_stream_de_anonymizer(provider: str | None):
-        handler_cls: Final = _get_provider_handlers().get(provider or "")
+    def _resolve_event_stream_de_anonymizer(provider: Optional[str]):
+        handler_cls = _get_provider_handlers().get(provider or "")
         return getattr(handler_cls, "de_anonymize_event_stream", None)
 
     @staticmethod
-    def supports_event_stream_de_anonymization(provider: str | None, endpoint: str | None) -> bool:
-        handler_cls: Final = _get_provider_handlers().get(provider or "")
-        endpoint_check: Final = getattr(handler_cls, "event_stream_endpoint_is_de_anonymizable", None)
+    def supports_event_stream_de_anonymization(provider: Optional[str], endpoint: Optional[str]) -> bool:
+        handler_cls = _get_provider_handlers().get(provider or "")
+        endpoint_check = getattr(handler_cls, "event_stream_endpoint_is_de_anonymizable", None)
         if endpoint_check is None:
             return False
         return endpoint_check(endpoint or "")
@@ -294,8 +294,8 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         user_api_key_dict: "UserAPIKeyAuth",
         data: dict,
     ) -> bytes:
-        provider: Final = data.get("custom_llm_provider")
-        de_anonymize: Final = LlmPassthroughRouteHandler._resolve_event_stream_de_anonymizer(provider)
+        provider = data.get("custom_llm_provider")
+        de_anonymize = LlmPassthroughRouteHandler._resolve_event_stream_de_anonymizer(provider)
         if de_anonymize is None:
             verbose_proxy_logger.debug(
                 "LlmPassthroughRouteHandler: no event-stream handler for provider=%s, leaving stream unmodified",

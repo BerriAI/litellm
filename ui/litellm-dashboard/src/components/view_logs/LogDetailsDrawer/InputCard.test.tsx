@@ -111,12 +111,16 @@ describe("InputCard", () => {
 
     render(<InputCard messages={messages} />);
 
-    const copyButton = screen.getByRole("button", { name: /copy/i });
+    const copyButtons = screen.getAllByRole("button");
+    const copyButton = copyButtons.find((button) => {
+      const icon = button.querySelector('[aria-label="copy"]');
+      return icon !== null;
+    });
 
     expect(copyButton).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(copyButton);
+      fireEvent.click(copyButton!);
     });
 
     await waitFor(() => {
@@ -205,7 +209,11 @@ describe("InputCard", () => {
       },
     ];
     render(<InputCard messages={messages} />);
-    const copyButton = screen.getByRole("button", { name: /copy/i });
+    const copyButtons = screen.getAllByRole("button");
+    const copyButton = copyButtons.find((button) => {
+      const icon = button.querySelector('[aria-label="copy"]');
+      return icon !== null;
+    });
     expect(copyButton).toBeInTheDocument();
   });
 });

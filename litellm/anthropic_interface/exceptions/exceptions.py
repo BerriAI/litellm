@@ -1,8 +1,6 @@
 """Anthropic error format type definitions."""
 
-from typing import Literal
-
-from typing_extensions import Required, TypedDict
+from typing_extensions import Literal, Required, TypedDict
 
 # Known Anthropic error types
 # Source: https://docs.anthropic.com/en/api/errors

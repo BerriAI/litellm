@@ -1,23 +1,13 @@
 import React from "react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select } from "antd";
 
-export const NEVER_RESETS_BUDGET_DURATION = "none";
-
-const DURATION_LABELS: Record<string, string> = {
-  [NEVER_RESETS_BUDGET_DURATION]: "Never resets",
-  "1h": "hourly",
-  "24h": "daily",
-  "7d": "weekly",
-  "30d": "monthly",
-};
+const { Option } = Select;
 
 interface BudgetDurationDropdownProps {
   value?: string | null;
-  onChange?: (value: string | undefined) => void;
+  onChange?: (value: string) => void;
   className?: string;
   style?: React.CSSProperties;
-  placeholder?: string;
-  showNeverResets?: boolean;
 }
 
 const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
@@ -25,26 +15,20 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
   onChange,
   className = "",
   style = {},
-  placeholder = "n/a",
-  showNeverResets = false,
 }) => {
   return (
     <Select
-      items={DURATION_LABELS}
-      value={value || null}
-      onValueChange={(next: string | null) => onChange?.(next ?? undefined)}
+      style={{ width: "100%", ...style }}
+      value={value || undefined}
+      onChange={onChange}
+      className={className}
+      placeholder="n/a"
+      allowClear
     >
-      <SelectTrigger className={`w-full ${className}`} style={style}>
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={null}>{placeholder}</SelectItem>
-        {showNeverResets ? <SelectItem value={NEVER_RESETS_BUDGET_DURATION}>Never resets</SelectItem> : null}
-        <SelectItem value="1h">hourly</SelectItem>
-        <SelectItem value="24h">daily</SelectItem>
-        <SelectItem value="7d">weekly</SelectItem>
-        <SelectItem value="30d">monthly</SelectItem>
-      </SelectContent>
+      <Option value="1h">hourly</Option>
+      <Option value="24h">daily</Option>
+      <Option value="7d">weekly</Option>
+      <Option value="30d">monthly</Option>
     </Select>
   );
 };

@@ -7,8 +7,7 @@ Transforms OpenAI-format requests to GigaChat format and back.
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
@@ -29,7 +28,7 @@ else:
     LiteLLMLoggingObj = Any
 
 # GigaChat API endpoint
-GIGACHAT_BASE_URL: Final = "https://gigachat.devices.sberbank.ru/api/v1"
+GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
 
 
 def is_valid_json(value: str) -> bool:
@@ -44,6 +43,8 @@ def is_valid_json(value: str) -> bool:
 
 class GigaChatError(BaseLLMException):
     """GigaChat API error."""
+
+    pass
 
 
 class GigaChatConfig(BaseConfig):
@@ -61,57 +62,57 @@ class GigaChatConfig(BaseConfig):
         stream: Enable streaming
     """
 
-    temperature: float | None = None
-    top_p: float | None = None
-    max_tokens: int | None = None
-    repetition_penalty: float | None = None
-    profanity_check: bool | None = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    max_tokens: Optional[int] = None
+    repetition_penalty: Optional[float] = None
+    profanity_check: Optional[bool] = None
 
     def __init__(
         self,
-        temperature: float | None = None,
-        top_p: float | None = None,
-        max_tokens: int | None = None,
-        repetition_penalty: float | None = None,
-        profanity_check: bool | None = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        repetition_penalty: Optional[float] = None,
+        profanity_check: Optional[bool] = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
         # Instance variables for current request context
-        self._current_credentials: str | None = None
-        self._current_api_base: str | None = None
+        self._current_credentials: Optional[str] = None
+        self._current_api_base: Optional[str] = None
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """Get complete API URL for chat completions."""
-        base: Final = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+        base = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
         return f"{base}/chat/completions"
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         """
         Set up headers with OAuth token.
         """
         # Get access token
-        credentials: Final = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
-        access_token: Final = get_access_token(credentials=credentials)
+        credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
+        access_token = get_access_token(credentials=credentials)
 
         # Store credentials for image uploads
         self._current_credentials = credentials
@@ -123,7 +124,7 @@ class GigaChatConfig(BaseConfig):
 
         return headers
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> List[str]:
         """Return list of supported OpenAI parameters."""
         return [
             "stream",
@@ -196,9 +197,9 @@ class GigaChatConfig(BaseConfig):
 
         return optional_params
 
-    def _convert_tools_to_functions(self, tools: list[dict]) -> list[dict]:
+    def _convert_tools_to_functions(self, tools: List[dict]) -> List[dict]:
         """Convert OpenAI tools format to GigaChat functions format."""
-        functions: Final = []
+        functions = []
         for tool in tools:
             if tool.get("type") == "function":
                 func = tool.get("function", {})
@@ -211,7 +212,7 @@ class GigaChatConfig(BaseConfig):
                 )
         return functions
 
-    def _map_tool_choice(self, tool_choice: str | dict) -> str | dict | None:
+    def _map_tool_choice(self, tool_choice: Union[str, dict]) -> Optional[Union[str, dict]]:
         """
         Map OpenAI tool_choice to GigaChat function_call format.
 
@@ -244,14 +245,14 @@ class GigaChatConfig(BaseConfig):
             # OpenAI format: {"type": "function", "function": {"name": "func_name"}}
             # GigaChat format: {"name": "func_name"}
             if tool_choice.get("type") == "function":
-                func_name: Final = tool_choice.get("function", {}).get("name")
+                func_name = tool_choice.get("function", {}).get("name")
                 if func_name:
                     return {"name": func_name}
 
         # Default to None (don't set function_call)
         return None
 
-    def _upload_image(self, image_url: str) -> str | None:
+    def _upload_image(self, image_url: str) -> Optional[str]:
         """
         Upload image to GigaChat and return file_id.
 
@@ -268,23 +269,23 @@ class GigaChatConfig(BaseConfig):
                 api_base=self._current_api_base,
             )
         except Exception as e:
-            verbose_logger.error("Failed to upload image: %s", e)
+            verbose_logger.error(f"Failed to upload image: {e}")
             return None
 
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
         """Transform OpenAI request to GigaChat format."""
         # Transform messages
-        giga_messages: Final = self._transform_messages(messages)
+        giga_messages = self._transform_messages(messages)
 
         # Build request
-        request_data: Final = {
+        request_data = {
             "model": model.replace("gigachat/", ""),
             "messages": giga_messages,
         }
@@ -309,9 +310,9 @@ class GigaChatConfig(BaseConfig):
 
         return request_data
 
-    def _transform_messages(self, messages: list[AllMessageValues]) -> list[dict]:
+    def _transform_messages(self, messages: List[AllMessageValues]) -> List[dict]:
         """Transform OpenAI messages to GigaChat format."""
-        transformed: Final = []
+        transformed = []
 
         for i, msg in enumerate(messages):
             message = dict(msg)
@@ -388,25 +389,25 @@ class GigaChatConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         """Transform GigaChat response to OpenAI format."""
         try:
-            response_json: Final = raw_response.json()
+            response_json = raw_response.json()
         except Exception:
             raise GigaChatError(
                 status_code=raw_response.status_code,
                 message=f"Invalid JSON response: {raw_response.text}",
             )
 
-        is_structured_output: Final = optional_params.get("_structured_output", False)
+        is_structured_output = optional_params.get("_structured_output", False)
 
-        choices: Final = []
+        choices = []
         for choice in response_json.get("choices", []):
             message_data = choice.get("message", {})
             finish_reason = choice.get("finish_reason", "stop")
@@ -459,8 +460,8 @@ class GigaChatConfig(BaseConfig):
             )
 
         # Build usage
-        usage_data: Final = response_json.get("usage", {})
-        usage: Final = Usage(
+        usage_data = response_json.get("usage", {})
+        usage = Usage(
             prompt_tokens=usage_data.get("prompt_tokens", 0),
             completion_tokens=usage_data.get("completion_tokens", 0),
             total_tokens=usage_data.get("total_tokens", 0),
@@ -469,7 +470,7 @@ class GigaChatConfig(BaseConfig):
         model_response.id = response_json.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}")
         model_response.created = response_json.get("created", int(time.time()))
         model_response.model = model
-        model_response.choices = choices
+        model_response.choices = choices  # type: ignore
         setattr(model_response, "usage", usage)
 
         return model_response
@@ -478,7 +479,7 @@ class GigaChatConfig(BaseConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: Union[dict, httpx.Headers],
     ) -> BaseLLMException:
         """Return GigaChat error class."""
         return GigaChatError(
@@ -489,9 +490,9 @@ class GigaChatConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: Optional[bool] = False,
     ):
         """Return streaming response iterator."""
         from .streaming import GigaChatModelResponseIterator

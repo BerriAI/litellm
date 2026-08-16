@@ -1,5 +1,5 @@
 import json
-from typing import Final
+from typing import Optional
 
 import litellm
 from litellm import verbose_logger
@@ -17,19 +17,19 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
-            processed_chunk: Final = litellm.ModelResponseStream(**chunk)
+            processed_chunk = litellm.ModelResponseStream(**chunk)
 
             text = ""
-            tool_use: ChatCompletionToolCallChunk | None = None
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
             finish_reason = ""
-            usage: ChatCompletionUsageBlock | None = None
+            usage: Optional[ChatCompletionUsageBlock] = None
 
             # Usage-only final chunk (OpenAI ``stream_options.include_usage``)
             # arrives with an empty ``choices`` list — return usage without
             # indexing ``choices[0]``.
             if len(processed_chunk.choices) == 0:
-                final_usage: Final = getattr(processed_chunk, "usage", None)
+                final_usage = getattr(processed_chunk, "usage", None)
                 return GenericStreamingChunk(
                     text="",
                     tool_use=None,
@@ -47,21 +47,26 @@ class ModelResponseIterator:
                     index=0,
                 )
 
-            if processed_chunk.choices[0].delta.content is not None:
-                text = processed_chunk.choices[0].delta.content
+            if processed_chunk.choices[0].delta.content is not None:  # type: ignore
+                text = processed_chunk.choices[0].delta.content  # type: ignore
 
             if (
-                processed_chunk.choices[0].delta.tool_calls is not None
-                and len(processed_chunk.choices[0].delta.tool_calls) > 0
-                and processed_chunk.choices[0].delta.tool_calls[0].function is not None
-                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments is not None
+                processed_chunk.choices[0].delta.tool_calls is not None  # type: ignore
+                and len(processed_chunk.choices[0].delta.tool_calls) > 0  # type: ignore
+                and processed_chunk.choices[0].delta.tool_calls[0].function is not None  # type: ignore
+                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments  # type: ignore
+                is not None
             ):
                 tool_use = ChatCompletionToolCallChunk(
-                    id=processed_chunk.choices[0].delta.tool_calls[0].id,
+                    id=processed_chunk.choices[0].delta.tool_calls[0].id,  # type: ignore
                     type="function",
                     function=ChatCompletionToolCallFunctionChunk(
-                        name=processed_chunk.choices[0].delta.tool_calls[0].function.name,
-                        arguments=processed_chunk.choices[0].delta.tool_calls[0].function.arguments,
+                        name=processed_chunk.choices[0]
+                        .delta.tool_calls[0]  # type: ignore
+                        .function.name,
+                        arguments=processed_chunk.choices[0]
+                        .delta.tool_calls[0]  # type: ignore
+                        .function.arguments,
                     ),
                     index=processed_chunk.choices[0].delta.tool_calls[0].index,
                 )
@@ -70,7 +75,7 @@ class ModelResponseIterator:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
 
-            usage_chunk: Final[Usage | None] = getattr(processed_chunk, "usage", None)
+            usage_chunk: Optional[Usage] = getattr(processed_chunk, "usage", None)
             if usage_chunk is not None:
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=usage_chunk.prompt_tokens,
@@ -108,7 +113,7 @@ class ModelResponseIterator:
             chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             chunk = chunk.strip()
             if len(chunk) > 0:
-                json_chunk: Final = json.loads(chunk)
+                json_chunk = json.loads(chunk)
                 return self.chunk_parser(chunk=json_chunk)
             else:
                 return GenericStreamingChunk(
@@ -122,9 +127,7 @@ class ModelResponseIterator:
         except StopIteration:
             raise StopIteration
         except ValueError as e:
-            verbose_logger.debug(
-                "Error parsing chunk: %s,\nReceived chunk: %s. Defaulting to empty chunk here.", e, chunk
-            )
+            verbose_logger.debug(f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here.")
             return GenericStreamingChunk(
                 text="",
                 is_finished=False,
@@ -155,7 +158,7 @@ class ModelResponseIterator:
             if chunk == "[DONE]":
                 raise StopAsyncIteration
             if len(chunk) > 0:
-                json_chunk: Final = json.loads(chunk)
+                json_chunk = json.loads(chunk)
                 return self.chunk_parser(chunk=json_chunk)
             else:
                 return GenericStreamingChunk(
@@ -169,9 +172,7 @@ class ModelResponseIterator:
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
-            verbose_logger.debug(
-                "Error parsing chunk: %s,\nReceived chunk: %s. Defaulting to empty chunk here.", e, chunk
-            )
+            verbose_logger.debug(f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here.")
             return GenericStreamingChunk(
                 text="",
                 is_finished=False,

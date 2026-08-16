@@ -4,13 +4,13 @@ based on user-provided attack examples and descriptions.
 """
 
 import json
-from typing import Final
+from typing import List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
-SUGGEST_TOOL: Final = {
+SUGGEST_TOOL = {
     "type": "function",
     "function": {
         "name": "select_policy_templates",
@@ -53,16 +53,16 @@ class AiPolicySuggester:
     async def suggest(
         self,
         templates: list,
-        attack_examples: list[str],
+        attack_examples: List[str],
         description: str,
-        model: str | None = None,
+        model: Optional[str] = None,
     ) -> dict:
-        system_prompt: Final = self._build_system_prompt(templates)
-        user_prompt: Final = self._build_user_prompt(attack_examples, description)
+        system_prompt = self._build_system_prompt(templates)
+        user_prompt = self._build_user_prompt(attack_examples, description)
         model = model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
         try:
-            response: Final = await litellm.acompletion(
+            response = await litellm.acompletion(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -76,16 +76,16 @@ class AiPolicySuggester:
                 temperature=0.2,
             )
 
-            tool_calls: Final = response.choices[0].message.tool_calls
+            tool_calls = response.choices[0].message.tool_calls  # type: ignore
             if not tool_calls:
                 return {
                     "selected_templates": [],
                     "explanation": "No templates could be matched to your requirements.",
                 }
 
-            result: Final = json.loads(tool_calls[0].function.arguments)
+            result = json.loads(tool_calls[0].function.arguments)
 
-            valid_ids: Final = {t["id"] for t in templates}
+            valid_ids = {t["id"] for t in templates}
             result["selected_templates"] = [
                 s for s in result.get("selected_templates", []) if s.get("template_id") in valid_ids
             ]
@@ -96,7 +96,7 @@ class AiPolicySuggester:
             raise
 
     def _build_system_prompt(self, templates: list) -> str:
-        template_descriptions: Final = []
+        template_descriptions = []
         for t in templates:
             examples = t.get("example_sentences", [])
             examples_str = ", ".join(f'"{e}"' for e in examples) if examples else "none"
@@ -117,9 +117,9 @@ class AiPolicySuggester:
             "Available templates:\n\n" + "\n\n".join(template_descriptions)
         )
 
-    def _build_user_prompt(self, attack_examples: list[str], description: str) -> str:
-        parts: Final = []
-        filtered_examples: Final = [e for e in attack_examples if e.strip()]
+    def _build_user_prompt(self, attack_examples: List[str], description: str) -> str:
+        parts = []
+        filtered_examples = [e for e in attack_examples if e.strip()]
         if filtered_examples:
             parts.append("Example attack prompts I want to block:")
             for i, ex in enumerate(filtered_examples, 1):

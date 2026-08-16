@@ -1,25 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Loader2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { cn } from "@/lib/cva.config";
+import { Modal, Form, Steps, Button, Checkbox } from "antd";
+import { Text, Title, Badge } from "@tremor/react";
 import { makeMCPPublicCall } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 
-const STEP_TITLES = ["Select Servers", "Confirm"];
-
-const statusVariant = (status?: string) => {
-  if (status === "active" || status === "healthy") {
-    return "default" as const;
-  }
-  if (status === "inactive" || status === "unhealthy") {
-    return "destructive" as const;
-  }
-  return "outline" as const;
-};
+const { Step } = Steps;
 
 interface MakeMCPPublicFormProps {
   visible: boolean;
@@ -39,10 +25,12 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [form] = Form.useForm();
 
   const handleClose = () => {
     setCurrentStep(0);
     setSelectedServers(new Set());
+    form.resetFields();
     onClose();
   };
 
@@ -126,30 +114,29 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Select MCP Servers to Make Public</h3>
+          <Title>Select MCP Servers to Make Public</Title>
           <div className="flex items-center space-x-2">
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={allServersSelected}
-                indeterminate={isIndeterminate}
-                onCheckedChange={(checked) => handleSelectAll(checked === true)}
-                disabled={mcpHubData.length === 0}
-              />
+            <Checkbox
+              checked={allServersSelected}
+              indeterminate={isIndeterminate}
+              onChange={(e) => handleSelectAll(e.target.checked)}
+              disabled={mcpHubData.length === 0}
+            >
               Select All {mcpHubData.length > 0 && `(${mcpHubData.length})`}
-            </label>
+            </Checkbox>
           </div>
         </div>
 
-        <p className="text-sm text-gray-600">
+        <Text className="text-sm text-gray-600">
           Select the MCP servers you want to be visible on the public model hub. Users will still require a valid
           Virtual Key to use these servers.
-        </p>
+        </Text>
 
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
           <div className="space-y-3">
             {mcpHubData.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                <p>No MCP servers available.</p>
+                <Text>No MCP servers available.</Text>
               </div>
             ) : (
               mcpHubData.map((server) => {
@@ -161,25 +148,42 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                   >
                     <Checkbox
                       checked={selectedServers.has(server.server_id)}
-                      onCheckedChange={(checked) => handleServerSelection(server.server_id, checked === true)}
+                      onChange={(e) => handleServerSelection(server.server_id, e.target.checked)}
                     />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-medium break-words">{server.server_name}</p>
-                        {isPublic && <Badge>Public</Badge>}
-                        <Badge variant="secondary">{server.transport}</Badge>
-                        <Badge variant={statusVariant(server.status)}>{server.status || "unknown"}</Badge>
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-2">
+                        <Text className="font-medium">{server.server_name}</Text>
+                        {isPublic && (
+                          <Badge color="emerald" size="sm">
+                            Public
+                          </Badge>
+                        )}
+                        <Badge color="blue" size="sm">
+                          {server.transport}
+                        </Badge>
+                        <Badge
+                          color={
+                            server.status === "active" || server.status === "healthy"
+                              ? "green"
+                              : server.status === "inactive" || server.status === "unhealthy"
+                                ? "red"
+                                : "gray"
+                          }
+                          size="sm"
+                        >
+                          {server.status || "unknown"}
+                        </Badge>
                       </div>
-                      <p className="text-xs text-gray-600 mt-1 break-words">{server.description || server.url}</p>
+                      <Text className="text-xs text-gray-600 mt-1">{server.description || server.url}</Text>
                       {server.allowed_tools && server.allowed_tools.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {server.allowed_tools.slice(0, 3).map((tool, idx) => (
-                            <Badge key={idx} variant="outline">
+                            <Badge key={idx} color="purple" size="xs">
                               {tool}
                             </Badge>
                           ))}
                           {server.allowed_tools.length > 3 && (
-                            <p className="text-xs text-gray-500">+{server.allowed_tools.length - 3} more</p>
+                            <Text className="text-xs text-gray-500">+{server.allowed_tools.length - 3} more</Text>
                           )}
                         </div>
                       )}
@@ -193,9 +197,9 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 
         {selectedServers.size > 0 && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <p className="text-sm text-blue-800">
+            <Text className="text-sm text-blue-800">
               <strong>{selectedServers.size}</strong> MCP server{selectedServers.size !== 1 ? "s" : ""} selected
-            </p>
+            </Text>
           </div>
         )}
       </div>
@@ -205,37 +209,48 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   const renderStep2Content = () => {
     return (
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Confirm Making MCP Servers Public</h3>
+        <Title>Confirm Making MCP Servers Public</Title>
 
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <p className="text-sm text-yellow-800">
+          <Text className="text-sm text-yellow-800">
             <strong>Warning:</strong> Once you make these MCP servers public, anyone who can go to the{" "}
             <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
-          </p>
+          </Text>
         </div>
 
         <div className="space-y-3">
-          <p className="font-medium">MCP Servers to be made public:</p>
+          <Text className="font-medium">MCP Servers to be made public:</Text>
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
               {Array.from(selectedServers).map((serverId) => {
                 const server = mcpHubData.find((s) => s.server_id === serverId);
                 return (
                   <div key={serverId} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-medium break-words">{server?.server_name || serverId}</p>
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-2">
+                        <Text className="font-medium">{server?.server_name || serverId}</Text>
                         {server && (
                           <>
-                            <Badge variant="secondary">{server.transport}</Badge>
-                            <Badge variant={statusVariant(server.status)}>{server.status || "unknown"}</Badge>
+                            <Badge color="blue" size="xs">
+                              {server.transport}
+                            </Badge>
+                            <Badge
+                              color={
+                                server.status === "active" || server.status === "healthy"
+                                  ? "green"
+                                  : server.status === "inactive" || server.status === "unhealthy"
+                                    ? "red"
+                                    : "gray"
+                              }
+                              size="xs"
+                            >
+                              {server.status || "unknown"}
+                            </Badge>
                           </>
                         )}
                       </div>
-                      {server?.description && (
-                        <p className="text-xs text-gray-600 mt-1 break-words">{server.description}</p>
-                      )}
-                      {server?.url && <p className="text-xs text-gray-500 mt-1 break-words">{server.url}</p>}
+                      {server?.description && <Text className="text-xs text-gray-600 mt-1">{server.description}</Text>}
+                      {server?.url && <Text className="text-xs text-gray-500 mt-1">{server.url}</Text>}
                     </div>
                   </div>
                 );
@@ -245,10 +260,10 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
         </div>
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <p className="text-sm text-blue-800">
+          <Text className="text-sm text-blue-800">
             Total: <strong>{selectedServers.size}</strong> MCP server{selectedServers.size !== 1 ? "s" : ""} will be
             made public
-          </p>
+          </Text>
         </div>
       </div>
     );
@@ -268,7 +283,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   const renderStepButtons = () => {
     return (
       <div className="flex justify-between mt-6">
-        <Button variant="outline" onClick={currentStep === 0 ? handleClose : handlePrevious}>
+        <Button onClick={currentStep === 0 ? handleClose : handlePrevious}>
           {currentStep === 0 ? "Cancel" : "Previous"}
         </Button>
 
@@ -280,8 +295,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
           )}
 
           {currentStep === 1 && (
-            <Button onClick={handleSubmit} disabled={loading}>
-              {loading && <Loader2 className="size-4 animate-spin" />}
+            <Button onClick={handleSubmit} loading={loading}>
               Make Public
             </Button>
           )}
@@ -291,42 +305,24 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   };
 
   return (
-    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1200px]">
-        <DialogHeader>
-          <DialogTitle>Make MCP Servers Public</DialogTitle>
-        </DialogHeader>
+    <Modal
+      title="Make MCP Servers Public"
+      open={visible}
+      onCancel={handleClose}
+      footer={null}
+      width={1200}
+      maskClosable={false}
+    >
+      <Form form={form} layout="vertical">
+        <Steps current={currentStep} className="mb-6">
+          <Step title="Select Servers" />
+          <Step title="Confirm" />
+        </Steps>
 
-        <div>
-          <ol className="mb-6 flex items-center gap-6">
-            {STEP_TITLES.map((title, index) => (
-              <li
-                key={title}
-                className="flex items-center gap-2"
-                aria-current={currentStep === index ? "step" : undefined}
-              >
-                <span
-                  className={cn(
-                    "flex size-6 items-center justify-center rounded-full border text-xs",
-                    currentStep === index
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border text-muted-foreground",
-                  )}
-                >
-                  {index + 1}
-                </span>
-                <span className={cn("text-sm", currentStep === index ? "font-medium" : "text-muted-foreground")}>
-                  {title}
-                </span>
-              </li>
-            ))}
-          </ol>
-
-          {renderStepContent()}
-          {renderStepButtons()}
-        </div>
-      </DialogContent>
-    </Dialog>
+        {renderStepContent()}
+        {renderStepButtons()}
+      </Form>
+    </Modal>
   );
 };
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Card } from "@/components/ui/card";
+import { Card, Text } from "@tremor/react";
 
 interface ModelGroupInfo {
   model_group: string;
@@ -121,11 +121,18 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   };
 
   // Expose filter values and reset function
+  const filterValues = {
+    searchTerm,
+    selectedProvider,
+    selectedMode,
+    selectedFeature,
+    resetFilters,
+  };
 
   const filtersContent = (
     <div className="flex flex-wrap gap-4 items-center">
       <div>
-        <p className="text-sm font-medium mb-2">Search Models:</p>
+        <Text className="text-sm font-medium mb-2">Search Models:</Text>
         <input
           type="text"
           placeholder="Search model names..."
@@ -135,7 +142,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         />
       </div>
       <div>
-        <p className="text-sm font-medium mb-2">Provider:</p>
+        <Text className="text-sm font-medium mb-2">Provider:</Text>
         <select
           value={selectedProvider}
           onChange={(e) => setSelectedProvider(e.target.value)}
@@ -153,7 +160,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         </select>
       </div>
       <div>
-        <p className="text-sm font-medium mb-2">Mode:</p>
+        <Text className="text-sm font-medium mb-2">Mode:</Text>
         <select
           value={selectedMode}
           onChange={(e) => setSelectedMode(e.target.value)}
@@ -171,7 +178,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         </select>
       </div>
       <div>
-        <p className="text-sm font-medium mb-2">Features:</p>
+        <Text className="text-sm font-medium mb-2">Features:</Text>
         <select
           value={selectedFeature}
           onChange={(e) => setSelectedFeature(e.target.value)}
@@ -204,7 +211,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   );
 
   if (showFiltersCard) {
-    return <Card className={`mb-6 px-6 ${className}`}>{filtersContent}</Card>;
+    return <Card className={`mb-6 ${className}`}>{filtersContent}</Card>;
   }
 
   return <div className={className}>{filtersContent}</div>;

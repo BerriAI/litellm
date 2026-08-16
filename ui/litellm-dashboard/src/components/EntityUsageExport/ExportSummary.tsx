@@ -1,5 +1,5 @@
 import React from "react";
-import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
+import type { DateRangePickerValue } from "@tremor/react";
 
 interface ExportSummaryProps {
   dateRange: DateRangePickerValue;

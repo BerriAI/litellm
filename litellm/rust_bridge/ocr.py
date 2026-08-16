@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Awaitable
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Awaitable, Final, Protocol, Union, cast
 
 import httpx
 
@@ -72,44 +71,26 @@ def use_litellm_rust(
     aocr: RustAocr | None | _Unset = _UNSET,
     messages: RustMessages | None | _Unset = _UNSET,
     amessages: RustAmessages | None | _Unset = _UNSET,
-    responses_websocket: Any | None | _Unset = _UNSET,
-    transcription: Any | None | _Unset = _UNSET,
-    atranscription: Any | None | _Unset = _UNSET,
 ) -> None:
     global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
-    configuring_ocr: Final = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
-    configuring_messages: Final = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
-    configuring_responses_websocket: Final = not isinstance(responses_websocket, _Unset)
-    configuring_transcription: Final = not isinstance(transcription, _Unset) or not isinstance(atranscription, _Unset)
-    if configuring_ocr or (not configuring_messages and not configuring_responses_websocket):
+    configuring_ocr = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
+    configuring_messages = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
+    if configuring_ocr or not configuring_messages:
         _rust_ocr_enabled = enabled
     if not isinstance(ocr, _Unset):
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
         _rust_aocr_impl = aocr
-    if configuring_transcription:
-        from litellm.rust_bridge.transcription import configure_rust_transcription
-
-        configure_rust_transcription(
-            enabled=enabled,
-            transcription=transcription,
-            atranscription=atranscription,
-        )
-    if not configuring_messages and not configuring_responses_websocket:
+    if not configuring_messages:
         return
-    if configuring_messages:
-        from litellm.rust_bridge.messages import set_rust_messages
+    from litellm.rust_bridge.messages import set_rust_messages
 
-        if not isinstance(messages, _Unset) and not isinstance(amessages, _Unset):
-            set_rust_messages(messages=messages, amessages=amessages)
-        elif not isinstance(messages, _Unset):
-            set_rust_messages(messages=messages)
-        else:
-            set_rust_messages(amessages=amessages)
-    if configuring_responses_websocket:
-        from litellm.rust_bridge.responses_websocket import set_rust_responses_websocket
-
-        set_rust_responses_websocket(connection=responses_websocket)
+    if not isinstance(messages, _Unset) and not isinstance(amessages, _Unset):
+        set_rust_messages(messages=messages, amessages=amessages)
+    elif not isinstance(messages, _Unset):
+        set_rust_messages(messages=messages)
+    else:
+        set_rust_messages(amessages=amessages)
 
 
 def rust_ocr_enabled() -> bool:
@@ -121,7 +102,7 @@ def load_rust_ocr() -> RustOcr | None:
         return _rust_ocr_impl
     from litellm.rust_bridge import get_native_bridge
 
-    native_bridge: Final = get_native_bridge()
+    native_bridge = get_native_bridge()
     if native_bridge is None:
         return None
     return cast(RustOcr, native_bridge.ocr)
@@ -132,7 +113,7 @@ def load_rust_aocr() -> RustAocr | None:
         return _rust_aocr_impl
     from litellm.rust_bridge import get_native_bridge
 
-    native_bridge: Final = get_native_bridge()
+    native_bridge = get_native_bridge()
     if native_bridge is None:
         return None
     return cast(RustAocr, getattr(native_bridge, "aocr", None))
@@ -147,9 +128,9 @@ def ocr(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
-    timeout: float | httpx.Timeout | None,
+    timeout: Union[float, httpx.Timeout] | None,
 ) -> dict[str, object] | None:
-    rust_ocr: Final = load_rust_ocr()
+    rust_ocr = load_rust_ocr()
     if rust_ocr is None:
         return None
     return rust_ocr(
@@ -173,9 +154,9 @@ async def aocr(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
-    timeout: float | httpx.Timeout | None,
+    timeout: Union[float, httpx.Timeout] | None,
 ) -> dict[str, object] | None:
-    rust_aocr: Final = load_rust_aocr()
+    rust_aocr = load_rust_aocr()
     if rust_aocr is None:
         return None
     return await rust_aocr(

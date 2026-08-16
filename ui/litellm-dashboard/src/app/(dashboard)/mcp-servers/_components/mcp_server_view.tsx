@@ -1,9 +1,6 @@
 import React, { useState } from "react";
-import { ArrowLeft, Eye, EyeOff } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ArrowLeftIcon, EyeIcon, EyeOffIcon } from "@heroicons/react/outline";
+import { Title, Card, Button, Text, Grid, TabGroup, TabList, TabPanel, TabPanels, Tab, Icon } from "@tremor/react";
 
 import { MCPServer, handleTransport, handleAuth } from "@/components/mcp_tools/types";
 // TODO: Move Tools viewer from index file
@@ -14,6 +11,7 @@ import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
+import { Button as AntdButton } from "antd";
 
 interface MCPServerViewProps {
   mcpServer: MCPServer;
@@ -88,306 +86,334 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
     }
   };
 
-  const getTransportBadge = (transport: string) => <Badge variant="outline">{transport.toUpperCase()}</Badge>;
+  const getTransportBadge = (transport: string) => {
+    const label = transport.toUpperCase();
+    return (
+      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded-sm border bg-gray-50 text-gray-700 border-gray-200">
+        {label}
+      </span>
+    );
+  };
 
-  const getAuthBadge = (authType: string) => <Badge variant="outline">{authType}</Badge>;
+  const getAuthBadge = (authType: string) => {
+    return (
+      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded-sm border bg-gray-50 text-gray-700 border-gray-200">
+        {authType}
+      </span>
+    );
+  };
 
   return (
-    <div className="max-w-full p-4">
+    <div className="p-4 max-w-full">
       <div className="mb-6">
-        <Button variant="ghost" className="mb-4" onClick={onBack}>
-          <ArrowLeft />
+        <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onBack}>
           Back to All Servers
         </Button>
         <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-semibold">{mcpServer.server_name || mcpServer.alias || "Unnamed Server"}</h1>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Copy server name"
+          <Title className="text-2xl">{mcpServer.server_name || mcpServer.alias || "Unnamed Server"}</Title>
+          <AntdButton
+            type="text"
+            size="small"
+            icon={copiedStates["mcp-server_name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
             onClick={() => copyToClipboard(mcpServer.server_name || mcpServer.alias, "mcp-server_name")}
-          >
-            {copiedStates["mcp-server_name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-          </Button>
+            className={`transition-all duration-200 ${
+              copiedStates["mcp-server_name"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+            }`}
+          />
           {mcpServer.alias && mcpServer.server_name && mcpServer.alias !== mcpServer.server_name && (
-            <Badge variant="secondary" className="ml-2 font-mono">
+            <span className="ml-2 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-sm bg-gray-100 text-gray-600 border border-gray-200 font-mono">
               {mcpServer.alias}
-            </Badge>
+            </span>
           )}
         </div>
-        <div className="mt-1 flex items-center gap-1.5">
-          <p className="font-mono text-xs text-muted-foreground">{mcpServer.server_id}</p>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Copy server id"
+        <div className="flex items-center gap-1.5 mt-1">
+          <Text className="text-gray-400 font-mono text-xs">{mcpServer.server_id}</Text>
+          <AntdButton
+            type="text"
+            size="small"
+            icon={copiedStates["mcp-server-id"] ? <CheckIcon size={10} /> : <CopyIcon size={10} />}
             onClick={() => copyToClipboard(mcpServer.server_id, "mcp-server-id")}
-          >
-            {copiedStates["mcp-server-id"] ? <CheckIcon size={10} /> : <CopyIcon size={10} />}
-          </Button>
+            className={`transition-all duration-200 ${
+              copiedStates["mcp-server-id"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-300 hover:text-gray-500 hover:bg-gray-50"
+            }`}
+          />
         </div>
-        {mcpServer.description && <p className="mt-2 text-sm text-muted-foreground">{mcpServer.description}</p>}
+        {mcpServer.description && <Text className="text-gray-500 mt-2">{mcpServer.description}</Text>}
       </div>
 
-      <Tabs value={String(selectedTabIndex)} onValueChange={(v: unknown) => setSelectedTabIndex(Number(v))}>
-        <TabsList className="mb-4">
-          <TabsTrigger value="0" className="flex-none">
-            Overview
-          </TabsTrigger>
-          <TabsTrigger value="1" className="flex-none">
-            MCP Tools
-          </TabsTrigger>
-          {isProxyAdmin && (
-            <TabsTrigger value="2" className="flex-none">
-              Settings
-            </TabsTrigger>
-          )}
-        </TabsList>
+      {/* TODO: magic number for index */}
+      <TabGroup index={selectedTabIndex} onIndexChange={setSelectedTabIndex}>
+        <TabList className="mb-4">
+          {[
+            <Tab key="overview">Overview</Tab>,
+            <Tab key="tools">MCP Tools</Tab>,
+            ...(isProxyAdmin ? [<Tab key="settings">Settings</Tab>] : []),
+          ]}
+        </TabList>
 
-        {/* Overview Panel */}
-        <TabsContent value="0">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <Card className="p-4">
-              <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Transport</p>
+        <TabPanels>
+          {/* Overview Panel */}
+          <TabPanel>
+            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-4">
+              <Card className="p-4">
+                <Text className="text-xs font-medium text-gray-500 uppercase tracking-wide">Transport</Text>
+                <div className="mt-3">
+                  {getTransportBadge(
+                    handleTransport(mcpServer.transport ?? undefined, mcpServer.spec_path ?? undefined),
+                  )}
+                </div>
+              </Card>
+
+              <Card className="p-4">
+                <Text className="text-xs font-medium text-gray-500 uppercase tracking-wide">Authentication</Text>
+                <div className="mt-3">{getAuthBadge(handleAuth(mcpServer.auth_type ?? undefined))}</div>
+              </Card>
+
+              <Card className="p-4">
+                <Text className="text-xs font-medium text-gray-500 uppercase tracking-wide">Host URL</Text>
+                <div className="mt-3 flex items-center gap-2">
+                  <Text className="break-all overflow-wrap-anywhere font-mono text-sm">
+                    {renderUrlWithToggle(mcpServer.url, showFullUrl)}
+                  </Text>
+                  {/* Only proxy admins may reveal the raw URL — non-admins
+                      receive a sanitized server object from the backend
+                      with `url=null`, but hide the toggle anyway as
+                      defense-in-depth in case the URL ever leaks back
+                      into the response. */}
+                  {hasToken && isProxyAdmin && (
+                    <button
+                      onClick={() => setShowFullUrl(!showFullUrl)}
+                      className="p-1 hover:bg-gray-100 rounded-sm shrink-0"
+                    >
+                      <Icon icon={showFullUrl ? EyeOffIcon : EyeIcon} size="sm" className="text-gray-500" />
+                    </button>
+                  )}
+                </div>
+              </Card>
+            </Grid>
+            <Card className="mt-4 p-4">
+              <Text className="text-xs font-medium text-gray-500 uppercase tracking-wide">Cost Configuration</Text>
               <div className="mt-3">
-                {getTransportBadge(handleTransport(mcpServer.transport ?? undefined, mcpServer.spec_path ?? undefined))}
+                <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
               </div>
             </Card>
+          </TabPanel>
 
-            <Card className="p-4">
-              <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Authentication</p>
-              <div className="mt-3">{getAuthBadge(handleAuth(mcpServer.auth_type ?? undefined))}</div>
-            </Card>
+          {/* Tool Panel */}
+          <TabPanel>
+            <MCPToolsViewer
+              serverId={mcpServer.server_id}
+              accessToken={accessToken}
+              auth_type={mcpServer.auth_type}
+              oauth2_flow={mcpServer.oauth2_flow}
+              delegate_auth_to_upstream={mcpServer.delegate_auth_to_upstream}
+              tokenUrl={mcpServer.token_url}
+              userRole={userRole}
+              userID={userID}
+              serverAlias={mcpServer.alias}
+              extraHeaders={mcpServer.extra_headers}
+            />
+          </TabPanel>
 
-            <Card className="p-4">
-              <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Host URL</p>
-              <div className="mt-3 flex items-center gap-2">
-                <p className="overflow-wrap-anywhere font-mono text-sm break-all">
-                  {renderUrlWithToggle(mcpServer.url, showFullUrl)}
-                </p>
-                {/* Only proxy admins may reveal the raw URL — non-admins
-                    receive a sanitized server object from the backend
-                    with `url=null`, but hide the toggle anyway as
-                    defense-in-depth in case the URL ever leaks back
-                    into the response. */}
-                {hasToken && isProxyAdmin && (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={showFullUrl ? "Hide full URL" : "Show full URL"}
-                    onClick={() => setShowFullUrl(!showFullUrl)}
-                  >
-                    {showFullUrl ? <EyeOff /> : <Eye />}
+          {/* Settings Panel */}
+          <TabPanel>
+            <Card>
+              <div className="flex justify-between items-center mb-4">
+                <Title>MCP Server Settings</Title>
+                {editing ? null : (
+                  <Button variant="light" onClick={() => setEditing(true)}>
+                    Edit Settings
                   </Button>
                 )}
               </div>
-            </Card>
-          </div>
-          <Card className="mt-4 p-4">
-            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Cost Configuration</p>
-            <div className="mt-3">
-              <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
-            </div>
-          </Card>
-        </TabsContent>
-
-        {/* Tool Panel */}
-        <TabsContent value="1">
-          <MCPToolsViewer
-            serverId={mcpServer.server_id}
-            accessToken={accessToken}
-            auth_type={mcpServer.auth_type}
-            oauth2_flow={mcpServer.oauth2_flow}
-            delegate_auth_to_upstream={mcpServer.delegate_auth_to_upstream}
-            dcr_bridge={mcpServer.dcr_bridge}
-            tokenUrl={mcpServer.token_url}
-            userRole={userRole}
-            userID={userID}
-            serverAlias={mcpServer.alias}
-            extraHeaders={mcpServer.extra_headers}
-          />
-        </TabsContent>
-
-        {/* Settings Panel */}
-        <TabsContent value="2">
-          <Card className="p-6">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-medium">MCP Server Settings</h2>
-              {editing ? null : (
-                <Button variant="outline" onClick={() => setEditing(true)}>
-                  Edit Settings
-                </Button>
-              )}
-            </div>
-            {editing ? (
-              <MCPServerEdit
-                mcpServer={mcpServer}
-                accessToken={accessToken}
-                userID={userID}
-                onCancel={() => setEditing(false)}
-                onSuccess={handleSuccess}
-                availableAccessGroups={availableAccessGroups}
-              />
-            ) : (
-              <div className="divide-y divide-border">
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Server Name</p>
-                  <div className="col-span-2 text-sm">
-                    {mcpServer.server_name || <span className="text-muted-foreground">—</span>}
+              {editing ? (
+                <MCPServerEdit
+                  mcpServer={mcpServer}
+                  accessToken={accessToken}
+                  userID={userID}
+                  onCancel={() => setEditing(false)}
+                  onSuccess={handleSuccess}
+                  availableAccessGroups={availableAccessGroups}
+                />
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Server Name</Text>
+                    <div className="col-span-2 text-sm text-gray-900">
+                      {mcpServer.server_name || <span className="text-gray-400">—</span>}
+                    </div>
                   </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Alias</p>
-                  <div className="col-span-2 font-mono text-sm">
-                    {mcpServer.alias || <span className="text-muted-foreground">—</span>}
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Alias</Text>
+                    <div className="col-span-2 text-sm font-mono text-gray-900">
+                      {mcpServer.alias || <span className="text-gray-400">—</span>}
+                    </div>
                   </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Description</p>
-                  <div className="col-span-2 text-sm">
-                    {mcpServer.description || <span className="text-muted-foreground">—</span>}
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Description</Text>
+                    <div className="col-span-2 text-sm text-gray-900">
+                      {mcpServer.description || <span className="text-gray-400">—</span>}
+                    </div>
                   </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">URL</p>
-                  <div className="col-span-2 flex items-center gap-2 font-mono text-sm break-all">
-                    {renderUrlWithToggle(mcpServer.url, showFullUrl)}
-                    {hasToken && (
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={showFullUrl ? "Hide full URL" : "Show full URL"}
-                        onClick={() => setShowFullUrl(!showFullUrl)}
-                      >
-                        {showFullUrl ? <EyeOff /> : <Eye />}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Transport</p>
-                  <div className="col-span-2">
-                    {getTransportBadge(handleTransport(mcpServer.transport, mcpServer.spec_path))}
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Authentication</p>
-                  <div className="col-span-2">{getAuthBadge(handleAuth(mcpServer.auth_type))}</div>
-                </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Extra Headers</p>
-                  <div className="col-span-2 text-sm">
-                    {mcpServer.extra_headers && mcpServer.extra_headers.length > 0 ? (
-                      mcpServer.extra_headers.join(", ")
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Allow All Keys</p>
-                  <div className="col-span-2">
-                    {mcpServer.allow_all_keys ? (
-                      <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                        Enabled
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline">Disabled</Badge>
-                    )}
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Network Access</p>
-                  <div className="col-span-2">
-                    {mcpServer.available_on_public_internet ? (
-                      <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                        Public
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
-                        Internal only
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-                {handleAuth(mcpServer.auth_type) === "oauth2" && (
-                  <div className="grid grid-cols-3 gap-4 py-3">
-                    <p className="text-sm font-medium text-muted-foreground">Delegate Auth to Upstream</p>
-                    <div className="col-span-2">
-                      {mcpServer.delegate_auth_to_upstream ? (
-                        <Badge variant="outline">
-                          <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                          Enabled (PKCE passthrough)
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline">Disabled</Badge>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">URL</Text>
+                    <div className="col-span-2 text-sm font-mono text-gray-900 break-all flex items-center gap-2">
+                      {renderUrlWithToggle(mcpServer.url, showFullUrl)}
+                      {hasToken && (
+                        <button
+                          onClick={() => setShowFullUrl(!showFullUrl)}
+                          className="p-1 hover:bg-gray-100 rounded-sm shrink-0"
+                        >
+                          <Icon icon={showFullUrl ? EyeOffIcon : EyeIcon} size="sm" className="text-gray-500" />
+                        </button>
                       )}
                     </div>
                   </div>
-                )}
-                {handleAuth(mcpServer.auth_type) !== "oauth2" &&
-                  Array.isArray(mcpServer.extra_headers) &&
-                  mcpServer.extra_headers.some((h) => typeof h === "string" && h.toLowerCase() === "authorization") && (
-                    <div className="grid grid-cols-3 gap-4 py-3">
-                      <p className="text-sm font-medium text-muted-foreground">OAuth Pass-through</p>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Transport</Text>
+                    <div className="col-span-2">
+                      {getTransportBadge(handleTransport(mcpServer.transport, mcpServer.spec_path))}
+                    </div>
+                  </div>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Authentication</Text>
+                    <div className="col-span-2">{getAuthBadge(handleAuth(mcpServer.auth_type))}</div>
+                  </div>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Extra Headers</Text>
+                    <div className="col-span-2 text-sm text-gray-900">
+                      {mcpServer.extra_headers && mcpServer.extra_headers.length > 0 ? (
+                        mcpServer.extra_headers.join(", ")
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Allow All Keys</Text>
+                    <div className="col-span-2">
+                      {mcpServer.allow_all_keys ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-700 rounded-full border border-green-200 text-xs font-medium">
+                          <span className="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                          Enabled
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-50 text-gray-600 rounded-full border border-gray-200 text-xs font-medium">
+                          Disabled
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Network Access</Text>
+                    <div className="col-span-2">
+                      {mcpServer.available_on_public_internet ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-700 rounded-full border border-green-200 text-xs font-medium">
+                          <span className="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                          Public
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-50 text-orange-700 rounded-full border border-orange-200 text-xs font-medium">
+                          <span className="h-1.5 w-1.5 rounded-full bg-orange-500"></span>
+                          Internal only
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {handleAuth(mcpServer.auth_type) === "oauth2" && (
+                    <div className="py-3 grid grid-cols-3 gap-4">
+                      <Text className="text-sm font-medium text-gray-500">Delegate Auth to Upstream</Text>
                       <div className="col-span-2">
-                        {mcpServer.oauth_passthrough ? (
-                          <Badge variant="outline">
-                            <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                            Enabled
-                          </Badge>
+                        {mcpServer.delegate_auth_to_upstream ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-700 rounded-full border border-green-200 text-xs font-medium">
+                            <span className="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                            Enabled (PKCE passthrough)
+                          </span>
                         ) : (
-                          <Badge variant="outline">Disabled</Badge>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-50 text-gray-600 rounded-full border border-gray-200 text-xs font-medium">
+                            Disabled
+                          </span>
                         )}
                       </div>
                     </div>
                   )}
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Access Groups</p>
-                  <div className="col-span-2">
-                    {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {mcpServer.mcp_access_groups.map((group: any, index: number) => (
-                          <Badge key={index} variant="secondary">
-                            {typeof group === "string" ? group : group?.name ?? ""}
-                          </Badge>
-                        ))}
+                  {handleAuth(mcpServer.auth_type) !== "oauth2" &&
+                    Array.isArray(mcpServer.extra_headers) &&
+                    mcpServer.extra_headers.some(
+                      (h) => typeof h === "string" && h.toLowerCase() === "authorization",
+                    ) && (
+                      <div className="py-3 grid grid-cols-3 gap-4">
+                        <Text className="text-sm font-medium text-gray-500">OAuth Pass-through</Text>
+                        <div className="col-span-2">
+                          {mcpServer.oauth_passthrough ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-700 rounded-full border border-green-200 text-xs font-medium">
+                              <span className="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                              Enabled
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-50 text-gray-600 rounded-full border border-gray-200 text-xs font-medium">
+                              Disabled
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    ) : (
-                      <span className="text-sm text-muted-foreground">—</span>
                     )}
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Access Groups</Text>
+                    <div className="col-span-2">
+                      {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {mcpServer.mcp_access_groups.map((group: any, index: number) => (
+                            <span
+                              key={index}
+                              className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-sm bg-gray-100 text-gray-700 border border-gray-200"
+                            >
+                              {typeof group === "string" ? group : group?.name ?? ""}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-sm text-gray-400">—</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Allowed Tools</Text>
+                    <div className="col-span-2">
+                      {mcpServer.allowed_tools && mcpServer.allowed_tools.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {mcpServer.allowed_tools.map((tool: string, index: number) => (
+                            <span
+                              key={index}
+                              className="inline-flex items-center text-xs font-mono font-medium px-2 py-0.5 rounded-sm bg-blue-50 text-blue-700 border border-blue-200"
+                            >
+                              {tool}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-sm bg-green-50 text-green-700 border border-green-200">
+                          All tools enabled
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Cost</Text>
+                    <div className="col-span-2">
+                      <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
+                    </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Allowed Tools</p>
-                  <div className="col-span-2">
-                    {mcpServer.allowed_tools && mcpServer.allowed_tools.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {mcpServer.allowed_tools.map((tool: string, index: number) => (
-                          <Badge key={index} variant="secondary" className="font-mono">
-                            {tool}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : (
-                      <Badge variant="outline">All tools enabled</Badge>
-                    )}
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Cost</p>
-                  <div className="col-span-2">
-                    <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
-        </TabsContent>
-      </Tabs>
+              )}
+            </Card>
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };

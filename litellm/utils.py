@@ -1778,10 +1778,7 @@ def client(original_function):
                         start_time=start_time,
                         end_time=end_time,
                     )
-                    return _llm_caching_handler.wrap_streaming_result_for_cache(
-                        result=result,
-                        call_type=call_type,
-                    )
+                    return result
             elif call_type == CallTypes.arealtime.value:
                 return result
             ### POST-CALL RULES ###
@@ -2721,6 +2718,9 @@ _CACHE_PRICING_FIELDS: Final = (
     "cache_creation_input_token_cost",
     "cache_creation_input_token_cost_above_1hr",
     "cache_creation_input_token_cost_above_200k_tokens",
+    "cache_creation_input_token_cost_priority",
+    "cache_creation_input_token_cost_flex",
+    "cache_creation_input_token_cost_above_272k_tokens",
     "cache_read_input_token_cost",
     "cache_read_input_token_cost_above_200k_tokens",
 )
@@ -9067,7 +9067,6 @@ class ProviderConfigManager:
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig
-        from litellm.llms.nimble.search.transformation import NimbleSearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )
@@ -9097,7 +9096,6 @@ class ProviderConfigManager:
             SearchProviders.YOU_COM: YouComSearchConfig,
             SearchProviders.APISERPENT: APISerpentSearchConfig,
             SearchProviders.TINYFISH: TinyfishSearchConfig,
-            SearchProviders.NIMBLE: NimbleSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

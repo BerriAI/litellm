@@ -1,10 +1,9 @@
-import { Trash2 } from "lucide-react";
-import type { ColumnDef } from "@tanstack/react-table";
+import { DeleteOutlined } from "@ant-design/icons";
+import { Button, Select, Table, Typography } from "antd";
 import React from "react";
-import { DataTable } from "@/components/shared/DataTable";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ACTION_ITEMS } from "./action_options";
+
+const { Text } = Typography;
+const { Option } = Select;
 
 interface BlockedWord {
   id: string;
@@ -20,46 +19,41 @@ interface KeywordTableProps {
 }
 
 const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, onRemove }) => {
-  const columns: ColumnDef<BlockedWord>[] = [
+  const columns = [
     {
-      header: "Keyword",
-      accessorKey: "keyword",
+      title: "Keyword",
+      dataIndex: "keyword",
+      key: "keyword",
     },
     {
-      header: "Action",
-      accessorKey: "action",
-      size: 150,
-      cell: ({ row }) => (
+      title: "Action",
+      dataIndex: "action",
+      key: "action",
+      width: 150,
+      render: (action: string, record: BlockedWord) => (
         <Select
-          items={ACTION_ITEMS}
-          value={row.original.action}
-          onValueChange={(value: string | null) => value && onActionChange(row.original.id, "action", value)}
+          value={action}
+          onChange={(value) => onActionChange(record.id, "action", value)}
+          style={{ width: 120 }}
+          size="small"
         >
-          <SelectTrigger size="sm" className="w-[120px]" aria-label="Action">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false}>
-            {ACTION_ITEMS.map((item) => (
-              <SelectItem key={item.value} value={item.value}>
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
+          <Option value="BLOCK">Block</Option>
+          <Option value="MASK">Mask</Option>
         </Select>
       ),
     },
     {
-      header: "Description",
-      accessorKey: "description",
-      cell: ({ row }) => row.original.description || "-",
+      title: "Description",
+      dataIndex: "description",
+      key: "description",
+      render: (desc: string) => desc || "-",
     },
     {
-      header: "",
-      id: "actions",
-      size: 100,
-      cell: ({ row }) => (
-        <Button variant="ghost" size="sm" onClick={() => onRemove(row.original.id)}>
-          <Trash2 />
+      title: "",
+      key: "actions",
+      width: 100,
+      render: (_: any, record: BlockedWord) => (
+        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove(record.id)}>
           Delete
         </Button>
       ),
@@ -67,10 +61,10 @@ const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, o
   ];
 
   if (keywords.length === 0) {
-    return <div className="py-10 text-center text-muted-foreground">No keywords added.</div>;
+    return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No keywords added.</div>;
   }
 
-  return <DataTable data={keywords} columns={columns} getRowId={(row) => row.id} size="compact" />;
+  return <Table dataSource={keywords} columns={columns} rowKey="id" pagination={false} size="small" />;
 };
 
 export default KeywordTable;

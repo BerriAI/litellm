@@ -35,10 +35,6 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         MessagesAuthStrategy::Header("x-api-key")
     }
 
-    fn accepts_bearer_auth(&self) -> bool {
-        false
-    }
-
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[
             ("anthropic-version", "2023-06-01"),

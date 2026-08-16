@@ -1,6 +1,3 @@
-from typing import Final
-
-
 def show_missing_vars_in_env():
     from fastapi.responses import HTMLResponse
 
@@ -23,7 +20,7 @@ def show_missing_vars_in_env():
 
 
 def missing_keys_form(missing_key_names: str):
-    missing_keys_html_form: Final = """
+    missing_keys_html_form = """
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -98,7 +95,7 @@ def missing_keys_form(missing_key_names: str):
 def admin_ui_disabled():
     from fastapi.responses import HTMLResponse
 
-    ui_disabled_html: Final = """
+    ui_disabled_html = """
         <!DOCTYPE html>
         <html lang="en">
         <head>

@@ -3,7 +3,6 @@
 
 import json
 import os
-from typing import Final
 
 import httpx
 
@@ -21,9 +20,9 @@ def get_utc_datetime():
     from datetime import datetime
 
     if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)
+        return datetime.now(dt.UTC)  # type: ignore
     else:
-        return datetime.utcnow()
+        return datetime.utcnow()  # type: ignore
 
 
 class OpenMeterLogger(CustomLogger):
@@ -41,18 +40,18 @@ class OpenMeterLogger(CustomLogger):
 
         in the environment
         """
-        missing_keys: Final = []
+        missing_keys = []
         if os.getenv("OPENMETER_API_KEY", None) is None:
             missing_keys.append("OPENMETER_API_KEY")
 
         if len(missing_keys) > 0:
-            raise Exception(f"Missing keys={missing_keys} in environment.")
+            raise Exception("Missing keys={} in environment.".format(missing_keys))
 
     def _common_logic(self, kwargs: dict, response_obj):
-        call_id: Final = response_obj.get("id", kwargs.get("litellm_call_id"))
-        dt: Final = get_utc_datetime().isoformat()
-        cost: Final = kwargs.get("response_cost", None)
-        model: Final = kwargs.get("model")
+        call_id = response_obj.get("id", kwargs.get("litellm_call_id"))
+        dt = get_utc_datetime().isoformat()
+        cost = kwargs.get("response_cost", None)
+        model = kwargs.get("model")
         usage = {}
         if (
             isinstance(response_obj, litellm.ModelResponse) or isinstance(response_obj, litellm.EmbeddingResponse)
@@ -68,15 +67,15 @@ class OpenMeterLogger(CustomLogger):
         # resolved solely from the key-bound user_api_key_user_id. Proxies
         # serving multi-tenant traffic enable this to prevent clients from
         # forging attribution by setting `user` in the request body.
-        trust_request_user: Final = os.getenv("OPENMETER_TRUST_REQUEST_USER", "true").lower() != "false"
+        trust_request_user = os.getenv("OPENMETER_TRUST_REQUEST_USER", "true").lower() != "false"
         user_param = kwargs.get("user", None) if trust_request_user else None
 
         # If no user provided directly, try to get it from token user_id
         if user_param is None:
             # Check if user_id is available from the API key metadata
-            litellm_params: Final = kwargs.get("litellm_params", {})
-            metadata: Final = litellm_params.get("metadata", {})
-            user_api_key_user_id: Final = metadata.get("user_api_key_user_id", None)
+            litellm_params = kwargs.get("litellm_params", {})
+            metadata = litellm_params.get("metadata", {})
+            user_api_key_user_id = metadata.get("user_api_key_user_id", None)
 
             if user_api_key_user_id is not None:
                 user_param = user_api_key_user_id
@@ -84,7 +83,7 @@ class OpenMeterLogger(CustomLogger):
                 raise Exception("OpenMeter: user is required")
 
         # Ensure subject is always a string for OpenMeter API
-        subject: Final = str(user_param)
+        subject = str(user_param)
 
         return {
             "specversion": "1.0",
@@ -103,12 +102,12 @@ class OpenMeterLogger(CustomLogger):
         else:
             _url += "/api/v1/events"
 
-        api_key: Final = os.getenv("OPENMETER_API_KEY")
+        api_key = os.getenv("OPENMETER_API_KEY")
 
-        _data: Final = self._common_logic(kwargs=kwargs, response_obj=response_obj)
-        _headers: Final = {
+        _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
+        _headers = {
             "Content-Type": "application/cloudevents+json",
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": "Bearer {}".format(api_key),
         }
 
         try:
@@ -129,12 +128,12 @@ class OpenMeterLogger(CustomLogger):
         else:
             _url += "/api/v1/events"
 
-        api_key: Final = os.getenv("OPENMETER_API_KEY")
+        api_key = os.getenv("OPENMETER_API_KEY")
 
-        _data: Final = self._common_logic(kwargs=kwargs, response_obj=response_obj)
-        _headers: Final = {
+        _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
+        _headers = {
             "Content-Type": "application/cloudevents+json",
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": "Bearer {}".format(api_key),
         }
 
         try:

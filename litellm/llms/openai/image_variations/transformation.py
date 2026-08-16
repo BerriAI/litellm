@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, List, Optional, Union
 
 from aiohttp import ClientResponse
 from httpx import Headers, Response
@@ -13,7 +13,7 @@ from ..common_utils import OpenAIError
 
 
 class OpenAIImageVariationConfig(BaseImageVariationConfig):
-    def get_supported_openai_params(self, model: str) -> list[OpenAIImageVariationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageVariationOptionalParams]:
         return ["n", "size", "response_format", "user"]
 
     def map_openai_params(
@@ -28,7 +28,7 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
 
     def transform_request_image_variation(
         self,
-        model: str | None,
+        model: Optional[str],
         image: FileTypes,
         optional_params: dict,
         headers: dict,
@@ -42,7 +42,7 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
 
     async def async_transform_response_image_variation(
         self,
-        model: str | None,
+        model: Optional[str],
         raw_response: ClientResponse,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -51,13 +51,13 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
+        api_key: Optional[str] = None,
     ) -> ImageResponse:
         return model_response
 
     def transform_response_image_variation(
         self,
-        model: str | None,
+        model: Optional[str],
         raw_response: Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -66,11 +66,11 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
+        api_key: Optional[str] = None,
     ) -> ImageResponse:
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
         return OpenAIError(
             status_code=status_code,
             message=error_message,

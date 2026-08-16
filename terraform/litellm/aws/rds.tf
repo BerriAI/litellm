@@ -1,7 +1,5 @@
 # Aurora Postgres cluster with one writer + one reader instance, IAM
-# database authentication enabled. Skipped entirely when
-# create_database = false, in which case the stack either talks to the
-# database named by var.database_url or runs without one.
+# database authentication enabled.
 #
 # Important: enabling IAM auth on the cluster does not by itself grant any
 # Postgres user the ability to log in with an IAM token. After the first
@@ -19,15 +17,13 @@
 # superusers — keep it for break-glass only.
 
 resource "aws_db_subnet_group" "this" {
-  count      = var.create_database ? 1 : 0
   name       = "${local.name}-db"
-  subnet_ids = local.private_subnet_ids
+  subnet_ids = aws_subnet.private[*].id
 
   tags = local.tags
 }
 
 resource "aws_rds_cluster_parameter_group" "this" {
-  count       = var.create_database ? 1 : 0
   name        = "${local.name}-cluster-pg"
   family      = "aurora-postgresql${split(".", var.db_engine_version)[0]}"
   description = "LiteLLM Aurora Postgres cluster parameters."
@@ -36,17 +32,16 @@ resource "aws_rds_cluster_parameter_group" "this" {
 }
 
 resource "aws_rds_cluster" "this" {
-  count                           = var.create_database ? 1 : 0
   cluster_identifier              = local.name
   engine                          = "aurora-postgresql"
   engine_mode                     = "provisioned"
   engine_version                  = var.db_engine_version
   database_name                   = var.db_name
   master_username                 = var.db_master_username
-  master_password                 = random_password.db_master_password[0].result
-  db_subnet_group_name            = aws_db_subnet_group.this[0].name
-  vpc_security_group_ids          = [aws_security_group.rds[0].id]
-  db_cluster_parameter_group_name = aws_rds_cluster_parameter_group.this[0].name
+  master_password                 = random_password.db_master_password.result
+  db_subnet_group_name            = aws_db_subnet_group.this.name
+  vpc_security_group_ids          = [aws_security_group.rds.id]
+  db_cluster_parameter_group_name = aws_rds_cluster_parameter_group.this.name
 
   iam_database_authentication_enabled = true
   storage_encrypted                   = true
@@ -66,12 +61,11 @@ resource "aws_rds_cluster" "this" {
 }
 
 resource "aws_rds_cluster_instance" "writer" {
-  count              = var.create_database ? 1 : 0
   identifier         = "${local.name}-writer"
-  cluster_identifier = aws_rds_cluster.this[0].id
+  cluster_identifier = aws_rds_cluster.this.id
   instance_class     = var.db_instance_class
-  engine             = aws_rds_cluster.this[0].engine
-  engine_version     = aws_rds_cluster.this[0].engine_version
+  engine             = aws_rds_cluster.this.engine
+  engine_version     = aws_rds_cluster.this.engine_version
 
   publicly_accessible          = false
   performance_insights_enabled = true
@@ -84,12 +78,11 @@ resource "aws_rds_cluster_instance" "writer" {
 }
 
 resource "aws_rds_cluster_instance" "reader" {
-  count              = var.create_database ? 1 : 0
   identifier         = "${local.name}-reader"
-  cluster_identifier = aws_rds_cluster.this[0].id
+  cluster_identifier = aws_rds_cluster.this.id
   instance_class     = var.db_instance_class
-  engine             = aws_rds_cluster.this[0].engine
-  engine_version     = aws_rds_cluster.this[0].engine_version
+  engine             = aws_rds_cluster.this.engine
+  engine_version     = aws_rds_cluster.this.engine_version
 
   publicly_accessible          = false
   performance_insights_enabled = true

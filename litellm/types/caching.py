@@ -1,6 +1,5 @@
-from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Final, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -31,26 +30,7 @@ CachingSupportedCallTypes = Literal[
     "rerank",
     "responses",
     "aresponses",
-    "anthropic_messages",
-    "aanthropic_messages",
 ]
-
-DEFAULT_CACHING_SUPPORTED_CALL_TYPES: tuple[CachingSupportedCallTypes, ...] = (
-    "completion",
-    "acompletion",
-    "embedding",
-    "aembedding",
-    "atranscription",
-    "transcription",
-    "atext_completion",
-    "text_completion",
-    "arerank",
-    "rerank",
-    "responses",
-    "aresponses",
-    "anthropic_messages",
-    "aanthropic_messages",
-)
 
 
 class RedisPipelineIncrementOperation(TypedDict):
@@ -60,7 +40,7 @@ class RedisPipelineIncrementOperation(TypedDict):
 
     key: str
     increment_value: float
-    ttl: int | None
+    ttl: Optional[int]
 
 
 class RedisPipelineSetOperation(TypedDict):
@@ -70,7 +50,7 @@ class RedisPipelineSetOperation(TypedDict):
 
     key: str
     value: Any
-    ttl: int | None
+    ttl: Optional[int]
 
 
 class RedisPipelineRpushOperation(TypedDict):
@@ -79,7 +59,7 @@ class RedisPipelineRpushOperation(TypedDict):
     """
 
     key: str
-    values: Sequence[Any]
+    values: List[Any]
 
 
 class RedisPipelineLpopOperation(TypedDict):
@@ -88,23 +68,23 @@ class RedisPipelineLpopOperation(TypedDict):
     """
 
     key: str
-    count: int | None
+    count: Optional[int]
 
 
 DynamicCacheControl = TypedDict(
     "DynamicCacheControl",
     {
         # Will cache the response for the user-defined amount of time (in seconds).
-        "ttl": int | None,
+        "ttl": Optional[int],
         # Namespace to use for caching
-        "namespace": str | None,
+        "namespace": Optional[str],
         # Max Age to use for caching
-        "s-maxage": int | None,
-        "s-max-age": int | None,
+        "s-maxage": Optional[int],
+        "s-max-age": Optional[int],
         # Will not return a cached response, but instead call the actual endpoint.
-        "no-cache": bool | None,
+        "no-cache": Optional[bool],
         # Will not store the response in the cache.
-        "no-store": bool | None,
+        "no-store": Optional[bool],
     },
 )
 
@@ -112,12 +92,12 @@ DynamicCacheControl = TypedDict(
 class CachePingResponse(BaseModel):
     status: str
     cache_type: str
-    ping_response: bool | None = None
-    set_cache_response: str | None = None
-    litellm_cache_params: str | None = None
+    ping_response: Optional[bool] = None
+    set_cache_response: Optional[str] = None
+    litellm_cache_params: Optional[str] = None
 
     # intentionally a dict, since we run masker.mask_dict() on HealthCheckCacheParams
-    health_check_cache_params: dict | None = None
+    health_check_cache_params: Optional[dict] = None
 
 
 class HealthCheckCacheParams(BaseModel):
@@ -125,19 +105,19 @@ class HealthCheckCacheParams(BaseModel):
     Cache Params returned on /cache/ping call
     """
 
-    host: str | None = None
-    port: str | int | None = None
-    redis_kwargs: dict[str, Any] | None = None
-    namespace: str | None = None
-    redis_version: str | int | float | None = None
+    host: Optional[str] = None
+    port: Optional[Union[str, int]] = None
+    redis_kwargs: Optional[Dict[str, Any]] = None
+    namespace: Optional[str] = None
+    redis_version: Optional[Union[str, int, float]] = None
 
 
 class CachedEmbedding(TypedDict):
     """Type definition for cached embedding objects"""
 
-    embedding: list[float] | None
-    index: int | None
-    object: str | None
-    model: str | None
-    prompt_tokens: int | None
-    prompt_tokens_details: dict | None
+    embedding: Optional[List[float]]
+    index: Optional[int]
+    object: Optional[str]
+    model: Optional[str]
+    prompt_tokens: Optional[int]
+    prompt_tokens_details: Optional[dict]

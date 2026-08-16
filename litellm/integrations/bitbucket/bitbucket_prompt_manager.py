@@ -3,7 +3,7 @@ BitBucket prompt manager that integrates with LiteLLM's prompt management system
 Fetches .prompt files from BitBucket repositories and provides team-based access control.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -34,8 +34,8 @@ class BitBucketPromptTemplate:
         self,
         template_id: str,
         content: str,
-        metadata: dict[str, Any],
-        model: str | None = None,
+        metadata: Dict[str, Any],
+        model: Optional[str] = None,
     ):
         self.template_id = template_id
         self.content = content
@@ -65,12 +65,12 @@ class BitBucketTemplateManager:
 
     def __init__(
         self,
-        bitbucket_config: dict[str, Any],
-        prompt_id: str | None = None,
+        bitbucket_config: Dict[str, Any],
+        prompt_id: Optional[str] = None,
     ):
         self.bitbucket_config = bitbucket_config
         self.prompt_id = prompt_id
-        self.prompts: dict[str, BitBucketPromptTemplate] = {}
+        self.prompts: Dict[str, BitBucketPromptTemplate] = {}
         self.bitbucket_client = BitBucketClient(bitbucket_config)
 
         # Templates fetched from a BitBucket repo are not trustworthy:
@@ -99,10 +99,10 @@ class BitBucketTemplateManager:
         """Load a specific .prompt file from BitBucket."""
         try:
             # Fetch the .prompt file from BitBucket
-            prompt_content: Final = self.bitbucket_client.get_file_content(f"{prompt_id}.prompt")
+            prompt_content = self.bitbucket_client.get_file_content(f"{prompt_id}.prompt")
 
             if prompt_content:
-                template: Final = self._parse_prompt_file(prompt_content, prompt_id)
+                template = self._parse_prompt_file(prompt_content, prompt_id)
                 self.prompts[prompt_id] = template
         except Exception as e:
             raise Exception(f"Failed to load prompt '{prompt_id}' from BitBucket: {e}")
@@ -111,7 +111,7 @@ class BitBucketTemplateManager:
         """Parse a .prompt file content and extract metadata and template."""
         # Split frontmatter and content
         if content.startswith("---"):
-            parts: Final = content.split("---", 2)
+            parts = content.split("---", 2)
             if len(parts) >= 3:
                 frontmatter_str = parts[1].strip()
                 template_content = parts[2].strip()
@@ -123,7 +123,7 @@ class BitBucketTemplateManager:
             template_content = content
 
         # Parse YAML frontmatter
-        metadata: dict[str, Any] = {}
+        metadata: Dict[str, Any] = {}
         if frontmatter_str:
             try:
                 import yaml
@@ -141,9 +141,9 @@ class BitBucketTemplateManager:
             metadata=metadata,
         )
 
-    def _parse_yaml_basic(self, yaml_str: str) -> dict[str, Any]:
+    def _parse_yaml_basic(self, yaml_str: str) -> Dict[str, Any]:
         """Basic YAML parser for simple cases when PyYAML is not available."""
-        result: Final[dict[str, Any]] = {}
+        result: Dict[str, Any] = {}
         for line in yaml_str.split("\n"):
             line = line.strip()
             if ":" in line and not line.startswith("#"):
@@ -162,21 +162,21 @@ class BitBucketTemplateManager:
                     result[key] = value.strip("\"'")
         return result
 
-    def render_template(self, template_id: str, variables: dict[str, Any] | None = None) -> str:
+    def render_template(self, template_id: str, variables: Optional[Dict[str, Any]] = None) -> str:
         """Render a template with the given variables."""
         if template_id not in self.prompts:
             raise ValueError(f"Template '{template_id}' not found")
 
-        template: Final = self.prompts[template_id]
-        jinja_template: Final = self.jinja_env.from_string(template.content)
+        template = self.prompts[template_id]
+        jinja_template = self.jinja_env.from_string(template.content)
 
         return jinja_template.render(**(variables or {}))
 
-    def get_template(self, template_id: str) -> BitBucketPromptTemplate | None:
+    def get_template(self, template_id: str) -> Optional[BitBucketPromptTemplate]:
         """Get a template by ID."""
         return self.prompts.get(template_id)
 
-    def list_templates(self) -> list[str]:
+    def list_templates(self) -> List[str]:
         """List all available template IDs."""
         return list(self.prompts.keys())
 
@@ -209,12 +209,12 @@ class BitBucketPromptManager(CustomPromptManagement):
 
     def __init__(
         self,
-        bitbucket_config: dict[str, Any],
-        prompt_id: str | None = None,
+        bitbucket_config: Dict[str, Any],
+        prompt_id: Optional[str] = None,
     ):
         self.bitbucket_config = bitbucket_config
         self.prompt_id = prompt_id
-        self._prompt_manager: BitBucketTemplateManager | None = None
+        self._prompt_manager: Optional[BitBucketTemplateManager] = None
 
     @property
     def integration_name(self) -> str:
@@ -234,8 +234,8 @@ class BitBucketPromptManager(CustomPromptManagement):
     def get_prompt_template(
         self,
         prompt_id: str,
-        prompt_variables: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, Any]]:
+        prompt_variables: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict[str, Any]]:
         """
         Get a prompt template and render it with variables.
 
@@ -246,15 +246,15 @@ class BitBucketPromptManager(CustomPromptManagement):
         Returns:
             Tuple of (rendered_prompt, metadata)
         """
-        template: Final = self.prompt_manager.get_template(prompt_id)
+        template = self.prompt_manager.get_template(prompt_id)
         if not template:
             raise ValueError(f"Prompt template '{prompt_id}' not found")
 
         # Render the template
-        rendered_prompt: Final = self.prompt_manager.render_template(prompt_id, prompt_variables or {})
+        rendered_prompt = self.prompt_manager.render_template(prompt_id, prompt_variables or {})
 
         # Extract metadata
-        metadata: Final = {
+        metadata = {
             "model": template.model,
             "temperature": template.temperature,
             "max_tokens": template.max_tokens,
@@ -265,14 +265,14 @@ class BitBucketPromptManager(CustomPromptManagement):
 
     def pre_call_hook(
         self,
-        user_id: str | None,
-        messages: list[AllMessageValues],
-        function_call: dict[str, Any] | str | None = None,
-        litellm_params: dict[str, Any] | None = None,
-        prompt_id: str | None = None,
-        prompt_variables: dict[str, Any] | None = None,
+        user_id: Optional[str],
+        messages: List[AllMessageValues],
+        function_call: Optional[Union[Dict[str, Any], str]] = None,
+        litellm_params: Optional[Dict[str, Any]] = None,
+        prompt_id: Optional[str] = None,
+        prompt_variables: Optional[Dict[str, Any]] = None,
         **kwargs,
-    ) -> tuple[list[AllMessageValues], dict[str, Any] | None]:
+    ) -> Tuple[List[AllMessageValues], Optional[Dict[str, Any]]]:
         """
         Pre-call hook that processes the prompt template before making the LLM call.
         """
@@ -284,15 +284,17 @@ class BitBucketPromptManager(CustomPromptManagement):
             rendered_prompt, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)
 
             # Parse the rendered prompt into messages
-            parsed_messages: Final = self._parse_prompt_to_messages(rendered_prompt)
+            parsed_messages = self._parse_prompt_to_messages(rendered_prompt)
 
             # Merge with existing messages
             if parsed_messages:
                 # If we have parsed messages, use them instead of the original messages
-                final_messages: list[AllMessageValues] = parsed_messages
+                final_messages: List[AllMessageValues] = parsed_messages
             else:
                 # If no messages were parsed, prepend the prompt to existing messages
-                final_messages = [{"role": "user", "content": rendered_prompt}] + messages
+                final_messages = [
+                    {"role": "user", "content": rendered_prompt}  # type: ignore
+                ] + messages
 
             # Update litellm_params with prompt metadata
             if litellm_params is None:
@@ -318,16 +320,16 @@ class BitBucketPromptManager(CustomPromptManagement):
             # Log error but don't fail the call
             import litellm
 
-            litellm._logging.verbose_proxy_logger.error("Error in BitBucket prompt pre_call_hook: %s", e)
+            litellm._logging.verbose_proxy_logger.error(f"Error in BitBucket prompt pre_call_hook: {e}")
             return messages, litellm_params
 
-    def _parse_prompt_to_messages(self, prompt_content: str) -> list[AllMessageValues]:
+    def _parse_prompt_to_messages(self, prompt_content: str) -> List[AllMessageValues]:
         """
         Parse prompt content into a list of messages.
         Handles both simple prompts and multi-role conversations.
         """
         messages = []
-        lines: Final = prompt_content.strip().split("\n")
+        lines = prompt_content.strip().split("\n")
         current_role = None
         current_content = []
 
@@ -343,7 +345,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }
+                        }  # type: ignore
                     )
                 current_role = "system"
                 current_content = [line[7:].strip()]  # Remove "System:" prefix
@@ -353,7 +355,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }
+                        }  # type: ignore
                     )
                 current_role = "user"
                 current_content = [line[5:].strip()]  # Remove "User:" prefix
@@ -363,7 +365,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }
+                        }  # type: ignore
                     )
                 current_role = "assistant"
                 current_content = [line[10:].strip()]  # Remove "Assistant:" prefix
@@ -377,19 +379,19 @@ class BitBucketPromptManager(CustomPromptManagement):
 
         # If no role indicators found, treat as a single user message
         if not messages and prompt_content.strip():
-            messages = [{"role": "user", "content": prompt_content.strip()}]
+            messages = [{"role": "user", "content": prompt_content.strip()}]  # type: ignore
 
-        return messages
+        return messages  # type: ignore
 
     def post_call_hook(
         self,
-        user_id: str | None,
+        user_id: Optional[str],
         response: Any,
-        input_messages: list[AllMessageValues],
-        function_call: dict[str, Any] | str | None = None,
-        litellm_params: dict[str, Any] | None = None,
-        prompt_id: str | None = None,
-        prompt_variables: dict[str, Any] | None = None,
+        input_messages: List[AllMessageValues],
+        function_call: Optional[Union[Dict[str, Any], str]] = None,
+        litellm_params: Optional[Dict[str, Any]] = None,
+        prompt_id: Optional[str] = None,
+        prompt_variables: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Any:
         """
@@ -397,7 +399,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         """
         return response
 
-    def get_available_prompts(self) -> list[str]:
+    def get_available_prompts(self) -> List[str]:
         """Get list of available prompt IDs."""
         return self.prompt_manager.list_templates()
 
@@ -409,8 +411,8 @@ class BitBucketPromptManager(CustomPromptManagement):
 
     def should_run_prompt_management(
         self,
-        prompt_id: str | None,
-        prompt_spec: PromptSpec | None,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         """
@@ -423,12 +425,12 @@ class BitBucketPromptManager(CustomPromptManagement):
 
     def _compile_prompt_helper(
         self,
-        prompt_id: str | None,
-        prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
+        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_label: str | None = None,
-        prompt_version: int | None = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
         """
         Compile a BitBucket prompt template into a PromptManagementClient structure.
@@ -451,13 +453,13 @@ class BitBucketPromptManager(CustomPromptManagement):
             rendered_prompt, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)
 
             # Convert rendered content to chat messages
-            messages: Final = self._parse_prompt_to_messages(rendered_prompt)
+            messages = self._parse_prompt_to_messages(rendered_prompt)
 
             # Extract model from metadata (if specified)
-            template_model: Final = prompt_metadata.get("model")
+            template_model = prompt_metadata.get("model")
 
             # Extract optional parameters from metadata
-            optional_params: Final = {}
+            optional_params = {}
             for param in [
                 "temperature",
                 "max_tokens",
@@ -481,12 +483,12 @@ class BitBucketPromptManager(CustomPromptManagement):
 
     async def async_compile_prompt_helper(
         self,
-        prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: PromptSpec | None = None,
-        prompt_label: str | None = None,
-        prompt_version: int | None = None,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
         """
         Async version of compile prompt helper. Since BitBucket operations use sync client,
@@ -507,17 +509,17 @@ class BitBucketPromptManager(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: PromptSpec | None = None,
-        prompt_label: str | None = None,
-        prompt_version: int | None = None,
-        ignore_prompt_manager_model: bool | None = False,
-        ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Get chat completion prompt from BitBucket and return processed model, messages, and parameters.
         """
@@ -537,19 +539,19 @@ class BitBucketPromptManager(CustomPromptManagement):
     async def async_get_chat_completion_prompt(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
-        prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
-        prompt_label: str | None = None,
-        prompt_version: int | None = None,
-        ignore_prompt_manager_model: bool | None = False,
-        ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+        prompt_spec: Optional[PromptSpec] = None,
+        tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Async version - delegates to PromptManagementBase async implementation.
         """

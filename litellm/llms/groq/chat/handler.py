@@ -2,8 +2,7 @@
 Handles the chat completion request for groq
 """
 
-from collections.abc import Callable
-from typing import cast
+from typing import Callable, List, Optional, Union, cast
 
 from httpx._config import Timeout
 
@@ -31,20 +30,20 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        api_key: str | None,
+        api_key: Optional[str],
         logging_obj,
         optional_params: dict,
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        headers: dict | None = None,
-        timeout: float | Timeout | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
-        custom_endpoint: bool | None = None,
-        streaming_decoder: CustomStreamingDecoder | None = None,
+        headers: Optional[dict] = None,
+        timeout: Optional[Union[float, Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_endpoint: Optional[bool] = None,
+        streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ):
-        messages = GroqChatConfig()._transform_messages(messages=cast(list[AllMessageValues], messages), model=model)
+        messages = GroqChatConfig()._transform_messages(messages=cast(List[AllMessageValues], messages), model=model)
 
         if optional_params.get("stream") is True:
             fake_stream = GroqChatConfig()._should_fake_stream(optional_params)

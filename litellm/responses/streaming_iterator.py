@@ -5,15 +5,12 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
+from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 from openai._streaming import SSEDecoder
-from typing_extensions import TypeIs
 
 import litellm
 from litellm.constants import (
@@ -31,23 +28,9 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
-from litellm.types.llms.openai import (
-    PART_UNION_TYPES,
-    ResponseAPIUsage,
-    ResponsesAPIResponse,
-    ResponsesAPIStreamEvents,
-    ResponsesAPIStreamingResponse,
-)
+from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
-
-if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.responses.streaming_websocket import (
-        PresidioGuardrailCallback,
-        ResponsesBackendWebSocket,
-        ResponsesClientWebSocket,
-    )
 
 
 @lru_cache(maxsize=1)
@@ -57,63 +40,26 @@ def _get_openai_response_types():
     return openai_types
 
 
-def _is_json_object(value: object) -> TypeIs[dict[str, object]]:  # guard-ok: trivial isinstance; JSON keys are str
-    return isinstance(value, dict)
-
-
-def _is_json_array(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial isinstance narrowing
-    return isinstance(value, list)
-
-
-def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verifies every value is str
-    return _is_json_object(value) and all(isinstance(item, str) for item in value.values())
-
-
-def _model_id_from_metadata(litellm_metadata: dict[str, object] | None) -> str | None:
-    model_info: Final = litellm_metadata.get("model_info") if litellm_metadata else None
-    model_id: Final = model_info.get("id") if _is_json_object(model_info) else None
-    return model_id if isinstance(model_id, str) else None
-
-
-def _log_background_task_failure(task: asyncio.Task[object], *, task_name: str) -> None:
+def _log_background_task_failure(task: "asyncio.Task[Any]", *, task_name: str) -> None:
     if task.cancelled():
         return
-    exception: Final = task.exception()
+    exception = task.exception()
     if exception is not None:
         verbose_logger.error("%s failed: %s", task_name, exception)
 
 
-_ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
-    {  # mutable-ok: immediately frozen by MappingProxyType
-        "server_error": 500,
-        "rate_limit_exceeded": 429,
-        "insufficient_quota": 429,
-        "vector_store_timeout": 504,
-        "invalid_prompt": 400,
-        "invalid_image": 400,
-        "invalid_image_format": 400,
-        "invalid_base64_image": 400,
-        "invalid_image_url": 400,
-        "image_too_large": 400,
-        "image_too_small": 400,
-        "image_parse_error": 400,
-        "image_content_policy_violation": 400,
-        "invalid_image_mode": 400,
-        "image_file_too_large": 400,
-        "unsupported_image_media_type": 400,
-        "empty_image_file": 400,
-        "failed_to_download_image": 400,
-        "image_file_not_found": 400,
-        "invalid_request_error": 400,
-        "context_length_exceeded": 400,
-        "content_policy_violation": 400,
-        "model_not_found": 400,
-    }
+_CLIENT_ERROR_CODES: frozenset[str] = frozenset(
+    (
+        "invalid_request_error",
+        "context_length_exceeded",
+        "content_policy_violation",
+        "model_not_found",
+    )
 )
 
 
-def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]:
-    if _is_json_object(error_obj):
+def _error_event_fields(error_obj: object) -> tuple[str, Optional[str], Optional[str]]:
+    if isinstance(error_obj, dict):
         raw_message = error_obj.get("message")
         raw_type = error_obj.get("type")
         raw_code = error_obj.get("code")
@@ -125,20 +71,19 @@ def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]
         raw_message = None
         raw_type = None
         raw_code = None
-    message: Final = str(raw_message) if raw_message is not None else "Response API in-stream error"
-    error_type: Final = raw_type if isinstance(raw_type, str) else None
-    code: Final = raw_code if isinstance(raw_code, str) else None
+    message = str(raw_message) if raw_message is not None else "Response API in-stream error"
+    error_type = raw_type if isinstance(raw_type, str) else None
+    code = raw_code if isinstance(raw_code, str) else None
     return message, error_type, code
 
 
-def _status_code_for_error_fields(error_type: str | None, error_code: str | None) -> int:
-    fields: Final = tuple(field for field in (error_code, error_type) if field is not None)
+def _status_code_for_error_fields(error_type: Optional[str], error_code: Optional[str]) -> int:
+    fields = tuple(field for field in (error_type, error_code) if field is not None)
     if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
         return 429
-    return next(
-        (_ERROR_CODE_HTTP_STATUS[field] for field in fields if field in _ERROR_CODE_HTTP_STATUS),
-        500,
-    )
+    if any(field in _CLIENT_ERROR_CODES for field in fields):
+        return 400
+    return 500
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -152,43 +97,44 @@ class BaseResponsesAPIStreamingIterator:
         self,
         response: httpx.Response,
         model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig | None,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig],
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: dict[str, object] | None = None,
-        custom_llm_provider: str | None = None,
-        request_data: dict[str, object] | None = None,
-        call_type: str | None = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict[str, Any]] = None,
+        call_type: Optional[str] = None,
     ):
         self.response = response
         self.model = model
         self.logging_obj = logging_obj
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
-        self.completed_response: ResponsesAPIStreamingResponse | None = None
+        self.completed_response: Optional[Any] = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
         self._generated_content = ""
         self._completed_response_cached = False
         self._completed_response_logged = False
-        self._completed_response_cache_hit: bool | None = None
+        self._completed_response_cache_hit: Optional[bool] = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
-        self.request_data: dict[str, object] = request_data or {}
-        self.call_type: str | None = call_type
+        self.request_data: Dict[str, Any] = request_data or {}
+        self.call_type: Optional[str] = call_type
 
         # set hidden params for response headers (e.g., x-litellm-model-id)
         # This matches the stream wrapper in litellm/litellm_core_utils/streaming_handler.py
-        _api_base: Final = get_api_base(
+        _api_base = get_api_base(
             model=model or "",
             optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
         )
-        self._hidden_params: dict[str, object] = {
-            "model_id": _model_id_from_metadata(litellm_metadata),
+        _model_info: Dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        self._hidden_params = {
+            "model_id": _model_info.get("id", None),
             "api_base": _api_base,
             "custom_llm_provider": custom_llm_provider,
         }
@@ -200,7 +146,7 @@ class BaseResponsesAPIStreamingIterator:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
         if LITELLM_MAX_STREAMING_DURATION_SECONDS is None:
             return
-        elapsed: Final = time.time() - self._stream_created_time
+        elapsed = time.time() - self._stream_created_time
         if elapsed > LITELLM_MAX_STREAMING_DURATION_SECONDS:
             raise litellm.Timeout(
                 message=f"Stream exceeded max streaming duration of {LITELLM_MAX_STREAMING_DURATION_SECONDS}s (elapsed {elapsed:.1f}s)",
@@ -208,7 +154,7 @@ class BaseResponsesAPIStreamingIterator:
                 llm_provider=self.custom_llm_provider or "",
             )
 
-    def _process_chunk(self, chunk: str) -> ResponsesAPIStreamingResponse | None:
+    def _process_chunk(self, chunk) -> Optional[Any]:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
@@ -228,13 +174,13 @@ class BaseResponsesAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk: Final = json.loads(chunk)
+            parsed_chunk = json.loads(chunk)
 
             # Format as ResponsesAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
                 if self.responses_api_provider_config is None:
                     raise ValueError("responses_api_provider_config is required to process live streaming chunks")
-                openai_responses_api_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
+                openai_responses_api_chunk = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
                     parsed_chunk=parsed_chunk,
                     logging_obj=self.logging_obj,
@@ -244,11 +190,9 @@ class BaseResponsesAPIStreamingIterator:
                 # Using getattr(..., "response") alone is unsafe with Mocks: they synthesize a
                 # truthy child Mock for any attribute, which breaks tests and is wrong on stream.
                 if "response" in parsed_chunk:
-                    response_object: Final[ResponsesAPIResponse | None] = getattr(
-                        openai_responses_api_chunk, "response", None
-                    )
+                    response_object = getattr(openai_responses_api_chunk, "response", None)
                     if response_object is not None:
-                        response: Final = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                        response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
                             responses_api_response=response_object,
                             litellm_metadata=self.litellm_metadata,
                             custom_llm_provider=self.custom_llm_provider,
@@ -256,17 +200,19 @@ class BaseResponsesAPIStreamingIterator:
                         setattr(openai_responses_api_chunk, "response", response)
 
                 # Encode container_id on streaming events so proxy/UI follow-ups route correctly
-                _event_type: Final = getattr(openai_responses_api_chunk, "type", None)
+                _event_type = getattr(openai_responses_api_chunk, "type", None)
                 if _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
-                    _delta: Final = getattr(openai_responses_api_chunk, "delta", None)
+                    _delta = getattr(openai_responses_api_chunk, "delta", None)
                     if isinstance(_delta, str):
                         self._generated_content += _delta
-                _stream_model_id: Final = _model_id_from_metadata(self.litellm_metadata)
+                _stream_model_id = (
+                    self.litellm_metadata.get("model_info", {}).get("id") if self.litellm_metadata else None
+                )
                 if _event_type in (
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 ):
-                    _item: Final = getattr(openai_responses_api_chunk, "item", None)
+                    _item = getattr(openai_responses_api_chunk, "item", None)
                     if _item is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                             item=_item,
@@ -274,7 +220,7 @@ class BaseResponsesAPIStreamingIterator:
                             model_id=_stream_model_id,
                         )
                 elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
-                    _annotation: Final = getattr(openai_responses_api_chunk, "annotation", None)
+                    _annotation = getattr(openai_responses_api_chunk, "annotation", None)
                     if _annotation is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                             item=_annotation,
@@ -282,9 +228,7 @@ class BaseResponsesAPIStreamingIterator:
                             model_id=_stream_model_id,
                         )
                 elif _event_type == ResponsesAPIStreamEvents.CONTENT_PART_DONE:
-                    _part: Final[PART_UNION_TYPES | Mapping[str, object] | None] = getattr(
-                        openai_responses_api_chunk, "part", None
-                    )
+                    _part = getattr(openai_responses_api_chunk, "part", None)
                     if _part is not None:
                         if isinstance(_part, dict):
                             ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
@@ -302,26 +246,28 @@ class BaseResponsesAPIStreamingIterator:
                 # Wrap encrypted_content in streaming events (output_item.added, output_item.done)
                 if self.litellm_metadata and self.litellm_metadata.get("encrypted_content_affinity_enabled"):
                     openai_types = _get_openai_response_types()
-                    event_type: Final = getattr(openai_responses_api_chunk, "type", None)
+                    event_type = getattr(openai_responses_api_chunk, "type", None)
                     if event_type in (
                         openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                         openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                     ):
-                        item: Final[object | None] = getattr(openai_responses_api_chunk, "item", None)
+                        item = getattr(openai_responses_api_chunk, "item", None)
                         if item:
-                            encrypted_content: Final = getattr(item, "encrypted_content", None)
+                            encrypted_content = getattr(item, "encrypted_content", None)
                             if encrypted_content and isinstance(encrypted_content, str):
-                                model_id: Final = _model_id_from_metadata(self.litellm_metadata)
+                                model_id = (
+                                    self.litellm_metadata.get("model_info", {}).get("id")
+                                    if self.litellm_metadata
+                                    else None
+                                )
                                 if model_id:
-                                    wrapped_content: Final = (
-                                        ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
-                                            encrypted_content, model_id
-                                        )
+                                    wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                                        encrypted_content, model_id
                                     )
                                     setattr(item, "encrypted_content", wrapped_content)
 
                 # Store the completed response (also for incomplete/failed so logging still fires)
-                _chunk_type: Final = getattr(openai_responses_api_chunk, "type", None)
+                _chunk_type = getattr(openai_responses_api_chunk, "type", None)
                 openai_types = _get_openai_response_types()
                 if openai_responses_api_chunk and _chunk_type in (
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
@@ -331,14 +277,12 @@ class BaseResponsesAPIStreamingIterator:
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
                     if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
-                        response_obj: Final[ResponsesAPIResponse | None] = getattr(
-                            openai_responses_api_chunk, "response", None
-                        )
+                        response_obj: Optional[Any] = getattr(openai_responses_api_chunk, "response", None)
                         if response_obj:
-                            usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+                            usage_obj: Optional[Any] = getattr(response_obj, "usage", None)
                             if usage_obj is not None:
                                 try:
-                                    cost: Final[float | None] = self.logging_obj._response_cost_calculator(
+                                    cost: Optional[float] = self.logging_obj._response_cost_calculator(
                                         result=response_obj
                                     )
                                     if cost is not None:
@@ -385,7 +329,7 @@ class BaseResponsesAPIStreamingIterator:
                 # Fallback to original if serialization fails
                 pass
 
-        end_time: Final = datetime.now()
+        end_time = datetime.now()
         if is_async:
             asyncio.create_task(
                 self.logging_obj.dispatch_success_handlers(
@@ -415,6 +359,7 @@ class BaseResponsesAPIStreamingIterator:
 
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
+        pass
 
     def _handle_logging_failed_response(self):
         """
@@ -425,13 +370,11 @@ class BaseResponsesAPIStreamingIterator:
         async_failure_handler / failure_handler so logging integrations correctly
         record the call as failed.
         """
-        response_obj: Final[ResponsesAPIResponse | None] = (
-            getattr(self.completed_response, "response", None) if self.completed_response else None
-        )
-        error_info: Final = getattr(response_obj, "error", None) if response_obj else None
+        response_obj = getattr(self.completed_response, "response", None) if self.completed_response else None
+        error_info = getattr(response_obj, "error", None) if response_obj else None
         error_message, error_type, error_code = _error_event_fields(error_info)
         self._record_failed_response_usage(response_obj)
-        exception: Final = litellm.APIError(
+        exception = litellm.APIError(
             status_code=_status_code_for_error_fields(error_type, error_code),
             message=error_message,
             llm_provider=self.custom_llm_provider or "",
@@ -439,10 +382,10 @@ class BaseResponsesAPIStreamingIterator:
         )
         self._handle_failure(exception)
 
-    def _record_failed_response_usage(self, response_obj: ResponsesAPIResponse | None) -> None:
+    def _record_failed_response_usage(self, response_obj: Optional[Any]) -> None:
         if response_obj is None or self.logging_obj is None:
             return
-        usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+        usage_obj = getattr(response_obj, "usage", None)
         if usage_obj is None:
             return
         try:
@@ -460,19 +403,19 @@ class BaseResponsesAPIStreamingIterator:
         )
 
     def _maybe_raise_for_error_event(self, result: object) -> None:
-        chunk_type: Final = getattr(result, "type", None)
+        chunk_type = getattr(result, "type", None)
         if chunk_type not in ("error", "response.failed"):
             return
 
-        error_obj: Final[object] = (
+        error_obj: object = (
             getattr(getattr(result, "response", None), "error", None)
             if chunk_type == "response.failed"
             else getattr(result, "error", None)
         )
 
         error_message, error_type, error_code = _error_event_fields(error_obj)
-        status_code: Final = _status_code_for_error_fields(error_type, error_code)
-        mapped_exception: Final = litellm.APIError(
+        status_code = _status_code_for_error_fields(error_type, error_code)
+        mapped_exception = litellm.APIError(
             status_code=status_code,
             message=error_message,
             llm_provider=self.custom_llm_provider or "",
@@ -489,13 +432,13 @@ class BaseResponsesAPIStreamingIterator:
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
 
-    def _get_completed_response_object(self) -> ResponsesAPIResponse | None:
-        openai_types: Final = _get_openai_response_types()
-        completed_response: Final = self.completed_response
+    def _get_completed_response_object(self) -> Optional[Any]:
+        openai_types = _get_openai_response_types()
+        completed_response = self.completed_response
         if isinstance(completed_response, openai_types.ResponsesAPIResponse):
             return completed_response
 
-        response_obj: Final = getattr(completed_response, "response", None)
+        response_obj = getattr(completed_response, "response", None)
         if isinstance(response_obj, openai_types.ResponsesAPIResponse):
             return response_obj
 
@@ -505,25 +448,25 @@ class BaseResponsesAPIStreamingIterator:
         if self._completed_response_cached:
             return
 
-        completed_response: Final = self.completed_response
-        openai_types: Final = _get_openai_response_types()
+        completed_response = self.completed_response
+        openai_types = _get_openai_response_types()
         if getattr(completed_response, "type", None) != openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             return
 
-        response_obj: Final = self._get_completed_response_object()
+        response_obj = self._get_completed_response_object()
         if response_obj is None:
             return
 
-        caching_handler: Final = getattr(self.logging_obj, "_llm_caching_handler", None)
+        caching_handler = getattr(self.logging_obj, "_llm_caching_handler", None)
         if caching_handler is None:
             return
 
         request_kwargs = getattr(caching_handler, "request_kwargs", None)
-        if not _is_json_object(request_kwargs) or request_kwargs.get("stream") is not True:
+        if not isinstance(request_kwargs, dict) or request_kwargs.get("stream") is not True:
             return
         request_kwargs = request_kwargs.copy()
         preset_cache_key = getattr(caching_handler, "preset_cache_key", None)
-        request_cache_key: Final = request_kwargs.pop("cache_key", None)
+        request_cache_key = request_kwargs.pop("cache_key", None)
         if preset_cache_key is None:
             preset_cache_key = request_cache_key
         if request_kwargs.get("metadata") is None:
@@ -541,9 +484,9 @@ class BaseResponsesAPIStreamingIterator:
         if litellm.cache is None:
             return
 
-        cached_response: Final = response_obj.model_dump_json()
+        cached_response = response_obj.model_dump_json()
         if is_async:
-            cache_write_task: Final = asyncio.create_task(
+            cache_write_task = asyncio.create_task(
                 litellm.cache.async_add_cache(
                     cached_response,
                     dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
@@ -565,15 +508,13 @@ class BaseResponsesAPIStreamingIterator:
 
         self._completed_response_cached = True
 
-    async def _call_post_streaming_deployment_hook(
-        self, chunk: ResponsesAPIStreamingResponse
-    ) -> ResponsesAPIStreamingResponse:
+    async def _call_post_streaming_deployment_hook(self, chunk):
         """
         Allow callbacks to modify streaming chunks before returning (parity with chat).
         """
         try:
             # Align with chat pipeline: use logging_obj model_call_details + call_type
-            typed_call_type: CallTypes | None = None
+            typed_call_type: Optional[CallTypes] = None
             if self.call_type is not None:
                 try:
                     typed_call_type = CallTypes(self.call_type)
@@ -585,8 +526,8 @@ class BaseResponsesAPIStreamingIterator:
                 except Exception:
                     typed_call_type = None
 
-            request_data: Final = self.request_data or getattr(self.logging_obj, "model_call_details", {})
-            callbacks: Final = getattr(litellm, "callbacks", None) or []
+            request_data = self.request_data or getattr(self.logging_obj, "model_call_details", {})
+            callbacks = getattr(litellm, "callbacks", None) or []
             hooks_ran = False
             for callback in callbacks:
                 if hasattr(callback, "async_post_call_streaming_deployment_hook"):
@@ -604,9 +545,7 @@ class BaseResponsesAPIStreamingIterator:
         except Exception:
             return chunk
 
-    async def call_post_streaming_hooks_for_testing(
-        self, chunk: ResponsesAPIStreamingResponse
-    ) -> ResponsesAPIStreamingResponse:
+    async def call_post_streaming_hooks_for_testing(self, chunk):
         """
         Helper to invoke streaming deployment hooks explicitly (used in tests).
         """
@@ -619,7 +558,7 @@ class BaseResponsesAPIStreamingIterator:
         if self.completed_response is None:
             return
 
-        request_payload: Final[dict[str, object]] = {}
+        request_payload: Dict[str, Any] = {}
         if isinstance(self.request_data, dict):
             request_payload.update(self.request_data)
         try:
@@ -649,7 +588,7 @@ class BaseResponsesAPIStreamingIterator:
             pass
 
         try:
-            typed_call_type: CallTypes | None = None
+            typed_call_type: Optional[CallTypes] = None
             if self.call_type is not None:
                 try:
                     typed_call_type = CallTypes(self.call_type)
@@ -684,7 +623,7 @@ class BaseResponsesAPIStreamingIterator:
             return
         self._failure_handled = True
 
-        traceback_exception: Final = traceback.format_exc()
+        traceback_exception = traceback.format_exc()
         try:
             run_async_function(
                 async_function=self.logging_obj.async_failure_handler,
@@ -708,15 +647,11 @@ class BaseResponsesAPIStreamingIterator:
             pass
 
 
-async def call_post_streaming_hooks_for_testing(
-    iterator: object, chunk: ResponsesAPIStreamingResponse
-) -> ResponsesAPIStreamingResponse:
+async def call_post_streaming_hooks_for_testing(iterator, chunk):
     """
     Module-level helper for tests to ensure hooks can be invoked even if the iterator is wrapped.
     """
-    hook_fn: Final[Callable[[ResponsesAPIStreamingResponse], Awaitable[ResponsesAPIStreamingResponse]] | None] = (
-        getattr(iterator, "_call_post_streaming_deployment_hook", None)
-    )
+    hook_fn = getattr(iterator, "_call_post_streaming_deployment_hook", None)
     if hook_fn is None:
         return chunk
     return await hook_fn(chunk)
@@ -733,10 +668,10 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: dict[str, object] | None = None,
-        custom_llm_provider: str | None = None,
-        request_data: dict[str, object] | None = None,
-        call_type: str | None = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict[str, Any]] = None,
+        call_type: Optional[str] = None,
     ):
         super().__init__(
             response,
@@ -753,7 +688,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> ResponsesAPIStreamingResponse:
+    async def __anext__(self) -> Any:
         try:
             self._check_max_streaming_duration()
             while True:
@@ -815,10 +750,10 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: dict[str, object] | None = None,
-        custom_llm_provider: str | None = None,
-        request_data: dict[str, object] | None = None,
-        call_type: str | None = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict[str, Any]] = None,
+        call_type: Optional[str] = None,
     ):
         super().__init__(
             response,
@@ -902,12 +837,12 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: dict[str, object] | None = None,
-        custom_llm_provider: str | None = None,
-        request_data: dict[str, object] | None = None,
-        call_type: str | None = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict[str, Any]] = None,
+        call_type: Optional[str] = None,
     ):
-        transformed: Final = responses_api_provider_config.transform_response_api_response(
+        transformed = responses_api_provider_config.transform_response_api_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
@@ -926,10 +861,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _set_events_from_response(
         self,
-        transformed: ResponsesAPIResponse,
+        transformed: Any,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
-        self._events: list[ResponsesAPIStreamingResponse] = _build_synthetic_response_events(
+        self._events = _build_synthetic_response_events(
             transformed=transformed,
             logging_obj=logging_obj,
             chunk_size=self.CHUNK_SIZE,
@@ -940,12 +875,12 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> ResponsesAPIStreamingResponse:
+    async def __anext__(self) -> Any:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
-        evt: Final = self._events[self._idx]
+        evt = self._events[self._idx]
         self._idx += 1
-        openai_types: Final = _get_openai_response_types()
+        openai_types = _get_openai_response_types()
         if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             self.completed_response = evt
             self._log_completed_response(is_async=True)
@@ -954,12 +889,12 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> ResponsesAPIStreamingResponse:
+    def __next__(self) -> Any:
         if self._idx >= len(self._events):
             raise StopIteration
-        evt: Final = self._events[self._idx]
+        evt = self._events[self._idx]
         self._idx += 1
-        openai_types: Final = _get_openai_response_types()
+        openai_types = _get_openai_response_types()
         if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             self.completed_response = evt
             self._log_completed_response(is_async=False)
@@ -969,10 +904,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __init__(
         self,
-        response: ResponsesAPIResponse,
+        response: Any,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict[str, object] | None = None,
-        call_type: str | None = None,
+        request_data: Optional[Dict[str, Any]] = None,
+        call_type: Optional[str] = None,
     ):
         BaseResponsesAPIStreamingIterator.__init__(
             self,
@@ -987,13 +922,13 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self._completed_response_cache_hit = True
         self._persist_completed_response_before_logging = False
-        self._events: list[ResponsesAPIStreamingResponse] = []
+        self._events: List[Any] = []
         self._idx = 0
         self._set_events_from_response(transformed=response, logging_obj=logging_obj)
 
     def _set_events_from_response(
         self,
-        transformed: ResponsesAPIResponse,
+        transformed: Any,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
         self._events = _build_synthetic_response_events(
@@ -1007,12 +942,12 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> ResponsesAPIStreamingResponse:
+    async def __anext__(self) -> Any:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
-        evt: Final = self._events[self._idx]
+        evt = self._events[self._idx]
         self._idx += 1
-        openai_types: Final = _get_openai_response_types()
+        openai_types = _get_openai_response_types()
         if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             self.completed_response = evt
             self._log_completed_response(is_async=True)
@@ -1021,32 +956,22 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> ResponsesAPIStreamingResponse:
+    def __next__(self) -> Any:
         if self._idx >= len(self._events):
             raise StopIteration
-        evt: Final = self._events[self._idx]
+        evt = self._events[self._idx]
         self._idx += 1
-        openai_types: Final = _get_openai_response_types()
+        openai_types = _get_openai_response_types()
         if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
 
 
-@runtime_checkable
-class _HasModelDump(Protocol):
-    def model_dump(self, *, exclude_none: bool = ...) -> dict[str, object]: ...
-
-
-@runtime_checkable
-class _HasModelDumpJson(Protocol):
-    def model_dump_json(self, *, exclude_none: bool = ...) -> str: ...
-
-
-def _dump_response_object(obj: object) -> dict[str, Any]:
-    if isinstance(obj, _HasModelDump):
+def _dump_response_object(obj: Any) -> Dict[str, Any]:
+    if hasattr(obj, "model_dump"):
         return obj.model_dump()
-    if _is_json_object(obj):
+    if isinstance(obj, dict):
         return obj
     return {}
 
@@ -1056,10 +981,10 @@ def _build_response_status_event(
         "response.created",
         "response.in_progress",
     ],
-    transformed: ResponsesAPIResponse,
-) -> ResponsesAPIStreamingResponse:
-    openai_types: Final = _get_openai_response_types()
-    in_progress_response: Final = transformed.model_copy(
+    transformed: Any,
+) -> Any:
+    openai_types = _get_openai_response_types()
+    in_progress_response = transformed.model_copy(
         deep=True,
         update={"status": "in_progress", "output": []},
     )
@@ -1073,13 +998,13 @@ def _build_content_part_done_event(
     item_id: str,
     output_index: int,
     content_index: int,
-    part_payload: dict[str, Any],
-) -> ResponsesAPIStreamingResponse | None:
-    openai_types: Final = _get_openai_response_types()
-    part_type: Final = part_payload.get("type")
-    part: PART_UNION_TYPES
+    part_payload: Dict[str, Any],
+) -> Optional[Any]:
+    openai_types = _get_openai_response_types()
+    part_type = part_payload.get("type")
+    part: Any
     if part_type == "output_text":
-        annotations: Final = [
+        annotations = [
             openai_types.BaseLiteLLMOpenAIResponseObject(**annotation)
             for annotation in part_payload.get("annotations", []) or []
         ]
@@ -1113,17 +1038,17 @@ def _build_content_part_done_event(
 
 def _add_text_like_part_events(
     *,
-    events: list[ResponsesAPIStreamingResponse],
+    events: List[Any],
     item_id: str,
     output_index: int,
     content_index: int,
-    part_payload: dict[str, Any],
+    part_payload: Dict[str, Any],
     chunk_size: int,
 ) -> None:
-    openai_types: Final = _get_openai_response_types()
-    part_type: Final = part_payload.get("type")
+    openai_types = _get_openai_response_types()
+    part_type = part_payload.get("type")
     if part_type == "output_text":
-        text: Final = str(part_payload.get("text") or "")
+        text = str(part_payload.get("text") or "")
         for i in range(0, len(text), chunk_size):
             events.append(
                 openai_types.OutputTextDeltaEvent(
@@ -1134,8 +1059,7 @@ def _add_text_like_part_events(
                     delta=text[i : i + chunk_size],
                 )
             )
-        annotations_payload: Final[Sequence[dict[str, object]]] = part_payload.get("annotations", []) or []
-        for annotation_index, annotation in enumerate(annotations_payload):
+        for annotation_index, annotation in enumerate(part_payload.get("annotations", []) or []):
             events.append(
                 openai_types.OutputTextAnnotationAddedEvent(
                     type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
@@ -1156,7 +1080,7 @@ def _add_text_like_part_events(
             )
         )
     elif part_type == "refusal":
-        refusal: Final = str(part_payload.get("refusal") or "")
+        refusal = str(part_payload.get("refusal") or "")
         for i in range(0, len(refusal), chunk_size):
             events.append(
                 openai_types.RefusalDeltaEvent(
@@ -1180,29 +1104,28 @@ def _add_text_like_part_events(
 
 def _build_synthetic_response_events(
     *,
-    transformed: ResponsesAPIResponse,
+    transformed: Any,
     logging_obj: LiteLLMLoggingObj,
     chunk_size: int,
-) -> list[ResponsesAPIStreamingResponse]:
-    openai_types: Final = _get_openai_response_types()
+) -> List[Any]:
+    openai_types = _get_openai_response_types()
     if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-        usage_obj: Final = transformed.usage if hasattr(transformed, "usage") else None
+        usage_obj: Optional[Any] = getattr(transformed, "usage", None)
         if usage_obj is not None:
             try:
-                cost: Final[float | None] = logging_obj._response_cost_calculator(result=transformed)
+                cost: Optional[float] = logging_obj._response_cost_calculator(result=transformed)
                 if cost is not None:
                     setattr(usage_obj, "cost", cost)
             except Exception:
                 pass
 
-    events: Final[list[ResponsesAPIStreamingResponse]] = [
+    events: List[Any] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
     ]
 
     sequence_number = 0
-    output_items: Final[Sequence[object]] = getattr(transformed, "output", []) or []
-    for output_index, output_item in enumerate(output_items):
+    for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
         output_item_payload = _dump_response_object(output_item)
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
@@ -1216,8 +1139,7 @@ def _build_synthetic_response_events(
         )
 
         if item_type == "message":
-            content_parts: Sequence[object] = output_item_payload.get("content", []) or []
-            for content_index, part in enumerate(content_parts):
+            for content_index, part in enumerate(output_item_payload.get("content", []) or []):
                 part_payload = _dump_response_object(part)
                 events.append(
                     openai_types.ContentPartAddedEvent(
@@ -1264,8 +1186,7 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            summaries: Sequence[object] = output_item_payload.get("summary", []) or []
-            for summary_index, summary in enumerate(summaries):
+            for summary_index, summary in enumerate(output_item_payload.get("summary", []) or []):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
                 for i in range(0, len(summary_text), chunk_size):
@@ -1326,7 +1247,7 @@ def _build_synthetic_response_events(
 
 from litellm._logging import verbose_logger
 
-RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
+RESPONSES_WS_LOGGED_EVENT_TYPES = [
     "response.created",
     "response.completed",
     "response.failed",
@@ -1334,7 +1255,7 @@ RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "error",
 ]
 
-RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output_text", "text"})
+RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES = frozenset({"input_text", "output_text", "text"})
 
 
 class ResponsesWebSocketStreaming:
@@ -1352,34 +1273,34 @@ class ResponsesWebSocketStreaming:
 
     def __init__(
         self,
-        websocket: ResponsesClientWebSocket,
-        backend_ws: ResponsesBackendWebSocket,
+        websocket: Any,
+        backend_ws: Any,
         logging_obj: LiteLLMLoggingObj,
-        user_api_key_dict: UserAPIKeyAuth | None = None,
-        request_data: dict[str, object] | None = None,
-        first_message: str | None = None,
-        guardrail_callbacks: list[Any] | None = None,
-        output_guardrail_callbacks: list[PresidioGuardrailCallback] | None = None,
-        authorized_model: str | None = None,
+        user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[Dict] = None,
+        first_message: Optional[str] = None,
+        guardrail_callbacks: Optional[List[Any]] = None,
+        output_guardrail_callbacks: Optional[List[Any]] = None,
+        authorized_model: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: dict[str, object] = request_data or {}
-        self.messages: list[dict[str, object]] = []
-        self.input_messages: list[dict[str, object]] = []
+        self.request_data: Dict = request_data or {}
+        self.messages: list[Dict] = []
+        self.input_messages: list[Dict[str, str]] = []
         self.first_message = first_message
-        self.guardrail_callbacks: list[Any] = guardrail_callbacks or []
-        self.output_guardrail_callbacks: list[PresidioGuardrailCallback] = output_guardrail_callbacks or []
+        self.guardrail_callbacks: List[Any] = guardrail_callbacks or []
+        self.output_guardrail_callbacks: List[Any] = output_guardrail_callbacks or []
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
-        self.authorized_model: str | None = authorized_model
+        self.authorized_model: Optional[str] = authorized_model
 
-    def _should_store_event(self, event_obj: Mapping[str, object]) -> bool:
+    def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
 
-    def _store_event(self, event: str | bytes | dict[str, object]) -> None:
+    def _store_event(self, event: Any) -> None:
         if isinstance(event, bytes):
             event = event.decode("utf-8")
         if isinstance(event, str):
@@ -1393,12 +1314,12 @@ class ResponsesWebSocketStreaming:
         if self._should_store_event(event_obj):
             self.messages.append(event_obj)
 
-    def _collect_input_from_client_event(self, message: object) -> None:
+    def _collect_input_from_client_event(self, message: Any) -> None:
         """Extract user input content from response.create for logging."""
         try:
             if isinstance(message, str):
                 msg_obj = json.loads(message)
-            elif _is_json_object(message):
+            elif isinstance(message, dict):
                 msg_obj = message
             else:
                 return
@@ -1406,29 +1327,29 @@ class ResponsesWebSocketStreaming:
             if msg_obj.get("type") != "response.create":
                 return
 
-            input_items: Final = msg_obj.get("input", [])
+            input_items = msg_obj.get("input", [])
             if isinstance(input_items, str):
                 self.input_messages.append({"role": "user", "content": input_items})
                 return
 
-            if _is_json_array(input_items):
+            if isinstance(input_items, list):
                 for item in input_items:
-                    if not _is_json_object(item):
+                    if not isinstance(item, dict):
                         continue
                     if item.get("type") == "message" and item.get("role") == "user":
                         content = item.get("content", [])
                         if isinstance(content, str):
                             self.input_messages.append({"role": "user", "content": content})
-                        elif _is_json_array(content):
+                        elif isinstance(content, list):
                             for c in content:
-                                if _is_json_object(c) and c.get("type") == "input_text":
+                                if isinstance(c, dict) and c.get("type") == "input_text":
                                     text = c.get("text", "")
                                     if text:
                                         self.input_messages.append({"role": "user", "content": text})
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _store_input(self, message: object) -> None:
+    def _store_input(self, message: Any) -> None:
         self._collect_input_from_client_event(message)
         if self.logging_obj:
             self.logging_obj.pre_call(input=message, api_key="")
@@ -1448,9 +1369,9 @@ class ResponsesWebSocketStreaming:
         try:
             while True:
                 try:
-                    raw_response = await self.backend_ws.recv(decode=False)
+                    raw_response = await self.backend_ws.recv(decode=False)  # type: ignore[union-attr]
                 except TypeError:
-                    raw_response = await self.backend_ws.recv()
+                    raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
 
                 if isinstance(raw_response, bytes):
                     response_str = raw_response.decode("utf-8")
@@ -1467,8 +1388,7 @@ class ResponsesWebSocketStreaming:
                 # masked response.completed.
                 if self.output_guardrail_callbacks:
                     try:
-                        _evt_payload: Mapping[str, object] = json.loads(response_str)
-                        _evt_type = _evt_payload.get("type")
+                        _evt_type = json.loads(response_str).get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
                     if _evt_type in self._DELTA_EVENT_TYPES or _evt_type in self._OUTPUT_DONE_EVENT_TYPES:
@@ -1483,14 +1403,14 @@ class ResponsesWebSocketStreaming:
 
                 await self.websocket.send_text(output_masked_str)
 
-        except websockets.exceptions.ConnectionClosed as e:
+        except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
         except Exception as e:
             verbose_logger.exception("Error in responses WS backend_to_client: %s", e)
         finally:
             await self._log_messages()
 
-    def _enforce_authorized_model(self, msg_obj: dict[str, object]) -> bool:
+    def _enforce_authorized_model(self, msg_obj: dict) -> bool:
         """
         Overwrite any ``model`` field in a ``response.create`` frame with the
         connection-authorized model to prevent deployment-substitution attacks.
@@ -1504,8 +1424,8 @@ class ResponsesWebSocketStreaming:
         if not self.authorized_model:
             return False
         modified = False
-        nested: Final = msg_obj.get("response")
-        if _is_json_object(nested):
+        nested = msg_obj.get("response")
+        if isinstance(nested, dict):
             if nested.get("model") != self.authorized_model:
                 nested["model"] = self.authorized_model
                 modified = True
@@ -1532,7 +1452,7 @@ class ResponsesWebSocketStreaming:
         Non-``response.create`` messages are returned unchanged.
         """
         try:
-            msg_obj: Final[dict[str, object]] = json.loads(message)
+            msg_obj = json.loads(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -1540,7 +1460,7 @@ class ResponsesWebSocketStreaming:
             return message
 
         # Always enforce the authorized model, even when PII masking is off.
-        model_modified: Final = self._enforce_authorized_model(msg_obj)
+        model_modified = self._enforce_authorized_model(msg_obj)
 
         if not self.guardrail_callbacks:
             return json.dumps(msg_obj) if model_modified else message
@@ -1549,17 +1469,15 @@ class ResponsesWebSocketStreaming:
             self.request_data["metadata"] = {}
 
         modified = model_modified
-        guardrail_cbs: Final[tuple[PresidioGuardrailCallback, ...]] = tuple(self.guardrail_callbacks)
-        for cb in guardrail_cbs:
+        for cb in self.guardrail_callbacks:
             presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
             # response.create carries client text in two shapes:
             #   flat:   {"type": "response.create", "input": ..., "instructions": ...}
             #   nested: {"type": "response.create", "response": {"input": ..., "instructions": ...}}
             # Mask "input" and "instructions" in both shapes so PII is never
             # forwarded unmasked regardless of where the client places it.
-            nested_candidate = msg_obj.get("response")
-            nested_response = nested_candidate if _is_json_object(nested_candidate) else None
-            text_containers: list[tuple[dict[str, object], str]] = []
+            nested_response = msg_obj.get("response") if isinstance(msg_obj.get("response"), dict) else None
+            text_containers: list[tuple[dict, str]] = []
             for container in (msg_obj, nested_response):
                 if container is None:
                     continue
@@ -1580,9 +1498,9 @@ class ResponsesWebSocketStreaming:
                     )
                     modified = True
 
-                elif _is_json_array(field_value):
+                elif isinstance(field_value, list):
                     for item in field_value:
-                        if not _is_json_object(item):
+                        if not isinstance(item, dict):
                             continue
                         for item_field in ("content", "output"):
                             value = item.get(item_field)
@@ -1594,16 +1512,15 @@ class ResponsesWebSocketStreaming:
                                     request_data=self.request_data,
                                 )
                                 modified = True
-                            elif _is_json_array(value):
+                            elif isinstance(value, list):
                                 for block in value:
-                                    if not _is_json_object(block):
-                                        continue
-                                    block_text = block.get("text")
-                                    if block.get("type") in RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES and isinstance(
-                                        block_text, str
+                                    if (
+                                        isinstance(block, dict)
+                                        and block.get("type") in RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES
+                                        and isinstance(block.get("text"), str)
                                     ):
                                         block["text"] = await cb.check_pii(
-                                            text=block_text,
+                                            text=block["text"],
                                             output_parse_pii=True,
                                             presidio_config=presidio_config,
                                             request_data=self.request_data,
@@ -1654,34 +1571,31 @@ class ResponsesWebSocketStreaming:
         if not self.guardrail_callbacks:
             return response_str
 
-        metadata: Final = self.request_data.get("metadata")
-        raw_pii_tokens: Final = metadata.get("pii_tokens") if _is_json_object(metadata) else None
-        pii_tokens: Final[Mapping[str, str]] = raw_pii_tokens if _is_str_mapping(raw_pii_tokens) else {}
+        pii_tokens: Dict[str, str] = (self.request_data.get("metadata") or {}).get("pii_tokens", {})
         if not pii_tokens:
             return response_str
 
         try:
-            evt_obj: Final[dict[str, object]] = json.loads(response_str)
+            evt_obj = json.loads(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
-        cb: Final = self.guardrail_callbacks[0]
-        event_type: Final = evt_obj.get("type")
+        cb = self.guardrail_callbacks[0]
+        event_type = evt_obj.get("type")
 
         if event_type == "response.completed":
             modified = False
-            response_obj: Final = evt_obj.get("response")
-            if not _is_json_object(response_obj):
+            response_obj = evt_obj.get("response") or {}
+            if not isinstance(response_obj, dict):
                 return response_str
-            output_items: Final = response_obj.get("output")
-            for output_item in output_items if _is_json_array(output_items) else []:
-                if not _is_json_object(output_item):
+            for output_item in response_obj.get("output") or []:
+                if not isinstance(output_item, dict):
                     continue
-                content = output_item.get("content")
-                if not _is_json_array(content):
+                content = output_item.get("content") or []
+                if not isinstance(content, list):
                     continue
                 for content_block in content:
-                    if not _is_json_object(content_block):
+                    if not isinstance(content_block, dict):
                         continue
                     text = content_block.get("text")
                     if isinstance(text, str):
@@ -1692,7 +1606,7 @@ class ResponsesWebSocketStreaming:
             return json.dumps(evt_obj) if modified else response_str
 
         if event_type in self._DELTA_EVENT_TYPES:
-            delta: Final = evt_obj.get("delta")
+            delta = evt_obj.get("delta")
             if isinstance(delta, str):
                 unmasked = cb._unmask_pii_text(delta, pii_tokens)
                 if unmasked != delta:
@@ -1717,7 +1631,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         try:
-            evt_obj: Final[Mapping[str, object]] = json.loads(response_str)
+            evt_obj = json.loads(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -1727,12 +1641,11 @@ class ResponsesWebSocketStreaming:
         modified = False
         for cb in self.output_guardrail_callbacks:
             presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
-            response_obj = evt_obj.get("response")
-            if not _is_json_object(response_obj):
+            response_obj = evt_obj.get("response") or {}
+            if not isinstance(response_obj, dict):
                 continue
-            output_items = response_obj.get("output")
-            for output_item in output_items if _is_json_array(output_items) else []:
-                if not _is_json_object(output_item):
+            for output_item in response_obj.get("output") or []:
+                if not isinstance(output_item, dict):
                     continue
                 arguments = output_item.get("arguments")
                 if isinstance(arguments, str):
@@ -1745,10 +1658,10 @@ class ResponsesWebSocketStreaming:
                     if masked_args != arguments:
                         output_item["arguments"] = masked_args
                         modified = True
-                summary = output_item.get("summary")
-                if _is_json_array(summary):
+                summary = output_item.get("summary") or []
+                if isinstance(summary, list):
                     for summary_block in summary:
-                        if not _is_json_object(summary_block):
+                        if not isinstance(summary_block, dict):
                             continue
                         summary_text = summary_block.get("text")
                         if isinstance(summary_text, str):
@@ -1761,11 +1674,11 @@ class ResponsesWebSocketStreaming:
                             if masked_summary != summary_text:
                                 summary_block["text"] = masked_summary
                                 modified = True
-                content = output_item.get("content")
-                if not _is_json_array(content):
+                content = output_item.get("content") or []
+                if not isinstance(content, list):
                     continue
                 for content_block in content:
-                    if not _is_json_object(content_block):
+                    if not isinstance(content_block, dict):
                         continue
                     text = content_block.get("text")
                     if isinstance(text, str):
@@ -1785,24 +1698,24 @@ class ResponsesWebSocketStreaming:
         """Forward response.create events from client to backend."""
         try:
             if self.first_message is not None:
-                masked_first: Final = await self._mask_response_create(self.first_message)
+                masked_first = await self._mask_response_create(self.first_message)
                 self._store_input(masked_first)
                 self._store_event(masked_first)
-                await self.backend_ws.send(masked_first)
+                await self.backend_ws.send(masked_first)  # type: ignore[union-attr]
 
             while True:
                 message = await self.websocket.receive_text()
                 masked = await self._mask_response_create(message)
                 self._store_input(masked)
                 self._store_event(masked)
-                await self.backend_ws.send(masked)
+                await self.backend_ws.send(masked)  # type: ignore[union-attr]
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
 
     async def bidirectional_forward(self) -> None:
         """Run both forwarding directions concurrently."""
-        forward_task: Final = asyncio.create_task(self.backend_to_client())
+        forward_task = asyncio.create_task(self.backend_to_client())
         try:
             await self.client_to_backend()
         except Exception:
@@ -1824,12 +1737,12 @@ class ResponsesWebSocketStreaming:
 # Managed WebSocket mode (HTTP-backed, provider-agnostic)
 # ---------------------------------------------------------------------------
 
-_RESPONSE_CREATE_PARAMS: Final[frozenset[str]] = (
+_RESPONSE_CREATE_PARAMS: frozenset = (
     _get_openai_response_types().ResponsesAPIRequestParams.__required_keys__
     | _get_openai_response_types().ResponsesAPIRequestParams.__optional_keys__
 )
 
-_MANAGED_WS_SKIP_KWARGS: Final[frozenset[str]] = frozenset(
+_MANAGED_WS_SKIP_KWARGS: frozenset = frozenset(
     {
         "litellm_logging_obj",
         "litellm_call_id",
@@ -1839,7 +1752,7 @@ _MANAGED_WS_SKIP_KWARGS: Final[frozenset[str]] = frozenset(
     }
 )
 
-_WARMUP_RESPONSE_ID_PREFIX: Final = "resp_warmup_"
+_WARMUP_RESPONSE_ID_PREFIX = "resp_warmup_"
 
 
 class ManagedResponsesWebSocketHandler:
@@ -1861,24 +1774,24 @@ class ManagedResponsesWebSocketHandler:
 
     def __init__(
         self,
-        websocket: ResponsesClientWebSocket,
+        websocket: Any,
         model: str,
-        logging_obj: LiteLLMLoggingObj,
-        user_api_key_dict: UserAPIKeyAuth | None = None,
-        litellm_metadata: dict[str, Any] | None = None,
-        api_key: str | None = None,
-        api_base: str | None = None,
-        timeout: float | None = None,
-        custom_llm_provider: str | None = None,
-        first_message: str | None = None,
-        **kwargs: object,
+        logging_obj: "LiteLLMLoggingObj",
+        user_api_key_dict: Optional[Any] = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[float] = None,
+        custom_llm_provider: Optional[str] = None,
+        first_message: Optional[str] = None,
+        **kwargs: Any,
     ) -> None:
         self.websocket = websocket
         self.model = model
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.litellm_metadata: dict[str, Any] = litellm_metadata or {}
-        self.model_group: str | None = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
+        self.litellm_metadata: Dict[str, Any] = litellm_metadata or {}
+        self.model_group: Optional[str] = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
             "deployment_model_name"
         )
         self.api_key = api_key
@@ -1888,26 +1801,26 @@ class ManagedResponsesWebSocketHandler:
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
         # Carry through safe pass-through kwargs (e.g. extra_headers)
-        self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
+        self.extra_kwargs: Dict[str, Any] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
         # Keyed by the DECODED (pre-encoding) response ID from response.completed.
         # This avoids the async DB-write race condition where spend logs haven't
         # been committed yet when the next response.create arrives.
-        self._session_history: dict[str, list[dict[str, object]]] = {}
+        self._session_history: Dict[str, List[Dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _serialize_chunk(chunk: Any) -> str | None:
+    def _serialize_chunk(chunk: Any) -> Optional[str]:
         """Serialize a streaming chunk to a JSON string for WebSocket transmission."""
         try:
-            if isinstance(chunk, _HasModelDumpJson):
+            if hasattr(chunk, "model_dump_json"):
                 return chunk.model_dump_json(exclude_none=True)
-            if isinstance(chunk, _HasModelDump):
+            if hasattr(chunk, "model_dump"):
                 return json.dumps(chunk.model_dump(exclude_none=True), default=str)
-            if _is_json_object(chunk):
+            if isinstance(chunk, dict):
                 return json.dumps(chunk, default=str)
             return json.dumps(str(chunk))
         except Exception as exc:
@@ -1922,18 +1835,18 @@ class ManagedResponsesWebSocketHandler:
         except Exception:
             pass
 
-    def _get_history_messages(self, previous_response_id: str) -> list[dict[str, object]]:
+    def _get_history_messages(self, previous_response_id: str) -> List[Dict[str, Any]]:
         """
         Return accumulated message history for *previous_response_id*.
 
         The key is the *decoded* response ID (the raw provider response ID before
         LiteLLM base64-encodes it into the ``resp_...`` format).
         """
-        decoded: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
-        raw_id: Final = decoded.get("response_id", previous_response_id)
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
+        raw_id = decoded.get("response_id", previous_response_id)
         return list(self._session_history.get(raw_id, []))
 
-    def _store_history(self, response_id: str, messages: list[dict[str, object]]) -> None:
+    def _store_history(self, response_id: str, messages: List[Dict[str, Any]]) -> None:
         """
         Store the complete accumulated message history for *response_id*.
 
@@ -1943,31 +1856,30 @@ class ManagedResponsesWebSocketHandler:
         self._session_history[response_id] = messages
 
     @staticmethod
-    def _extract_response_id(completed_event: dict[str, object]) -> str | None:
+    def _extract_response_id(completed_event: Dict[str, Any]) -> Optional[str]:
         """
         Pull the raw (decoded) response ID out of a ``response.completed`` event.
         Returns *None* if the event doesn't contain a usable ID.
         """
-        resp_obj: Final = completed_event.get("response", {})
-        raw_id: Final = resp_obj.get("id") if _is_json_object(resp_obj) else None
-        encoded_id: Final[str | None] = raw_id if isinstance(raw_id, str) else None
+        resp_obj = completed_event.get("response", {})
+        encoded_id: Optional[str] = resp_obj.get("id") if isinstance(resp_obj, dict) else None
         if not encoded_id:
             return None
-        decoded: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(encoded_id)
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(encoded_id)
         return decoded.get("response_id", encoded_id)
 
     @staticmethod
     def _extract_output_messages(
-        completed_event: dict[str, object],
-    ) -> list[dict[str, object]]:
+        completed_event: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
         """
         Convert the output items in a ``response.completed`` event into
         Responses API message dicts suitable for the next turn's ``input``.
         """
-        resp_obj: Final = completed_event.get("response", {})
+        resp_obj = completed_event.get("response", {})
         if not isinstance(resp_obj, dict):
             return []
-        messages: Final[list[dict[str, object]]] = []
+        messages: List[Dict[str, Any]] = []
         for item in resp_obj.get("output", []) or []:
             if not isinstance(item, dict):
                 continue
@@ -1994,7 +1906,7 @@ class ManagedResponsesWebSocketHandler:
         return messages
 
     @staticmethod
-    def _input_to_messages(input_val: object) -> list[dict[str, object]]:
+    def _input_to_messages(input_val: Any) -> List[Dict[str, Any]]:
         """
         Normalise the ``input`` field of a ``response.create`` event to a list
         of Responses API message dicts.
@@ -2007,18 +1919,18 @@ class ManagedResponsesWebSocketHandler:
                     "content": [{"type": "input_text", "text": input_val}],
                 }
             ]
-        if _is_json_array(input_val):
-            return [item for item in input_val if _is_json_object(item)]
+        if isinstance(input_val, list):
+            return [item for item in input_val if isinstance(item, dict)]
         return []
 
     # ------------------------------------------------------------------
     # _process_response_create sub-methods
     # ------------------------------------------------------------------
 
-    async def _parse_message(self, raw_message: str) -> dict[str, object] | None:
+    async def _parse_message(self, raw_message: str) -> Optional[Dict[str, Any]]:
         """Parse raw WS text; return the message dict or None (JSON error / ignored type)."""
         try:
-            msg_obj: Final[dict[str, object]] = json.loads(raw_message)
+            msg_obj = json.loads(raw_message)
         except json.JSONDecodeError:
             await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
             return None
@@ -2028,32 +1940,32 @@ class ManagedResponsesWebSocketHandler:
         return msg_obj
 
     @staticmethod
-    def _is_warmup_frame(msg_obj: dict[str, object]) -> bool:
+    def _is_warmup_frame(msg_obj: Dict[str, Any]) -> bool:
         """Return True for a response.create whose generate flag is false."""
-        nested: Final = msg_obj.get("response")
-        source: Final = nested if _is_json_object(nested) and nested else msg_obj
+        nested = msg_obj.get("response")
+        source = nested if isinstance(nested, dict) and nested else msg_obj
         return source.get("generate") is False
 
     @staticmethod
-    def _is_warmup_response_id(response_id: str | None) -> bool:
+    def _is_warmup_response_id(response_id: Optional[str]) -> bool:
         """Return True for synthetic warmup IDs that only exist on this connection."""
         if not response_id:
             return False
-        decoded: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
-        raw_id: Final = decoded.get("response_id", response_id)
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        raw_id = decoded.get("response_id", response_id)
         return str(raw_id).startswith(_WARMUP_RESPONSE_ID_PREFIX)
 
     @staticmethod
-    def _warmup_source_params(msg_obj: dict[str, object]) -> dict[str, object]:
-        nested: Final = msg_obj.get("response")
-        if _is_json_object(nested) and nested:
+    def _warmup_source_params(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        nested = msg_obj.get("response")
+        if isinstance(nested, dict) and nested:
             return nested
         return {k: v for k, v in msg_obj.items() if k != "type"}
 
-    def _build_warmup_response(self, msg_obj: dict[str, object]) -> dict[str, object]:
+    def _build_warmup_response(self, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
         """Build a minimal completed Responses API object for a warmup ack."""
-        source: Final = self._warmup_source_params(msg_obj)
-        wire_model: Final = source.get("model") or self.model_group or self.model
+        source = self._warmup_source_params(msg_obj)
+        wire_model = source.get("model") or self.model_group or self.model
         return {
             "id": f"{_WARMUP_RESPONSE_ID_PREFIX}{uuid.uuid4().hex}",
             "object": "response",
@@ -2068,7 +1980,7 @@ class ManagedResponsesWebSocketHandler:
             },
         }
 
-    async def _send_warmup_ack(self, msg_obj: dict[str, object]) -> None:
+    async def _send_warmup_ack(self, msg_obj: Dict[str, Any]) -> None:
         """
         Acknowledge a generate=false prewarm without calling the provider.
 
@@ -2076,7 +1988,7 @@ class ManagedResponsesWebSocketHandler:
         response.completed over the WebSocket. Managed HTTP providers cannot
         honor an empty-input warmup, so we synthesize the completion locally.
         """
-        response: Final = self._build_warmup_response(msg_obj)
+        response = self._build_warmup_response(msg_obj)
         for event_type, status in (
             ("response.created", "in_progress"),
             ("response.completed", "completed"),
@@ -2091,15 +2003,15 @@ class ManagedResponsesWebSocketHandler:
             await self.websocket.send_text(serialized)
 
     @staticmethod
-    def _build_base_call_kwargs(msg_obj: dict[str, object]) -> dict[str, Any]:
+    def _build_base_call_kwargs(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract Responses API params from the event, handling both wire formats:
           Nested: {"type": "response.create", "response": {"input": [...], ...}}
           Flat:   {"type": "response.create", "input": [...], "model": "...", ...}
         """
-        nested: Final = msg_obj.get("response")
-        response_params: Final[dict[str, object]] = (
-            nested if _is_json_object(nested) and nested else {k: v for k, v in msg_obj.items() if k != "type"}
+        nested = msg_obj.get("response")
+        response_params: Dict[str, Any] = (
+            nested if isinstance(nested, dict) and nested else {k: v for k, v in msg_obj.items() if k != "type"}
         )
         return {
             param: response_params[param]
@@ -2109,10 +2021,10 @@ class ManagedResponsesWebSocketHandler:
 
     def _apply_history(
         self,
-        call_kwargs: dict[str, object],
-        previous_response_id: str | None,
-        current_messages: list[dict[str, object]],
-        prior_history: list[dict[str, object]],
+        call_kwargs: Dict[str, Any],
+        previous_response_id: Optional[str],
+        current_messages: List[Dict[str, Any]],
+        prior_history: List[Dict[str, Any]],
     ) -> None:
         """Prepend in-memory turn history, or fall back to DB-based reconstruction."""
         if not previous_response_id:
@@ -2141,7 +2053,7 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["previous_response_id"] = previous_response_id
 
     @staticmethod
-    def _resolve_provider(model: str | None) -> str | None:
+    def _resolve_provider(model: Optional[str]) -> Optional[str]:
         """Resolve the LLM provider for a model string, or None if unresolvable."""
         if not model:
             return None
@@ -2153,16 +2065,16 @@ class ManagedResponsesWebSocketHandler:
         except Exception:
             return None
 
-    def _same_provider(self, model: str | None) -> bool:
+    def _same_provider(self, model: Optional[str]) -> bool:
         """Return True if model uses the same LLM provider as the connection model."""
         if model is None or model == self.model:
             return True
-        event_provider: Final = self._resolve_provider(model)
+        event_provider = self._resolve_provider(model)
         if event_provider is None:
             return False
         return event_provider == self._connection_provider
 
-    def _inject_credentials(self, call_kwargs: dict[str, object], model: str | None = None) -> None:
+    def _inject_credentials(self, call_kwargs: Dict[str, Any], model: Optional[str] = None) -> None:
         """Inject connection-level credentials and metadata into call_kwargs."""
         if self.api_key is not None:
             call_kwargs["api_key"] = self.api_key
@@ -2181,12 +2093,12 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
 
     @staticmethod
-    def _update_proxy_request(call_kwargs: dict[str, Any], model: str) -> None:
+    def _update_proxy_request(call_kwargs: Dict[str, Any], model: str) -> None:
         """Update proxy_server_request body so spend logs record the full request."""
         proxy_server_request = (call_kwargs.get("litellm_metadata") or {}).get("proxy_server_request") or {}
         if not isinstance(proxy_server_request, dict):
             return
-        body: Final = dict(proxy_server_request.get("body") or {})
+        body = dict(proxy_server_request.get("body") or {})
         body["input"] = call_kwargs.get("input")
         body["store"] = call_kwargs.get("store")
         body["model"] = model
@@ -2200,7 +2112,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs.setdefault("litellm_params", {})
         call_kwargs["litellm_params"]["proxy_server_request"] = proxy_server_request
 
-    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, Any]) -> dict[str, object] | None:
+    async def _stream_and_forward(self, model: str, call_kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
 
@@ -2208,11 +2120,9 @@ class ManagedResponsesWebSocketHandler:
         directly (before serialization) to avoid a redundant JSON round-trip on
         every chunk.  Returns the completed event dict, or ``None``.
         """
-        completed_event: dict[str, object] | None = (
-            None  # rebind-ok: captures the completed event once the stream yields it
-        )
-        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
-        async for chunk in stream_response:
+        completed_event: Optional[Dict[str, Any]] = None
+        stream_response = await litellm.aresponses(model=model, **call_kwargs)
+        async for chunk in stream_response:  # type: ignore[union-attr]
             if chunk is None:
                 continue
             # Read type from the object before serializing to avoid double JSON parse
@@ -2234,18 +2144,18 @@ class ManagedResponsesWebSocketHandler:
 
     def _save_turn_history(
         self,
-        completed_event: dict[str, object] | None,
-        prior_history: list[dict[str, object]],
-        current_messages: list[dict[str, object]],
+        completed_event: Optional[Dict[str, Any]],
+        prior_history: List[Dict[str, Any]],
+        current_messages: List[Dict[str, Any]],
     ) -> None:
         """Store this turn in in-memory history for future previous_response_id lookups."""
         if completed_event is None:
             return
-        new_response_id: Final = self._extract_response_id(completed_event)
+        new_response_id = self._extract_response_id(completed_event)
         if not new_response_id:
             return
-        output_msgs: Final = self._extract_output_messages(completed_event)
-        all_messages: Final = prior_history + current_messages + output_msgs
+        output_msgs = self._extract_output_messages(completed_event)
+        all_messages = prior_history + current_messages + output_msgs
         self._store_history(new_response_id, all_messages)
         verbose_logger.debug(
             "ManagedResponsesWS: stored %d messages for response_id=%s",
@@ -2277,7 +2187,7 @@ class ManagedResponsesWebSocketHandler:
         occurs when spend logs haven't been committed by the time the second
         ``response.create`` arrives over the same WebSocket connection.
         """
-        msg_obj: Final = await self._parse_message(raw_message)
+        msg_obj = await self._parse_message(raw_message)
         if msg_obj is None:
             return
 
@@ -2292,23 +2202,24 @@ class ManagedResponsesWebSocketHandler:
                 verbose_logger.debug("ManagedResponsesWS: error sending warmup ack: %s", exc)
             return
 
-        call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
+        call_kwargs = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
         # A frame that repeats the connection's public alias (model_group) must
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        requested_model: Final[str | None] = call_kwargs.pop("model", None)
-        model: Final[str] = (
-            self.model if requested_model is None or requested_model == self.model_group else requested_model
-        )
+        requested_model = call_kwargs.pop("model", None)
+        if requested_model is None or requested_model == self.model_group:
+            model = self.model
+        else:
+            model = requested_model
 
-        previous_response_id: Final[str | None] = call_kwargs.pop("previous_response_id", None)
-        current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
+        previous_response_id: Optional[str] = call_kwargs.pop("previous_response_id", None)
+        current_messages = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history
-        prior_history: Final = self._get_history_messages(previous_response_id) if previous_response_id else []
+        prior_history = self._get_history_messages(previous_response_id) if previous_response_id else []
 
         self._apply_history(call_kwargs, previous_response_id, current_messages, prior_history)
         self._inject_credentials(call_kwargs, model=model)
@@ -2316,7 +2227,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs.update(self.extra_kwargs)
 
         try:
-            completed_event: Final = await self._stream_and_forward(model, call_kwargs)
+            completed_event = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
             await self._send_error(str(exc))

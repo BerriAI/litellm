@@ -1,9 +1,7 @@
 import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { Tooltip } from "@/components/atoms/Tooltip";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { CircleHelp } from "lucide-react";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Card, Col, Row, Space, Tag, Tooltip, Typography } from "antd";
 import React from "react";
 import { useMyTeamMember } from "./useMyTeamMember";
 
@@ -12,12 +10,12 @@ interface MyUserTabProps {
 }
 
 const labelWithTooltip = (label: string, tooltip: string) => (
-  <span className="flex items-center gap-1 text-muted-foreground">
-    {label}
-    <Tooltip content={tooltip}>
-      <CircleHelp className="size-4" aria-label={`${label} information`} />
+  <Space size={4}>
+    <Typography.Text type="secondary">{label}</Typography.Text>
+    <Tooltip title={tooltip}>
+      <InfoCircleOutlined style={{ color: "#8c8c8c" }} />
     </Tooltip>
-  </span>
+  </Space>
 );
 
 const formatNumber = (value: number | null | undefined, digits = 4): string => {
@@ -36,7 +34,7 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
   if (isLoading) {
     return (
       <Card>
-        <CardContent className="text-muted-foreground">Loading your membership info…</CardContent>
+        <Typography.Text type="secondary">Loading your membership info…</Typography.Text>
       </Card>
     );
   }
@@ -44,9 +42,9 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
   if (error) {
     return (
       <Card>
-        <CardContent className="text-destructive">
+        <Typography.Text type="danger">
           {error instanceof Error ? error.message : "Failed to load your membership info for this team."}
-        </CardContent>
+        </Typography.Text>
       </Card>
     );
   }
@@ -54,9 +52,9 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
   if (!data) {
     return (
       <Card>
-        <CardContent className="text-muted-foreground">
+        <Typography.Text type="secondary">
           No membership info available for the current user in this team.
-        </CardContent>
+        </Typography.Text>
       </Card>
     );
   }
@@ -71,79 +69,89 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
   const allowedModels = budgetTable?.allowed_models ?? null;
 
   return (
-    <div className="flex w-full flex-col gap-4">
+    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <Card>
-        <CardContent>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-            <div>
-              <span className="text-muted-foreground">User</span>
-              <div className="mt-1 font-semibold">{data.user_email || data.user_id}</div>
-              <span className="font-mono text-xs text-muted-foreground">{data.user_id}</span>
+        <Row gutter={[24, 16]}>
+          <Col xs={24} sm={12} md={8}>
+            <Typography.Text type="secondary">User</Typography.Text>
+            <div style={{ marginTop: 4 }}>
+              <Typography.Text strong>{data.user_email || data.user_id}</Typography.Text>
             </div>
-            <div>
-              <span className="text-muted-foreground">Team Role</span>
-              <div className="mt-1">
-                <Badge variant={data.role === "admin" ? "default" : "secondary"}>{data.role || "user"}</Badge>
-              </div>
+            <Typography.Text type="secondary" style={{ fontSize: 12, fontFamily: "monospace" }}>
+              {data.user_id}
+            </Typography.Text>
+          </Col>
+          <Col xs={24} sm={12} md={8}>
+            <Typography.Text type="secondary">Team Role</Typography.Text>
+            <div style={{ marginTop: 4 }}>
+              <Tag color={data.role === "admin" ? "blue" : "default"}>{data.role || "user"}</Tag>
             </div>
-          </div>
-        </CardContent>
+          </Col>
+        </Row>
       </Card>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Card>
-          <CardContent>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={12}>
+          <Card>
             {labelWithTooltip(
               "Current Cycle Spend (USD)",
               "Spend for the current budget cycle. Resets to $0 when the budget window rolls over.",
             )}
-            <div className="mt-2">
-              <h3 className="text-2xl font-semibold">${formatNumber(spend, 4)}</h3>
-              <span className="text-muted-foreground">
+            <div style={{ marginTop: 8 }}>
+              <Typography.Title level={3} style={{ margin: 0 }}>
+                ${formatNumber(spend, 4)}
+              </Typography.Title>
+              <Typography.Text type="secondary">
                 of {maxBudget === null ? "Unlimited" : `$${formatNumber(maxBudget, 4)}`}
-              </span>
+              </Typography.Text>
             </div>
-            {budgetReset && <div className="mt-1 text-muted-foreground">Resets {budgetReset}</div>}
-          </CardContent>
-        </Card>
+            {budgetReset && (
+              <div style={{ marginTop: 4 }}>
+                <Typography.Text type="secondary">Resets {budgetReset}</Typography.Text>
+              </div>
+            )}
+          </Card>
+        </Col>
 
-        <Card>
-          <CardContent>
+        <Col xs={24} md={12}>
+          <Card>
             {labelWithTooltip("Rate Limits", "Your per-member rate limits within this team.")}
-            <div className="mt-2">
-              <span>TPM: {formatRateLimit(tpmLimit)}</span>
+            <div style={{ marginTop: 8 }}>
+              <Typography.Text>TPM: {formatRateLimit(tpmLimit)}</Typography.Text>
               <br />
-              <span>RPM: {formatRateLimit(rpmLimit)}</span>
+              <Typography.Text>RPM: {formatRateLimit(rpmLimit)}</Typography.Text>
             </div>
-          </CardContent>
-        </Card>
+          </Card>
+        </Col>
 
-        <Card>
-          <CardContent>
+        <Col xs={24} md={12}>
+          <Card>
             {labelWithTooltip("Total Spend (USD)", "Cumulative spend across all budget cycles within this team.")}
-            <h4 className="mt-2 text-xl font-semibold">${formatNumber(totalSpend, 4)}</h4>
-          </CardContent>
-        </Card>
+            <div style={{ marginTop: 8 }}>
+              <Typography.Title level={4} style={{ margin: 0 }}>
+                ${formatNumber(totalSpend, 4)}
+              </Typography.Title>
+            </div>
+          </Card>
+        </Col>
 
-        <Card>
-          <CardContent>
+        <Col xs={24} md={12}>
+          <Card>
             {labelWithTooltip("Model Scope", "Models you can access within this team.")}
-            <div className="mt-2">
+            <div style={{ marginTop: 8 }}>
               {allowedModels && allowedModels.length > 0 ? (
-                <div className="flex flex-wrap gap-1">
+                <Space wrap>
                   {allowedModels.map((m) => (
-                    <Badge key={m} variant="secondary">
-                      {m}
-                    </Badge>
+                    <Tag key={m}>{m}</Tag>
                   ))}
-                </div>
+                </Space>
               ) : (
-                <span>All Team Models</span>
+                <Typography.Text>All Team Models</Typography.Text>
               )}
             </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+          </Card>
+        </Col>
+      </Row>
+    </Space>
   );
 }

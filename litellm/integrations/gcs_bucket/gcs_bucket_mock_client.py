@@ -9,18 +9,16 @@ Usage:
 """
 
 import asyncio
-from collections.abc import AsyncIterable, Iterable
-from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.mock_client_factory import (
     MockClientConfig,
-    MockResponse,
     create_mock_client_factory,
+    MockResponse,
 )
 
 # Use factory for POST handler
-_config: Final = MockClientConfig(
+_config = MockClientConfig(
     name="GCS",
     env_var="GCS_MOCK",
     default_latency_ms=150,
@@ -40,18 +38,18 @@ _mocks_initialized = False
 
 # Default mock latency in seconds (simulates network round-trip)
 # Typical GCS API calls take 100-300ms for uploads, 50-150ms for GET/DELETE
-_MOCK_LATENCY_SECONDS: Final = float(__import__("os").getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
+_MOCK_LATENCY_SECONDS = float(__import__("os").getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
 
 
 async def _mock_async_handler_get(self, url, params=None, headers=None, follow_redirects=None):
     """Monkey-patched AsyncHTTPHandler.get that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
-        verbose_logger.info("[GCS MOCK] GET to %s", url)
+        verbose_logger.info(f"[GCS MOCK] GET to {url}")
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         # Return a minimal but valid StandardLoggingPayload JSON string as bytes
         # This matches what GCS returns when downloading with ?alt=media
-        mock_payload: Final = {
+        mock_payload = {
             "id": "mock-request-id",
             "trace_id": "mock-trace-id",
             "call_type": "completion",
@@ -114,12 +112,12 @@ async def _mock_async_handler_delete(
     headers=None,
     timeout=None,
     stream=False,
-    content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
+    content=None,
 ):
     """Monkey-patched AsyncHTTPHandler.delete that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
-        verbose_logger.info("[GCS MOCK] DELETE to %s", url)
+        verbose_logger.info(f"[GCS MOCK] DELETE to {url}")
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         # DELETE returns 204 No Content with empty body (not JSON)
         return MockResponse(
@@ -168,12 +166,12 @@ def create_mock_gcs_client():
 
     if _original_async_handler_get is None:
         _original_async_handler_get = AsyncHTTPHandler.get
-        AsyncHTTPHandler.get = _mock_async_handler_get
+        AsyncHTTPHandler.get = _mock_async_handler_get  # type: ignore
         verbose_logger.debug("[GCS MOCK] Patched AsyncHTTPHandler.get")
 
     if _original_async_handler_delete is None:
         _original_async_handler_delete = AsyncHTTPHandler.delete
-        AsyncHTTPHandler.delete = _mock_async_handler_delete
+        AsyncHTTPHandler.delete = _mock_async_handler_delete  # type: ignore
         verbose_logger.debug("[GCS MOCK] Patched AsyncHTTPHandler.delete")
 
     verbose_logger.debug(f"[GCS MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms")
@@ -228,9 +226,9 @@ def mock_vertex_auth_methods():
             return ("mock-gcs-token", "https://storage.googleapis.com")
 
         # Patch the methods
-        VertexBase._ensure_access_token_async = _mock_ensure_access_token_async
-        VertexBase._ensure_access_token = _mock_ensure_access_token
-        VertexBase._get_token_and_url = _mock_get_token_and_url
+        VertexBase._ensure_access_token_async = _mock_ensure_access_token_async  # type: ignore
+        VertexBase._ensure_access_token = _mock_ensure_access_token  # type: ignore
+        VertexBase._get_token_and_url = _mock_get_token_and_url  # type: ignore
 
         verbose_logger.debug("[GCS MOCK] Patched Vertex AI auth methods")
 

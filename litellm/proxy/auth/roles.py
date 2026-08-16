@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Final
 
 
 class Role(str, Enum):
@@ -18,7 +17,7 @@ class TeamRole(str, Enum):
     MEMBER = "member"
 
 
-_ROLE_MAP: Final[dict[str, Role]] = {
+_ROLE_MAP: dict[str, Role] = {
     "proxy_admin": Role.PLATFORM_ADMIN,
     "proxy_admin_viewer": Role.PLATFORM_VIEWER,
     "org_admin": Role.ORG_ADMIN,

@@ -10,14 +10,6 @@ describe("TopModelView", () => {
     mockSetTopModelsLimit.mockClear();
   });
 
-  // Which element a control library gives its label to is its own business, so drive the
-  // control by its visible text and judge the result by what the panel renders.
-  const clickControl = async (user: ReturnType<typeof userEvent.setup>, label: string) => {
-    await user.click(screen.getByText(label));
-  };
-
-  const showsChart = (container: HTMLElement) => container.querySelector(".recharts-wrapper") !== null;
-
   it("should render", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
     expect(screen.getByText("Table View")).toBeInTheDocument();
@@ -25,12 +17,12 @@ describe("TopModelView", () => {
 
   it("should display table view button", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
-    expect(screen.getByText("Table View")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Table View" })).toBeInTheDocument();
   });
 
   it("should display chart view button", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
-    expect(screen.getByText("Chart View")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chart View" })).toBeInTheDocument();
   });
 
   it("should display all table column headers", () => {
@@ -68,32 +60,27 @@ describe("TopModelView", () => {
     expect(screen.getByText("50,000")).toBeInTheDocument();
   });
 
-  const oneModel = [{ key: "gpt-4", spend: 150.5, successful_requests: 100, failed_requests: 5, tokens: 50000 }];
-
   it("should switch to chart view when chart view button is clicked", async () => {
     const user = userEvent.setup();
-    const { container } = render(
-      <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
-    );
+    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
 
-    expect(showsChart(container)).toBe(false);
-    await clickControl(user, "Chart View");
+    const chartViewButton = screen.getByRole("button", { name: "Chart View" });
+    await user.click(chartViewButton);
 
-    expect(showsChart(container)).toBe(true);
-    expect(screen.queryByText("Spend (USD)")).not.toBeInTheDocument();
+    expect(chartViewButton).toHaveClass("bg-blue-100");
   });
 
   it("should switch to table view when table view button is clicked", async () => {
     const user = userEvent.setup();
-    const { container } = render(
-      <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
-    );
+    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
 
-    await clickControl(user, "Chart View");
-    await clickControl(user, "Table View");
+    const chartViewButton = screen.getByRole("button", { name: "Chart View" });
+    const tableViewButton = screen.getByRole("button", { name: "Table View" });
 
-    expect(showsChart(container)).toBe(false);
-    expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
+    await user.click(chartViewButton);
+    await user.click(tableViewButton);
+
+    expect(tableViewButton).toHaveClass("bg-blue-100");
   });
 
   it("renders one cyan bar per model with model names on the axis in chart view", async () => {
@@ -121,7 +108,7 @@ describe("TopModelView", () => {
       />,
     );
 
-    await clickControl(user, "Chart View");
+    await user.click(screen.getByRole("button", { name: "Chart View" }));
 
     const bars = container.querySelectorAll("path.recharts-rectangle");
     expect(bars).toHaveLength(2);
@@ -131,11 +118,19 @@ describe("TopModelView", () => {
     expect(screen.getAllByText("claude-3").length).toBeGreaterThan(0);
   });
 
-  it("should call setTopModelsLimit when the limit control is changed", async () => {
+  it("should call setTopModelsLimit when limit is changed via Segmented control", async () => {
     const user = userEvent.setup();
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
 
-    await clickControl(user, "10");
+    const limit10Radio = screen.getByRole("radio", { name: "10" });
+    const limit10Label = limit10Radio.closest("label");
+    if (limit10Label) {
+      await user.click(limit10Label);
+    } else {
+      // Fallback: click the div with title="10"
+      const limit10Div = screen.getByTitle("10");
+      await user.click(limit10Div);
+    }
 
     expect(mockSetTopModelsLimit).toHaveBeenCalledWith(10);
   });

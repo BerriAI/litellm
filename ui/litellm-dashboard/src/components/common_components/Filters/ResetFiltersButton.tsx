@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { Button } from "antd";
 import { RotateCcw } from "lucide-react";
 import React from "react";
 
@@ -9,8 +9,7 @@ interface ResetFiltersButtonProps {
 
 export const ResetFiltersButton: React.FC<ResetFiltersButtonProps> = ({ onClick, label = "Reset Filters" }) => {
   return (
-    <Button variant="outline" onClick={onClick}>
-      <RotateCcw className="size-4" />
+    <Button type="default" onClick={onClick} icon={<RotateCcw size={16} />}>
       {label}
     </Button>
   );

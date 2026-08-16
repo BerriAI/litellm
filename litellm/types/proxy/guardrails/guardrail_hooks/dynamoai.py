@@ -1,7 +1,7 @@
 # Type definitions for DynamoAI Guardrails API
 
 import enum
-from typing import Any, Literal, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from pydantic import Field
 
@@ -16,7 +16,7 @@ class DynamoAIMessage(TypedDict):
 
 
 class DynamoRequestMetadata(TypedDict):
-    endUserId: str | None
+    endUserId: Optional[str]
 
 
 class DynamoTextType(str, enum.Enum):
@@ -41,12 +41,12 @@ class PolicyApplicableTo(str, enum.Enum):
 class DynamoAIRequest(TypedDict, total=False):
     """Request structure for DynamoAI /moderation/analyze endpoint"""
 
-    messages: list[dict[str, Any]]
-    textType: DynamoTextType | None
-    policyIds: list[str]
-    modelId: str | None
-    clientId: str | None
-    metadata: DynamoRequestMetadata | None
+    messages: List[Dict[str, Any]]
+    textType: Optional[DynamoTextType]
+    policyIds: List[str]
+    modelId: Optional[str]
+    clientId: Optional[str]
+    metadata: Optional[DynamoRequestMetadata]
 
 
 class PolicyInfo(TypedDict, total=False):
@@ -57,8 +57,8 @@ class PolicyInfo(TypedDict, total=False):
     description: str
     method: PolicyMethod
     action: Literal["BLOCK", "WARN", "REDACT", "SANITIZE", "NONE"]
-    methodParams: dict[str, Any]
-    decisionParams: dict[str, Any]
+    methodParams: Dict[str, Any]
+    decisionParams: Dict[str, Any]
     applicableTo: PolicyApplicableTo
     created_at: str
     creatorId: str
@@ -68,15 +68,15 @@ class PolicyOutputs(TypedDict, total=False):
     """Outputs from the policy"""
 
     action: Literal["BLOCK", "WARN", "REDACT", "SANITIZE", "NONE"]
-    message: str | None
+    message: Optional[str]
 
 
 class AppliedPolicyDto(TypedDict, total=False):
     """Applied policy details from DynamoAI response"""
 
     policy: PolicyInfo
-    outputs: dict[str, Any] | None
-    action: str | None
+    outputs: Optional[Dict[str, Any]]
+    action: Optional[str]
 
 
 class DynamoAIResponse(TypedDict, total=False):
@@ -85,37 +85,37 @@ class DynamoAIResponse(TypedDict, total=False):
     text: str
     textType: DynamoTextType
     finalAction: Literal["BLOCK", "WARN", "REDACT", "SANITIZE", "NONE"]
-    appliedPolicies: list[AppliedPolicyDto]
-    error: str | None
+    appliedPolicies: List[AppliedPolicyDto]
+    error: Optional[str]
 
 
 class DynamoAIProcessedResult(TypedDict):
     """Processed result from DynamoAI guardrail check"""
 
-    violations_detected: list[str]
-    violation_details: dict[str, Any]
+    violations_detected: List[str]
+    violation_details: Dict[str, Any]
 
 
 class DynamoAIGuardrailConfigModel(GuardrailConfigModel):
     """Configuration model for DynamoAI Guardrails"""
 
-    api_key: str | None = Field(
+    api_key: Optional[str] = Field(
         default=None,
         description="API key for DynamoAI Guardrails. If not provided, the `DYNAMOAI_API_KEY` environment variable is checked.",
     )
-    api_base: str | None = Field(
+    api_base: Optional[str] = Field(
         default=None,
         description="Base URL for DynamoAI API. If not provided, the `DYNAMOAI_API_BASE` environment variable is checked, defaults to https://api.dynamo.ai",
     )
-    policy_ids: list[str] | None = Field(
+    policy_ids: Optional[List[str]] = Field(
         default=None,
         description="List of DynamoAI policy IDs to apply. If not provided, the `DYNAMOAI_POLICY_IDS` environment variable is checked (comma-separated).",
     )
-    model_id: str | None = Field(
+    model_id: Optional[str] = Field(
         default=None,
         description="Model ID for tracking/logging purposes. If not provided, the `DYNAMOAI_MODEL_ID` environment variable is checked.",
     )
-    guardrail_name: str | None = Field(
+    guardrail_name: Optional[str] = Field(
         default=None,
         description="Name of the guardrail for identification in logs and traces.",
     )

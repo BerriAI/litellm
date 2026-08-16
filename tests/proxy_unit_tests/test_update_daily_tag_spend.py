@@ -91,13 +91,17 @@ async def test_daily_tag_spend_retries_then_succeeds():
     prisma_client = MagicMock()
     proxy_logging_obj = MagicMock()
 
-    # Fail the upsert 3 times with retryable DB errors, then succeed.
-    prisma_client.db.execute_raw = AsyncMock(
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_batcher.litellm_dailytagspend = mock_table
+
+    # Fail entering batch context 3 times with retryable DB errors, then succeed.
+    prisma_client.db.batch_.return_value.__aenter__ = AsyncMock(
         side_effect=[
             httpx.ConnectError("x"),
             httpx.ConnectError("x"),
             httpx.ConnectError("x"),
-            1,
+            mock_batcher,
         ]
     )
 
@@ -134,10 +138,6 @@ async def test_daily_tag_spend_retries_then_succeeds():
             daily_spend_transactions=daily_spend_transactions,
         )
 
-    assert prisma_client.db.execute_raw.await_count == 4
+    assert prisma_client.db.batch_.return_value.__aenter__.await_count == 4
     assert sleep_mock.await_count == 3
-    # The batch is one statement, so the successful attempt is a single call carrying
-    # the row rather than one call per key.
-    final_sql = prisma_client.db.execute_raw.await_args.args[0]
-    assert final_sql.count("ON CONFLICT") == 1
-    assert "prod-tag" in prisma_client.db.execute_raw.await_args.args[1:]
+    mock_table.upsert.assert_called_once()

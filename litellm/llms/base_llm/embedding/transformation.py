@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
@@ -33,7 +33,7 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
+        api_key: Optional[str],
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -42,12 +42,12 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         OPTIONAL
@@ -61,7 +61,7 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -75,11 +75,11 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         raise NotImplementedError("EmbeddingConfig does not need a response transformation for chat models")

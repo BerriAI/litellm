@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./ContentFilterManager";
+import React from "react";
 
 const CONTENT_FILTER_GUARDRAIL_DATA = {
   litellm_params: {
@@ -84,7 +85,18 @@ vi.mock("./ContentFilterDisplay", () => ({
   ),
 }));
 
-const UNSAVED_CHANGES_TEXT = /You have unsaved changes to patterns or keywords/;
+vi.mock("antd", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("antd")>();
+  return {
+    ...actual,
+    Divider: ({ children }: { children: React.ReactNode }) => <div data-testid="divider">{children}</div>,
+    Alert: ({ message, type }: { message: React.ReactNode; type: string }) => (
+      <div data-testid="unsaved-alert" data-type={type}>
+        {message}
+      </div>
+    ),
+  };
+});
 
 describe("ContentFilterManager", () => {
   beforeEach(() => {
@@ -105,7 +117,7 @@ describe("ContentFilterManager", () => {
       expect(screen.getByTestId("content-filter-config")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Content Filter Configuration")).toBeInTheDocument();
+    expect(screen.getByTestId("divider")).toHaveTextContent("Content Filter Configuration");
   });
 
   it("should return null when guardrail is not litellm_content_filter", () => {
@@ -263,15 +275,15 @@ describe("ContentFilterManager", () => {
       expect(screen.getByTestId("content-filter-config")).toBeInTheDocument();
     });
 
-    expect(screen.queryByText(UNSAVED_CHANGES_TEXT)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("unsaved-alert")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /add pattern/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(UNSAVED_CHANGES_TEXT)).toBeInTheDocument();
+      expect(screen.getByTestId("unsaved-alert")).toBeInTheDocument();
     });
 
-    expect(screen.getByText(UNSAVED_CHANGES_TEXT)).toHaveTextContent(/Save Changes/i);
+    expect(screen.getByTestId("unsaved-alert")).toHaveTextContent(/unsaved changes.*Save Changes/i);
   });
 
   it("should call onDataChange when patterns or keywords change", async () => {
@@ -359,7 +371,7 @@ describe("ContentFilterManager", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Content Filter Configuration")).toBeInTheDocument();
+      expect(screen.getByTestId("divider")).toBeInTheDocument();
     });
 
     expect(screen.queryByTestId("content-filter-config")).not.toBeInTheDocument();

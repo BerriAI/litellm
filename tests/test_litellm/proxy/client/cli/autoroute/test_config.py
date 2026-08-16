@@ -16,7 +16,6 @@ from litellm.proxy.client.cli.commands.autoroute.config import (
     build_generated_proxy_config,
     chat_models,
     embedding_models,
-    master_key_from_config,
     parse_discovered_models,
     validate_config,
 )
@@ -48,22 +47,27 @@ def _base_config(**overrides: Any) -> AutorouteConfig:
 class TestParseDiscoveredModels:
     def test_parses_valid_raw_list_into_typed_tuple(self):
         raw = [
-            {"id": "gpt-4o", "object": "model", "mode": "chat"},
-            {"id": "text-embedding-3-small", "object": "model", "mode": "embedding"},
+            {
+                "model_group": "gpt-4o",
+                "mode": "chat",
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+            },
+            {"model_group": "text-embedding-3-small", "mode": "embedding"},
         ]
         result = parse_discovered_models(raw)
         assert result == (
-            DiscoveredModel(name="gpt-4o", mode="chat"),
+            DiscoveredModel(name="gpt-4o", mode="chat", input_cost_per_token=0.01, output_cost_per_token=0.02),
             DiscoveredModel(name="text-embedding-3-small", mode="embedding"),
         )
 
     def test_ignores_unknown_extra_fields(self):
-        raw = [{"id": "gpt-4o", "mode": "chat", "created": 123, "owned_by": "openai", "max_input_tokens": 128000}]
+        raw = [{"model_group": "gpt-4o", "mode": "chat", "totally_unknown_field": "whatever"}]
         result = parse_discovered_models(raw)
         assert result == (DiscoveredModel(name="gpt-4o", mode="chat"),)
 
     def test_missing_mode_defaults_to_chat(self):
-        raw = [{"id": "gpt-4o", "object": "model"}]
+        raw = [{"model_group": "gpt-4o"}]
         result = parse_discovered_models(raw)
         assert result[0].mode == "chat"
 
@@ -202,24 +206,3 @@ class TestValidateConfig:
         config = _base_config(semantic_matching=SemanticMatching(embedding_model="unknown-embedding"))
         with pytest.raises(ConfigGenerationError, match="unknown-embedding"):
             validate_config(config, DISCOVERED)
-
-
-class TestMasterKeyFromConfig:
-    def test_returns_a_persisted_key_verbatim(self):
-        assert master_key_from_config({"general_settings": {"master_key": " sk-abc "}}) == " sk-abc "
-
-    @pytest.mark.parametrize(
-        "config",
-        [
-            {},
-            {"general_settings": None},
-            {"general_settings": "not-a-dict"},
-            {"general_settings": {}},
-            {"general_settings": {"master_key": None}},
-            {"general_settings": {"master_key": 123}},
-            {"general_settings": {"master_key": ""}},
-            {"general_settings": {"master_key": "   "}},
-        ],
-    )
-    def test_returns_none_when_absent_or_unusable(self, config):
-        assert master_key_from_config(config) is None

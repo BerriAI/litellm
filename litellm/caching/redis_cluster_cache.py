@@ -5,7 +5,7 @@ Key differences:
 - RedisClient NEEDs to be re-used across requests, adds 3000ms latency if it's re-created
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from litellm.caching.redis_cache import RedisCache
 
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     pipeline = Pipeline
     async_redis_client = Redis
-    Span = _Span | Any
+    Span = Union[_Span, Any]
 else:
     pipeline = Any
     async_redis_client = Any
@@ -26,8 +26,8 @@ else:
 class RedisClusterCache(RedisCache):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.redis_async_redis_cluster_client: RedisCluster | None = None
-        self.redis_sync_redis_cluster_client: RedisCluster | None = None
+        self.redis_async_redis_cluster_client: Optional[RedisCluster] = None
+        self.redis_sync_redis_cluster_client: Optional[RedisCluster] = None
 
     def init_async_client(self):
         from redis.asyncio import RedisCluster
@@ -37,24 +37,24 @@ class RedisClusterCache(RedisCache):
         if self.redis_async_redis_cluster_client:
             return self.redis_async_redis_cluster_client
 
-        _redis_client: Final = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
+        _redis_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
         if isinstance(_redis_client, RedisCluster):
             self.redis_async_redis_cluster_client = _redis_client
 
         return _redis_client
 
-    def _run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
+    def _run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
         """
         Overrides `_run_redis_mget_operation` in redis_cache.py
         """
-        return self.redis_client.mget_nonatomic(keys=keys)
+        return self.redis_client.mget_nonatomic(keys=keys)  # type: ignore
 
-    async def _async_run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
+    async def _async_run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
         """
         Overrides `_async_run_redis_mget_operation` in redis_cache.py
         """
-        async_redis_cluster_client: Final = self.init_async_client()
-        return await async_redis_cluster_client.mget_nonatomic(keys=keys)
+        async_redis_cluster_client = self.init_async_client()
+        return await async_redis_cluster_client.mget_nonatomic(keys=keys)  # type: ignore
 
     async def test_connection(self) -> dict:
         """
@@ -68,24 +68,24 @@ class RedisClusterCache(RedisCache):
             from redis.cluster import ClusterNode
 
             # Create ClusterNode objects from startup_nodes
-            cluster_kwargs: Final = self.redis_kwargs.copy()
-            startup_nodes: Final = cluster_kwargs.pop("startup_nodes", [])
+            cluster_kwargs = self.redis_kwargs.copy()
+            startup_nodes = cluster_kwargs.pop("startup_nodes", [])
 
-            new_startup_nodes: Final[list[ClusterNode]] = []
+            new_startup_nodes: List[ClusterNode] = []
             for item in startup_nodes:
                 new_startup_nodes.append(ClusterNode(**item))
 
             # Create a fresh Redis Cluster client with current settings
-            redis_client: Final = redis_async.RedisCluster(
+            redis_client = redis_async.RedisCluster(
                 startup_nodes=new_startup_nodes,
-                **cluster_kwargs,
+                **cluster_kwargs,  # type: ignore
             )
 
             # Test the connection
-            ping_result: Final = await redis_client.ping()
+            ping_result = await redis_client.ping()  # type: ignore[attr-defined, misc]
 
             # Close the connection
-            await redis_client.aclose()
+            await redis_client.aclose()  # type: ignore[attr-defined]
 
             if ping_result:
                 return {
@@ -100,9 +100,9 @@ class RedisClusterCache(RedisCache):
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.error("Redis Cluster connection test failed: %s", e)
+            verbose_logger.error(f"Redis Cluster connection test failed: {str(e)}")
             return {
                 "status": "failed",
-                "message": f"Redis Cluster connection failed: {e}",
+                "message": f"Redis Cluster connection failed: {str(e)}",
                 "error": str(e),
             }

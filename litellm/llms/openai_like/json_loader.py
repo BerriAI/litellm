@@ -4,7 +4,7 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 
 import json
 from pathlib import Path
-from typing import Final
+from typing import Dict, Optional
 
 from litellm._logging import verbose_logger
 
@@ -27,7 +27,7 @@ class SimpleProviderConfig:
 class JSONProviderRegistry:
     """Load providers from JSON once on import"""
 
-    _providers: dict[str, SimpleProviderConfig] = {}
+    _providers: Dict[str, SimpleProviderConfig] = {}
     _loaded = False
 
     @classmethod
@@ -36,7 +36,7 @@ class JSONProviderRegistry:
         if cls._loaded:
             return
 
-        json_path: Final = Path(__file__).parent / "providers.json"
+        json_path = Path(__file__).parent / "providers.json"
 
         if not json_path.exists():
             # No JSON file yet, that's okay
@@ -45,18 +45,18 @@ class JSONProviderRegistry:
 
         try:
             with open(json_path) as f:
-                data: Final = json.load(f)
+                data = json.load(f)
 
             for slug, config in data.items():
                 cls._providers[slug] = SimpleProviderConfig(slug, config)
 
             cls._loaded = True
         except Exception as e:
-            verbose_logger.warning("Warning: Failed to load JSON provider configs: %s", e)
+            verbose_logger.warning(f"Warning: Failed to load JSON provider configs: {e}")
             cls._loaded = True
 
     @classmethod
-    def get(cls, slug: str) -> SimpleProviderConfig | None:
+    def get(cls, slug: str) -> Optional[SimpleProviderConfig]:
         """Get a provider configuration by slug"""
         return cls._providers.get(slug)
 
@@ -68,7 +68,7 @@ class JSONProviderRegistry:
     @classmethod
     def supports_responses_api(cls, slug: str) -> bool:
         """Check if a JSON provider supports the Responses API"""
-        provider: Final = cls._providers.get(slug)
+        provider = cls._providers.get(slug)
         if provider is None:
             return False
         return "/v1/responses" in provider.supported_endpoints

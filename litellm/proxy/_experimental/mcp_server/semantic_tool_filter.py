@@ -5,12 +5,11 @@ Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
-from litellm.proxy._experimental.mcp_server.faults import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
 if TYPE_CHECKING:
@@ -35,15 +34,18 @@ class SemanticToolFilterContextWindowError(Exception):
         )
 
 
-def _is_context_window_error(error: BaseException | None) -> bool:
-    """Detect a context-window overflow anywhere in an exception's tree."""
-    if error is None:
-        return False
-    return any(
-        isinstance(current, ContextWindowExceededError)
-        or ExceptionCheckers.is_error_str_context_window_exceeded(str(current))
-        for current in iter_exception_tree(error)
-    )
+def _is_context_window_error(error: Optional[BaseException], max_depth: int = 5) -> bool:
+    """Detect a context-window overflow anywhere in an exception's cause chain."""
+    current = error
+    for _ in range(max_depth):
+        if current is None:
+            return False
+        if isinstance(current, ContextWindowExceededError):
+            return True
+        if ExceptionCheckers.is_error_str_context_window_exceeded(str(current)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class SemanticMCPToolFilter:
@@ -72,9 +74,9 @@ class SemanticMCPToolFilter:
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
         self.router_instance = litellm_router_instance
-        self.tool_router: SemanticRouter | None = None
-        self.context_window_error: str | None = None
-        self._tool_map: dict[str, Any] = {}  # MCPTool objects or OpenAI function dicts
+        self.tool_router: Optional["SemanticRouter"] = None
+        self.context_window_error: Optional[str] = None
+        self._tool_map: Dict[str, Any] = {}  # MCPTool objects or OpenAI function dicts
         self._index_sync_lock = asyncio.Lock()
 
     async def build_router_from_mcp_registry(self) -> None:
@@ -85,20 +87,20 @@ class SemanticMCPToolFilter:
 
         try:
             # Get all servers from registry without auth checks
-            registry: Final = global_mcp_server_manager.get_registry()
+            registry = global_mcp_server_manager.get_registry()
             if not registry:
                 verbose_logger.warning("MCP registry is empty")
                 self.tool_router = None
                 return
 
             # Fetch tools from all servers in parallel
-            all_tools: Final = []
+            all_tools = []
             for server_id, server in registry.items():
                 try:
                     tools = await global_mcp_server_manager.get_tools_for_server(server_id)
                     all_tools.extend(tools)
                 except Exception as e:
-                    verbose_logger.warning("Failed to fetch tools from server %s: %s", server_id, e)
+                    verbose_logger.warning(f"Failed to fetch tools from server {server_id}: {e}")
                     continue
 
             if not all_tools:
@@ -106,11 +108,11 @@ class SemanticMCPToolFilter:
                 self.tool_router = None
                 return
 
-            verbose_logger.info("Fetched %s tools from %s MCP servers", len(all_tools), len(registry))
+            verbose_logger.info(f"Fetched {len(all_tools)} tools from {len(registry)} MCP servers")
             self._build_router(all_tools)
 
         except Exception as e:
-            verbose_logger.error("Failed to build router from MCP registry: %s", e)
+            verbose_logger.error(f"Failed to build router from MCP registry: {e}")
             self.tool_router = None
             raise
 
@@ -130,7 +132,7 @@ class SemanticMCPToolFilter:
 
         return name, description
 
-    def _build_router(self, tools: list) -> None:
+    def _build_router(self, tools: List) -> None:
         """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""
         from semantic_router.routers import SemanticRouter
         from semantic_router.routers.base import Route
@@ -146,7 +148,7 @@ class SemanticMCPToolFilter:
         try:
             self.context_window_error = None
             # Convert tools to routes
-            routes: Final = []
+            routes = []
             self._tool_map = {}
 
             for tool in tools:
@@ -172,10 +174,10 @@ class SemanticMCPToolFilter:
                 auto_sync="local",
             )
 
-            verbose_logger.info("Built semantic router with %s tools", len(routes))
+            verbose_logger.info(f"Built semantic router with {len(routes)} tools")
 
         except Exception as e:
-            verbose_logger.error("Failed to build semantic router: %s", e)
+            verbose_logger.error(f"Failed to build semantic router: {e}")
             self.tool_router = None
             if _is_context_window_error(e):
                 self.context_window_error = str(e)
@@ -221,12 +223,12 @@ class SemanticMCPToolFilter:
             return
 
         async with self._index_sync_lock:
-            missing: Final = self._tools_missing_from_index(available_tools)
+            missing = self._tools_missing_from_index(available_tools)
             if not missing:
                 return
 
-            descriptions: Final = {name: self._extract_tool_info(tool)[1] for name, tool in missing.items()}
-            routes: Final = [
+            descriptions = {name: self._extract_tool_info(tool)[1] for name, tool in missing.items()}
+            routes = [
                 Route(
                     name=name,
                     description=description,
@@ -237,7 +239,7 @@ class SemanticMCPToolFilter:
             ]
 
             if self.tool_router is None:
-                router: Final = SemanticRouter(
+                router = SemanticRouter(
                     routes=[],
                     encoder=LiteLLMRouterEncoder(
                         litellm_router_instance=self.router_instance,
@@ -254,15 +256,15 @@ class SemanticMCPToolFilter:
 
             self._tool_map.update(missing)
             verbose_logger.info(
-                "Semantic tool filter indexed %s request-time tools missing from the startup index", len(routes)
+                f"Semantic tool filter indexed {len(routes)} request-time tools missing from the startup index"
             )
 
     async def filter_tools(
         self,
         query: str,
-        available_tools: list[Any],
-        top_k: int | None = None,
-    ) -> list[Any]:
+        available_tools: List[Any],
+        top_k: Optional[int] = None,
+    ) -> List[Any]:
         """
         Filter tools semantically based on query.
 
@@ -299,19 +301,20 @@ class SemanticMCPToolFilter:
                 verbose_logger.warning("Semantic router could not be built from the request's tools")
                 return available_tools
 
-            available_names: Final = [name for name in (self._extract_tool_info(t)[0] for t in available_tools) if name]
+            available_names = [name for name in (self._extract_tool_info(t)[0] for t in available_tools) if name]
             if not available_names:
                 return available_tools
 
-            limit: Final = top_k or self.top_k
-            self.tool_router.top_k = max(self.tool_router.top_k, limit)
-            matches: Final = self.tool_router(text=query, limit=limit, route_filter=available_names)
-            matched_tool_names: Final = self._extract_tool_names_from_matches(matches)
+            limit = top_k or self.top_k
+            if self.tool_router.top_k < limit:
+                self.tool_router.top_k = limit
+            matches = self.tool_router(text=query, limit=limit, route_filter=available_names)
+            matched_tool_names = self._extract_tool_names_from_matches(matches)
 
             if not matched_tool_names:
                 return available_tools
 
-            filtered_tools: Final = self._get_tools_by_names(matched_tool_names, available_tools)
+            filtered_tools = self._get_tools_by_names(matched_tool_names, available_tools)
             if not filtered_tools:
                 return available_tools
             return filtered_tools
@@ -321,8 +324,7 @@ class SemanticMCPToolFilter:
         except Exception as e:
             if _is_context_window_error(e):
                 verbose_logger.error(
-                    "Semantic tool filter embedding exceeded its context window: %s",
-                    e,
+                    f"Semantic tool filter embedding exceeded its context window: {e}",
                     exc_info=True,
                 )
                 raise SemanticToolFilterContextWindowError(
@@ -330,10 +332,10 @@ class SemanticMCPToolFilter:
                     stage="the user query or the MCP tool descriptions being indexed",
                     original_error=str(e),
                 ) from e
-            verbose_logger.error("Semantic tool filter failed: %s", e, exc_info=True)
+            verbose_logger.error(f"Semantic tool filter failed: {e}", exc_info=True)
             return available_tools
 
-    def _extract_tool_names_from_matches(self, matches) -> list[str]:
+    def _extract_tool_names_from_matches(self, matches) -> List[str]:
         """Extract tool names from semantic router match results."""
         if not matches:
             return []
@@ -382,10 +384,10 @@ class SemanticMCPToolFilter:
             return False
         if not client_name.endswith(canonical):
             return False
-        separator: Final = client_name[-len(canonical) - 1]
+        separator = client_name[-len(canonical) - 1]
         return separator in ("_", "-")
 
-    def _get_tools_by_names(self, tool_names: list[str], available_tools: list[Any]) -> list[Any]:
+    def _get_tools_by_names(self, tool_names: List[str], available_tools: List[Any]) -> List[Any]:
         """
         Get tools from available_tools by their names, preserving the
         semantic router's ordering.
@@ -401,14 +403,14 @@ class SemanticMCPToolFilter:
         # Exact matches win over suffix matches when both are present, and
         # each incoming tool is returned at most once even if two canonical
         # names happen to be tail-compatible with the same incoming name.
-        available_by_name: Final[dict[str, Any]] = {}
+        available_by_name: Dict[str, Any] = {}
         for tool in available_tools:
             client_name, _ = self._extract_tool_info(tool)
             if client_name and client_name not in available_by_name:
                 available_by_name[client_name] = tool
 
-        matched: Final[list[Any]] = []
-        used_ids: Final[set] = set()
+        matched: List[Any] = []
+        used_ids: set = set()
         for canonical in tool_names:
             tool = available_by_name.get(canonical)
             if tool is None:
@@ -417,7 +419,7 @@ class SemanticMCPToolFilter:
                 # "my_search" and "my_tag_search" both end in "search"),
                 # the one closest in length to the canonical is the
                 # least-wrapped and most likely the intended target.
-                best_name: str | None = None
+                best_name: Optional[str] = None
                 for client_name in available_by_name:
                     if not self._name_matches_canonical(client_name, canonical):
                         continue
@@ -430,7 +432,7 @@ class SemanticMCPToolFilter:
                 used_ids.add(id(tool))
         return matched
 
-    def extract_user_query(self, messages: list[dict[str, Any]]) -> str:
+    def extract_user_query(self, messages: List[Dict[str, Any]]) -> str:
         """
         Extract user query from messages for /chat/completions or /responses.
 

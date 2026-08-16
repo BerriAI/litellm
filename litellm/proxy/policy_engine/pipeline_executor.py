@@ -6,7 +6,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
 import time
-from typing import Any, Final, Literal
+from typing import Any, List, Literal, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -27,7 +27,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
 try:
     from fastapi.exceptions import HTTPException
 except ImportError:
-    HTTPException = None
+    HTTPException = None  # type: ignore
 
 
 class PipelineExecutor:
@@ -35,7 +35,7 @@ class PipelineExecutor:
 
     @staticmethod
     async def execute_steps(
-        steps: list[PipelineStep],
+        steps: List[PipelineStep],
         mode: str,
         data: dict,
         user_api_key_dict: Any,
@@ -56,7 +56,7 @@ class PipelineExecutor:
         Returns:
             PipelineExecutionResult with terminal action and step results
         """
-        step_results: Final[list[PipelineStepResult]] = []
+        step_results: List[PipelineStepResult] = []
         working_data = data.copy()
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
@@ -92,12 +92,7 @@ class PipelineExecutor:
             step_results.append(step_result)
 
             verbose_proxy_logger.debug(
-                "Pipeline '%s' step %s: guardrail=%s, outcome=%s, action=%s",
-                policy_name,
-                i,
-                step.guardrail,
-                outcome,
-                action,
+                f"Pipeline '{policy_name}' step {i}: guardrail={step.guardrail}, outcome={outcome}, action={action}"
             )
 
             # Forward modified data to next step if pass_data is True
@@ -145,9 +140,9 @@ class PipelineExecutor:
         call_type: str,
     ) -> tuple[
         Literal["pass", "fail", "error"],
-        dict | None,
-        str | None,
-        Exception | None,
+        Optional[dict],
+        Optional[str],
+        Optional[Exception],
     ]:
         """
         Run a single pipeline step's guardrail.
@@ -161,9 +156,9 @@ class PipelineExecutor:
               pipeline can re-raise it verbatim and match the direct-attachment
               response/trace, else None
         """
-        callback: Final = PipelineExecutor.find_guardrail_callback(step.guardrail)
+        callback = PipelineExecutor.find_guardrail_callback(step.guardrail)
         if callback is None:
-            verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
+            verbose_proxy_logger.warning(f"Pipeline: guardrail '{step.guardrail}' not found in callbacks")
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
         try:
@@ -174,7 +169,7 @@ class PipelineExecutor:
 
             # Use unified_guardrail path if callback implements apply_guardrail
             target: CustomLogger = callback
-            use_unified: Final = "apply_guardrail" in type(callback).__dict__
+            use_unified = "apply_guardrail" in type(callback).__dict__
             if use_unified:
                 data["guardrail_to_apply"] = callback
                 target = UnifiedLLMGuardrails()
@@ -182,9 +177,9 @@ class PipelineExecutor:
             if mode == "pre_call":
                 response = await target.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
-                    cache=None,
+                    cache=None,  # type: ignore
                     data=data,
-                    call_type=call_type,
+                    call_type=call_type,  # type: ignore
                 )
                 if isinstance(callback, CustomGuardrail):
                     callback.mark_pre_call_hook_ran(data)
@@ -194,7 +189,7 @@ class PipelineExecutor:
                 response = await target.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
                     data=data,
-                    response=data.get("response"),
+                    response=data.get("response"),  # type: ignore
                 )
             else:
                 return ("error", None, f"Unsupported pipeline mode: {mode}", None)
@@ -207,14 +202,14 @@ class PipelineExecutor:
 
         except Exception as e:
             if CustomGuardrail._is_guardrail_intervention(e):
-                error_msg: Final = _extract_error_message(e)
+                error_msg = _extract_error_message(e)
                 return ("fail", None, error_msg, e)
             else:
-                verbose_proxy_logger.error("Pipeline: unexpected error from guardrail '%s': %s", step.guardrail, e)
+                verbose_proxy_logger.error(f"Pipeline: unexpected error from guardrail '{step.guardrail}': {e}")
                 return ("error", None, str(e), e)
 
     @staticmethod
-    def find_guardrail_callback(guardrail_name: str) -> CustomGuardrail | None:
+    def find_guardrail_callback(guardrail_name: str) -> Optional[CustomGuardrail]:
         """Look up an initialized guardrail callback by name from litellm.callbacks."""
         for callback in litellm.callbacks:
             if isinstance(callback, CustomGuardrail):
@@ -245,7 +240,7 @@ def _extract_error_message(e: Exception) -> str:
     if isinstance(e, ModifyResponseException):
         return str(e)
     if HTTPException is not None and isinstance(e, HTTPException):
-        detail: Final = getattr(e, "detail", None)
+        detail = getattr(e, "detail", None)
         if detail:
             return str(detail)
     return str(e)

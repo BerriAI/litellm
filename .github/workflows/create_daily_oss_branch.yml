@@ -1,0 +1,61 @@
+name: Create Daily OSS Branch
+
+on:
+  schedule:
+    - cron: "0 16 * * 1-5" # 9am PT during daylight saving time, weekdays.
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Branch date in YYYY_MM_DD format. Defaults to today's UTC date."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  create-oss-branch:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create dated OSS branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED_DATE: ${{ inputs.date }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${REQUESTED_DATE}" ]; then
+            if ! echo "${REQUESTED_DATE}" | grep -Eq '^[0-9]{4}_[0-9]{2}_[0-9]{2}$'; then
+              echo "::error::date must use YYYY_MM_DD format, got '${REQUESTED_DATE}'"
+              exit 1
+            fi
+            BRANCH_DATE="${REQUESTED_DATE}"
+          else
+            BRANCH_DATE="$(date -u +'%Y_%m_%d')"
+          fi
+
+          BRANCH_NAME="litellm_oss_daily_${BRANCH_DATE}"
+          echo "Creating branch: ${BRANCH_NAME}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main "${BRANCH_NAME}" || true
+
+          if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}"; then
+            echo "Branch ${BRANCH_NAME} already exists. Skipping creation."
+            exit 0
+          fi
+
+          git checkout -b "${BRANCH_NAME}" origin/main
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
+          echo "Successfully created and pushed branch: ${BRANCH_NAME}"

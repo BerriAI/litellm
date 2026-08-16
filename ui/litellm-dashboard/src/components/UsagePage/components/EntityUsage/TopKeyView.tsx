@@ -1,6 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { BarChart } from "@/components/shared/charts";
-import { DataTable } from "@/components/shared/DataTable";
 import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
 import { Segmented, Tooltip } from "antd";
@@ -9,6 +8,7 @@ import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
 import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
+import { DataTable } from "../../../view_logs/table";
 import { TagUsage } from "../../types";
 
 interface TopKeyViewProps {
@@ -20,7 +20,7 @@ interface TopKeyViewProps {
 }
 
 const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false, topKeysLimit, setTopKeysLimit }) => {
-  const { accessToken } = useAuthorized();
+  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
@@ -232,7 +232,9 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
           />
         </div>
       ) : (
-        <DataTable columns={columns} data={topKeys} isLoading={false} maxBodyHeight={600} size="compact" />
+        <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
+          <DataTable columns={columns} data={topKeys} isLoading={false} />
+        </div>
       )}
 
       {isModalOpen && selectedKey && keyData && (

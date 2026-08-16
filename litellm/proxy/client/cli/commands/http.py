@@ -1,9 +1,9 @@
 import json as json_lib
-from typing import Final
+from typing import Optional
 
 import click
-import requests
 import rich
+import requests
 
 from ...http_client import HTTPClient
 
@@ -11,6 +11,7 @@ from ...http_client import HTTPClient
 @click.group()
 def http():
     """Make HTTP requests to the LiteLLM proxy server"""
+    pass
 
 
 @http.command()
@@ -39,8 +40,8 @@ def request(
     ctx: click.Context,
     method: str,
     uri: str,
-    data: str | None = None,
-    json: str | None = None,
+    data: Optional[str] = None,
+    json: Optional[str] = None,
     header: tuple[str, ...] = (),
 ):
     """Make an HTTP request to the LiteLLM proxy server
@@ -54,7 +55,7 @@ def request(
         litellm http request GET /health/test_connection -H "X-Custom-Header:value"
     """
     # Parse headers from key:value format
-    headers: Final = {}
+    headers = {}
     for h in header:
         try:
             key, value = h.split(":", 1)
@@ -79,9 +80,9 @@ def request(
             # If not JSON, use as raw data
             request_data = data
 
-    client: Final = HTTPClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    client = HTTPClient(ctx.obj["base_url"], ctx.obj["api_key"])
     try:
-        response: Final = client.request(
+        response = client.request(
             method=method,
             uri=uri,
             data=request_data,
@@ -92,7 +93,7 @@ def request(
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body: Final = e.response.json()
+            error_body = e.response.json()
             rich.print_json(data=error_body)
         except json_lib.JSONDecodeError:
             click.echo(e.response.text, err=True)

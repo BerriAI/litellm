@@ -1,59 +1,37 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { renderWithProviders as render } from "@/../tests/test-utils";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
-import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 
+// Mock the fetchAvailableModels function
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 
-vi.mock("@/components/llm_calls/chat_completion", () => ({
-  makeOpenAIChatCompletionRequest: vi.fn().mockResolvedValue(undefined),
-}));
-
+// Mock other networking functions that cause errors
 vi.mock("@/components/networking", () => ({
-  tagListCall: vi.fn().mockResolvedValue({}),
+  tagListCall: vi.fn().mockResolvedValue({ data: [] }),
   vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
   getGuardrailsList: vi.fn().mockResolvedValue({ data: [] }),
-  getPoliciesList: vi.fn().mockResolvedValue({ data: [] }),
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
-  fetchMCPServers: vi.fn().mockResolvedValue([]),
-  fetchMCPToolsets: vi.fn().mockResolvedValue([]),
-  listMCPTools: vi.fn().mockResolvedValue({ tools: [] }),
-  callMCPTool: vi.fn(),
 }));
 
+// Mock scrollIntoView which is not available in jsdom
 beforeEach(() => {
   Element.prototype.scrollIntoView = () => {};
 });
 
-const CHAT_REQUEST_ARG_COUNT = 26;
-const STREAMING_ENABLED_ARG_INDEX = 25;
-
-async function openComboboxByPlaceholder(placeholder: string) {
-  const user = userEvent.setup();
-  const combobox = screen.getByPlaceholderText(placeholder);
-  await user.click(combobox);
-  return combobox;
-}
-
-async function selectComboboxOption(placeholder: string, optionLabel: string) {
-  const user = userEvent.setup();
-  await openComboboxByPlaceholder(placeholder);
-  const option = await screen.findByText(optionLabel);
-  await user.click(option);
-}
-
 describe("ChatUI", () => {
   beforeEach(() => {
+    // Reset mocks before each test
     vi.clearAllMocks();
     sessionStorage.clear();
+
+    // Mock scrollIntoView which is not available in JSDOM
     Element.prototype.scrollIntoView = vi.fn();
 
-    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+    // Mock the fetchAvailableModels to return test models
+    (fetchModelsModule.fetchAvailableModels as any).mockResolvedValue([
       { model_group: "Model 1", mode: "chat" },
       { model_group: "Model 2", mode: "chat" },
       { model_group: "Model 3", mode: "chat" },
@@ -61,7 +39,7 @@ describe("ChatUI", () => {
   });
 
   it("should render the chat UI", async () => {
-    render(
+    const { getByText } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -70,11 +48,11 @@ describe("ChatUI", () => {
         disabledPersonalKeyCreation={false}
       />,
     );
-    expect(screen.getByText("Test Key")).toBeInTheDocument();
+    expect(getByText("Test Key")).toBeInTheDocument();
   });
 
   it("should show the voice selector when the endpoint type is audio_speech", async () => {
-    render(
+    const { getByText, container } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -84,20 +62,47 @@ describe("ChatUI", () => {
       />,
     );
 
+    // Wait for the component to render
     await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
+      expect(getByText("Test Key")).toBeInTheDocument();
     });
 
-    await selectComboboxOption("Select an endpoint", "/v1/audio/speech");
+    // Find the endpoint selector by looking for the "Endpoint Type:" text and its associated Select
+    const endpointTypeText = getByText("Endpoint Type");
+    const selectContainer = endpointTypeText.parentElement;
+    const selectElement = selectContainer?.querySelector(".ant-select-selector");
 
+    expect(selectElement).toBeInTheDocument();
+
+    // Click on the select to open the dropdown
+    if (selectElement) {
+      fireEvent.mouseDown(selectElement);
+    }
+
+    // Wait for the dropdown to appear and find the audio_speech option
     await waitFor(() => {
-      expect(screen.getByText("Voice")).toBeInTheDocument();
-      expect(screen.getByLabelText("Voice")).toBeInTheDocument();
+      const audioSpeechOption = screen.getByText("/v1/audio/speech");
+      expect(audioSpeechOption).toBeInTheDocument();
     });
+
+    // Click on the audio_speech option
+    const audioSpeechOption = screen.getByText("/v1/audio/speech");
+    fireEvent.click(audioSpeechOption);
+
+    // Verify the voice selector appears
+    await waitFor(() => {
+      expect(getByText("Voice")).toBeInTheDocument();
+    });
+
+    // Verify the voice select component is present
+    const voiceText = getByText("Voice");
+    const voiceSelectContainer = voiceText.parentElement;
+    const voiceSelectElement = voiceSelectContainer?.querySelector(".ant-select");
+    expect(voiceSelectElement).toBeInTheDocument();
   });
 
   it("should allow the user to select a model", async () => {
-    render(
+    const { getByText, container } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -107,28 +112,35 @@ describe("ChatUI", () => {
       />,
     );
 
+    // Wait for the component to render
     await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
+      expect(getByText("Test Key")).toBeInTheDocument();
     });
 
-    await openComboboxByPlaceholder("Select a Model");
+    // Open the "Select Model" dropdown (AntD renders options in a portal)
+    const selectModelLabel = getByText("Select Model");
+    // The Select component is a sibling of the Text component, so we need to find it in the parent container
+    const modelSelectContainer = selectModelLabel.closest("div");
+    const modelSelect = modelSelectContainer?.querySelector(".ant-select-selector");
+    expect(modelSelect).toBeTruthy();
+
+    fireEvent.mouseDown(modelSelect!);
 
     await waitFor(() => {
-      expect(screen.getAllByText("Model 1").length).toBeGreaterThan(0);
+      const model1Label = screen.getAllByText("Model 1");
+      expect(model1Label.length).toBeGreaterThan(0);
     });
   });
 
-  it("shows only endpoint-compatible models when chat endpoint is selected", async () => {
-    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+  it("shows only chat-compatible models when chat endpoint is selected", async () => {
+    (fetchModelsModule.fetchAvailableModels as any).mockResolvedValueOnce([
       { model_group: "ChatModel", mode: "chat" },
       { model_group: "SpeechModel", mode: "audio_speech" },
       { model_group: "ImageModel", mode: "image_generation" },
       { model_group: "ResponsesModel", mode: "responses" },
-      { model_group: "RealtimeModel", mode: "realtime" },
-      { model_group: "NoModeModel" },
     ]);
 
-    render(
+    const { getByText, baseElement } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -139,55 +151,43 @@ describe("ChatUI", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
+      expect(getByText("Test Key")).toBeInTheDocument();
     });
 
-    await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
-    await openComboboxByPlaceholder("Select a Model");
+    // Open endpoint selector and explicitly select /v1/chat/completions
+    const endpointTypeText = getByText("Endpoint Type");
+    const endpointSelect = endpointTypeText.parentElement?.querySelector(".ant-select-selector");
+    expect(endpointSelect).toBeTruthy();
+    act(() => {
+      fireEvent.mouseDown(endpointSelect!);
+      fireEvent.click(screen.getByText("/v1/chat/completions"));
+    });
+
+    // Open model selector
+    const selectModelLabel = getByText("Select Model");
+    // The Select component is a sibling of the Text component, so we need to find it in the parent container
+    const modelSelectContainer = selectModelLabel.closest("div");
+    const modelSelect = modelSelectContainer?.querySelector(".ant-select-selector");
+    expect(modelSelect).toBeTruthy();
+    act(() => {
+      fireEvent.mouseDown(modelSelect!);
+    });
 
     await waitFor(() => {
+      // Chat-compatible: ChatModel should be visible
       expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("NoModeModel").length).toBeGreaterThan(0);
       expect(screen.queryByText("SpeechModel")).toBeNull();
       expect(screen.queryByText("ImageModel")).toBeNull();
       expect(screen.queryByText("ResponsesModel")).toBeNull();
-      expect(screen.queryByText("RealtimeModel")).toBeNull();
     });
   });
 
-  it("shows only realtime models when realtime endpoint is selected", async () => {
-    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      { model_group: "ChatModel", mode: "chat" },
-      { model_group: "RealtimeModel", mode: "realtime" },
-      { model_group: "NoModeModel" },
-    ]);
-
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
-    });
-
-    await selectComboboxOption("Select an endpoint", "/v1/realtime");
-    await openComboboxByPlaceholder("Select a Model");
-
-    await waitFor(() => {
-      expect(screen.getAllByText("RealtimeModel").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("NoModeModel").length).toBeGreaterThan(0);
-      expect(screen.queryByText("ChatModel")).toBeNull();
-    });
-  });
-
+  /**
+   * Tests that the 'Enter custom model' option is available in the model selector dropdown.
+   * This ensures users can manually enter a model name if it's not in the list.
+   */
   it("should show 'Enter custom model' option in model selector", async () => {
-    render(
+    const { getByText } = render(
       <ChatUI
         accessToken="1234567890"
         token="1234567890"
@@ -197,14 +197,24 @@ describe("ChatUI", () => {
       />,
     );
 
+    // Wait for the component to render
     await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
+      expect(getByText("Test Key")).toBeInTheDocument();
     });
 
-    await openComboboxByPlaceholder("Select a Model");
+    // Open the "Select Model" dropdown
+    const selectModelLabel = getByText("Select Model");
+    const modelSelectContainer = selectModelLabel.closest("div");
+    const modelSelect = modelSelectContainer?.querySelector(".ant-select-selector");
+
+    fireEvent.mouseDown(modelSelect!);
 
     await waitFor(() => {
-      expect(screen.getByText("Enter custom model")).toBeInTheDocument();
+      // Get all options in the dropdown (Ant Design renders these in a portal)
+      const options = document.querySelectorAll(".ant-select-item-option-content");
+      expect(options.length).toBeGreaterThan(0);
+      // Check if the first option is 'Enter custom model'
+      expect(options[0]).toHaveTextContent("Enter custom model");
     });
   });
 
@@ -223,23 +233,44 @@ describe("ChatUI", () => {
       expect(screen.getByText("Test Key")).toBeInTheDocument();
     });
 
-    const mcpInput = () => screen.getByLabelText("Select MCP servers");
+    const endpointTypeText = screen.getByText("Endpoint Type");
+    const endpointSelect = endpointTypeText.parentElement?.querySelector(".ant-select-selector") as HTMLElement | null;
+    expect(endpointSelect).not.toBeNull();
 
-    await selectComboboxOption("Select an endpoint", "/v1/embeddings");
+    const selectEndpointOption = async (label: string) => {
+      act(() => {
+        fireEvent.mouseDown(endpointSelect!);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText(label)).toBeInTheDocument();
+      });
+
+      act(() => {
+        fireEvent.click(screen.getByText(label));
+      });
+    };
+
+    const getMcpSelect = () =>
+      screen.getByText("MCP Servers").closest("div")?.querySelector(".ant-select") as HTMLElement | null;
+
+    await selectEndpointOption("/v1/embeddings");
+
+    const mcpSelect = getMcpSelect();
+    expect(mcpSelect).not.toBeNull();
 
     await waitFor(() => {
-      expect(mcpInput()).toBeDisabled();
+      expect(mcpSelect).toHaveClass("ant-select-disabled");
     });
 
-    await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
+    await selectEndpointOption("/v1/chat/completions");
 
     await waitFor(() => {
-      expect(mcpInput()).not.toBeDisabled();
+      expect(mcpSelect).not.toHaveClass("ant-select-disabled");
     });
   });
 
   it("should show Simulate failure to test fallbacks in Model Settings when chat endpoint is selected", async () => {
-    const user = userEvent.setup();
     render(
       <ChatUI
         accessToken="1234567890"
@@ -254,13 +285,35 @@ describe("ChatUI", () => {
       expect(screen.getByText("Test Key")).toBeInTheDocument();
     });
 
-    await selectComboboxOption("Select a Model", "Model 1");
+    // Model Settings button only appears when a chat model is selected; select "Model 1" first
+    const selectModelLabel = screen.getByText("Select Model");
+    const modelSelectContainer = selectModelLabel.closest("div");
+    const modelSelect = modelSelectContainer?.querySelector(".ant-select-selector");
+    expect(modelSelect).toBeTruthy();
 
-    await waitFor(() => {
-      expect(screen.getByTestId("model-settings-button")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.mouseDown(modelSelect!);
     });
 
-    await user.click(screen.getByTestId("model-settings-button"));
+    await waitFor(() => {
+      expect(screen.getAllByText("Model 1").length).toBeGreaterThan(0);
+    });
+
+    // Ant Design Select options may not have role="option"; click the dropdown option by text
+    const model1Options = screen.getAllByText("Model 1");
+    await act(async () => {
+      fireEvent.click(model1Options[model1Options.length - 1]);
+    });
+
+    await waitFor(() => {
+      const modelSettingsButton = screen.getByTestId("model-settings-button");
+      expect(modelSettingsButton).toBeInTheDocument();
+    });
+
+    const modelSettingsButton = screen.getByTestId("model-settings-button");
+    await act(async () => {
+      fireEvent.click(modelSettingsButton);
+    });
 
     await waitFor(() => {
       expect(screen.getByText("Model Settings")).toBeInTheDocument();
@@ -272,132 +325,13 @@ describe("ChatUI", () => {
     });
     expect(fallbacksCheckbox).not.toBeChecked();
 
-    await user.click(fallbacksCheckbox);
+    await act(async () => {
+      fireEvent.click(fallbacksCheckbox);
+    });
 
     await waitFor(() => {
       expect(screen.getByRole("checkbox", { name: /Simulate failure to test fallbacks/i })).toBeChecked();
     });
-  });
-
-  it("should send the chat request non-streaming after Stream responses is unchecked", async () => {
-    const user = userEvent.setup();
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
-    });
-
-    await selectComboboxOption("Select a Model", "Model 1");
-
-    await waitFor(() => {
-      expect(screen.getByTestId("model-settings-button")).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByTestId("model-settings-button"));
-
-    const streamingCheckbox = await screen.findByRole("checkbox", { name: /Stream responses/i });
-    expect(streamingCheckbox).toBeChecked();
-
-    await user.click(streamingCheckbox);
-
-    await waitFor(() => {
-      expect(screen.getByRole("checkbox", { name: /Stream responses/i })).not.toBeChecked();
-    });
-
-    const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
-    await act(async () => {
-      fireEvent.change(messageInput, { target: { value: "hello" } });
-    });
-    await act(async () => {
-      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
-    });
-
-    await waitFor(() => {
-      expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
-    });
-
-    const requestArgs = vi.mocked(makeOpenAIChatCompletionRequest).mock.calls[0];
-    expect(requestArgs).toHaveLength(CHAT_REQUEST_ARG_COUNT);
-    expect(requestArgs[STREAMING_ENABLED_ARG_INDEX]).toBe(false);
-  });
-
-  it("should force streaming in simplified mode even when the playground setting is off", async () => {
-    sessionStorage.setItem("streamingEnabled", "false");
-
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-        simplified
-        fixedModel="Model 1"
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Chat")).toBeInTheDocument();
-    });
-
-    const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
-    await act(async () => {
-      fireEvent.change(messageInput, { target: { value: "hello" } });
-    });
-    await act(async () => {
-      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
-    });
-
-    await waitFor(() => {
-      expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
-    });
-
-    const requestArgs = vi.mocked(makeOpenAIChatCompletionRequest).mock.calls[0];
-    expect(requestArgs).toHaveLength(CHAT_REQUEST_ARG_COUNT);
-    expect(requestArgs[STREAMING_ENABLED_ARG_INDEX]).toBe(true);
-    expect(sessionStorage.getItem("streamingEnabled")).toBe("false");
-  });
-
-  it("should offer the streaming toggle for a responses-only model without advanced params", async () => {
-    const user = userEvent.setup();
-    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { model_group: "ResponsesModel", mode: "responses" },
-    ]);
-
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
-    });
-
-    await selectComboboxOption("Select an endpoint", "/v1/responses");
-    await selectComboboxOption("Select a Model", "ResponsesModel");
-
-    await waitFor(() => {
-      expect(screen.getByTestId("model-settings-button")).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByTestId("model-settings-button"));
-
-    expect(await screen.findByRole("checkbox", { name: /Stream responses/i })).toBeChecked();
-    expect(screen.queryByText("Temperature")).not.toBeInTheDocument();
-    expect(screen.queryByText("Use Advanced Parameters")).not.toBeInTheDocument();
   });
 
   it("should show Fill button and populate customProxyBaseUrl when proxySettings.LITELLM_UI_API_DOC_BASE_URL is provided", async () => {
@@ -442,7 +376,6 @@ describe("ChatUI", () => {
   });
 
   it("should enable search functionality for MCP server selector", async () => {
-    const user = userEvent.setup();
     render(
       <ChatUI
         accessToken="1234567890"
@@ -457,161 +390,27 @@ describe("ChatUI", () => {
       expect(screen.getByText("Test Key")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    const mcpServersText = screen.queryByText("MCP Servers");
+    expect(mcpServersText).toBeInTheDocument();
 
-    const mcpInput = screen.getByLabelText("Select MCP servers");
-    expect(mcpInput).toBeInTheDocument();
-    expect(mcpInput).not.toBeDisabled();
+    if (mcpServersText) {
+      const selectContainer = mcpServersText.parentElement?.nextElementSibling;
+      const selectElement = selectContainer?.querySelector(".ant-select-selector");
+      expect(selectElement).toBeInTheDocument();
 
-    await user.click(mcpInput);
+      if (selectElement) {
+        fireEvent.mouseDown(selectElement);
 
-    await waitFor(() => {
-      expect(screen.getByText("All MCP Servers")).toBeInTheDocument();
-    });
-  });
+        await waitFor(() => {
+          const allServersOption = screen.queryByText("All MCP Servers");
+          if (allServersOption) {
+            expect(allServersOption).toBeInTheDocument();
+          }
+        });
 
-  it("should keep the chosen endpoint when a model that endpoint can serve is picked", async () => {
-    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      { model_group: "ChatModel", mode: "chat" },
-    ]);
-
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
-    });
-
-    await selectComboboxOption("Select an endpoint", "/v1/responses");
-    await selectComboboxOption("Select a Model", "ChatModel");
-
-    expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("/v1/responses");
-  });
-
-  it("should not offer a model the selected endpoint cannot serve", async () => {
-    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      { model_group: "ChatModel", mode: "chat" },
-      { model_group: "SpeechModel", mode: "audio_speech" },
-    ]);
-
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
-    });
-
-    await selectComboboxOption("Select an endpoint", "/v1/responses");
-    await openComboboxByPlaceholder("Select a Model");
-
-    await waitFor(() => {
-      expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
-    });
-    expect(screen.queryByText("SpeechModel")).toBeNull();
-  });
-
-  it("should attach an audio file dropped on the transcription upload area", async () => {
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
-    });
-
-    await selectComboboxOption("Select an endpoint", "/v1/audio/transcriptions");
-
-    const dropZone = (await screen.findByText("Click or drag audio file to upload")).closest("label");
-    const file = new File(["clip"], "clip.wav", { type: "audio/wav" });
-    fireEvent.drop(dropZone as HTMLElement, { dataTransfer: { files: [file] } });
-
-    expect(await screen.findByText("clip.wav")).toBeInTheDocument();
-  });
-
-  it("should name the virtual key source options instead of showing raw values", async () => {
-    const user = userEvent.setup();
-
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
-    });
-
-    const keySourceTrigger = screen.getByLabelText("Virtual Key Source");
-    expect(keySourceTrigger).toHaveTextContent("Current UI Session");
-    expect(keySourceTrigger).not.toHaveTextContent("session");
-
-    await user.click(keySourceTrigger);
-    await user.click(await screen.findByRole("option", { name: "Virtual Key" }));
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("Virtual Key Source")).toHaveTextContent("Virtual Key");
-    });
-    expect(screen.getByLabelText("Virtual Key Source")).not.toHaveTextContent("custom");
-  });
-
-  it("should re-enable the model selector when the virtual key is cleared mid-load", async () => {
-    const user = userEvent.setup();
-    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockImplementation(
-      () => new Promise(() => {}),
-    );
-
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByLabelText("Virtual Key Source"));
-    await user.click(await screen.findByRole("option", { name: "Virtual Key" }));
-
-    const keyField = await screen.findByPlaceholderText("Enter custom Virtual Key");
-    await user.type(keyField, "sk-test");
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText("Loading models...")).toBeInTheDocument();
-    });
-
-    await user.clear(keyField);
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText("Select a Model")).not.toBeDisabled();
-    });
+        const searchInput = document.querySelector(".ant-select-selection-search-input");
+        expect(searchInput).toBeInTheDocument();
+      }
+    }
   });
 });

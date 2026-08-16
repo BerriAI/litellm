@@ -27,7 +27,6 @@ class FailBeforeFix(str, Enum):
 
 LlmEndpoint = Literal[
     "chat_completions",
-    "completions",
     "messages",
     "responses",
     "embeddings",
@@ -35,15 +34,10 @@ LlmEndpoint = Literal[
     "files",
     "rerank",
     "images_generations",
-    "images_edits",
     "audio_speech",
     "audio_transcriptions",
     "moderations",
     "realtime",
-    "google_native",
-    "vector_stores",
-    "ocr",
-    "bedrock_native",
 ]
 
 LlmRoute = Literal[
@@ -53,21 +47,16 @@ LlmRoute = Literal[
     "bedrock_converse",
     "bedrock_invoke",
     "cohere",
-    "gemini",
-    "hosted_vllm",
     "openai",
     "together_ai",
     "vertex",
 ]
 
 LlmCapability = Literal[
-    "assume_role",
     "basic",
     "count_tokens",
-    "input_validation",
     "long_context_1m",
     "mid_conversation_system",
-    "multi_turn",
     "pdf_input",
     "prompt_cache_1h",
     "prompt_cache_5m",
@@ -79,7 +68,6 @@ LlmCapability = Literal[
     "tool_use",
     "vision",
     "web_search",
-    "web_search_server_tool",
 ]
 
 

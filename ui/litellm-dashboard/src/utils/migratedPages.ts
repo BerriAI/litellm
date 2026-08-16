@@ -44,7 +44,6 @@ export const MIGRATED_PAGES: Record<string, string> = {
   // The modern usage dashboard; the legacy ?page=usage report routes to /old-usage.
   new_usage: "usage",
   usage: "old-usage",
-  "cost-optimization": "cost-optimization",
   agents: "agents",
   "router-settings": "router-settings",
   users: "users",

@@ -1,20 +1,28 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ModelSelector from "./ModelSelector";
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([]),
 }));
 
-const openCustomModelInput = async () => {
-  const user = userEvent.setup();
-  await user.click(screen.getByRole("combobox"));
-  await user.click(await screen.findByText("Enter custom model"));
+const openCustomModelInput = () => {
+  const selector = document.querySelector(".ant-select-selector");
+  expect(selector).toBeTruthy();
+  act(() => {
+    fireEvent.mouseDown(selector!);
+  });
+  act(() => {
+    fireEvent.click(screen.getByText("Enter custom model"));
+  });
   return screen.getByPlaceholderText("Enter custom model name");
 };
 
 describe("ModelSelector custom model debounce", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   afterEach(() => {
     act(() => {
       vi.runOnlyPendingTimers();
@@ -22,12 +30,11 @@ describe("ModelSelector custom model debounce", () => {
     vi.useRealTimers();
   });
 
-  it("does not call onChange before the debounce wait elapses", async () => {
+  it("does not call onChange before the debounce wait elapses", () => {
     const onChange = vi.fn();
     render(<ModelSelector accessToken="test-token" onChange={onChange} />);
 
-    const input = await openCustomModelInput();
-    vi.useFakeTimers();
+    const input = openCustomModelInput();
 
     act(() => {
       fireEvent.change(input, { target: { value: "gpt-4o" } });
@@ -42,12 +49,11 @@ describe("ModelSelector custom model debounce", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("calls onChange exactly once with the last typed value after the wait", async () => {
+  it("calls onChange exactly once with the last typed value after the wait", () => {
     const onChange = vi.fn();
     render(<ModelSelector accessToken="test-token" onChange={onChange} />);
 
-    const input = await openCustomModelInput();
-    vi.useFakeTimers();
+    const input = openCustomModelInput();
 
     act(() => {
       fireEvent.change(input, { target: { value: "g" } });
@@ -65,12 +71,11 @@ describe("ModelSelector custom model debounce", () => {
     expect(onChange).toHaveBeenCalledWith("gpt-5.2");
   });
 
-  it("does not call onChange when unmounted mid-wait", async () => {
+  it("does not call onChange when unmounted mid-wait", () => {
     const onChange = vi.fn();
     const { unmount } = render(<ModelSelector accessToken="test-token" onChange={onChange} />);
 
-    const input = await openCustomModelInput();
-    vi.useFakeTimers();
+    const input = openCustomModelInput();
 
     act(() => {
       fireEvent.change(input, { target: { value: "gpt-4o" } });

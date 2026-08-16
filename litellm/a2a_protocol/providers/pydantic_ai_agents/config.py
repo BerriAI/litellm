@@ -2,8 +2,7 @@
 Pydantic AI provider configuration.
 """
 
-from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, AsyncIterator, Dict, Optional
 
 from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
 from litellm.a2a_protocol.providers.pydantic_ai_agents.handler import PydanticAIHandler
@@ -20,10 +19,10 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
     async def handle_non_streaming(
         self,
         request_id: str,
-        params: dict[str, Any],
-        api_base: str | None = None,
+        params: Dict[str, Any],
+        api_base: Optional[str] = None,
         **kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         """Handle non-streaming request to Pydantic AI agent."""
         if api_base is None:
             raise ValueError("api_base is required for PydanticAIProviderConfig")
@@ -38,10 +37,10 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
     async def handle_streaming(
         self,
         request_id: str,
-        params: dict[str, Any],
-        api_base: str | None = None,
+        params: Dict[str, Any],
+        api_base: Optional[str] = None,
         **kwargs,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[Dict[str, Any]]:
         """Handle streaming request with fake streaming."""
         if not api_base:
             raise ValueError("api_base is required for Pydantic AI agents")

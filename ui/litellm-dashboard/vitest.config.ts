@@ -1,21 +1,9 @@
-import { defineConfig, type Plugin, type ViteUserConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
 import { resolve } from "path";
 
-const staticImageData: Plugin = {
-  name: "next-static-image-data",
-  enforce: "pre",
-  load(id: string) {
-    const path = id.split("?")[0];
-    if (!/\.(svg|png|jpe?g|gif|webp|avif|ico|bmp)$/i.test(path)) return undefined;
-    const name = path.slice(path.lastIndexOf("/") + 1);
-    return `export default { src: ${JSON.stringify(`/_next/static/media/${name}`)}, height: 24, width: 24 };`;
-  },
-};
-
-const config: ViteUserConfig = {
-  plugins: [staticImageData],
+export default defineConfig({
   test: {
-    environment: "./tests/jsdomFetchEnv.ts",
+    environment: "jsdom",
     setupFiles: ["tests/setupTests.ts"],
     globals: true,
     css: true, // lets you import CSS/modules without extra mocks
@@ -29,10 +17,10 @@ const config: ViteUserConfig = {
       exclude: [
         "**/*.d.ts",
         "**/*.test.*",
-        "**/*.test-d.*",
         "**/*.spec.*",
 
         "tests/**",
+        "e2e_tests/**",
 
         "node_modules/**",
         ".next/**",
@@ -44,12 +32,8 @@ const config: ViteUserConfig = {
         "next.config.*",
       ],
     },
-    exclude: ["node_modules/**"],
+    exclude: ["e2e_tests/**", "node_modules/**"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts", "tests/**/*.test.tsx"],
-    typecheck: {
-      include: ["src/**/*.test-d.ts", "src/**/*.test-d.tsx"],
-      ignoreSourceErrors: true,
-    },
   },
   resolve: {
     alias: {
@@ -63,6 +47,4 @@ const config: ViteUserConfig = {
     jsx: "automatic",
     jsxImportSource: "react",
   },
-};
-
-export default defineConfig(config);
+});

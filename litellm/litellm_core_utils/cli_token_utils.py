@@ -8,34 +8,33 @@ This module has no dependencies on proxy code and can be safely imported at the 
 import json
 import os
 import time
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Final
+from typing import Optional
 
 
 def get_cli_token_file_path() -> str:
     """Get the path to the CLI token file"""
-    home_dir: Final = Path.home()
-    config_dir: Final = home_dir / ".litellm"
+    home_dir = Path.home()
+    config_dir = home_dir / ".litellm"
     return str(config_dir / "token.json")
 
 
-def load_cli_token() -> dict | None:
+def load_cli_token() -> Optional[dict]:
     """Load CLI token data from file"""
-    token_file: Final = get_cli_token_file_path()
+    token_file = get_cli_token_file_path()
     if not os.path.exists(token_file):
         return None
 
     try:
         with open(token_file, "r") as f:
             return json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except (json.JSONDecodeError, IOError):
         return None
 
 
 def get_litellm_gateway_api_key(
-    expected_base_url: str | None = None,
-) -> str | None:
+    expected_base_url: Optional[str] = None,
+) -> Optional[str]:
     """
     Get the stored CLI API key for use with LiteLLM SDK.
 
@@ -62,25 +61,25 @@ def get_litellm_gateway_api_key(
         >>>         base_url="https://your-proxy.com/v1"
         >>>     )
     """
-    token_data: Final = load_cli_token()
+    token_data = load_cli_token()
     if not token_data or "key" not in token_data:
         return None
     if expected_base_url is not None:
-        stored_url: Final = token_data.get("base_url")
+        stored_url = token_data.get("base_url")
         if stored_url != expected_base_url.rstrip("/"):
             return None
     return token_data["key"]
 
 
-def is_cli_token_fresh(token_data: Mapping[str, object], buffer_hours: float = 0.1) -> bool:
+def is_cli_token_fresh(token_data: dict, buffer_hours: float = 0.1) -> bool:
     """Check whether a cached CLI token (as stored in token.json) is still
     within its expiration window. Used by `lite auth print-token` to fail
     fast, without a network round trip, once the cached token is past
     `LITELLM_CLI_JWT_EXPIRATION_HOURS`."""
     from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 
-    timestamp: Final = token_data.get("timestamp")
+    timestamp = token_data.get("timestamp")
     if not isinstance(timestamp, (int, float)):
         return False
-    age_hours: Final = (time.time() - timestamp) / 3600
+    age_hours = (time.time() - timestamp) / 3600
     return age_hours < (CLI_JWT_EXPIRATION_HOURS - buffer_hours)

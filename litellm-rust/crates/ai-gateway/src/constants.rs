@@ -29,14 +29,14 @@ pub(crate) const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 #[cfg(feature = "server")]
 pub(crate) const DEFAULT_PROVIDER: &str = "openai";
 
-pub(crate) const DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS: u64 = 10;
-pub(crate) const DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS: u64 = 300;
+/// Full-request timeout ceiling for Anthropic Messages provider calls, in
+/// seconds. Mirrors the Python Anthropic Messages default. The per-request
+/// timeout from `litellm_params` still overrides this on the request builder.
+pub(crate) const MESSAGES_TIMEOUT_SECS: u64 = 600;
 
-/// HTTP path for the non-streaming Anthropic Messages route.
-#[cfg(feature = "server")]
-pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";
+/// Connect timeout for Anthropic Messages provider calls, in seconds.
+pub(crate) const MESSAGES_CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// Request headers owned by the gateway and never forwarded upstream.
-#[cfg(feature = "server")]
-pub(crate) const MESSAGES_HEADERS_NOT_FORWARDED: &[&str] =
-    &["authorization", "connection", "content-length", "host"];
+/// Max characters of an upstream error body echoed across the host boundary
+/// before truncation, so provider bodies are bounded and data-minimized.
+pub(crate) const MESSAGES_ERROR_BODY_MAX_CHARS: usize = 256;

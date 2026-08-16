@@ -1,3 +1,5 @@
+from typing import Dict, List, Optional
+
 from pydantic import Field
 from typing_extensions import TypedDict
 
@@ -10,8 +12,8 @@ class JavelinGuardInput(TypedDict):
 
 class JavelinGuardRequest(TypedDict):
     input: JavelinGuardInput
-    config: dict | None
-    metadata: dict | None
+    config: Optional[Dict]
+    metadata: Optional[Dict]
 
 
 class JavelinPromptInjectionCategories(TypedDict):
@@ -74,8 +76,8 @@ class JavelinLanguageDetectionAssessment(TypedDict):
 
 
 class JavelinGuardResponse(TypedDict):
-    assessments: list[
-        dict[
+    assessments: List[
+        Dict[
             str,
             JavelinPromptInjectionAssessment | JavelinTrustSafetyAssessment | JavelinLanguageDetectionAssessment,
         ]
@@ -85,11 +87,11 @@ class JavelinGuardResponse(TypedDict):
 class JavelinGuardrailConfigModel(GuardrailConfigModel):
     """Configuration parameters for the Javelin guardrail"""
 
-    guard_name: str | None = Field(default=None, description="Name of the Javelin guard to use")
-    api_version: str | None = Field(default="v1", description="API version for Javelin service")
-    metadata: dict | None = Field(default=None, description="Additional metadata to send with requests")
-    application: str | None = Field(default=None, description="Application name for Javelin service")
-    config: dict | None = Field(default=None, description="Configuration parameters for Javelin service")
+    guard_name: Optional[str] = Field(default=None, description="Name of the Javelin guard to use")
+    api_version: Optional[str] = Field(default="v1", description="API version for Javelin service")
+    metadata: Optional[Dict] = Field(default=None, description="Additional metadata to send with requests")
+    application: Optional[str] = Field(default=None, description="Application name for Javelin service")
+    config: Optional[Dict] = Field(default=None, description="Configuration parameters for Javelin service")
 
     @staticmethod
     def ui_friendly_name() -> str:

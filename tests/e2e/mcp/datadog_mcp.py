@@ -30,12 +30,7 @@ def assert_dd_mcp_creds() -> None:
         )
 
 
-def register_datadog_mcp(
-    client: McpClient,
-    resources: ResourceManager,
-    *,
-    mcp_access_groups: list[str] | None = None,
-) -> str:
+def register_datadog_mcp(client: McpClient, resources: ResourceManager) -> str:
     assert_dd_mcp_creds()
     name = f"e2e_dd_mcp_{unique_marker()}"
     server_id = client.register_server(
@@ -48,7 +43,6 @@ def register_datadog_mcp(
             "DD-APPLICATION-KEY": _dd_app_key(),
         },
         allowed_tools=[SEARCH_LOGS_TOOL],
-        mcp_access_groups=mcp_access_groups,
     )
     resources.defer(lambda: client.delete_server(server_id))
     return server_id

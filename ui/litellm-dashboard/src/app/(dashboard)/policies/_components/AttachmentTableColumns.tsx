@@ -41,12 +41,7 @@ interface AttachmentRowActionsProps {
   onDeleteClick: (attachmentId: string) => void;
 }
 
-const CONFIG_ATTACHMENT_HINT =
-  "Config attachments are defined in the config file and cannot be deleted from the dashboard.";
-
 function AttachmentRowActions({ attachment, isAdmin, onDeleteClick }: AttachmentRowActionsProps) {
-  const isConfigAttachment = attachment.definition_location === "config";
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -70,8 +65,6 @@ function AttachmentRowActions({ attachment, isAdmin, onDeleteClick }: Attachment
             <DropdownMenuItem
               variant="destructive"
               data-testid="attachment-action-delete"
-              disabled={isConfigAttachment}
-              title={isConfigAttachment ? CONFIG_ATTACHMENT_HINT : undefined}
               onClick={() => onDeleteClick(attachment.attachment_id)}
             >
               <Trash2 />

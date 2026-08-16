@@ -2,9 +2,7 @@
 Email Templates used by the LiteLLM Email Service in slack_alerting.py
 """
 
-from typing import Final
-
-KEY_CREATED_EMAIL_TEMPLATE: Final = """
+KEY_CREATED_EMAIL_TEMPLATE = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {recipient_email}, <br/>
@@ -47,14 +45,14 @@ KEY_CREATED_EMAIL_TEMPLATE: Final = """
 """
 
 
-USER_INVITED_EMAIL_TEMPLATE: Final = """
+USER_INVITED_EMAIL_TEMPLATE = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {recipient_email}, <br/>
 
                     You were invited to use OpenAI Proxy API for team {team_name}  <br /> <br />
 
-                    <a href="{base_url}" style="display: inline-block; padding: 10px 20px; background-color: #87ceeb; color: #fff; text-decoration: none; border-radius: 20px;">Accept Invitation</a> <br /> <br />
+                    <a href="{base_url}" style="display: inline-block; padding: 10px 20px; background-color: #87ceeb; color: #fff; text-decoration: none; border-radius: 20px;">Get Started here</a> <br /> <br />
 
                     
                     If you have any questions, please send an email to {email_support_contact} <br /> <br />
@@ -63,7 +61,7 @@ USER_INVITED_EMAIL_TEMPLATE: Final = """
                     The LiteLLM team <br />
 """
 
-SOFT_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
+SOFT_BUDGET_ALERT_EMAIL_TEMPLATE = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {recipient_email}, <br/>
@@ -86,7 +84,7 @@ SOFT_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
                     {email_footer}
 """
 
-TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
+TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {team_alias} team member, <br/>
@@ -109,7 +107,7 @@ TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
                     {email_footer}
 """
 
-MAX_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
+MAX_BUDGET_ALERT_EMAIL_TEMPLATE = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {recipient_email}, <br/>

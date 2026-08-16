@@ -5,10 +5,18 @@
  */
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp, MessageSquare, Mic, Settings, Volume2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Typography, Tag, Tooltip } from "antd";
+import {
+  SoundOutlined,
+  MessageOutlined,
+  SettingOutlined,
+  AudioOutlined,
+  DownOutlined,
+  UpOutlined,
+} from "@ant-design/icons";
 import { SectionHeader } from "./SectionHeader";
+
+const { Text } = Typography;
 
 interface RealtimeEvent {
   type: string;
@@ -155,34 +163,34 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <div style={{ display: "flex", alignItems: "center" }}>
             {isCollapsed ? (
-              <ChevronDown className="size-2.5 text-muted-foreground" />
+              <DownOutlined style={{ fontSize: 10, color: "#8c8c8c" }} />
             ) : (
-              <ChevronUp className="size-2.5 text-muted-foreground" />
+              <UpOutlined style={{ fontSize: 10, color: "#8c8c8c" }} />
             )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Settings className="size-3.5 text-muted-foreground" />
-            <span style={{ fontWeight: 500, fontSize: 14 }}>Session</span>
+            <SettingOutlined style={{ color: "#8c8c8c", fontSize: 14 }} />
+            <Text style={{ fontWeight: 500, fontSize: 14 }}>Session</Text>
           </div>
-          <span className="text-muted-foreground" style={{ fontSize: 12 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
             {session.model}
-          </span>
+          </Text>
           {turnCount > 0 && (
-            <Badge variant="secondary" style={{ margin: 0, fontWeight: 500 }}>
+            <Tag color="purple" style={{ margin: 0, fontWeight: 500 }}>
               {turnCount} {turnCount === 1 ? "turn" : "turns"}
-            </Badge>
+            </Tag>
           )}
           {session.voice && (
-            <Badge variant="secondary" style={{ margin: 0 }}>
-              <Volume2 className="size-3" /> {session.voice}
-            </Badge>
+            <Tag color="blue" style={{ margin: 0 }}>
+              <SoundOutlined /> {session.voice}
+            </Tag>
           )}
           {session.modalities && (
             <div style={{ display: "flex", gap: 4 }}>
               {session.modalities.map((m) => (
-                <Badge key={m} variant="outline" style={{ margin: 0 }}>
-                  {m === "audio" ? <Mic className="size-3" /> : <MessageSquare className="size-3" />} {m}
-                </Badge>
+                <Tag key={m} style={{ margin: 0 }}>
+                  {m === "audio" ? <AudioOutlined /> : <MessageOutlined />} {m}
+                </Tag>
               ))}
             </div>
           )}
@@ -220,8 +228,8 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
 
           {session.instructions && (
             <div style={{ marginTop: 12 }}>
-              <span
-                className="text-muted-foreground"
+              <Text
+                type="secondary"
                 style={{
                   fontSize: 10,
                   letterSpacing: "0.5px",
@@ -231,7 +239,7 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
                 }}
               >
                 Instructions
-              </span>
+              </Text>
               <div
                 style={{
                   fontSize: 12,
@@ -336,25 +344,20 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
           marginBottom: 8,
         }}
       >
-        <Badge variant={response.status === "completed" ? "secondary" : "outline"} style={{ margin: 0 }}>
+        <Tag color={response.status === "completed" ? "green" : "orange"} style={{ margin: 0 }}>
           {response.status || "unknown"}
-        </Badge>
+        </Tag>
         {usage && (
-          <span className="text-muted-foreground" style={{ fontSize: 11 }}>
+          <Text type="secondary" style={{ fontSize: 11 }}>
             {usage.input_tokens ?? 0} in / {usage.output_tokens ?? 0} out tokens
-          </span>
+          </Text>
         )}
         {response.conversation_id && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger
-                render={<span className="text-muted-foreground" style={{ fontSize: 11, cursor: "help" }} />}
-              >
-                conv: {response.conversation_id.slice(0, 12)}...
-              </TooltipTrigger>
-              <TooltipContent>{response.conversation_id}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip title={response.conversation_id}>
+            <Text type="secondary" style={{ fontSize: 11, cursor: "help" }}>
+              conv: {response.conversation_id.slice(0, 12)}...
+            </Text>
+          </Tooltip>
         )}
       </div>
 
@@ -378,8 +381,8 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
 
   return (
     <div style={{ marginBottom: 8 }}>
-      <span
-        className="text-muted-foreground"
+      <Text
+        type="secondary"
         style={{
           fontSize: 10,
           letterSpacing: "0.5px",
@@ -389,7 +392,7 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
         }}
       >
         {output.role?.toUpperCase() || "ASSISTANT"}
-      </span>
+      </Text>
       {contents.map((c, cIdx) => {
         const text = c.transcript || c.text;
         if (!text) return null;
@@ -404,18 +407,20 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
             }}
           >
             {c.type === "audio" && (
-              <Mic
-                className="size-3 text-muted-foreground"
+              <AudioOutlined
                 style={{
+                  color: "#8c8c8c",
+                  fontSize: 12,
                   marginTop: 3,
                   flexShrink: 0,
                 }}
               />
             )}
             {c.type === "text" && (
-              <MessageSquare
-                className="size-3 text-muted-foreground"
+              <MessageOutlined
                 style={{
+                  color: "#8c8c8c",
+                  fontSize: 12,
                   marginTop: 3,
                   flexShrink: 0,
                 }}
@@ -448,12 +453,9 @@ function TokenBreakdown({ label, details }: { label: string; details: Record<str
 
   return (
     <div style={{ marginTop: 4 }}>
-      <span
-        className="text-muted-foreground"
-        style={{ fontSize: 10, letterSpacing: "0.5px", textTransform: "uppercase" }}
-      >
+      <Text type="secondary" style={{ fontSize: 10, letterSpacing: "0.5px", textTransform: "uppercase" }}>
         {label} Token Breakdown
-      </span>
+      </Text>
       <div
         style={{
           display: "flex",
@@ -465,9 +467,9 @@ function TokenBreakdown({ label, details }: { label: string; details: Record<str
         {entries.map(([key, value]) => {
           if (typeof value === "number") {
             return (
-              <Badge key={key} variant="outline" style={{ margin: 0 }}>
+              <Tag key={key} style={{ margin: 0 }}>
                 {formatTokenLabel(key)}: {value.toLocaleString()}
-              </Badge>
+              </Tag>
             );
           }
           return null;
@@ -481,9 +483,9 @@ function ConfigRow({ label, value }: { label: string; value: any }) {
   if (value === undefined || value === null) return null;
   return (
     <div>
-      <span className="text-muted-foreground" style={{ fontSize: 11 }}>
+      <Text type="secondary" style={{ fontSize: 11 }}>
         {label}
-      </span>
+      </Text>
       <div style={{ fontSize: 13, color: "#262626" }}>{String(value)}</div>
     </div>
   );

@@ -2,9 +2,10 @@ import React from "react";
 import { TextInput, Button } from "@tremor/react";
 import { Select as AntdSelect, Form, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Providers, provider_map } from "@/components/provider_info_helpers";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { Providers, provider_map, providerLogoMap } from "@/components/provider_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import { DiscountConfig } from "./types";
+import { handleImageError } from "./provider_display_helpers";
 
 interface AddProviderFormProps {
   discountConfig: DiscountConfig;
@@ -59,7 +60,12 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
             return (
               <AntdSelect.Option key={providerEnum} value={providerEnum} label={providerDisplayName}>
                 <div className="flex items-center space-x-2">
-                  <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />
+                  <img
+                    src={resolveLogoSrc(providerLogoMap[providerDisplayName])}
+                    alt={`${providerEnum} logo`}
+                    className="w-5 h-5"
+                    onError={(e) => handleImageError(e, providerDisplayName)}
+                  />
                   <span>{providerDisplayName}</span>
                 </div>
               </AntdSelect.Option>

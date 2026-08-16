@@ -11,7 +11,6 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
-import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import { ChatMessage } from "./types";
 
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
@@ -249,12 +248,6 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
           <MCPEventsDisplay events={mcpEvents} />
         </div>
       )}
-
-      <ResponseMetrics
-        timeToFirstToken={message.timeToFirstToken}
-        totalLatency={message.totalLatency}
-        usage={message.usage}
-      />
     </div>
   );
 }

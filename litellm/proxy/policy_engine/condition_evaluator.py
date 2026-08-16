@@ -5,6 +5,7 @@ Supports model-based conditions with exact match or regex patterns.
 """
 
 import re
+from typing import List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (
@@ -25,7 +26,7 @@ class ConditionEvaluator:
 
     @staticmethod
     def evaluate(
-        condition: PolicyCondition | None,
+        condition: Optional[PolicyCondition],
         context: PolicyMatchContext,
     ) -> bool:
         """
@@ -48,17 +49,15 @@ class ConditionEvaluator:
                 condition=condition.model,
                 model=context.model,
             ):
-                verbose_proxy_logger.debug(
-                    "Condition failed: model=%s did not match %s", context.model, condition.model
-                )
+                verbose_proxy_logger.debug(f"Condition failed: model={context.model} did not match {condition.model}")
                 return False
 
         return True
 
     @staticmethod
     def _evaluate_model_condition(
-        condition: str | list[str],
-        model: str | None,
+        condition: Union[str, List[str]],
+        model: Optional[str],
     ) -> bool:
         """
         Evaluate a model condition.

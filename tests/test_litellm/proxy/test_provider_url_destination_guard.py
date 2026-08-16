@@ -39,46 +39,6 @@ class TestRejectUrlValuedDestinations:
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail["param"] == "model"
 
-    def test_provider_prefixed_url_rejected(self):
-        with pytest.raises(HTTPException) as exc_info:
-            _reject_url_valued_destinations(
-                {"model": "huggingface/https://attacker.example/v1"}
-            )
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail["param"] == "model"
-
-    def test_comma_batch_smuggled_url_rejected(self):
-        with pytest.raises(HTTPException) as exc_info:
-            _reject_url_valued_destinations(
-                {"model": "gpt-4,huggingface/https://attacker.example/v1"}
-            )
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail["param"] == "model"
-
-    def test_provider_prefixed_uppercase_scheme_url_rejected(self):
-        with pytest.raises(HTTPException) as exc_info:
-            _reject_url_valued_destinations(
-                {"model": "huggingface/HTTPS://evil.example/v1"}
-            )
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail["param"] == "model"
-
-    def test_provider_prefixed_plain_model_passes(self):
-        _reject_url_valued_destinations({"model": "huggingface/BAAI/bge-small-en"})
-
-    def test_comma_batch_plain_models_pass(self):
-        _reject_url_valued_destinations({"model": "gpt-4,huggingface/BAAI/bge-small-en"})
-
-    def test_provider_prefixed_url_respects_allowlist(self, monkeypatch):
-        monkeypatch.setattr(
-            litellm,
-            "provider_url_destination_allowed_hosts",
-            ["trusted.example"],
-        )
-        _reject_url_valued_destinations(
-            {"model": "huggingface/https://trusted.example/v1"}
-        )
-
     def test_url_valued_file_id_rejected(self):
         with pytest.raises(HTTPException) as exc_info:
             _reject_url_valued_destinations(
@@ -177,16 +137,3 @@ async def test_add_litellm_data_to_request_rejects_url_valued_model():
         )
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["param"] == "model"
-
-
-class TestNonStringDestinationValues:
-    """Only string identifiers are inspected. Anything else is left alone for the
-    request's normal validation to handle."""
-
-    @pytest.mark.parametrize("value", [123, None, True, {"a": 1}, ["x"], 1.5])
-    def test_non_string_model_is_ignored(self, value):
-        _reject_url_valued_destinations({"model": value})
-
-    @pytest.mark.parametrize("value", [123, None, True, {"a": 1}, ["x"]])
-    def test_non_string_file_id_is_ignored(self, value):
-        _reject_url_valued_destinations({"file_id": value})

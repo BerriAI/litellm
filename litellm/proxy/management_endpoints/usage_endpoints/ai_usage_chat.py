@@ -4,11 +4,10 @@ usage/spend data by querying the aggregated daily activity endpoints.
 """
 
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, cast
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -21,21 +20,21 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 # Constants
 # ---------------------------------------------------------------------------
 
-USAGE_AI_TEMPERATURE: Final = 0.2
+USAGE_AI_TEMPERATURE = 0.2
 
-TABLE_DAILY_USER_SPEND: Final = "litellm_dailyuserspend"
-TABLE_DAILY_TEAM_SPEND: Final = "litellm_dailyteamspend"
-TABLE_DAILY_TAG_SPEND: Final = "litellm_dailytagspend"
+TABLE_DAILY_USER_SPEND = "litellm_dailyuserspend"
+TABLE_DAILY_TEAM_SPEND = "litellm_dailyteamspend"
+TABLE_DAILY_TAG_SPEND = "litellm_dailytagspend"
 
-ENTITY_FIELD_USER: Final = "user_id"
-ENTITY_FIELD_TEAM: Final = "team_id"
-ENTITY_FIELD_TAG: Final = "tag"
+ENTITY_FIELD_USER = "user_id"
+ENTITY_FIELD_TEAM = "team_id"
+ENTITY_FIELD_TAG = "tag"
 
-PAGINATED_PAGE_SIZE: Final = 200
-MAX_CHAT_MESSAGES: Final = 20
-TOP_N_MODELS: Final = 15
-TOP_N_PROVIDERS: Final = 10
-TOP_N_KEYS: Final = 10
+PAGINATED_PAGE_SIZE = 200
+MAX_CHAT_MESSAGES = 20
+TOP_N_MODELS = 15
+TOP_N_PROVIDERS = 10
+TOP_N_KEYS = 10
 
 # ---------------------------------------------------------------------------
 # Types
@@ -51,7 +50,7 @@ class SSEToolCallEvent(TypedDict, total=False):
     type: Literal["tool_call"]
     tool_name: str
     tool_label: str
-    arguments: dict[str, str]
+    arguments: Dict[str, str]
     status: Literal["running", "complete", "error"]
     error: str
 
@@ -73,36 +72,9 @@ class SSEErrorEvent(TypedDict):
 SSEEvent = SSEStatusEvent | SSEToolCallEvent | SSEChunkEvent | SSEDoneEvent | SSEErrorEvent
 
 
-class _EntityEntry(TypedDict, total=False):
-    metrics: ReadOnly[Mapping[str, float]]
-    metadata: ReadOnly[Mapping[str, str]]
-
-
-class _DayDump(TypedDict, total=False):
-    breakdown: ReadOnly[Mapping[str, Mapping[str, _EntityEntry]]]
-
-
-class _UsageDump(Protocol):
-    @overload
-    def get(self, key: Literal["metadata"], default: Mapping[str, float], /) -> Mapping[str, float]: ...
-    @overload
-    def get(self, key: Literal["results"], default: Sequence[_DayDump], /) -> Sequence[_DayDump]: ...
-
-
-class _ToolFunctionDef(TypedDict):
-    name: ReadOnly[str]
-    description: ReadOnly[str]
-    parameters: ReadOnly[Mapping[str, object]]
-
-
-class _ToolDef(TypedDict):
-    type: ReadOnly[str]
-    function: ReadOnly[_ToolFunctionDef]
-
-
 class ToolHandler(TypedDict):
-    fetch: Callable[..., Awaitable[_UsageDump]]
-    summarise: Callable[[_UsageDump], str]
+    fetch: Callable[..., Any]
+    summarise: Callable[[Dict[str, Any]], str]
     label: str
 
 
@@ -110,12 +82,12 @@ class ToolHandler(TypedDict):
 # Tool definitions (OpenAI function-calling schema)
 # ---------------------------------------------------------------------------
 
-_DATE_PARAMS: Final = {
+_DATE_PARAMS = {
     "start_date": {"type": "string", "description": "Start date in YYYY-MM-DD format"},
     "end_date": {"type": "string", "description": "End date in YYYY-MM-DD format"},
 }
 
-_TOOL_USAGE: Final[_ToolDef] = {
+_TOOL_USAGE = {
     "type": "function",
     "function": {
         "name": "get_usage_data",
@@ -138,7 +110,7 @@ _TOOL_USAGE: Final[_ToolDef] = {
     },
 }
 
-_TOOL_TEAM: Final[_ToolDef] = {
+_TOOL_TEAM = {
     "type": "function",
     "function": {
         "name": "get_team_usage_data",
@@ -160,7 +132,7 @@ _TOOL_TEAM: Final[_ToolDef] = {
     },
 }
 
-_TOOL_TAG: Final[_ToolDef] = {
+_TOOL_TAG = {
     "type": "function",
     "function": {
         "name": "get_tag_usage_data",
@@ -182,16 +154,16 @@ _TOOL_TAG: Final[_ToolDef] = {
     },
 }
 
-TOOLS_BASE: Final = [_TOOL_USAGE]
-TOOLS_ADMIN: Final = [_TOOL_USAGE, _TOOL_TEAM, _TOOL_TAG]
+TOOLS_BASE = [_TOOL_USAGE]
+TOOLS_ADMIN = [_TOOL_USAGE, _TOOL_TEAM, _TOOL_TAG]
 
 
-def get_tools_for_role(is_admin: bool) -> list[_ToolDef]:
+def get_tools_for_role(is_admin: bool) -> List[Dict[str, Any]]:
     """Return the tool list appropriate for the user's role."""
     return TOOLS_ADMIN if is_admin else TOOLS_BASE
 
 
-_SYSTEM_PROMPT_BASE: Final = (
+_SYSTEM_PROMPT_BASE = (
     "You are an AI assistant embedded in the LiteLLM Usage dashboard. "
     "You help users understand their LLM API spend and usage data.\n\n"
     "ALWAYS call the appropriate tool(s) first to fetch data before answering. "
@@ -206,33 +178,33 @@ _SYSTEM_PROMPT_BASE: Final = (
     "like 'this week', 'this month', 'last 7 days', etc."
 )
 
-_TOOL_DESCRIPTIONS_ADMIN: Final = (
+_TOOL_DESCRIPTIONS_ADMIN = (
     "You have access to these tools:\n"
     "- `get_usage_data`: Global/user-level usage (spend, models, providers, API keys)\n"
     "- `get_team_usage_data`: Team-level usage breakdown\n"
     "- `get_tag_usage_data`: Tag-level usage breakdown\n\n"
 )
 
-_TOOL_DESCRIPTIONS_BASE: Final = (
+_TOOL_DESCRIPTIONS_BASE = (
     "You have access to this tool:\n- `get_usage_data`: Your usage data (spend, models, providers, API keys)\n\n"
 )
 
 
 def _build_system_prompt(is_admin: bool) -> str:
     """Build role-appropriate system prompt with today's date."""
-    tool_desc: Final = _TOOL_DESCRIPTIONS_ADMIN if is_admin else _TOOL_DESCRIPTIONS_BASE
+    tool_desc = _TOOL_DESCRIPTIONS_ADMIN if is_admin else _TOOL_DESCRIPTIONS_BASE
     return f"{_SYSTEM_PROMPT_BASE}\n\n{tool_desc}Today's date: {date.today().isoformat()}"
 
 
 # keep a public reference for test assertions
-SYSTEM_PROMPT: Final = _SYSTEM_PROMPT_BASE
+SYSTEM_PROMPT = _SYSTEM_PROMPT_BASE
 
 # ---------------------------------------------------------------------------
 # Data fetchers
 # ---------------------------------------------------------------------------
 
 
-def _parse_csv_ids(raw: str | None) -> list[str] | None:
+def _parse_csv_ids(raw: Optional[str]) -> Optional[List[str]]:
     if not raw:
         return None
     return [t.strip() for t in raw.split(",") if t.strip()]
@@ -241,7 +213,7 @@ def _parse_csv_ids(raw: str | None) -> list[str] | None:
 async def _query_activity(
     table_name: str,
     entity_id_field: str,
-    entity_id: Any | None,
+    entity_id: Optional[Any],
     start_date: str,
     end_date: str,
     *,
@@ -281,8 +253,8 @@ async def _query_activity(
     )
 
 
-async def _fetch_usage_data(start_date: str, end_date: str, user_id: str | None = None) -> _UsageDump:
-    resp: Final = await _query_activity(
+async def _fetch_usage_data(start_date: str, end_date: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+    resp = await _query_activity(
         TABLE_DAILY_USER_SPEND,
         ENTITY_FIELD_USER,
         user_id,
@@ -293,8 +265,8 @@ async def _fetch_usage_data(start_date: str, end_date: str, user_id: str | None 
     return resp.model_dump(mode="json")
 
 
-async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: str | None = None) -> _UsageDump:
-    resp: Final = await _query_activity(
+async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: Optional[str] = None) -> Dict[str, Any]:
+    resp = await _query_activity(
         TABLE_DAILY_TEAM_SPEND,
         ENTITY_FIELD_TEAM,
         _parse_csv_ids(team_ids),
@@ -304,8 +276,8 @@ async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: str |
     return resp.model_dump(mode="json")
 
 
-async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: str | None = None) -> _UsageDump:
-    resp: Final = await _query_activity(
+async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: Optional[str] = None) -> Dict[str, Any]:
+    resp = await _query_activity(
         TABLE_DAILY_TAG_SPEND,
         ENTITY_FIELD_TAG,
         _parse_csv_ids(tags),
@@ -321,10 +293,10 @@ async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: str | None
 
 
 def _accumulate_breakdown(
-    results: Sequence[_DayDump], dimension: str, fields: Sequence[str]
-) -> dict[str, dict[str, float]]:
+    results: List[Dict[str, Any]], dimension: str, fields: List[str]
+) -> Dict[str, Dict[str, float]]:
     """Aggregate a single breakdown dimension across days."""
-    totals: Final[dict[str, dict[str, float]]] = {}
+    totals: Dict[str, Dict[str, float]] = {}
     for day in results:
         for key, entry in day.get("breakdown", {}).get(dimension, {}).items():
             if key not in totals:
@@ -336,19 +308,19 @@ def _accumulate_breakdown(
 
 
 def _ranked_lines(
-    totals: dict[str, dict[str, float]],
-    fmt: Callable[[str, dict[str, float]], str],
+    totals: Dict[str, Dict[str, float]],
+    fmt: Callable[[str, Dict[str, float]], str],
     limit: int,
-) -> list[str]:
+) -> List[str]:
     """Sort by spend descending, format each entry, and truncate."""
     return [fmt(name, vals) for name, vals in sorted(totals.items(), key=lambda x: -x[1].get("spend", 0))[:limit]]
 
 
-def _summarise_usage_data(data: _UsageDump) -> str:
-    meta: Final = data.get("metadata", {})
-    results: Final = data.get("results", [])
+def _summarise_usage_data(data: Dict[str, Any]) -> str:
+    meta = data.get("metadata", {})
+    results = data.get("results", [])
 
-    header: Final = (
+    header = (
         f"Total Spend: ${meta.get('total_spend', 0):.4f}\n"
         f"Total Requests: {meta.get('total_api_requests', 0)}\n"
         f"Successful: {meta.get('total_successful_requests', 0)} | "
@@ -356,15 +328,15 @@ def _summarise_usage_data(data: _UsageDump) -> str:
         f"Total Tokens: {meta.get('total_tokens', 0)}"
     )
 
-    models: Final = _accumulate_breakdown(results, "models", ["spend", "api_requests", "total_tokens"])
-    providers: Final = _accumulate_breakdown(results, "providers", ["spend", "api_requests"])
+    models = _accumulate_breakdown(results, "models", ["spend", "api_requests", "total_tokens"])
+    providers = _accumulate_breakdown(results, "providers", ["spend", "api_requests"])
 
-    model_lines: Final = _ranked_lines(
+    model_lines = _ranked_lines(
         models,
         lambda n, d: f"  - {n}: ${d['spend']:.4f} ({int(d['api_requests'])} reqs, {int(d['total_tokens'])} tokens)",
         TOP_N_MODELS,
     )
-    provider_lines: Final = _ranked_lines(
+    provider_lines = _ranked_lines(
         providers,
         lambda n, d: f"  - {n}: ${d['spend']:.4f} ({int(d['api_requests'])} reqs)",
         TOP_N_PROVIDERS,
@@ -376,13 +348,13 @@ def _summarise_usage_data(data: _UsageDump) -> str:
     return "\n".join(sections)
 
 
-def _summarise_entity_data(data: _UsageDump, entity_label: str) -> str:
+def _summarise_entity_data(data: Dict[str, Any], entity_label: str) -> str:
     """Summarise team/tag entity usage data."""
-    results: Final = data.get("results", [])
+    results = data.get("results", [])
     if not results:
         return f"No {entity_label} usage data found for the given date range."
 
-    totals: Final[dict[str, dict[str, Any]]] = {}
+    totals: Dict[str, Dict[str, Any]] = {}
     for day in results:
         for eid, entry in day.get("breakdown", {}).get("entities", {}).items():
             if eid not in totals:
@@ -393,7 +365,7 @@ def _summarise_entity_data(data: _UsageDump, entity_label: str) -> str:
             totals[eid]["requests"] += m.get("api_requests", 0)
             totals[eid]["tokens"] += m.get("total_tokens", 0)
 
-    lines: Final = [f"{entity_label} Usage ({len(totals)} {entity_label.lower()}s):", ""]
+    lines = [f"{entity_label} Usage ({len(totals)} {entity_label.lower()}s):", ""]
     for eid, d in sorted(totals.items(), key=lambda x: -x[1]["spend"]):
         label = d["alias"] if d["alias"] != eid else eid
         lines.append(
@@ -406,7 +378,7 @@ def _summarise_entity_data(data: _UsageDump, entity_label: str) -> str:
 # Tool dispatch registry
 # ---------------------------------------------------------------------------
 
-TOOL_HANDLERS: Final[dict[str, ToolHandler]] = {
+TOOL_HANDLERS: Dict[str, ToolHandler] = {
     "get_usage_data": ToolHandler(
         fetch=_fetch_usage_data,
         summarise=_summarise_usage_data,
@@ -436,16 +408,16 @@ def _sse(event: SSEEvent) -> str:
 
 def _resolve_fetch_kwargs(
     fn_name: str,
-    fn_args: Mapping[str, str],
-    user_id: str | None,
+    fn_args: Dict[str, str],
+    user_id: Optional[str],
     is_admin: bool,
-) -> dict[str, str]:
+) -> Dict[str, Any]:
     """Build keyword arguments for a tool's fetch function."""
-    start_date: Final = fn_args.get("start_date", "")
-    end_date: Final = fn_args.get("end_date", "")
+    start_date = fn_args.get("start_date", "")
+    end_date = fn_args.get("end_date", "")
     if not start_date or not end_date:
         raise ValueError("Missing required start_date or end_date from tool arguments")
-    kwargs: Final[dict[str, str]] = {"start_date": start_date, "end_date": end_date}
+    kwargs: Dict[str, Any] = {"start_date": start_date, "end_date": end_date}
     if fn_name == "get_usage_data":
         if not is_admin:
             if user_id is None:
@@ -470,28 +442,28 @@ def _resolve_fetch_kwargs(
 async def _execute_tool_call(
     handler: ToolHandler,
     fn_name: str,
-    fn_args: Mapping[str, str],
-    user_id: str | None,
+    fn_args: Dict[str, str],
+    user_id: Optional[str],
     is_admin: bool,
 ) -> str:
     """Run a single tool and return the summarised result text."""
-    kwargs: Final = _resolve_fetch_kwargs(fn_name, fn_args, user_id, is_admin)
-    raw_data: Final = await handler["fetch"](**kwargs)
+    kwargs = _resolve_fetch_kwargs(fn_name, fn_args, user_id, is_admin)
+    raw_data = await handler["fetch"](**kwargs)
     return handler["summarise"](raw_data)
 
 
 async def _process_tool_call(
     tc: Any,
-    chat_messages: list[Mapping[str, object]],
-    user_id: str | None,
+    chat_messages: List[Dict[str, Any]],
+    user_id: Optional[str],
     is_admin: bool,
 ) -> AsyncIterator[str]:
     """Execute a single tool call, yielding SSE events for status."""
-    fn_name: Final[str] = tc.function.name
-    fn_args: Final[Mapping[str, str]] = json.loads(tc.function.arguments)
+    fn_name = tc.function.name
+    fn_args = json.loads(tc.function.arguments)
 
-    allowed_names: Final = {t["function"]["name"] for t in get_tools_for_role(is_admin)}
-    handler: Final = TOOL_HANDLERS.get(fn_name)
+    allowed_names = {t["function"]["name"] for t in get_tools_for_role(is_admin)}
+    handler = TOOL_HANDLERS.get(fn_name)
 
     if fn_name not in allowed_names or not handler:
         chat_messages.append(
@@ -503,7 +475,7 @@ async def _process_tool_call(
         )
         return
 
-    tool_event_base: Final = {
+    tool_event_base = {
         "type": "tool_call",
         "tool_name": fn_name,
         "tool_label": handler["label"],
@@ -522,11 +494,11 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
-async def _stream_final_response(model: str, chat_messages: list[Mapping[str, object]]) -> AsyncIterator[str]:
+async def _stream_final_response(model: str, chat_messages: List[Dict[str, Any]]) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response: Final = await litellm.acompletion(
+    response = await litellm.acompletion(
         model=model,
         messages=chat_messages,
         stream=True,
@@ -539,29 +511,29 @@ async def _stream_final_response(model: str, chat_messages: list[Mapping[str, ob
 
 
 async def stream_usage_ai_chat(
-    messages: list[dict[str, str]],
-    model: str | None = None,
-    user_id: str | None = None,
+    messages: List[Dict[str, str]],
+    model: Optional[str] = None,
+    user_id: Optional[str] = None,
     is_admin: bool = False,
 ) -> AsyncIterator[str]:
     """Stream SSE events: status → tool_call → chunk → done."""
-    resolved_model: Final = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
-    truncated: Final = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
-    chat_messages: Final[list[Mapping[str, object]]] = [
+    resolved_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    truncated = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
+    chat_messages: List[Dict[str, Any]] = [
         {"role": "system", "content": _build_system_prompt(is_admin)},
         *truncated,
     ]
 
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
-        tools: Final = get_tools_for_role(is_admin)
-        response: Final = await litellm.acompletion(
+        tools = get_tools_for_role(is_admin)
+        response = await litellm.acompletion(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
         )
-        choice: Final = response.choices[0]
+        choice = response.choices[0]  # type: ignore
 
         if not choice.message.tool_calls:
             if choice.message.content:

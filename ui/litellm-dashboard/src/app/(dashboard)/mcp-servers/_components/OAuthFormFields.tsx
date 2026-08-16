@@ -23,13 +23,6 @@ interface OAuthFormFieldsProps {
 
 const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
 
-const UPSTREAM_RESOURCE_TOOLTIP =
-  "RFC 8707 resource indicator sent to the authorization server so it mints a token audienced for this MCP server. " +
-  "Leave blank to send nothing, which is the default and what most providers expect. Use 'auto' to send this server's " +
-  "own URL. Set an exact identifier when the authorization server expects a specific one. Some providers reject this " +
-  "parameter and take the audience from scopes instead; if you see AADSTS901002, leave it blank. If you see " +
-  "invalid_target, the authorization server needs it set.";
-
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
   <span className="text-sm font-medium text-gray-700 flex items-center">
     {label}
@@ -37,15 +30,6 @@ const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, toolt
       <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
     </Tooltip>
   </span>
-);
-
-const UpstreamResourceField: React.FC = () => (
-  <Form.Item
-    label={<FieldLabel label="Resource Indicator (optional)" tooltip={UPSTREAM_RESOURCE_TOOLTIP} />}
-    name={["credentials", "upstream_resource"]}
-  >
-    <TextInput placeholder="auto, or https://mcp.example.com/mcp" className={fieldClassName} />
-  </Form.Item>
 );
 
 const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
@@ -56,7 +40,6 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
   docsUrl,
 }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
-  const requiredWhenCreating = (message: string) => (isEditing ? [] : [{ required: true, message }]);
 
   return (
     <>
@@ -70,7 +53,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
         name="oauth_flow_type"
         {...(initialFlowType ? { initialValue: initialFlowType } : {})}
       >
-        <Select placeholder="Select OAuth flow" className="rounded-lg" size="large">
+        <Select className="rounded-lg" size="large">
           <Select.Option value={OAUTH_FLOW.M2M}>
             <div>
               <span className="font-medium">Machine-to-Machine (M2M)</span>
@@ -91,7 +74,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           <Form.Item
             label={<FieldLabel label="Client ID" tooltip="OAuth2 client ID for the client_credentials grant." />}
             name={["credentials", "client_id"]}
-            rules={requiredWhenCreating("Client ID is required for M2M OAuth")}
+            rules={[{ required: true, message: "Client ID is required for M2M OAuth" }]}
           >
             <TextInput
               type="password"
@@ -104,7 +87,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
               <FieldLabel label="Client Secret" tooltip="OAuth2 client secret for the client_credentials grant." />
             }
             name={["credentials", "client_secret"]}
-            rules={requiredWhenCreating("Client Secret is required for M2M OAuth")}
+            rules={[{ required: true, message: "Client Secret is required for M2M OAuth" }]}
           >
             <TextInput
               type="password"
@@ -115,7 +98,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           <Form.Item
             label={<FieldLabel label="Token URL" tooltip="Token endpoint URL for the client_credentials grant." />}
             name="token_url"
-            rules={requiredWhenCreating("Token URL is required for M2M OAuth")}
+            rules={[{ required: true, message: "Token URL is required for M2M OAuth" }]}
           >
             <TextInput placeholder="https://auth.example.com/oauth/token" className={fieldClassName} />
           </Form.Item>
@@ -131,7 +114,6 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           >
             <Select mode="tags" tokenSeparators={[","]} placeholder="Add scopes" className="rounded-lg" size="large" />
           </Form.Item>
-          <UpstreamResourceField />
         </>
       ) : (
         <>
@@ -185,12 +167,11 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           >
             <Select mode="tags" tokenSeparators={[","]} placeholder="Add scopes" className="rounded-lg" size="large" />
           </Form.Item>
-          <UpstreamResourceField />
           <Form.Item
             label={
               <FieldLabel
                 label="Issuer (optional)"
-                tooltip="OAuth 2.0 authorization server issuer (RFC 8414). Leave empty to discover endpoints from the upstream resource; set it to pin the trust anchor, which makes this issuer's document the only endpoint source (RFC 8414 §3.3), overriding the Authorization/Token/Registration URLs above and failing closed if its metadata cannot be fetched."
+                tooltip="OAuth 2.0 authorization server issuer (RFC 8414). Auto-discovered from the upstream on first connect; set it explicitly to pin the trust anchor so token and scope discovery is fetched from and validated against this issuer (RFC 8414 §3.3) instead of anything the resource advertises."
               />
             }
             name="issuer"

@@ -3,86 +3,77 @@ Base repository class with common functionality.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
 T = TypeVar("T", bound=BaseModel)
 
 
-@runtime_checkable
-class SupportsModelDump(Protocol):
-    def model_dump(self) -> dict[str, object]: ...
-
-
-@runtime_checkable
-class SupportsDict(Protocol):
-    def dict(self) -> dict[str, object]: ...
-
-
-DbRecord = Mapping[str, object] | SupportsModelDump | SupportsDict | Sequence[tuple[str, object]]
-
-
-def record_to_dict(record: DbRecord) -> Mapping[str, object]:
-    """Project a database record into a mapping of column name to value."""
-    if isinstance(record, SupportsModelDump):
-        return record.model_dump()
-    if isinstance(record, SupportsDict):
-        return record.dict()
-    if isinstance(record, Mapping):
+def _record_to_dict(record: Any) -> Dict[str, Any]:
+    if isinstance(record, dict):
         return record
-    return {key: value for key, value in record}
+    if hasattr(record, "model_dump") and callable(record.model_dump):
+        return record.model_dump()
+    if hasattr(record, "dict") and callable(record.dict):
+        return record.dict()
+    return dict(record)
 
 
 class BaseRepository(ABC, Generic[T]):
     """Abstract base class for all repositories."""
 
-    def __init__(self, prisma_client: Any):  # any-ok: PrismaClient is an untyped runtime wrapper
+    def __init__(self, prisma_client: Any):
         self._prisma_client = prisma_client
 
     @property
-    def prisma_client(self) -> Any:  # any-ok: PrismaClient is an untyped runtime wrapper
+    def prisma_client(self) -> Any:
         if self._prisma_client is None:
             raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
 
     @property
     @abstractmethod
-    def table(self) -> Any:  # any-ok: Prisma table actions are reached through the untyped client wrapper
+    def table(self) -> Any:
         """Return the Prisma table for this repository."""
         ...
 
     @property
     @abstractmethod
-    def model_class(self) -> type[T]:
+    def model_class(self) -> Type[T]:
         """Return the domain model class for this repository."""
         ...
 
-    def _to_model(self, record: DbRecord | None) -> T | None:
+    def _to_model(self, record: Any) -> Optional[T]:
         """Convert a database record to a domain model."""
         if record is None:
             return None
-        return self.model_class.model_validate(record_to_dict(record))
+        return self.model_class(**_record_to_dict(record))
 
-    def _to_model_list(self, records: Iterable[DbRecord | None]) -> list[T]:
+    def _to_model_list(self, records: List[Any]) -> List[T]:
         """Convert a list of database records to domain models."""
-        return [model for record in records if record is not None and (model := self._to_model(record)) is not None]
+        result: List[T] = []
+        for r in records:
+            if r is not None:
+                model = self._to_model(r)
+                if model is not None:
+                    result.append(model)
+        return result
 
-    async def find_by_id(self, id_value: str, id_field: str = "id") -> T | None:
+    async def find_by_id(self, id_value: str, id_field: str = "id") -> Optional[T]:
         """Find a record by its primary key."""
-        record: Final = await self.table.find_unique(where={id_field: id_value})
+        record = await self.table.find_unique(where={id_field: id_value})
         return self._to_model(record)
 
     async def find_many(
         self,
-        where: dict[str, Any] | None = None,
-        skip: int | None = None,
-        take: int | None = None,
-        order: dict[str, str] | None = None,
-    ) -> list[T]:
+        where: Optional[Dict[str, Any]] = None,
+        skip: Optional[int] = None,
+        take: Optional[int] = None,
+        order: Optional[Dict[str, str]] = None,
+    ) -> List[T]:
         """Find multiple records matching the criteria."""
-        kwargs: Final[dict[str, Any]] = {}
+        kwargs: Dict[str, Any] = {}
         if where:
             kwargs["where"] = where
         if skip is not None:
@@ -92,31 +83,31 @@ class BaseRepository(ABC, Generic[T]):
         if order:
             kwargs["order"] = order
 
-        records: Final = await self.table.find_many(**kwargs)
+        records = await self.table.find_many(**kwargs)
         return self._to_model_list(records)
 
-    async def create(self, data: dict[str, Any]) -> T:
+    async def create(self, data: Dict[str, Any]) -> T:
         """Create a new record."""
-        record: Final = await self.table.create(data=data)
-        model: Final = self._to_model(record)
+        record = await self.table.create(data=data)
+        model = self._to_model(record)
         assert model is not None
         return model
 
-    async def update(self, id_value: str, data: dict[str, Any], id_field: str = "id") -> T | None:
+    async def update(self, id_value: str, data: Dict[str, Any], id_field: str = "id") -> Optional[T]:
         """Update an existing record."""
-        record: Final = await self.table.update(where={id_field: id_value}, data=data)
+        record = await self.table.update(where={id_field: id_value}, data=data)
         return self._to_model(record)
 
-    async def delete(self, id_value: str, id_field: str = "id") -> T | None:
+    async def delete(self, id_value: str, id_field: str = "id") -> Optional[T]:
         """Delete a record by its primary key."""
-        record: Final = await self.table.delete(where={id_field: id_value})
+        record = await self.table.delete(where={id_field: id_value})
         return self._to_model(record)
 
-    async def count(self, where: dict[str, Any] | None = None) -> int:
+    async def count(self, where: Optional[Dict[str, Any]] = None) -> int:
         """Count records matching the criteria."""
         return await self.table.count(where=where)
 
     async def exists(self, id_value: str, id_field: str = "id") -> bool:
         """Check if a record exists."""
-        record: Final = await self.table.find_unique(where={id_field: id_value})
+        record = await self.table.find_unique(where={id_field: id_value})
         return record is not None

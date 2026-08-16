@@ -2,8 +2,8 @@
 GigaChat Chat Module
 """
 
-from .streaming import GigaChatModelResponseIterator
 from .transformation import GigaChatConfig, GigaChatError
+from .streaming import GigaChatModelResponseIterator
 
 __all__ = [
     "GigaChatConfig",

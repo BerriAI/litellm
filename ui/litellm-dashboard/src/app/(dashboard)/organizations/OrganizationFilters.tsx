@@ -14,6 +14,8 @@ interface OrganizationFiltersProps {
 type FilterState = {
   org_id: string;
   org_alias: string;
+  sort_by: string;
+  sort_order: "asc" | "desc";
 };
 
 const OrganizationFilters = ({

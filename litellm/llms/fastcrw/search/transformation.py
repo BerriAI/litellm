@@ -8,7 +8,7 @@ or cloud). The search response uses the Firecrawl-compatible envelope
 fastCRW API Reference: https://fastcrw.com/docs/rest-api
 """
 
-from typing import Final, TypedDict
+from typing import Optional, TypedDict, Union
 
 import httpx
 
@@ -48,8 +48,8 @@ class FastCRWSearchConfig(BaseSearchConfig):
     def validate_environment(
         self,
         headers: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs,
     ) -> dict:
         """
@@ -70,9 +70,9 @@ class FastCRWSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
-        data: dict | list[dict] | None = None,
+        data: Optional[Union[dict, list[dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -88,7 +88,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: str | list[str],
+        query: Union[str, list[str]],
         optional_params: dict,
         **kwargs,
     ) -> dict:
@@ -112,7 +112,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
             # fastCRW only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: Final[FastCRWSearchRequest] = {
+        request_data: FastCRWSearchRequest = {
             "query": query,
         }
 
@@ -121,7 +121,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
             request_data["limit"] = optional_params["max_results"]
 
         # Convert to dict before dynamic key assignments
-        result_data: Final = dict(request_data)
+        result_data = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -157,11 +157,11 @@ class FastCRWSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json = raw_response.json()
 
-        results: Final = []
+        results = []
 
-        data: Final = response_json.get("data", [])
+        data = response_json.get("data", [])
 
         if isinstance(data, list):
             for result in data:

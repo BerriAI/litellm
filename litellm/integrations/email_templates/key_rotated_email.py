@@ -2,9 +2,7 @@
 Modern Email Templates for LiteLLM Email Service with professional styling
 """
 
-from typing import Final
-
-KEY_ROTATED_EMAIL_TEMPLATE: Final = """
+KEY_ROTATED_EMAIL_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>

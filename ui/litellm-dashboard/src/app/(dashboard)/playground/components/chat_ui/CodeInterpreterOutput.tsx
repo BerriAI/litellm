@@ -1,10 +1,15 @@
-import React, { useEffect, useState } from "react";
-import { Code, Download, FileImage, FileText, Loader2 } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Collapse, Spin } from "antd";
+import {
+  CodeOutlined,
+  DownloadOutlined,
+  FileImageOutlined,
+  FileTextOutlined,
+  LoadingOutlined,
+} from "@ant-design/icons";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 interface ContainerFileCitation {
   type: "container_file_citation";
@@ -22,60 +27,48 @@ interface CodeInterpreterOutputProps {
   accessToken: string;
 }
 
-const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif"] as const;
-
-function isImageFilename(filename: string | undefined): boolean {
-  if (!filename) {
-    return false;
-  }
-  const lower = filename.toLowerCase();
-  return IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext));
-}
-
-const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, annotations = [], accessToken }) => {
+const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
+  code,
+  containerId,
+  annotations = [],
+  accessToken,
+}) => {
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>({});
-  const [codeOpen, setCodeOpen] = useState(false);
   const proxyBaseUrl = getProxyBaseUrl();
 
+  // Fetch images from container files API
   useEffect(() => {
-    const createdUrls: string[] = [];
-    let cancelled = false;
-
     const fetchImages = async () => {
       for (const annotation of annotations) {
-        if (!isImageFilename(annotation.filename) || !annotation.container_id || !annotation.file_id) {
-          continue;
-        }
+        const isImage =
+          annotation.filename?.toLowerCase().endsWith(".png") ||
+          annotation.filename?.toLowerCase().endsWith(".jpg") ||
+          annotation.filename?.toLowerCase().endsWith(".jpeg") ||
+          annotation.filename?.toLowerCase().endsWith(".gif");
 
-        if (!cancelled) {
+        if (isImage && annotation.container_id && annotation.file_id) {
           setLoadingImages((prev) => ({ ...prev, [annotation.file_id]: true }));
-        }
 
-        try {
-          const response = await fetch(
-            `${proxyBaseUrl}/v1/containers/${annotation.container_id}/files/${annotation.file_id}/content`,
-            {
-              headers: {
-                [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
+          try {
+            // Fetch image content from container files API
+            const response = await fetch(
+              `${proxyBaseUrl}/v1/containers/${annotation.container_id}/files/${annotation.file_id}/content`,
+              {
+                headers: {
+                  [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
+                },
               },
-            },
-          );
+            );
 
-          if (response.ok) {
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            createdUrls.push(url);
-            if (!cancelled) {
+            if (response.ok) {
+              const blob = await response.blob();
+              const url = URL.createObjectURL(blob);
               setImageUrls((prev) => ({ ...prev, [annotation.file_id]: url }));
-            } else {
-              URL.revokeObjectURL(url);
             }
-          }
-        } catch (error) {
-          console.error("Error fetching image:", error);
-        } finally {
-          if (!cancelled) {
+          } catch (error) {
+            console.error("Error fetching image:", error);
+          } finally {
             setLoadingImages((prev) => ({ ...prev, [annotation.file_id]: false }));
           }
         }
@@ -83,12 +76,12 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
     };
 
     if (annotations.length > 0 && accessToken) {
-      void fetchImages();
+      fetchImages();
     }
 
+    // Cleanup URLs on unmount
     return () => {
-      cancelled = true;
-      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+      Object.values(imageUrls).forEach((url) => URL.revokeObjectURL(url));
     };
   }, [annotations, accessToken, proxyBaseUrl]);
 
@@ -119,8 +112,22 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
     }
   };
 
-  const imageAnnotations = annotations.filter((a) => isImageFilename(a.filename));
-  const fileAnnotations = annotations.filter((a) => !isImageFilename(a.filename));
+  // Separate images and other files
+  const imageAnnotations = annotations.filter(
+    (a) =>
+      a.filename?.toLowerCase().endsWith(".png") ||
+      a.filename?.toLowerCase().endsWith(".jpg") ||
+      a.filename?.toLowerCase().endsWith(".jpeg") ||
+      a.filename?.toLowerCase().endsWith(".gif"),
+  );
+
+  const fileAnnotations = annotations.filter(
+    (a) =>
+      !a.filename?.toLowerCase().endsWith(".png") &&
+      !a.filename?.toLowerCase().endsWith(".jpg") &&
+      !a.filename?.toLowerCase().endsWith(".jpeg") &&
+      !a.filename?.toLowerCase().endsWith(".gif"),
+  );
 
   if (!code && annotations.length === 0) {
     return null;
@@ -128,46 +135,44 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
 
   return (
     <div className="mt-3 space-y-3">
+      {/* Executed Code - Collapsible */}
       {code && (
-        <Collapsible open={codeOpen} onOpenChange={setCodeOpen} className="rounded-md border border-gray-200">
-          <CollapsibleTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start gap-2 text-sm text-gray-600"
-              />
-            }
-          >
-            <Code className="size-4" />
-            Python Code Executed
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <div className="border-t border-gray-200 p-2">
-              <SyntaxHighlighter
-                language="python"
-                style={coy}
-                customStyle={{
-                  margin: 0,
-                  borderRadius: "6px",
-                  fontSize: "12px",
-                  maxHeight: "300px",
-                  overflow: "auto",
-                }}
-              >
-                {code}
-              </SyntaxHighlighter>
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
+        <Collapse
+          size="small"
+          items={[
+            {
+              key: "code",
+              label: (
+                <span className="flex items-center gap-2 text-sm text-gray-600">
+                  <CodeOutlined /> Python Code Executed
+                </span>
+              ),
+              children: (
+                <SyntaxHighlighter
+                  language="python"
+                  style={coy}
+                  customStyle={{
+                    margin: 0,
+                    borderRadius: "6px",
+                    fontSize: "12px",
+                    maxHeight: "300px",
+                    overflow: "auto",
+                  }}
+                >
+                  {code}
+                </SyntaxHighlighter>
+              ),
+            },
+          ]}
+        />
       )}
 
+      {/* Generated Images */}
       {imageAnnotations.map((annotation) => (
-        <div key={annotation.file_id} className="overflow-hidden rounded-lg border border-gray-200">
+        <div key={annotation.file_id} className="rounded-lg border border-gray-200 overflow-hidden">
           {loadingImages[annotation.file_id] ? (
-            <div className="flex items-center justify-center bg-gray-50 p-8">
-              <Loader2 className="size-4 animate-spin text-gray-500" aria-hidden="true" />
+            <div className="flex items-center justify-center p-8 bg-gray-50">
+              <Spin indicator={<LoadingOutlined spin />} />
               <span className="ml-2 text-sm text-gray-500">Loading image...</span>
             </div>
           ) : imageUrls[annotation.file_id] ? (
@@ -175,48 +180,42 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
               <img
                 src={imageUrls[annotation.file_id]}
                 alt={annotation.filename || "Generated chart"}
-                className="max-h-[400px] max-w-full"
+                className="max-w-full"
+                style={{ maxHeight: "400px" }}
               />
-              <div className="flex items-center justify-between border-t border-gray-200 bg-gray-50 px-3 py-2">
-                <span className="flex items-center gap-1 text-xs text-gray-500">
-                  <FileImage className="size-3" aria-hidden="true" />
-                  {annotation.filename}
+              <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-200">
+                <span className="text-xs text-gray-500 flex items-center gap-1">
+                  <FileImageOutlined /> {annotation.filename}
                 </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  className="h-auto gap-1 px-1 py-0 text-xs text-blue-500 hover:text-blue-700"
-                  onClick={() => void handleDownload(annotation)}
+                <button
+                  onClick={() => handleDownload(annotation)}
+                  className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
                 >
-                  <Download className="size-3" />
-                  Download
-                </Button>
+                  <DownloadOutlined /> Download
+                </button>
               </div>
             </div>
           ) : (
-            <div className="flex items-center justify-center bg-gray-50 p-4">
+            <div className="flex items-center justify-center p-4 bg-gray-50">
               <span className="text-sm text-gray-400">Image not available</span>
             </div>
           )}
         </div>
       ))}
 
+      {/* Download Links for Other Files */}
       {fileAnnotations.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {fileAnnotations.map((annotation) => (
-            <Button
+            <button
               key={annotation.file_id}
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-auto gap-2 border-gray-200 bg-gray-50 px-3 py-2 hover:bg-gray-100"
-              onClick={() => void handleDownload(annotation)}
+              onClick={() => handleDownload(annotation)}
+              className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors"
             >
-              <FileText className="size-4 text-blue-500" aria-hidden="true" />
+              <FileTextOutlined className="text-blue-500" />
               <span className="text-sm">{annotation.filename}</span>
-              <Download className="size-3 text-gray-400" aria-hidden="true" />
-            </Button>
+              <DownloadOutlined className="text-gray-400" />
+            </button>
           ))}
         </div>
       )}

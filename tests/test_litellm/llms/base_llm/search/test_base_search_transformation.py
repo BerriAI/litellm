@@ -27,7 +27,6 @@ from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
 from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
 from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
 from litellm.llms.linkup.search.transformation import LinkupSearchConfig
-from litellm.llms.nimble.search.transformation import NimbleSearchConfig
 from litellm.llms.parallel_ai.search.transformation import ParallelAISearchConfig
 from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
 from litellm.llms.searchapi.search.transformation import SearchAPIConfig
@@ -58,7 +57,6 @@ _BASE_ENV_VARS = (
     "DATAFORSEO_API_BASE",
     "TINYFISH_API_BASE",
     "CRW_API_BASE",
-    "NIMBLE_API_BASE",
 )
 
 
@@ -98,7 +96,6 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     ),
     (TinyfishSearchConfig, {"TINYFISH_API_KEY": "srv"}, "caller-key", {}),
     (FastCRWSearchConfig, {"CRW_API_KEY": "srv"}, "caller-key", {}),
-    (NimbleSearchConfig, {"NIMBLE_API_KEY": "srv"}, "caller-key", {}),
 )
 
 _IDS = tuple(spec[0].__name__ for spec in PROVIDERS)

@@ -1,6 +1,6 @@
 import React from "react";
-import { Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ClearOutlined } from "@ant-design/icons";
+import { Button as TremorButton } from "@tremor/react";
 import { ConversationPanelProps } from "./types";
 import { useConversation } from "./useConversation";
 import VariableInput from "./VariableInput";
@@ -27,7 +27,7 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
   } = useConversation(prompt, accessToken);
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex flex-col h-full bg-white">
       {!variablesFilled && (
         <VariableInput
           extractedVariables={extractedVariables}
@@ -37,11 +37,14 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
       )}
 
       {messages.length > 0 && (
-        <div className="p-3 border-b border-border bg-background flex justify-end">
-          <Button type="button" variant="outline" size="sm" onClick={handleClearConversation}>
-            <Trash2 aria-hidden="true" />
+        <div className="p-3 border-b border-gray-200 bg-white flex justify-end">
+          <TremorButton
+            onClick={handleClearConversation}
+            className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+            icon={ClearOutlined}
+          >
             Clear Chat
-          </Button>
+          </TremorButton>
         </div>
       )}
 
@@ -52,7 +55,7 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
         messagesEndRef={messagesEndRef}
       />
 
-      <div className="p-4 border-t border-border bg-background">
+      <div className="p-4 border-t border-gray-200 bg-white">
         <VariableWarning extractedVariables={extractedVariables} variables={variables} />
 
         <MessageInput

@@ -13,7 +13,6 @@ from typing import Dict, Optional
 import pytest
 import yaml
 from fastapi.testclient import TestClient
-from prisma.errors import ClientNotConnectedError
 
 _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
@@ -21,7 +20,7 @@ _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
 )
 
 
-class StubClientNotConnectedError(ClientNotConnectedError):
+class StubClientNotConnectedError(Exception):
     pass
 
 
@@ -34,7 +33,10 @@ class DisconnectedPrisma:
 
     @property
     def _engine(self) -> None:
-        raise StubClientNotConnectedError()
+        raise StubClientNotConnectedError(
+            "Client is not connected to the query engine, you must call `connect()` "
+            "before attempting to query data."
+        )
 
 
 @pytest.fixture
@@ -43,51 +45,32 @@ def disconnected_prisma() -> DisconnectedPrisma:
     return DisconnectedPrisma()
 
 
-_MODULE_GLOBAL_MISSING = object()
-_proxy_module_globals_snapshot = pytest.StashKey[Dict[str, object]]()
-
-
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_setup(item):
+@pytest.fixture(autouse=True)
+def _isolate_proxy_module_globals():
     """
-    Snapshot module-level globals on litellm.proxy.proxy_server before any
-    fixture runs, and restore them in pytest_runtest_teardown after every
-    fixture finalizer has run.
+    Snapshot and restore module-level globals on litellm.proxy.proxy_server
+    that tests sometimes mutate via raw setattr (not monkeypatch).
 
-    Without this, a leaked value (e.g. master_key set by a sibling test)
+    Without this, a leaked value — e.g. master_key set by a sibling test —
     flips the auth short-circuit in user_api_key_auth and causes unrelated
     tests in the same xdist worker to return 401 instead of 200.
-
-    This must be a hook pair, not an autouse fixture: an autouse fixture in
-    the root conftest requests monkeypatch, so monkeypatch's undo stack
-    unwinds after every other fixture finalizer. A test that monkeypatches a
-    global while a fixture has it patched records the fixture's mock as the
-    "original", and monkeypatch.undo re-plants that mock after all restores
-    have run, poisoning the global for the rest of the xdist worker.
     """
     from litellm.proxy import proxy_server
 
-    item.stash[_proxy_module_globals_snapshot] = {
-        name: getattr(proxy_server, name, _MODULE_GLOBAL_MISSING)
+    sentinel = object()
+    snapshot = {
+        name: getattr(proxy_server, name, sentinel)
         for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
     }
-    yield
-
-
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_teardown(item, nextitem):
-    yield
-    snapshot = item.stash.get(_proxy_module_globals_snapshot, None)
-    if snapshot is None:
-        return
-    from litellm.proxy import proxy_server
-
-    for name, value in snapshot.items():
-        if value is _MODULE_GLOBAL_MISSING:
-            if hasattr(proxy_server, name):
-                delattr(proxy_server, name)
-        else:
-            setattr(proxy_server, name, value)
+    try:
+        yield
+    finally:
+        for name, value in snapshot.items():
+            if value is sentinel:
+                if hasattr(proxy_server, name):
+                    delattr(proxy_server, name)
+            else:
+                setattr(proxy_server, name, value)
 
 
 @pytest.fixture(autouse=True)

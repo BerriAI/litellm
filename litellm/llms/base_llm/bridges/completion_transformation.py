@@ -3,8 +3,7 @@ Bridge for transforming API requests to another API requests
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -19,13 +18,14 @@ class CompletionTransformationBridge(ABC):
     def transform_request(
         self,
         model: str,
-        messages: list["AllMessageValues"],
+        messages: List["AllMessageValues"],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
     ) -> dict:
         """Transform /chat/completions api request to another request"""
+        pass
 
     @abstractmethod
     def transform_response(
@@ -35,20 +35,21 @@ class CompletionTransformationBridge(ABC):
         model_response: "ModelResponse",
         logging_obj: "LiteLLMLoggingObj",
         request_data: dict,
-        messages: list["AllMessageValues"],
+        messages: List["AllMessageValues"],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> "ModelResponse":
         """Transform another response to /chat/completions api response"""
+        pass
 
     @abstractmethod
     def get_model_response_iterator(
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: Optional[bool] = False,
     ) -> "BaseModelResponseIterator":
         pass

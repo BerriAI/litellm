@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    _akto_callback: Final = AktoGuardrail(
+    _akto_callback = AktoGuardrail(
         akto_base_url=getattr(litellm_params, "akto_base_url", None),
         akto_api_key=getattr(litellm_params, "akto_api_key", None),
         akto_account_id=getattr(litellm_params, "akto_account_id", None),
@@ -27,10 +27,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _akto_callback
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.AKTO.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {
+guardrail_class_registry = {
     SupportedGuardrailIntegrations.AKTO.value: AktoGuardrail,
 }

@@ -4,7 +4,7 @@ Calls Exa AI's /search endpoint to search the web.
 Exa AI API Reference: https://docs.exa.ai/reference/search
 """
 
-from typing import Final, TypedDict
+from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
 
@@ -33,15 +33,15 @@ class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
     category: str  # Optional - data category ('company', 'research paper', 'news', 'pdf', 'github', 'tweet', 'personal site', 'linkedin profile', 'financial report')
     userLocation: str  # Optional - two-letter ISO country code
     numResults: int  # Optional - number of results (max 100), default 10
-    includeDomains: list[str]  # Optional - list of domains to include
-    excludeDomains: list[str]  # Optional - list of domains to exclude
+    includeDomains: List[str]  # Optional - list of domains to include
+    excludeDomains: List[str]  # Optional - list of domains to exclude
     startCrawlDate: str  # Optional - crawl date filter (ISO 8601 format)
     endCrawlDate: str  # Optional - crawl date filter (ISO 8601 format)
     startPublishedDate: str  # Optional - published date filter (ISO 8601 format)
     endPublishedDate: str  # Optional - published date filter (ISO 8601 format)
-    includeText: list[str]  # Optional - strings that must be present in webpage text
-    excludeText: list[str]  # Optional - strings that must not be present in webpage text
-    context: bool | dict  # Optional - format results for LLMs
+    includeText: List[str]  # Optional - strings that must be present in webpage text
+    excludeText: List[str]  # Optional - strings that must not be present in webpage text
+    context: Union[bool, dict]  # Optional - format results for LLMs
     moderation: bool  # Optional - enable content moderation, default false
     contents: dict  # Optional - content retrieval options
 
@@ -55,11 +55,11 @@ class ExaAISearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        headers: Dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Validate environment and return headers.
         """
@@ -78,9 +78,9 @@ class ExaAISearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
-        data: dict | list[dict] | None = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -96,10 +96,10 @@ class ExaAISearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: str | list[str],
+        query: Union[str, List[str]],
         optional_params: dict,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Transform Search request to Exa AI API format.
 
@@ -123,7 +123,7 @@ class ExaAISearchConfig(BaseSearchConfig):
             # Exa AI only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: Final[ExaAISearchRequest] = {
+        request_data: ExaAISearchRequest = {
             "query": query,
         }
 
@@ -138,7 +138,7 @@ class ExaAISearchConfig(BaseSearchConfig):
             request_data["userLocation"] = optional_params["country"]
 
         # Convert to dict before dynamic key assignments
-        result_data: Final = dict(request_data)
+        result_data = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -175,10 +175,10 @@ class ExaAISearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json = raw_response.json()
 
         # Transform results to SearchResult objects
-        results: Final = []
+        results = []
         for result in response_json.get("results", []):
             search_result = SearchResult(
                 title=result.get("title", ""),

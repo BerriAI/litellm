@@ -23,13 +23,11 @@ from litellm.integrations._types.open_inference import ErrorAttributes
 from ._helpers import assert_server_span_attrs, get_server_span
 
 
-def _fake_request(parent_otel_span=None, path="/key/generate"):
-    """A real Request always carries a url; the validation handler reads its path to
-    decide whether the caller is on a surface with its own error contract."""
+def _fake_request(parent_otel_span=None):
     state = types.SimpleNamespace()
     if parent_otel_span is not None:
         state.parent_otel_span = parent_otel_span
-    return types.SimpleNamespace(state=state, url=types.SimpleNamespace(path=path))
+    return types.SimpleNamespace(state=state)
 
 
 @pytest.fixture
@@ -43,7 +41,7 @@ def wired_otel(otel_with_exporter, monkeypatch):
 def test_close_dangling_span_stamps_status(
     wired_otel, server_span_factory, status, path
 ):
-    request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
+    request = _fake_request(parent_otel_span=server_span_factory(path))
     _close_dangling_otel_server_span(request, status)
     assert_server_span_attrs(
         wired_otel,
@@ -61,7 +59,7 @@ def test_close_dangling_span_noop_when_no_span(wired_otel):
 
 def test_close_dangling_span_noop_when_otel_absent(server_span_factory, monkeypatch):
     monkeypatch.setattr(proxy_server_module, "open_telemetry_logger", None)
-    request = _fake_request(parent_otel_span=server_span_factory("/key/generate"), path="/key/generate")
+    request = _fake_request(parent_otel_span=server_span_factory("/key/generate"))
     _close_dangling_otel_server_span(request, 500)
 
 
@@ -85,7 +83,7 @@ def test_close_dangling_span_noop_when_otel_absent(server_span_factory, monkeypa
 def test_exception_handler_closes_span(
     wired_otel, server_span_factory, handler, exc, status, path
 ):
-    request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
+    request = _fake_request(parent_otel_span=server_span_factory(path))
     response = asyncio.run(handler(request, exc))
     assert response.status_code == status
     assert_server_span_attrs(
@@ -93,25 +91,6 @@ def test_exception_handler_closes_span(
         expected_status=status,
         expected_url_path=path,
         where=f"{handler.__name__} ({type(exc).__name__})",
-    )
-
-
-def test_validation_handler_closes_span_on_the_control_plane_too(wired_otel, server_span_factory):
-    """The control plane answers validation errors with a 400 problem document
-    instead of the proxy-wide 422, and that branch returns early. It must still
-    close the dangling SERVER span, or those requests leak a span apiece."""
-    path = "/management/v1/spend_logs/end_users"
-    request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
-
-    response = asyncio.run(otel_request_validation_exception_handler(request, RequestValidationError(errors=[])))
-
-    assert response.status_code == 400
-    assert response.media_type == "application/problem+json"
-    assert_server_span_attrs(
-        wired_otel,
-        expected_status=400,
-        expected_url_path=path,
-        where="otel_request_validation_exception_handler (control plane)",
     )
 
 
@@ -124,7 +103,7 @@ def test_openai_exception_handler_stamps_structured_error_on_span(
     ProxyException stringified to "" so error.message was dropped — the span
     showed an error with no message."""
     msg = "Authentication Error, Invalid proxy server token passed."
-    request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
+    request = _fake_request(parent_otel_span=server_span_factory(path))
     exc = ProxyException(message=msg, type="auth_error", param="key", code=401)
 
     response = asyncio.run(openai_exception_handler(request, exc))
@@ -144,7 +123,7 @@ def test_openai_exception_handler_stamps_structured_error_on_span(
 
 def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_factory):
     """ProxyException / HTTPException / RequestValidationError have dedicated handlers."""
-    request = _fake_request(parent_otel_span=server_span_factory("/key/generate"), path="/key/generate")
+    request = _fake_request(parent_otel_span=server_span_factory("/key/generate"))
     with pytest.raises(HTTPException):
         asyncio.run(
             otel_unhandled_exception_handler(
@@ -168,7 +147,7 @@ def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_fac
 def test_openai_exception_handler_closes_span(
     wired_otel, server_span_factory, code, path
 ):
-    request = _fake_request(parent_otel_span=server_span_factory(path), path=path)
+    request = _fake_request(parent_otel_span=server_span_factory(path))
     exc = ProxyException(
         message="boom",
         type="invalid_request_error",

@@ -2,8 +2,8 @@
 Helper for safe JSON loading in LiteLLM.
 """
 
-import json
 from typing import Any
+import json
 
 
 def safe_json_loads(data: str, default: Any = None) -> Any:

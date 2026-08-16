@@ -1,4 +1,5 @@
 import React from "react";
+import { Text } from "@tremor/react";
 import { MCPServerCostInfo } from "@/components/mcp_tools/types";
 
 interface MCPServerCostDisplayProps {
@@ -14,12 +15,12 @@ const MCPServerCostDisplay: React.FC<MCPServerCostDisplayProps> = ({ costConfig 
 
   if (!hasCostConfig) {
     return (
-      <div className="mt-6 border-t border-border pt-6">
+      <div className="mt-6 pt-6 border-t border-gray-200">
         <div className="space-y-4">
-          <div className="rounded-lg border border-border bg-muted p-4">
-            <p className="text-sm text-muted-foreground">
+          <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+            <Text className="text-gray-600">
               No cost configuration set for this server. Tool calls will be charged at $0.00 per tool call.
-            </p>
+            </Text>
           </div>
         </div>
       </div>
@@ -27,28 +28,28 @@ const MCPServerCostDisplay: React.FC<MCPServerCostDisplayProps> = ({ costConfig 
   }
 
   return (
-    <div className="mt-6 border-t border-border pt-6">
+    <div className="mt-6 pt-6 border-t border-gray-200">
       <div className="space-y-4">
         {hasDefaultCost &&
           costConfig?.default_cost_per_query !== undefined &&
           costConfig?.default_cost_per_query !== null && (
             <div>
-              <p className="text-sm font-medium">Default Cost per Query</p>
-              <div className="font-mono text-sm">${costConfig.default_cost_per_query.toFixed(4)}</div>
+              <Text className="font-medium">Default Cost per Query</Text>
+              <div className="text-green-600 font-mono">${costConfig.default_cost_per_query.toFixed(4)}</div>
             </div>
           )}
 
         {hasToolCosts && costConfig?.tool_name_to_cost_per_query && (
           <div>
-            <p className="text-sm font-medium">Tool-Specific Costs</p>
+            <Text className="font-medium">Tool-Specific Costs</Text>
             <div className="mt-2 space-y-2">
               {Object.entries(costConfig.tool_name_to_cost_per_query).map(
                 ([toolName, cost]) =>
                   cost !== null &&
                   cost !== undefined && (
-                    <div key={toolName} className="flex items-center justify-between rounded-lg bg-muted p-3">
-                      <p className="text-sm font-medium">{toolName}</p>
-                      <p className="font-mono text-sm">${cost.toFixed(4)} per query</p>
+                    <div key={toolName} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                      <Text className="font-medium">{toolName}</Text>
+                      <Text className="text-green-600 font-mono">${cost.toFixed(4)} per query</Text>
                     </div>
                   ),
               )}
@@ -56,20 +57,20 @@ const MCPServerCostDisplay: React.FC<MCPServerCostDisplayProps> = ({ costConfig 
           </div>
         )}
 
-        <div className="mt-4 rounded-lg border border-border bg-muted p-4">
-          <p className="text-sm font-medium">Cost Summary:</p>
+        <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <Text className="text-blue-800 font-medium">Cost Summary:</Text>
           <div className="mt-2 space-y-1">
             {hasDefaultCost &&
               costConfig?.default_cost_per_query !== undefined &&
               costConfig?.default_cost_per_query !== null && (
-                <p className="text-sm text-muted-foreground">
+                <Text className="text-blue-700">
                   • Default cost: ${costConfig.default_cost_per_query.toFixed(4)} per query
-                </p>
+                </Text>
               )}
             {hasToolCosts && costConfig?.tool_name_to_cost_per_query && (
-              <p className="text-sm text-muted-foreground">
+              <Text className="text-blue-700">
                 • {Object.keys(costConfig.tool_name_to_cost_per_query).length} tool(s) with custom pricing
-              </p>
+              </Text>
             )}
           </div>
         </div>

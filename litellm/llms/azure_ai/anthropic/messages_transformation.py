@@ -2,13 +2,16 @@
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.router import GenericLiteLLMParams
+
+if TYPE_CHECKING:
+    pass
 
 
 class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -19,7 +22,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> str | None:
+    def custom_llm_provider(self) -> Optional[str]:
         return "azure_ai"
 
     def should_strip_billing_metadata(self) -> bool:
@@ -29,12 +32,12 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: List[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> Tuple[dict, Optional[str]]:
         """
         Validate environment and set up Azure authentication headers for /v1/messages endpoint.
         Azure Anthropic uses x-api-key header (not api-key).
@@ -74,12 +77,12 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         Get the complete URL for Azure Anthropic /v1/messages endpoint.
@@ -96,7 +99,10 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
 
         # Ensure the URL ends with /v1/messages
         api_base = api_base.rstrip("/")
-        if api_base.endswith("/v1/messages") or api_base.endswith("/anthropic/v1/messages"):
+        if api_base.endswith("/v1/messages"):
+            # Already correct
+            pass
+        elif api_base.endswith("/anthropic/v1/messages"):
             # Already correct
             pass
         else:
@@ -104,7 +110,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             if "/anthropic" in api_base:
                 # /anthropic exists, ensure we end with /anthropic/v1/messages
                 # Extract the base URL up to and including /anthropic
-                parts: Final = api_base.split("/anthropic", 1)
+                parts = api_base.split("/anthropic", 1)
                 api_base = parts[0] + "/anthropic"
             else:
                 # /anthropic not in path, add it
@@ -114,7 +120,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
 
         return api_base
 
-    def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
+    def _remove_scope_from_cache_control(self, anthropic_messages_request: Dict) -> None:
         """
         Remove `scope` field from cache_control for Azure AI Foundry.
 
@@ -134,7 +140,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                     _sanitize(item["cache_control"])
 
         if "system" in anthropic_messages_request:
-            system: Final = anthropic_messages_request["system"]
+            system = anthropic_messages_request["system"]
             if isinstance(system, list):
                 _process_content_list(system)
 
@@ -148,18 +154,17 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: List[Dict],
+        anthropic_messages_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
-        anthropic_messages_request: Final = super().transform_anthropic_messages_request(
+    ) -> Dict:
+        anthropic_messages_request = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
         self._remove_scope_from_cache_control(anthropic_messages_request)
         return anthropic_messages_request

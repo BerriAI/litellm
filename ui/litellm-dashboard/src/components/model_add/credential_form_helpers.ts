@@ -1,10 +1,5 @@
+import type { FormInstance } from "antd";
 import { Providers } from "../provider_info_helpers";
-
-interface CredentialFormAdapter {
-  getFieldValue: (field: string) => unknown;
-  resetFields: () => void;
-  setFieldValue: (field: string, value: unknown) => void;
-}
 
 /**
  * Reset the credential form when the user switches providers.
@@ -24,7 +19,7 @@ interface CredentialFormAdapter {
  * that shouldn't reset just because the admin re-selected a provider.
  */
 export function resetCredentialFormOnProviderChange(
-  form: CredentialFormAdapter,
+  form: FormInstance,
   newProvider: Providers,
   setSelectedProvider: (p: Providers) => void,
 ): void {

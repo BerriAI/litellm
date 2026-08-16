@@ -4,9 +4,9 @@ Type definitions for AWS Bedrock AgentCore API.
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgentRuntime.html
 """
 
-from typing import Literal
+from typing import Dict, List, Optional
 
-from typing_extensions import TypedDict
+from typing_extensions import Literal, TypedDict
 
 
 # Request Types
@@ -85,25 +85,25 @@ class AgentCoreEventPayload(TypedDict, total=False):
     """Union payload for different event types."""
 
     # messageStart event
-    messageStart: AgentCoreMessageStart | None
+    messageStart: Optional[AgentCoreMessageStart]
 
     # contentBlockDelta event
-    contentBlockDelta: AgentCoreContentBlockDeltaEvent | None
+    contentBlockDelta: Optional[AgentCoreContentBlockDeltaEvent]
 
     # contentBlockStop event
-    contentBlockStop: AgentCoreContentBlockStop | None
+    contentBlockStop: Optional[AgentCoreContentBlockStop]
 
     # messageStop event
-    messageStop: AgentCoreMessageStop | None
+    messageStop: Optional[AgentCoreMessageStop]
 
     # metadata event
-    metadata: AgentCoreMetadata | None
+    metadata: Optional[AgentCoreMetadata]
 
 
 class AgentCoreEvent(TypedDict, total=False):
     """SSE event structure from AgentCore."""
 
-    event: AgentCoreEventPayload | None
+    event: Optional[AgentCoreEventPayload]
 
 
 class AgentCoreContentBlock(TypedDict):
@@ -116,7 +116,7 @@ class AgentCoreMessage(TypedDict):
     """Complete message structure."""
 
     role: Literal["assistant"]
-    content: list[AgentCoreContentBlock]
+    content: List[AgentCoreContentBlock]
 
 
 class AgentCoreFinalMessage(TypedDict):
@@ -130,5 +130,5 @@ class AgentCoreParsedResponse(TypedDict):
     """Parsed response from SSE stream."""
 
     content: str
-    usage: AgentCoreUsage | None
-    final_message: AgentCoreMessage | None
+    usage: Optional[AgentCoreUsage]
+    final_message: Optional[AgentCoreMessage]

@@ -6,6 +6,7 @@ Canonical definition for ``litellm_tagtable``. Re-exported from
 """
 
 from datetime import datetime
+from typing import List, Optional
 
 from pydantic import model_validator
 
@@ -15,15 +16,15 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
     tag_name: str
-    description: str | None = None
-    models: list[str] = []
-    model_info: dict | None = None
+    description: Optional[str] = None
+    models: List[str] = []
+    model_info: Optional[dict] = None
     spend: float = 0.0
-    budget_id: str | None = None
-    litellm_budget_table: LiteLLM_BudgetTable | None = None
-    created_at: datetime | None = None
-    created_by: str | None = None
-    updated_at: datetime | None = None
+    budget_id: Optional[str] = None
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
 
     @model_validator(mode="before")
     @classmethod

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
@@ -18,7 +18,7 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
     OpenAI dall-e-2 image generation config
     """
 
-    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         return ["n", "response_format", "quality", "size", "user"]
 
     def map_openai_params(
@@ -28,9 +28,9 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params: Final = self.get_supported_openai_params(model)
-        for k in non_default_params:
-            if k not in optional_params:
+        supported_params = self.get_supported_openai_params(model)
+        for k in non_default_params.keys():
+            if k not in optional_params.keys():
                 if k in supported_params:
                     optional_params[k] = non_default_params[k]
                 elif drop_params:
@@ -52,12 +52,12 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ImageResponse:
-        response: Final = raw_response.json()
+        response = raw_response.json()
 
-        stringified_response: Final = response
+        stringified_response = response
         ## LOGGING
         logging_obj.post_call(
             input=request_data.get("prompt", ""),
@@ -65,7 +65,7 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
             additional_args={"complete_input_dict": request_data},
             original_response=stringified_response,
         )
-        image_response: Final[ImageResponse] = convert_to_model_response_object(
+        image_response: ImageResponse = convert_to_model_response_object(  # type: ignore
             response_object=stringified_response,
             model_response_object=model_response,
             response_type="image_generation",

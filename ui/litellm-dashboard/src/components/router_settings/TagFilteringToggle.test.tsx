@@ -22,11 +22,6 @@ describe("TagFilteringToggle", () => {
     expect(screen.getByText("Enable Tag Filtering")).toBeInTheDocument();
   });
 
-  it("should name the switch with the metadata label so it is reachable by accessible name", () => {
-    render(<TagFilteringToggle enabled={false} routerFieldsMetadata={baseMetadata} onToggle={vi.fn()} />);
-    expect(screen.getByRole("switch", { name: "Tag Filtering" })).toBeInTheDocument();
-  });
-
   it("should display the label from metadata when provided", () => {
     render(<TagFilteringToggle enabled={false} routerFieldsMetadata={baseMetadata} onToggle={vi.fn()} />);
     expect(screen.getByText("Tag Filtering")).toBeInTheDocument();

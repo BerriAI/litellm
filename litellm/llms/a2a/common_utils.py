@@ -2,7 +2,7 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
-from typing import Any, Final
+from typing import Any, Dict, List
 
 from pydantic import BaseModel
 
@@ -20,7 +20,7 @@ class A2AError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict[str, Any] = {},
+        headers: Dict[str, Any] = {},
     ):
         super().__init__(
             status_code=status_code,
@@ -29,7 +29,7 @@ class A2AError(BaseLLMException):
         )
 
 
-def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
+def convert_messages_to_prompt(messages: List[AllMessageValues]) -> str:
     """
     Convert OpenAI messages to a single prompt string for A2A agent.
 
@@ -42,7 +42,7 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     Returns:
         Formatted prompt string with full conversation context
     """
-    conversation_parts: Final = []
+    conversation_parts = []
     for msg in messages:
         # Use LiteLLM's helper to extract text from content (handles both str and list)
         content_text = convert_content_list_to_str(message=msg)
@@ -53,7 +53,7 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
         elif isinstance(msg, dict):
             role = msg.get("role", "user")
         else:
-            role = dict(msg).get("role", "user")
+            role = dict(msg).get("role", "user")  # type: ignore
 
         if content_text:
             conversation_parts.append(f"{role}: {content_text}")
@@ -61,7 +61,7 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     return "\n".join(conversation_parts)
 
 
-def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
+def extract_text_from_a2a_message(message: Dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
     """
     Extract text content from A2A message parts.
 
@@ -76,8 +76,8 @@ def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_d
     if message is None or depth >= max_depth:
         return ""
 
-    parts: Final = message.get("parts", [])
-    text_parts: Final[list[str]] = []
+    parts = message.get("parts", [])
+    text_parts: List[str] = []
 
     for part in parts:
         if part.get("kind") == "text":
@@ -91,7 +91,7 @@ def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_d
     return " ".join(text_parts)
 
 
-def extract_text_from_a2a_response(response_dict: dict[str, Any], max_depth: int = 10) -> str:
+def extract_text_from_a2a_response(response_dict: Dict[str, Any], max_depth: int = 10) -> str:
     """
     Extract text content from A2A response result.
 
@@ -102,7 +102,7 @@ def extract_text_from_a2a_response(response_dict: dict[str, Any], max_depth: int
     Returns:
         Text from response message parts
     """
-    result: Final = response_dict.get("result", {})
+    result = response_dict.get("result", {})
     if not isinstance(result, dict):
         return ""
 
@@ -118,26 +118,26 @@ def extract_text_from_a2a_response(response_dict: dict[str, Any], max_depth: int
         return extract_text_from_a2a_message(result, depth=0, max_depth=max_depth)
 
     # Check for nested message
-    message: Final = result.get("message")
+    message = result.get("message")
     if message:
         return extract_text_from_a2a_message(message, depth=0, max_depth=max_depth)
 
     # Check for streaming artifact-update (singular artifact)
-    artifact: Final = result.get("artifact")
+    artifact = result.get("artifact")
     if artifact and isinstance(artifact, dict):
         return extract_text_from_a2a_message(artifact, depth=0, max_depth=max_depth)
 
     # Check for task status message (common in Gemini A2A agents)
-    status: Final = result.get("status", {})
+    status = result.get("status", {})
     if isinstance(status, dict):
-        status_message: Final = status.get("message")
+        status_message = status.get("message")
         if status_message:
             return extract_text_from_a2a_message(status_message, depth=0, max_depth=max_depth)
 
     # Handle task result with artifacts (plural, array)
-    artifacts: Final = result.get("artifacts", [])
+    artifacts = result.get("artifacts", [])
     if artifacts and len(artifacts) > 0:
-        first_artifact: Final = artifacts[0]
+        first_artifact = artifacts[0]
         return extract_text_from_a2a_message(first_artifact, depth=0, max_depth=max_depth)
 
     return ""

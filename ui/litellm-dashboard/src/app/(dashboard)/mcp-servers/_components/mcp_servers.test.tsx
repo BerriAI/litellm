@@ -1,6 +1,5 @@
 import React from "react";
-import { render, waitFor, screen, act, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, waitFor, screen, fireEvent, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import MCPServers from "./mcp_servers";
@@ -308,15 +307,36 @@ describe("MCPServers", () => {
     expect(screen.getByText("Team B Server")).toBeInTheDocument();
     expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
 
-    // Find the team select by its "Team" label, then the combobox it labels
+    // Find the team select dropdown by looking for the "Team" label
     const teamLabel = screen.getByText("Team");
-    const teamSelect = within(teamLabel.parentElement!).getByRole("combobox");
+    const teamSelectContainer = teamLabel.closest("div")?.querySelector(".ant-select");
+    expect(teamSelectContainer).toBeTruthy();
 
-    await userEvent.click(teamSelect);
+    // Open the dropdown by clicking on the selector
+    const selectSelector = teamSelectContainer?.querySelector(".ant-select-selector");
+    expect(selectSelector).toBeTruthy();
 
-    // Pick the "Team A" option once the listbox opens
-    const teamAOption = await screen.findByText("Team A");
-    await userEvent.click(teamAOption);
+    act(() => {
+      fireEvent.mouseDown(selectSelector!);
+    });
+
+    // Wait for dropdown to open
+    await waitFor(
+      () => {
+        const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
+        expect(dropdownOptions.length).toBeGreaterThan(0);
+      },
+      { timeout: 5000 },
+    );
+
+    // Find and click on "Team A" option
+    const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
+    const teamAOption = Array.from(dropdownOptions).find((option) => option.textContent?.includes("Team A"));
+    expect(teamAOption).toBeTruthy();
+
+    act(() => {
+      fireEvent.click(teamAOption!);
+    });
 
     // Wait for filtering to complete
     await waitFor(() => {

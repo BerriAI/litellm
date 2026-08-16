@@ -1,6 +1,5 @@
 import json
-from collections.abc import Callable
-from typing import Final
+from typing import Callable, Optional, Union
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -12,7 +11,7 @@ from litellm.utils import ModelResponse
 
 from .transformation import NLPCloudConfig
 
-nlp_config: Final = NLPCloudConfig()
+nlp_config = NLPCloudConfig()
 
 
 def completion(
@@ -28,7 +27,7 @@ def completion(
     litellm_params: dict,
     logger_fn=None,
     default_max_tokens_to_sample=None,
-    client: HTTPHandler | AsyncHTTPHandler | None = None,
+    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     headers={},
 ):
     headers = nlp_config.validate_environment(
@@ -41,19 +40,19 @@ def completion(
     )
 
     ## Load Config
-    config: Final = litellm.NLPCloudConfig.get_config()
+    config = litellm.NLPCloudConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
         ):  # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    completion_url_fragment_1: Final = api_base
-    completion_url_fragment_2: Final = "/generation"
+    completion_url_fragment_1 = api_base
+    completion_url_fragment_2 = "/generation"
     model = model
 
-    completion_url: Final = completion_url_fragment_1 + model + completion_url_fragment_2
-    data: Final = nlp_config.transform_request(
+    completion_url = completion_url_fragment_1 + model + completion_url_fragment_2
+    data = nlp_config.transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -75,7 +74,7 @@ def completion(
     if client is None or not isinstance(client, HTTPHandler):
         client = _get_httpx_client()
 
-    response: Final = client.post(
+    response = client.post(
         completion_url,
         headers=headers,
         data=json.dumps(data),

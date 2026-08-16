@@ -34,8 +34,6 @@ import {
 } from "@/components/networking";
 import { Button as AntdButton, Modal, Select as AntdSelect, Form, Tooltip } from "antd";
 import { rolesWithWriteAccess } from "@/utils/roles";
-import { teamDetailHref } from "@/utils/entityLinks";
-import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
@@ -43,10 +41,6 @@ import { CopyIcon, CheckIcon } from "lucide-react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import MCPServerPermissions from "@/components/permissions/MCPServerPermissions";
-import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
-import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
-import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 
 interface UserInfoViewProps {
   userId: string;
@@ -97,8 +91,6 @@ export default function UserInfoView({
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<string>("user");
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
-  const { data: allMcpServers = [] } = useMCPServers();
-  const { data: allMcpToolsets = [] } = useMCPToolsets();
 
   React.useEffect(() => {
     setBaseUrl(getProxyBaseUrl());
@@ -300,18 +292,7 @@ export default function UserInfoView({
     try {
       if (!accessToken || !userData) return;
 
-      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers, allMcpToolsets);
-      const userFields = Object.fromEntries(
-        Object.entries(formValues).filter(
-          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions",
-        ),
-      );
-
-      await userUpdateUserCall(
-        accessToken,
-        mcpEntitlement ? { ...userFields, object_permission: mcpEntitlement } : userFields,
-        null,
-      );
+      const response = await userUpdateUserCall(accessToken, formValues, null);
 
       // Update local state with new values
       setUserData({
@@ -322,9 +303,6 @@ export default function UserInfoView({
         max_budget: formValues.max_budget ?? userData.max_budget,
         budget_duration: formValues.budget_duration ?? userData.budget_duration,
         metadata: formValues.metadata ?? userData.metadata,
-        object_permission: mcpEntitlement
-          ? { ...userData.object_permission, ...mcpEntitlement }
-          : userData.object_permission,
       });
 
       NotificationsManager.success("User updated successfully");
@@ -456,10 +434,10 @@ export default function UserInfoView({
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${formatNumberWithCommas(userData.spend || 0, 2)}</Title>
+                  <Title>${formatNumberWithCommas(userData.spend || 0, 4)}</Title>
                   <Text>
                     of{" "}
-                    {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : "Unlimited"}
+                    {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 4)}` : "Unlimited"}
                   </Text>
                 </div>
               </Card>
@@ -486,11 +464,7 @@ export default function UserInfoView({
                         <TableBody>
                           {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
                             <TableRow key={team.team_id}>
-                              <TableCell>
-                                <BadgeLink href={teamDetailHref(team.team_id)}>
-                                  {team.team_alias || team.team_id}
-                                </BadgeLink>
-                              </TableCell>
+                              <TableCell>{team.team_alias || team.team_id}</TableCell>
                               {isProxyAdmin && (
                                 <TableCell className="text-right">
                                   <Button
@@ -557,7 +531,6 @@ export default function UserInfoView({
                   userRole={userRole}
                   userModels={userModels}
                   possibleUIRoles={possibleUIRoles}
-                  objectPermission={userData.object_permission}
                 />
               ) : (
                 <div className="space-y-4">
@@ -638,17 +611,6 @@ export default function UserInfoView({
                     <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                       {JSON.stringify(userData.metadata || {}, null, 2)}
                     </pre>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium mb-2">MCP Permissions</Text>
-                    <MCPServerPermissions
-                      mcpServers={userData.object_permission?.mcp_servers || []}
-                      mcpAccessGroups={userData.object_permission?.mcp_access_groups || []}
-                      mcpToolPermissions={userData.object_permission?.mcp_tool_permissions || {}}
-                      mcpToolsets={userData.object_permission?.mcp_toolsets || []}
-                      accessToken={accessToken}
-                    />
                   </div>
                 </div>
               )}

@@ -37,10 +37,7 @@ describe("UsageAIChatPanel", () => {
   it("should render model selector", () => {
     renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
 
-    // One library paints the prompt as its own text node and the other leaves it on the input's
-    // placeholder attribute, so either one means the user is being told what to pick.
-    const prompt = "Select a model (optional, defaults to gpt-4o-mini)";
-    expect(screen.queryAllByText(prompt).length + screen.queryAllByPlaceholderText(prompt).length).toBeGreaterThan(0);
+    expect(screen.getByText("Select a model (optional, defaults to gpt-4o-mini)")).toBeInTheDocument();
   });
 
   it("should render empty state message when no conversation", () => {

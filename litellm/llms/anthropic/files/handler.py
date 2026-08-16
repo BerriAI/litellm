@@ -1,8 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Coroutine
-from typing import Any, Final
+from typing import Any, Coroutine, Optional, Union
 
 import httpx
 
@@ -25,7 +24,7 @@ from ..chat.transformation import AnthropicConfig
 from ..common_utils import AnthropicModelInfo
 
 # Map Anthropic error types to HTTP status codes
-ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = {
+ANTHROPIC_ERROR_STATUS_CODE_MAP = {
     "invalid_request_error": 400,
     "authentication_error": 401,
     "permission_error": 403,
@@ -51,10 +50,10 @@ class AnthropicFilesHandler:
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
-        api_base: str | None = None,
-        api_key: str | None = None,
-        timeout: float | httpx.Timeout = 600.0,
-        max_retries: int | None = None,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: Union[float, httpx.Timeout] = 600.0,
+        max_retries: Optional[int] = None,
     ) -> HttpxBinaryResponseContent:
         """
         Async: Retrieve file content from Anthropic.
@@ -72,7 +71,7 @@ class AnthropicFilesHandler:
         Returns:
             HttpxBinaryResponseContent: Binary content wrapped in compatible response format
         """
-        file_id: Final = file_content_request.get("file_id")
+        file_id = file_content_request.get("file_id")
         if not file_id:
             raise ValueError("file_id is required in file_content_request")
 
@@ -85,32 +84,32 @@ class AnthropicFilesHandler:
 
         # Get Anthropic API credentials
         api_base = self.anthropic_model_info.get_api_base(api_base)
-        auth_header: Final = self.anthropic_model_info.get_auth_header(api_key, api_base)
+        auth_header = self.anthropic_model_info.get_auth_header(api_key, api_base)
 
         if auth_header is None:
             raise ValueError("Missing Anthropic API Key")
 
         # Construct the Anthropic batch results URL
-        encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
-        results_url: Final = f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}/results"
+        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        results_url = f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}/results"
 
         # Prepare headers
-        headers: Final = {
+        headers = {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
         }
         headers.update(auth_header)
 
         # Make the request to Anthropic
-        async_client: Final = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
-        anthropic_response: Final = await async_client.get(url=results_url, headers=headers)
+        async_client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
+        anthropic_response = await async_client.get(url=results_url, headers=headers)
         anthropic_response.raise_for_status()
 
         # Transform Anthropic batch results to OpenAI format
         transformed_content = self._transform_anthropic_batch_results_to_openai_format(anthropic_response.content)
 
         # Create a new response with transformed content
-        transformed_response: Final = httpx.Response(
+        transformed_response = httpx.Response(
             status_code=anthropic_response.status_code,
             headers=anthropic_response.headers,
             content=transformed_content,
@@ -124,11 +123,11 @@ class AnthropicFilesHandler:
         self,
         _is_async: bool,
         file_content_request: FileContentRequest,
-        api_base: str | None = None,
-        api_key: str | None = None,
-        timeout: float | httpx.Timeout = 600.0,
-        max_retries: int | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: Union[float, httpx.Timeout] = 600.0,
+        max_retries: Optional[int] = None,
+    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
         """
         Retrieve file content from Anthropic.
 
@@ -188,11 +187,11 @@ class AnthropicFilesHandler:
         }
         """
         try:
-            anthropic_config: Final = AnthropicConfig()
-            transformed_lines: Final = []
+            anthropic_config = AnthropicConfig()
+            transformed_lines = []
 
             # Parse JSONL content
-            content_str: Final = anthropic_content.decode("utf-8")
+            content_str = anthropic_content.decode("utf-8")
             for line in content_str.strip().split("\n"):
                 if not line.strip():
                     continue
@@ -270,7 +269,7 @@ class AnthropicFilesHandler:
                 transformed_content += "\n"  # Add trailing newline for JSONL format
             return transformed_content.encode("utf-8")
         except Exception as e:
-            verbose_logger.error("Error transforming Anthropic batch results to OpenAI format: %s", e)
+            verbose_logger.error(f"Error transforming Anthropic batch results to OpenAI format: {e}")
             # Return original content if transformation fails
             return anthropic_content
 
@@ -282,13 +281,13 @@ class AnthropicFilesHandler:
         """
         try:
             # Create a mock httpx.Response for transformation
-            mock_response: Final = httpx.Response(
+            mock_response = httpx.Response(
                 status_code=200,
                 content=json.dumps(anthropic_message).encode("utf-8"),
             )
 
             # Create a ModelResponse object
-            model_response: Final = ModelResponse()
+            model_response = ModelResponse()
             # Initialize with required fields - will be populated by transform_parsed_response
             model_response.choices = [
                 litellm.Choices(
@@ -296,10 +295,10 @@ class AnthropicFilesHandler:
                     index=0,
                     message=litellm.Message(content="", role="assistant"),
                 )
-            ]
+            ]  # type: ignore
 
             # Create a logging object for transformation
-            logging_obj: Final = Logging(
+            logging_obj = Logging(
                 model=anthropic_message.get("model", "claude-3-5-sonnet-20241022"),
                 messages=[{"role": "user", "content": "batch_request"}],
                 stream=False,
@@ -313,7 +312,7 @@ class AnthropicFilesHandler:
             logging_obj.optional_params = {}
 
             # Transform using AnthropicConfig
-            transformed_response: Final = anthropic_config.transform_parsed_response(
+            transformed_response = anthropic_config.transform_parsed_response(
                 completion_response=anthropic_message,
                 raw_response=mock_response,
                 model_response=model_response,
@@ -322,7 +321,7 @@ class AnthropicFilesHandler:
             )
 
             # Convert ModelResponse to OpenAI format dict - it's already in OpenAI format
-            openai_body: Final[OpenAIChatCompletionResponse] = transformed_response.model_dump(exclude_none=True)
+            openai_body: OpenAIChatCompletionResponse = transformed_response.model_dump(exclude_none=True)
 
             # Ensure id comes from anthropic_message if not set
             if not openai_body.get("id"):
@@ -330,9 +329,9 @@ class AnthropicFilesHandler:
 
             return openai_body
         except Exception as e:
-            verbose_logger.error("Error transforming Anthropic message to OpenAI format: %s", e)
+            verbose_logger.error(f"Error transforming Anthropic message to OpenAI format: {e}")
             # Return a basic error response if transformation fails
-            error_response: Final[OpenAIChatCompletionResponse] = {
+            error_response: OpenAIChatCompletionResponse = {
                 "id": anthropic_message.get("id", ""),
                 "object": "chat.completion",
                 "created": int(time.time()),

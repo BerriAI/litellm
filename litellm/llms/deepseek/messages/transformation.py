@@ -2,7 +2,7 @@
 DeepSeek Anthropic-compatible messages transformation config.
 """
 
-from typing import Any, Final
+from typing import Any, Dict, List, Optional, Tuple
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -23,18 +23,18 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> str | None:
+    def custom_llm_provider(self) -> Optional[str]:
         return "deepseek"
 
     def should_strip_billing_metadata(self) -> bool:
         return True
 
     @staticmethod
-    def get_api_key(api_key: str | None = None) -> str | None:
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
         return api_key or get_secret_str("DEEPSEEK_API_KEY") or litellm.api_key
 
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str:
+    def get_api_base(api_base: Optional[str] = None) -> str:
         return (
             api_base
             or get_secret_str("DEEPSEEK_ANTHROPIC_API_BASE")
@@ -46,13 +46,13 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: List[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
-        dynamic_api_key: Final = self.get_api_key(api_key=api_key)
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> Tuple[dict, Optional[str]]:
+        dynamic_api_key = self.get_api_key(api_key=api_key)
 
         if "x-api-key" not in headers and "authorization" not in headers and dynamic_api_key is not None:
             headers["x-api-key"] = dynamic_api_key
@@ -72,20 +72,23 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         base_url = self.get_api_base(api_base=api_base).rstrip("/")
 
         if base_url.endswith("/v1/messages") and "/anthropic/" in base_url:
             return base_url
-        base_url = base_url.removesuffix("/v1/messages")
-        base_url = base_url.removesuffix("/v1")
-        base_url = base_url.removesuffix("/beta")
+        if base_url.endswith("/v1/messages"):
+            base_url = base_url[: -len("/v1/messages")]
+        if base_url.endswith("/v1"):
+            base_url = base_url[: -len("/v1")]
+        if base_url.endswith("/beta"):
+            base_url = base_url[: -len("/beta")]
 
         if not base_url.endswith("/anthropic") and "/anthropic/" not in base_url:
             base_url = f"{base_url}/anthropic"
@@ -97,7 +100,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         if not isinstance(tools, list):
             return tools
 
-        sanitized_tools: Final = []
+        sanitized_tools = []
         for tool in tools:
             if isinstance(tool, dict) and tool.get("type") == "custom":
                 sanitized_tool = dict(tool)
@@ -110,12 +113,12 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: List[Dict],
+        anthropic_messages_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
-        anthropic_messages_request: Final = super().transform_anthropic_messages_request(
+    ) -> Dict:
+        anthropic_messages_request = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,

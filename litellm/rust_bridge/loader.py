@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from types import ModuleType
-from typing import Final
 
-_BRIDGE_SENTINEL: Final = object()
+_BRIDGE_SENTINEL = object()
 _cached_bridge: ModuleType | None | object = _BRIDGE_SENTINEL
 
 

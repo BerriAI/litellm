@@ -145,7 +145,8 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
       onClose();
     } catch (error) {
       console.error("Error registering skill:", error);
-      MessageManager.error(error instanceof Error && error.message ? error.message : "Failed to register skill");
+      const reason = error instanceof Error && error.message ? error.message : "Failed to register skill";
+      MessageManager.error(`Failed to register skill: ${reason}`);
     } finally {
       setIsSubmitting(false);
     }

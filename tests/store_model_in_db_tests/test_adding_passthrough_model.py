@@ -6,7 +6,8 @@ make request
 Cases to cover
 1. user points api base to <proxy-base>/assemblyai
 2. user points api base to <proxy-base>/asssemblyai/us
-3. Bad API Key / credential - 401
+3. user points api base to <proxy-base>/assemblyai/eu
+4. Bad API Key / credential - 401
 """
 
 import time
@@ -18,6 +19,7 @@ import json
 TEST_MASTER_KEY = "sk-1234"
 PROXY_BASE_URL = "http://0.0.0.0:4000"
 US_BASE_URL = f"{PROXY_BASE_URL}/assemblyai"
+EU_BASE_URL = f"{PROXY_BASE_URL}/eu.assemblyai"
 ASSEMBLYAI_API_KEY_ENV_VAR = "ASSEMBLYAI_API_KEY"
 
 
@@ -80,6 +82,20 @@ def test_e2e_assemblyai_passthrough():
     pass
 
 
+def test_e2e_assemblyai_passthrough_eu():
+    """
+    Test adding a pass through assemblyai model + api key + api base to the db
+    wait 20 seconds
+    make request
+    """
+    add_assembly_ai_model_to_db(api_base="https://api.eu.assemblyai.com")
+    virtual_key = create_virtual_key()
+    # make request
+    make_assemblyai_basic_transcribe_request(
+        virtual_key=virtual_key, assemblyai_base_url=EU_BASE_URL
+    )
+
+    pass
 
 
 def test_assemblyai_routes_with_bad_api_key():

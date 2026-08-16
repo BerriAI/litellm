@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Optional
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -9,7 +9,7 @@ from litellm.types.router import GenericLiteLLMParams
 # (e.g. the responses endpoint URL is stored as api_base for Azure models).
 # Strip these before building the containers URL so we always start from the
 # resource root (https://resource.cognitiveservices.azure.com).
-_AZURE_ENDPOINT_PATHS: Final = ("/openai/responses",)
+_AZURE_ENDPOINT_PATHS = ("/openai/responses",)
 
 
 class AzureContainerConfig(OpenAIContainerConfig):
@@ -27,7 +27,7 @@ class AzureContainerConfig(OpenAIContainerConfig):
     def validate_environment(
         self,
         headers: dict,
-        api_key: str | None = None,
+        api_key: Optional[str] = None,
     ) -> dict:
         return BaseAzureLLM._base_validate_azure_environment(
             headers=headers,
@@ -35,19 +35,19 @@ class AzureContainerConfig(OpenAIContainerConfig):
         )
 
     @staticmethod
-    def _normalize_api_base(api_base: str | None) -> str | None:
+    def _normalize_api_base(api_base: Optional[str]) -> Optional[str]:
         """Strip endpoint-specific path suffixes from api_base to get the resource root."""
         if not api_base:
             return api_base
-        parsed: Final = urlparse(api_base)
-        path: Final = parsed.path.rstrip("/")
+        parsed = urlparse(api_base)
+        path = parsed.path.rstrip("/")
         for ep in _AZURE_ENDPOINT_PATHS:
             if path.endswith(ep):
                 return urlunparse((parsed.scheme, parsed.netloc, path[: -len(ep)], "", "", ""))
         return api_base
 
     @staticmethod
-    def _extract_api_version(api_base: str | None) -> str | None:
+    def _extract_api_version(api_base: Optional[str]) -> Optional[str]:
         """Return the api-version query param from api_base if present."""
         if not api_base:
             return None
@@ -55,7 +55,7 @@ class AzureContainerConfig(OpenAIContainerConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
         """
@@ -71,8 +71,8 @@ class AzureContainerConfig(OpenAIContainerConfig):
         prefer the api-version embedded there over the deployment's
         api_version field, which may point to an older chat API version.
         """
-        effective_params: Final = dict(litellm_params)
-        api_version_from_base: Final = self._extract_api_version(api_base)
+        effective_params = dict(litellm_params)
+        api_version_from_base = self._extract_api_version(api_base)
         if api_version_from_base:
             effective_params["api_version"] = api_version_from_base
         return BaseAzureLLM._get_base_azure_url(

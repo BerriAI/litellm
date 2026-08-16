@@ -10,19 +10,19 @@ so it never compounds across requests.
 """
 
 import math
-from typing import Final
+from typing import Optional
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 
 
-def budget_throttle_percentage() -> float | None:
+def budget_throttle_percentage() -> Optional[float]:
     """
     The global throttle percentage, or None when throttling is disabled /
     misconfigured (in which case an over-budget key is hard-blocked, the safe
     default).
     """
-    pct: Final = litellm.budget_exceeded_throttle_percentage
+    pct = litellm.budget_exceeded_throttle_percentage
     if not isinstance(pct, (int, float)) or isinstance(pct, bool):
         return None
     if not 0 < pct <= 1:
@@ -45,7 +45,7 @@ def should_throttle_budget_exceeded(valid_token: UserAPIKeyAuth) -> bool:
     return budget_throttle_percentage() is not None
 
 
-def throttled_limit(limit: int | None, pct: float | None) -> int | None:
+def throttled_limit(limit: Optional[int], pct: Optional[float]) -> Optional[int]:
     """
     Scale a TPM/RPM limit to ``pct`` of its value, keeping a trickle of at least
     1 so a throttled key is slowed rather than fully locked out. An unset limit

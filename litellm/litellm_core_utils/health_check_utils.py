@@ -2,8 +2,6 @@
 Utils used for litellm.ahealth_check()
 """
 
-from typing import Final
-
 
 def _filter_model_params(model_params: dict) -> dict:
     """Remove 'messages' param from model params."""
@@ -11,7 +9,7 @@ def _filter_model_params(model_params: dict) -> dict:
 
 
 def _create_health_check_response(response_headers: dict) -> dict:
-    response: Final = {}
+    response = {}
 
     if response_headers.get("x-ratelimit-remaining-requests", None) is not None:  # not provided for dall-e requests
         response["x-ratelimit-remaining-requests"] = response_headers["x-ratelimit-remaining-requests"]

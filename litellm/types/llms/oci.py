@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, SerializeAsAny
 
@@ -24,6 +24,8 @@ class OCIVendors(Enum):
 class OCIContentPart(BaseModel):
     """Base model for content parts in an OCI message."""
 
+    pass
+
 
 class OCITextContentPart(OCIContentPart):
     """Text content part for the OCI API."""
@@ -36,7 +38,7 @@ class OCIImageUrl(BaseModel):
     """ImageUrl object for OCI API. See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/generative_ai_inference/models/oci.generative_ai_inference.models.ImageUrl.html"""
 
     url: str
-    detail: Literal["AUTO", "HIGH", "LOW"] | None = None
+    detail: Optional[Literal["AUTO", "HIGH", "LOW"]] = None
 
 
 class OCIImageContentPart(OCIContentPart):
@@ -46,7 +48,7 @@ class OCIImageContentPart(OCIContentPart):
     imageUrl: OCIImageUrl
 
 
-OCIContentPartUnion = OCITextContentPart | OCIImageContentPart
+OCIContentPartUnion = Union[OCITextContentPart, OCIImageContentPart]
 
 # --- Models for Tools and Tool Calls ---
 
@@ -54,7 +56,7 @@ OCIContentPartUnion = OCITextContentPart | OCIImageContentPart
 class OCIToolCall(BaseModel):
     """Represents a tool call made by the model."""
 
-    id: str | None = None  # absent in some provider responses (e.g. Google via OCI)
+    id: Optional[str] = None  # absent in some provider responses (e.g. Google via OCI)
     type: Literal["FUNCTION"] = "FUNCTION"
     name: str
     arguments: str  # Arguments should be a JSON-serialized string
@@ -64,9 +66,9 @@ class OCIToolDefinition(BaseModel):
     """Defines a tool that can be used by the model."""
 
     type: Literal["FUNCTION"] = "FUNCTION"
-    name: str | None = None
-    description: str | None = None
-    parameters: dict | None = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    parameters: Optional[dict] = None
 
 
 # --- Message Models (Request and Response) ---
@@ -76,9 +78,9 @@ class OCIMessage(BaseModel):
     """Model for a single message in the request/response payload."""
 
     role: OCIRoles
-    content: list[OCIContentPartUnion] | None = None
-    toolCalls: list[OCIToolCall] | None = None
-    toolCallId: str | None = None
+    content: Optional[List[OCIContentPartUnion]] = None
+    toolCalls: Optional[List[OCIToolCall]] = None
+    toolCallId: Optional[str] = None
 
 
 # --- Request Payload Models ---
@@ -88,35 +90,35 @@ class OCIChatRequestPayload(BaseModel):
     """Internal 'chatRequest' payload for the OCI API."""
 
     apiFormat: str
-    messages: list[OCIMessage]
-    tools: list[OCIToolDefinition] | None = None
+    messages: List[OCIMessage]
+    tools: Optional[List[OCIToolDefinition]] = None
     isStream: bool = False
-    numGenerations: int | None = None
-    maxTokens: int | None = None
+    numGenerations: Optional[int] = None
+    maxTokens: Optional[int] = None
     # GPT-5+ on OCI rejects maxTokens and requires maxCompletionTokens.
-    maxCompletionTokens: int | None = None
-    temperature: float | None = None
-    topP: float | None = None
-    stop: list[str] | None = None
-    seed: int | None = None
-    frequencyPenalty: float | None = None
-    presencePenalty: float | None = None
+    maxCompletionTokens: Optional[int] = None
+    temperature: Optional[float] = None
+    topP: Optional[float] = None
+    stop: Optional[List[str]] = None
+    seed: Optional[int] = None
+    frequencyPenalty: Optional[float] = None
+    presencePenalty: Optional[float] = None
     # Reasoning-token budget knob (OCI: NONE/MINIMAL/LOW/MEDIUM/HIGH).
     # Honoured by GPT-5 family, Gemini 2.5, Grok reasoning variants,
     # Cohere Command-A-Reasoning. Ignored by non-reasoning models.
-    reasoningEffort: str | None = None
-    responseFormat: dict[str, Any] | None = None
-    toolChoice: str | dict[str, Any] | None = None
-    logitBias: dict[str, Any] | None = None
-    logProbs: int | None = None
+    reasoningEffort: Optional[str] = None
+    responseFormat: Optional[Dict[str, Any]] = None
+    toolChoice: Optional[Union[str, Dict[str, Any]]] = None
+    logitBias: Optional[Dict[str, Any]] = None
+    logProbs: Optional[int] = None
 
 
 class OCIServingMode(BaseModel):
     """Defines the serving mode and the model to be used."""
 
     servingType: str
-    endpointId: str | None = None
-    modelId: str | None = None
+    endpointId: Optional[str] = None
+    modelId: Optional[str] = None
 
 
 class OCICompletionPayload(BaseModel):
@@ -124,7 +126,7 @@ class OCICompletionPayload(BaseModel):
 
     compartmentId: str
     servingMode: OCIServingMode
-    chatRequest: OCIChatRequestPayload | CohereChatRequest
+    chatRequest: Union[OCIChatRequestPayload, CohereChatRequest]
 
 
 # --- API Response Models (Non-streaming) ---
@@ -133,14 +135,14 @@ class OCICompletionPayload(BaseModel):
 class OCICompletionTokenDetails(BaseModel):
     """Completion token details in the OCI response."""
 
-    acceptedPredictionTokens: int | None = None
-    reasoningTokens: int | None = None
+    acceptedPredictionTokens: Optional[int] = None
+    reasoningTokens: Optional[int] = None
 
 
 class OCIPromptTokensDetails(BaseModel):
     """Prompt token details in the OCI response."""
 
-    cachedTokens: int | None = None
+    cachedTokens: Optional[int] = None
 
 
 class OCIResponseUsage(BaseModel):
@@ -149,10 +151,10 @@ class OCIResponseUsage(BaseModel):
     promptTokens: int
     # completionTokens may be absent for reasoning models when all the output
     # budget is consumed by reasoning tokens before any visible content is produced.
-    completionTokens: int | None = None
+    completionTokens: Optional[int] = None
     totalTokens: int
-    completionTokensDetails: OCICompletionTokenDetails | None = None
-    promptTokensDetails: OCIPromptTokensDetails | None = None
+    completionTokensDetails: Optional[OCICompletionTokenDetails] = None
+    promptTokensDetails: Optional[OCIPromptTokensDetails] = None
 
 
 class OCIResponseChoice(BaseModel):
@@ -161,9 +163,9 @@ class OCIResponseChoice(BaseModel):
     index: int
     # message is absent when a reasoning model exhausts max_tokens in the
     # reasoning phase without producing any visible content.
-    message: OCIMessage | None = None
-    finishReason: str | None = None
-    logprobs: dict[str, Any] | None = None
+    message: Optional[OCIMessage] = None
+    finishReason: Optional[str] = None
+    logprobs: Optional[Dict[str, Any]] = None
 
 
 class OCIChatResponse(BaseModel):
@@ -171,7 +173,7 @@ class OCIChatResponse(BaseModel):
 
     apiFormat: str
     timeCreated: str
-    choices: list[OCIResponseChoice]
+    choices: List[OCIResponseChoice]
     usage: OCIResponseUsage
 
 
@@ -189,18 +191,18 @@ class OCICompletionResponse(BaseModel):
 class OCIStreamDelta(BaseModel):
     """The content delta in a streaming chunk."""
 
-    content: list[OCIContentPartUnion] | None = None
-    role: str | None = None
-    toolCalls: list[OCIToolCall] | None = None
+    content: Optional[List[OCIContentPartUnion]] = None
+    role: Optional[str] = None
+    toolCalls: Optional[List[OCIToolCall]] = None
 
 
 class OCIStreamChunk(BaseModel):
     """Model for a single SSE event chunk from OCI."""
 
-    finishReason: str | None = None
-    message: OCIStreamDelta | None = None
-    pad: str | None = None
-    index: int | None = None
+    finishReason: Optional[str] = None
+    message: Optional[OCIStreamDelta] = None
+    pad: Optional[str] = None
+    index: Optional[int] = None
 
 
 # --- Cohere-Specific Models ---
@@ -210,20 +212,20 @@ class CohereStreamChunk(BaseModel):
     """Model for a single SSE event chunk from OCI Cohere API."""
 
     apiFormat: str
-    text: str | None = None
-    chatHistory: list[CohereMessage] | None = None
-    finishReason: str | None = None
-    toolCalls: list[CohereToolCall] | None = None
-    pad: str | None = None
-    index: int | None = None
+    text: Optional[str] = None
+    chatHistory: Optional[List[CohereMessage]] = None
+    finishReason: Optional[str] = None
+    toolCalls: Optional[List[CohereToolCall]] = None
+    pad: Optional[str] = None
+    index: Optional[int] = None
 
 
 class CohereMessage(BaseModel):
     """Base model for Cohere messages."""
 
     role: str
-    message: str | None = None
-    toolCalls: list[CohereToolCall] | None = None
+    message: Optional[str] = None
+    toolCalls: Optional[List[CohereToolCall]] = None
 
 
 class CohereUserMessage(CohereMessage):
@@ -252,7 +254,7 @@ class CohereToolMessage(CohereMessage):
     """
 
     role: Literal["TOOL"] = "TOOL"
-    toolResults: list[CohereToolResult]
+    toolResults: List[CohereToolResult]
 
 
 class CohereParameterDefinition(BaseModel):
@@ -268,14 +270,14 @@ class CohereTool(BaseModel):
 
     name: str
     description: str
-    parameterDefinitions: dict[str, CohereParameterDefinition]
+    parameterDefinitions: Dict[str, CohereParameterDefinition]
 
 
 class CohereToolCall(BaseModel):
     """Tool call made by Cohere model."""
 
     name: str
-    parameters: dict[str, Any]
+    parameters: Dict[str, Any]
 
 
 class CohereToolResult(BaseModel):
@@ -286,7 +288,7 @@ class CohereToolResult(BaseModel):
     """
 
     call: CohereToolCall
-    outputs: list[dict[str, Any]]
+    outputs: List[Dict[str, Any]]
 
 
 class CohereChatRequest(BaseModel):
@@ -301,16 +303,16 @@ class CohereChatRequest(BaseModel):
     # on ``CohereToolMessage``) when this request is serialized via ``model_dump``.
     # Without it, Pydantic v2 would serialize each element using the declared
     # ``CohereMessage`` schema and silently drop subclass fields.
-    chatHistory: list[SerializeAsAny[CohereMessage]] | None = None
-    maxTokens: int | None = None
-    temperature: float | None = None
-    topP: float | None = None
-    topK: int | None = None
-    frequencyPenalty: float | None = None
-    presencePenalty: float | None = None
-    stopSequences: list[str] | None = None
-    seed: int | None = None
-    tools: list[CohereTool] | None = None
+    chatHistory: Optional[List[SerializeAsAny[CohereMessage]]] = None
+    maxTokens: Optional[int] = None
+    temperature: Optional[float] = None
+    topP: Optional[float] = None
+    topK: Optional[int] = None
+    frequencyPenalty: Optional[float] = None
+    presencePenalty: Optional[float] = None
+    stopSequences: Optional[List[str]] = None
+    seed: Optional[int] = None
+    tools: Optional[List[CohereTool]] = None
     # NOTE: OCI's Cohere chat endpoint does not accept ``toolChoice`` — see
     # ``OCIChatConfig.openai_to_oci_cohere_param_map`` which marks
     # ``tool_choice`` as unsupported. The field is intentionally absent here
@@ -318,22 +320,22 @@ class CohereChatRequest(BaseModel):
     # OCI Cohere responseFormat is {"type": "TEXT" | "JSON_OBJECT", "schema"?: ...};
     # there is no JSON_SCHEMA type. The shape is built in
     # OCIChatConfig._normalize_response_format.
-    responseFormat: dict[str, Any] | None = None
-    preambleOverride: str | None = None
-    documents: list[dict[str, Any]] | None = None
-    searchQueriesOnly: bool | None = None
-    searchEntryPoint: str | None = None
-    grounding: dict[str, Any] | None = None
-    isEcho: bool | None = None
-    isSearchQueriesOnly: bool | None = None
-    isRawPrompting: bool | None = None
-    isForceSingleStep: bool | None = None
-    promptTruncation: str | None = None
-    safetyMode: str | None = None
-    citationQuality: str | None = None
-    maxInputTokens: int | None = None
-    isStream: bool | None = None
-    streamOptions: dict[str, Any] | None = None
+    responseFormat: Optional[Dict[str, Any]] = None
+    preambleOverride: Optional[str] = None
+    documents: Optional[List[Dict[str, Any]]] = None
+    searchQueriesOnly: Optional[bool] = None
+    searchEntryPoint: Optional[str] = None
+    grounding: Optional[Dict[str, Any]] = None
+    isEcho: Optional[bool] = None
+    isSearchQueriesOnly: Optional[bool] = None
+    isRawPrompting: Optional[bool] = None
+    isForceSingleStep: Optional[bool] = None
+    promptTruncation: Optional[str] = None
+    safetyMode: Optional[str] = None
+    citationQuality: Optional[str] = None
+    maxInputTokens: Optional[int] = None
+    isStream: Optional[bool] = None
+    streamOptions: Optional[Dict[str, Any]] = None
 
 
 class CohereUsage(BaseModel):
@@ -342,8 +344,8 @@ class CohereUsage(BaseModel):
     promptTokens: int
     completionTokens: int
     totalTokens: int
-    promptTokensDetails: dict[str, Any] | None = None
-    completionTokensDetails: dict[str, Any] | None = None
+    promptTokensDetails: Optional[Dict[str, Any]] = None
+    completionTokensDetails: Optional[Dict[str, Any]] = None
 
 
 class CohereCitation(BaseModel):
@@ -352,7 +354,7 @@ class CohereCitation(BaseModel):
     start: int
     end: int
     text: str
-    document_ids: list[str]
+    document_ids: List[str]
 
 
 class CohereSearchQuery(BaseModel):
@@ -373,18 +375,18 @@ class CohereChatResponse(BaseModel):
     # via ``handle_cohere_response``'s ``elif oci_finish_reason is not None``
     # fallback instead of crashing Pydantic validation. Mirrors
     # ``CohereStreamChunk.finishReason`` which has always been ``Optional[str]``.
-    finishReason: str | None = None
+    finishReason: Optional[str] = None
 
     # Optional fields
-    chatHistory: list[CohereMessage] | None = None
-    citations: list[CohereCitation] | None = None
-    documents: list[dict[str, Any]] | None = None
-    errorMessage: str | None = None
-    isSearchRequired: bool | None = None
-    prompt: str | None = None
-    searchQueries: list[CohereSearchQuery] | None = None
-    toolCalls: list[CohereToolCall] | None = None
-    usage: CohereUsage | None = None
+    chatHistory: Optional[List[CohereMessage]] = None
+    citations: Optional[List[CohereCitation]] = None
+    documents: Optional[List[Dict[str, Any]]] = None
+    errorMessage: Optional[str] = None
+    isSearchRequired: Optional[bool] = None
+    prompt: Optional[str] = None
+    searchQueries: Optional[List[CohereSearchQuery]] = None
+    toolCalls: Optional[List[CohereToolCall]] = None
+    usage: Optional[CohereUsage] = None
 
 
 class CohereChatDetails(BaseModel):
@@ -413,10 +415,10 @@ class OCIEmbedRequest(BaseModel):
 
     compartmentId: str
     servingMode: OCIServingMode
-    inputs: list[str]
-    inputType: str | None = None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
-    truncate: str | None = "END"  # NONE | START | END
-    outputDimensions: int | None = None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
+    inputs: List[str]
+    inputType: Optional[str] = None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
+    truncate: Optional[str] = "END"  # NONE | START | END
+    outputDimensions: Optional[int] = None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
 
 
 class OCIEmbedUsage(BaseModel):
@@ -427,11 +429,11 @@ class OCIEmbedUsage(BaseModel):
 class OCIEmbedResponse(BaseModel):
     """Response body from POST /20231130/actions/embedText."""
 
-    id: str | None = None  # present in the official SDK response
-    embeddings: list[list[float]]
+    id: Optional[str] = None  # present in the official SDK response
+    embeddings: List[List[float]]
     modelId: str
     modelVersion: str
     # OCI returns per-input token counts in inputTextTokenCounts (summed for total usage)
-    inputTextTokenCounts: list[int] | None = None
+    inputTextTokenCounts: Optional[List[int]] = None
     # Some deployments may return a usage object instead
-    usage: OCIEmbedUsage | None = None
+    usage: Optional[OCIEmbedUsage] = None

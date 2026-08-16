@@ -6,12 +6,12 @@ When a policy has a `pipeline`, its guardrails run in the defined step order
 with configurable actions on pass/fail, rather than independently.
 """
 
-from typing import Any, Final, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-VALID_PIPELINE_ACTIONS: Final = {"allow", "block", "next", "modify_response"}
-VALID_PIPELINE_MODES: Final = {"pre_call", "post_call"}
+VALID_PIPELINE_ACTIONS = {"allow", "block", "next", "modify_response"}
+VALID_PIPELINE_MODES = {"pre_call", "post_call"}
 
 
 class PipelineStep(BaseModel):
@@ -31,7 +31,7 @@ class PipelineStep(BaseModel):
         default="allow",
         description="Action when guardrail passes: next | block | allow | modify_response",
     )
-    on_error: str | None = Field(
+    on_error: Optional[str] = Field(
         default=None,
         description="Action when the guardrail raises a technical error (timeouts, "
         "unreachable provider, non-intervention HTTP errors). If omitted, uses on_fail.",
@@ -40,7 +40,7 @@ class PipelineStep(BaseModel):
         default=False,
         description="Forward modified request data (e.g., PII-masked) to next step.",
     )
-    modify_response_message: str | None = Field(
+    modify_response_message: Optional[str] = Field(
         default=None,
         description="Custom message for modify_response action.",
     )
@@ -49,7 +49,7 @@ class PipelineStep(BaseModel):
 
     @field_validator("on_fail", "on_pass", "on_error")
     @classmethod
-    def validate_action(cls, v: str | None) -> str | None:
+    def validate_action(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
         if v not in VALID_PIPELINE_ACTIONS:
@@ -66,7 +66,7 @@ class GuardrailPipeline(BaseModel):
     """
 
     mode: str = Field(description="Event hook: pre_call | post_call")
-    steps: list[PipelineStep] = Field(
+    steps: List[PipelineStep] = Field(
         description="Ordered list of pipeline steps. Must have at least 1 step.",
         min_length=1,
     )
@@ -87,9 +87,9 @@ class PipelineStepResult(BaseModel):
     guardrail_name: str
     outcome: Literal["pass", "fail", "error"]
     action_taken: str
-    modified_data: dict[str, Any] | None = None
-    error_detail: str | None = None
-    duration_seconds: float | None = None
+    modified_data: Optional[Dict[str, Any]] = None
+    error_detail: Optional[str] = None
+    duration_seconds: Optional[float] = None
 
 
 class PipelineExecutionResult(BaseModel):
@@ -98,8 +98,8 @@ class PipelineExecutionResult(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     terminal_action: str  # block | allow | modify_response
-    step_results: list[PipelineStepResult]
-    modified_data: dict[str, Any] | None = None
-    error_message: str | None = None
-    modify_response_message: str | None = None
-    original_exception: Exception | None = Field(default=None, exclude=True)
+    step_results: List[PipelineStepResult]
+    modified_data: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    modify_response_message: Optional[str] = None
+    original_exception: Optional[Exception] = Field(default=None, exclude=True)

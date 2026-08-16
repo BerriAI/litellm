@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,7 +14,7 @@ def initialize_guardrail(
 ):
     import litellm
 
-    _cb: Final = XecGuardGuardrail(
+    _cb = XecGuardGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         xecguard_model=litellm_params.xecguard_model,
@@ -35,11 +35,11 @@ def initialize_guardrail(
     return _cb
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.XECGUARD.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry: Final = {
+guardrail_class_registry = {
     SupportedGuardrailIntegrations.XECGUARD.value: XecGuardGuardrail,
 }

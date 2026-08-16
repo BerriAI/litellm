@@ -3,7 +3,6 @@ import { Loader2 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import MessageManager from "@/components/molecules/message_manager";
-import { Logo } from "@/components/molecules/logo/Logo";
 import { fetchMCPServers, listMCPTools } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
 
@@ -99,10 +98,13 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
           return (
             <div key={server.server_id} className="flex items-start justify-between px-3 py-2 gap-3">
               {server.mcp_info?.logo_url && (
-                <Logo
+                <img
                   src={server.mcp_info.logo_url}
-                  label={name}
+                  alt={`${name} logo`}
                   className="w-6 h-6 rounded-md object-contain shrink-0 mt-0.5"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = "none";
+                  }}
                 />
               )}
               <div className="flex-1 min-w-0">

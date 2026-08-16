@@ -1,12 +1,14 @@
-import type { components } from "@/lib/http/schema";
-
 export interface AgentAttachedKey {
   token: string;
   key_alias?: string | null;
   key_name?: string | null;
 }
 
-export type AgentObjectPermission = components["schemas"]["AgentObjectPermission"];
+export interface AgentObjectPermission {
+  mcp_servers?: string[];
+  mcp_access_groups?: string[];
+  mcp_tool_permissions?: Record<string, string[]>;
+}
 
 export interface Agent {
   agent_id: string;

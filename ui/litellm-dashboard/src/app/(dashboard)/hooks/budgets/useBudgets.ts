@@ -1,46 +1,28 @@
-"use client";
-
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { SortingState } from "@tanstack/react-table";
-import { useCallback } from "react";
-
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { apiClient, budgetCreateCall, budgetUpdateCall, budgetDeleteCall } from "@/components/networking";
-import type { components } from "@/lib/http/schema";
-
+import { useQuery, useMutation, useQueryClient, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import { useResourceList, type ResourceListQuery, type ResourceListResult } from "../common/useResourceList";
-import { serializeBudgetFilters } from "./budgetFilters";
+import { getBudgetList, budgetCreateCall, budgetUpdateCall, budgetDeleteCall } from "@/components/networking";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
-export type budgetItem = components["schemas"]["BudgetListItem"];
-
-type BudgetListResponse = components["schemas"]["ListResponse_BudgetListItem_"];
-
-export const BUDGET_LIST_PATH = "/management/v1/budgets";
+export interface budgetItem {
+  budget_id: string;
+  max_budget: number | null;
+  rpm_limit: number | null;
+  tpm_limit: number | null;
+  updated_at: string;
+}
 
 export const budgetKeys = createQueryKeys("budgets");
 
-const DEFAULT_PAGE_SIZE = 50;
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
-
-export const useBudgetList = (): ResourceListResult<budgetItem> => {
+export const useBudgets = (): UseQueryResult<budgetItem[]> => {
   const { accessToken } = useAuthorized();
-
-  const fetchPage = useCallback(
-    (query: ResourceListQuery, signal: AbortSignal): Promise<BudgetListResponse> =>
-      apiClient.get<BudgetListResponse>(BUDGET_LIST_PATH, { accessToken, query, signal }),
-    [accessToken],
-  );
-
-  const listOptions = {
-    queryKey: budgetKeys.lists(),
-    fetchPage,
-    serializeFilters: serializeBudgetFilters,
-    defaultSorting: DEFAULT_SORTING,
-    defaultPageSize: DEFAULT_PAGE_SIZE,
+  return useQuery<budgetItem[]>({
+    queryKey: budgetKeys.list({}),
+    queryFn: async () => {
+      const data = await getBudgetList(accessToken!);
+      return (data ?? []).filter((item: budgetItem | null): item is budgetItem => item != null);
+    },
     enabled: Boolean(accessToken),
-  };
-  return useResourceList<budgetItem>(listOptions);
+  });
 };
 
 export const useCreateBudget = () => {

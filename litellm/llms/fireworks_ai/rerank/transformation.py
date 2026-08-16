@@ -4,7 +4,7 @@ Fireworks AI Rerank API transformation
 Reference: https://docs.fireworks.ai/inference-api-reference/rerank
 """
 
-from typing import Any, Final
+from typing import Any, Dict, List, Union
 
 import httpx
 
@@ -37,7 +37,9 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             # Remove trailing slashes and ensure clean base URL
             api_base = api_base.rstrip("/")
             if not api_base.endswith("/rerank"):
-                if api_base.endswith("/v1") or api_base.endswith("/inference/v1"):
+                if api_base.endswith("/v1"):
+                    api_base = f"{api_base}/rerank"
+                elif api_base.endswith("/inference/v1"):
                     api_base = f"{api_base}/rerank"
                 else:
                     api_base = f"{api_base}/inference/v1/rerank"
@@ -58,19 +60,19 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: List[Union[str, Dict[str, Any]]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: list[str] | None = None,
+        rank_fields: List[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         """
         Map Cohere rerank params to Fireworks AI rerank params
         """
-        params: Final[dict[str, Any]] = {
+        params: Dict[str, Any] = {
             "query": query,
             "documents": documents,
         }
@@ -96,7 +98,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
 
         return params
 
-    def validate_environment(
+    def validate_environment(  # type: ignore[override]
         self,
         headers: dict,
         model: str,
@@ -109,7 +111,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
                 "FIREWORKS_API_KEY is not set. Please set 'FIREWORKS_API_KEY' or 'FIREWORKS_AI_API_KEY' in your environment"
             )
 
-        default_headers: Final = {
+        default_headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
@@ -124,7 +126,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
+        optional_rerank_params: Dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -146,7 +148,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         if not model.startswith("fireworks/"):
             model = f"fireworks/{model}"
 
-        request_data: Final = {
+        request_data = {
             "model": model,
             "query": optional_rerank_params["query"],
             "documents": optional_rerank_params["documents"],
@@ -175,10 +177,10 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         Transform Fireworks AI rerank response to LiteLLM RerankResponse format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Failed to parse response: {e}",
+                error_message=f"Failed to parse response: {str(e)}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -202,21 +204,21 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         # }
 
         # Extract usage information
-        usage: Final = raw_response_json.get("usage", {})
-        _billed_units: Final = RerankBilledUnits(search_units=usage.get("total_tokens", 0))
-        _tokens: Final = RerankTokens(
+        usage = raw_response_json.get("usage", {})
+        _billed_units = RerankBilledUnits(search_units=usage.get("total_tokens", 0))
+        _tokens = RerankTokens(
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
         )
-        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         # Extract results - Fireworks AI uses "data" instead of "results"
-        _results: Final[list[dict] | None] = raw_response_json.get("data") or raw_response_json.get("results")
+        _results: List[dict] | None = raw_response_json.get("data") or raw_response_json.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
 
-        rerank_results: Final[list[RerankResponseResult]] = []
+        rerank_results: List[RerankResponseResult] = []
 
         for result in _results:
             # Validate required fields exist
@@ -249,7 +251,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             rerank_results.append(rerank_result)
 
         # Use model name as id if no id is provided
-        response_id: Final = raw_response_json.get("id") or raw_response_json.get("model") or str(uuid.uuid4())
+        response_id = raw_response_json.get("id") or raw_response_json.get("model") or str(uuid.uuid4())
 
         return RerankResponse(
             id=response_id,

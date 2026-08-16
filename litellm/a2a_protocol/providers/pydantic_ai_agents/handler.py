@@ -5,8 +5,7 @@ Pydantic AI agents follow A2A protocol but don't support streaming natively.
 This handler provides fake streaming by converting non-streaming responses into streaming chunks.
 """
 
-from collections.abc import AsyncIterator
-from typing import Any, Final
+from typing import Any, AsyncIterator, Dict, Optional
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
@@ -26,11 +25,11 @@ class PydanticAIHandler:
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
-        params: dict[str, Any],
-        api_base: str | None = None,
+        params: Dict[str, Any],
+        api_base: Optional[str] = None,
         timeout: float = 60.0,
-        agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+        agent_extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         """
         Handle non-streaming request to Pydantic AI agent.
 
@@ -47,10 +46,10 @@ class PydanticAIHandler:
         """
         if api_base is None:
             raise ValueError("api_base is required for Pydantic AI agents")
-        verbose_logger.info("Pydantic AI: Routing to Pydantic AI agent at %s", api_base)
+        verbose_logger.info(f"Pydantic AI: Routing to Pydantic AI agent at {api_base}")
 
         # Send request directly to Pydantic AI agent
-        response_data: Final = await PydanticAITransformation.send_non_streaming_request(
+        response_data = await PydanticAITransformation.send_non_streaming_request(
             api_base=api_base,
             request_id=request_id,
             params=params,
@@ -63,13 +62,13 @@ class PydanticAIHandler:
     @staticmethod
     async def handle_streaming(
         request_id: str,
-        params: dict[str, Any],
-        api_base: str | None = None,
+        params: Dict[str, Any],
+        api_base: Optional[str] = None,
         timeout: float = 60.0,
         chunk_size: int = 50,
         delay_ms: int = 10,
-        agent_extra_headers: dict[str, str] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
+        agent_extra_headers: Optional[Dict[str, str]] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
         """
         Handle streaming request to Pydantic AI agent with fake streaming.
 
@@ -92,10 +91,10 @@ class PydanticAIHandler:
         """
         if api_base is None:
             raise ValueError("api_base is required for Pydantic AI agents")
-        verbose_logger.info("Pydantic AI: Faking streaming for Pydantic AI agent at %s", api_base)
+        verbose_logger.info(f"Pydantic AI: Faking streaming for Pydantic AI agent at {api_base}")
 
         # Get raw task response first (not the transformed A2A format)
-        raw_response: Final = await PydanticAITransformation.send_and_get_raw_response(
+        raw_response = await PydanticAITransformation.send_and_get_raw_response(
             api_base=api_base,
             request_id=request_id,
             params=params,

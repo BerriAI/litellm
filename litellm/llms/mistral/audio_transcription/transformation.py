@@ -4,7 +4,7 @@ Support for Mistral Voxtral audio transcription via ``/v1/audio/transcriptions``
 API reference: https://docs.mistral.ai/api/#tag/audio/operation/audio_transcriptions_v1_audio_transcriptions_post
 """
 
-from typing import Final
+from typing import List, Optional, Union
 
 import httpx
 
@@ -27,7 +27,7 @@ class MistralAudioTranscriptionException(BaseLLMException):
 
 
 class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         return [
             "language",
             "temperature",
@@ -42,7 +42,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params: Final = self.get_supported_openai_params(model)
+        supported_params = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
@@ -50,17 +50,19 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         api_base = "https://api.mistral.ai/v1" if api_base is None else api_base.rstrip("/")
         return f"{api_base}/audio/transcriptions"
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
         return MistralAudioTranscriptionException(
             message=error_message,
             status_code=status_code,
@@ -71,16 +73,16 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("MISTRAL_API_KEY")
 
-        default_headers: Final = {
+        default_headers = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
         }
@@ -94,9 +96,9 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> AudioTranscriptionRequestData:
-        processed_audio: Final = process_audio_file(audio_file)
+        processed_audio = process_audio_file(audio_file)
 
-        form_fields: Final[dict] = {
+        form_fields: dict = {
             "model": model,
         }
 
@@ -107,7 +109,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 form_fields[key] = value
 
         # Mistral-specific params (e.g. diarize)
-        provider_specific_params: Final = self.get_provider_specific_params(
+        provider_specific_params = self.get_provider_specific_params(
             model=model,
             optional_params=optional_params,
             openai_params=self.get_supported_openai_params(model),
@@ -115,7 +117,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         for key, value in provider_specific_params.items():
             form_fields[key] = str(value).lower() if isinstance(value, bool) else str(value)
 
-        files: Final = {
+        files = {
             "file": (
                 processed_audio.filename,
                 processed_audio.file_content,
@@ -130,7 +132,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raw_response: httpx.Response,
     ) -> TranscriptionResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json = raw_response.json()
         except Exception:
             raise MistralAudioTranscriptionException(
                 message=raw_response.text,
@@ -138,8 +140,8 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        text: Final = response_json.get("text") or ""
-        response: Final = TranscriptionResponse(text=text)
+        text = response_json.get("text") or ""
+        response = TranscriptionResponse(text=text)
 
         # Preserve Mistral-specific fields (e.g. diarization segments)
         if "segments" in response_json:

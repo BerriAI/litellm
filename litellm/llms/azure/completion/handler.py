@@ -1,16 +1,14 @@
-from collections.abc import Callable
-from typing import Any, Final
+from typing import Any, Callable, Optional
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.utils import CustomStreamWrapper, ModelResponse, TextCompletionResponse
 
 from ...openai.completion.transformation import OpenAITextCompletionConfig
 from ..common_utils import AzureOpenAIError, BaseAzureLLM
 
-openai_text_completion_config: Final = OpenAITextCompletionConfig()
+openai_text_completion_config = OpenAITextCompletionConfig()
 
 
 class AzureTextCompletion(BaseAzureLLM):
@@ -18,7 +16,7 @@ class AzureTextCompletion(BaseAzureLLM):
         super().__init__()
 
     def validate_environment(self, api_key, azure_ad_token):
-        headers: Final = {
+        headers = {
             "content-type": "application/json",
         }
         if api_key is not None:
@@ -32,28 +30,28 @@ class AzureTextCompletion(BaseAzureLLM):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        api_key: str | None,
+        api_key: Optional[str],
         api_base: str,
         api_version: str,
         api_type: str,
-        azure_ad_token: str | None,
-        azure_ad_token_provider: Callable | None,
+        azure_ad_token: Optional[str],
+        azure_ad_token_provider: Optional[Callable],
         print_verbose: Callable,
         timeout,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj,
         optional_params,
-        litellm_params: dict[str, object],
+        litellm_params,
         logger_fn,
         acompletion: bool = False,
-        headers: dict | None = None,
+        headers: Optional[dict] = None,
         client=None,
     ):
         try:
             if model is None or messages is None:
                 raise AzureOpenAIError(status_code=422, message="Missing model or messages")
 
-            max_retries: Final = optional_params.pop("max_retries", 2)
-            prompt: Final = prompt_factory(messages=messages, model=model, custom_llm_provider="azure_text")
+            max_retries = optional_params.pop("max_retries", 2)
+            prompt = prompt_factory(messages=messages, model=model, custom_llm_provider="azure_text")
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url
@@ -76,7 +74,7 @@ class AzureTextCompletion(BaseAzureLLM):
                 data = {"model": None, "prompt": prompt, **optional_params}
             else:
                 data = {
-                    "model": model,
+                    "model": model,  # type: ignore
                     "prompt": prompt,
                     **optional_params,
                 }
@@ -140,7 +138,7 @@ class AzureTextCompletion(BaseAzureLLM):
                 if not isinstance(max_retries, int):
                     raise AzureOpenAIError(status_code=422, message="max retries must be an int")
                 # init AzureOpenAI Client
-                azure_client: Final = self.get_azure_openai_client(
+                azure_client = self.get_azure_openai_client(
                     api_key=api_key,
                     api_base=api_base,
                     api_version=api_version,
@@ -156,9 +154,9 @@ class AzureTextCompletion(BaseAzureLLM):
                         message="azure_client is not an instance of AzureOpenAI",
                     )
 
-                raw_response: Final = azure_client.completions.with_raw_response.create(**data, timeout=timeout)
-                response: Final = raw_response.parse()
-                stringified_response: Final = response.model_dump()
+                raw_response = azure_client.completions.with_raw_response.create(**data, timeout=timeout)
+                response = raw_response.parse()
+                stringified_response = response.model_dump()
                 ## LOGGING
                 logging_obj.post_call(
                     input=prompt,
@@ -177,16 +175,16 @@ class AzureTextCompletion(BaseAzureLLM):
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
-            status_code: Final = getattr(e, "status_code", 500)
+            status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)
 
     async def acompletion(
         self,
-        api_key: str | None,
+        api_key: Optional[str],
         api_version: str,
         model: str,
         api_base: str,
@@ -195,7 +193,7 @@ class AzureTextCompletion(BaseAzureLLM):
         model_response: ModelResponse,
         logging_obj: Any,
         max_retries: int,
-        azure_ad_token: str | None = None,
+        azure_ad_token: Optional[str] = None,
         client=None,  # this is the AsyncAzureOpenAI
         litellm_params: dict = {},
     ):
@@ -203,7 +201,7 @@ class AzureTextCompletion(BaseAzureLLM):
         try:
             # init AzureOpenAI Client
             # setting Azure client
-            azure_client: Final = self.get_azure_openai_client(
+            azure_client = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
                 api_key=api_key,
@@ -229,7 +227,7 @@ class AzureTextCompletion(BaseAzureLLM):
                     "complete_input_dict": data,
                 },
             )
-            raw_response: Final = await azure_client.completions.with_raw_response.create(**data, timeout=timeout)
+            raw_response = await azure_client.completions.with_raw_response.create(**data, timeout=timeout)
             response = raw_response.parse()
             return openai_text_completion_config.convert_to_chat_model_response_object(
                 response_object=response.model_dump(),
@@ -238,31 +236,31 @@ class AzureTextCompletion(BaseAzureLLM):
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
-            status_code: Final = getattr(e, "status_code", 500)
+            status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)
 
     def streaming(
         self,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj,
         api_base: str,
-        api_key: str | None,
+        api_key: Optional[str],
         api_version: str,
         data: dict,
         model: str,
         timeout: Any,
-        azure_ad_token: str | None = None,
+        azure_ad_token: Optional[str] = None,
         client=None,
         litellm_params: dict = {},
     ):
-        max_retries: Final = data.pop("max_retries", 2)
+        max_retries = data.pop("max_retries", 2)
         if not isinstance(max_retries, int):
             raise AzureOpenAIError(status_code=422, message="max retries must be an int")
         # init AzureOpenAI Client
-        azure_client: Final = self.get_azure_openai_client(
+        azure_client = self.get_azure_openai_client(
             api_version=api_version,
             api_base=api_base,
             api_key=api_key,
@@ -288,9 +286,9 @@ class AzureTextCompletion(BaseAzureLLM):
                 "complete_input_dict": data,
             },
         )
-        raw_response: Final = azure_client.completions.with_raw_response.create(**data, timeout=timeout)
-        response: Final = raw_response.parse()
-        streamwrapper: Final = CustomStreamWrapper(
+        raw_response = azure_client.completions.with_raw_response.create(**data, timeout=timeout)
+        response = raw_response.parse()
+        streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
             custom_llm_provider="azure_text",
@@ -300,20 +298,20 @@ class AzureTextCompletion(BaseAzureLLM):
 
     async def async_streaming(
         self,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj,
         api_base: str,
-        api_key: str | None,
+        api_key: Optional[str],
         api_version: str,
         data: dict,
         model: str,
         timeout: Any,
-        azure_ad_token: str | None = None,
+        azure_ad_token: Optional[str] = None,
         client=None,
         litellm_params: dict = {},
     ):
         try:
             # init AzureOpenAI Client
-            azure_client: Final = self.get_azure_openai_client(
+            azure_client = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
                 api_key=api_key,
@@ -338,10 +336,10 @@ class AzureTextCompletion(BaseAzureLLM):
                     "complete_input_dict": data,
                 },
             )
-            raw_response: Final = await azure_client.completions.with_raw_response.create(**data, timeout=timeout)
-            response: Final = raw_response.parse()
+            raw_response = await azure_client.completions.with_raw_response.create(**data, timeout=timeout)
+            response = raw_response.parse()
             # return response
-            streamwrapper: Final = CustomStreamWrapper(
+            streamwrapper = CustomStreamWrapper(
                 completion_stream=response,
                 model=model,
                 custom_llm_provider="azure_text",
@@ -349,9 +347,9 @@ class AzureTextCompletion(BaseAzureLLM):
             )
             return streamwrapper  ## DO NOT make this into an async for ... loop, it will yield an async generator, which won't raise errors if the response fails
         except Exception as e:
-            status_code: Final = getattr(e, "status_code", 500)
+            status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)

@@ -7,11 +7,9 @@ to RESPONSE_REJECTION_GUARDRAIL_CODE. The guardrail runs only on input_type "res
 and raises a block error if any response text matches known rejection phrases.
 """
 
-from typing import Final
-
 # Default phrases that indicate the model is refusing the user request (lowercase for case-insensitive match).
 # Custom code guardrails can override by defining rejection_phrases in the code.
-DEFAULT_REJECTION_PHRASES: Final = [
+DEFAULT_REJECTION_PHRASES = [
     "that's not something i can help with",
     "that is not something i can help with",
     "i can't help with that",
@@ -32,7 +30,7 @@ DEFAULT_REJECTION_PHRASES: Final = [
 
 # Custom code string for the Custom Code Guardrail. Only runs on input_type "response".
 # Uses primitives: allow(), block(), lower(), contains()
-RESPONSE_REJECTION_GUARDRAIL_CODE: Final = '''
+RESPONSE_REJECTION_GUARDRAIL_CODE = '''
 def apply_guardrail(inputs, request_data, input_type):
     """Block responses that indicate the model rejected the user request."""
     if input_type != "response":

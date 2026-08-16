@@ -16,10 +16,9 @@ Sent to this route when `model` is in the format `vertex_ai/openai/{MODEL_ID}`
 Vertex Documentation for using the OpenAI /chat/completions endpoint: https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_pytorch_llama3_deployment.ipynb
 """
 
-from collections.abc import Callable
-from typing import Final
+from typing import Callable, Optional, Union
 
-import httpx
+import httpx  # type: ignore
 
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse
@@ -42,12 +41,12 @@ def _vertex_model_garden_model_id_in_json_body(model: str) -> bool:
 def create_vertex_url(
     vertex_location: str,
     vertex_project: str,
-    stream: bool | None,
+    stream: Optional[bool],
     model: str,
-    api_base: str | None = None,
+    api_base: Optional[str] = None,
 ) -> str:
     """Return the api base for vertex model garden (without /chat/completions)."""
-    base_url: Final = get_vertex_base_url(vertex_location)
+    base_url = get_vertex_base_url(vertex_location)
     if _vertex_model_garden_model_id_in_json_body(model):
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
     return f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
@@ -65,11 +64,11 @@ class VertexAIModelGardenModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: dict | None,
-        timeout: float | httpx.Timeout,
+        headers: Optional[dict],
+        timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,
@@ -107,13 +106,13 @@ class VertexAIModelGardenModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            openai_like_chat_completions: Final = OpenAILikeChatHandler()
+            openai_like_chat_completions = OpenAILikeChatHandler()
 
             ## CONSTRUCT API BASE
             # Skip _check_custom_proxy: its ":verb" URL construction corrupts a
             # user-supplied api_base (e.g. Vertex MG dedicated endpoint), and
             # OpenAILikeChatHandler already appends "/chat/completions".
-            stream: Final[bool] = optional_params.get("stream", False) or False
+            stream: bool = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
             if api_base is None:
                 api_base = create_vertex_url(

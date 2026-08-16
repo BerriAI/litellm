@@ -4,17 +4,15 @@ Documentation: https://api-dashboard.search.brave.com/app/documentation/web-sear
 """
 
 from __future__ import annotations
-
-import re
 from datetime import datetime, timezone
-from typing import Final, Literal, TypedDict
-
+from dateutil import parser  # type: ignore[import-untyped]
+from typing import Dict, List, Literal, Optional, TypedDict, Union
 import httpx
-from dateutil import parser
+import re
 
-_ISO_YMD: Final = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")
-_UNIX_TIMESTAMP: Final = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")
-BRAVE_SECTIONS: Final = ["web", "discussions", "faqs", "faq", "news", "videos"]
+_ISO_YMD = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")
+_UNIX_TIMESTAMP = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")
+BRAVE_SECTIONS = ["web", "discussions", "faqs", "faq", "news", "videos"]
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -22,15 +20,16 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResponse,
     SearchResult,
 )
+
 from litellm.secret_managers.main import get_secret_str
 
 
 def to_yyyy_mm_dd(
-    s: str | float | None,
+    s: Union[str, int, float, None],
     *,
     dayfirst: bool = False,
     yearfirst: bool = False,
-) -> str | None:
+) -> Optional[str]:
     """
     Convert a string/int/float to YYYY-MM-DD; return None if parsing fails.
     """
@@ -108,11 +107,11 @@ class BraveSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        headers: Dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Validate environment and return headers.
         """
@@ -136,9 +135,9 @@ class BraveSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
-        data: dict | list[dict] | None = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -153,20 +152,20 @@ class BraveSearchConfig(BaseSearchConfig):
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_brave_params" in data:
-            params: Final = data["_brave_params"]
-            query_string: Final = urlencode(params, doseq=True)
+            params = data["_brave_params"]
+            query_string = urlencode(params, doseq=True)
             return f"{api_base}?{query_string}"
 
         return api_base
 
     def transform_search_request(
         self,
-        query: str | list[str],
+        query: Union[str, List[str]],
         optional_params: dict,
-        api_key: str | None = None,
-        search_engine_id: str | None = None,
+        api_key: Optional[str] = None,
+        search_engine_id: Optional[str] = None,
         **kwargs,
-    ) -> dict:
+    ) -> Dict:
         """
         Transform Search request to Brave Search API format.
 
@@ -190,7 +189,7 @@ class BraveSearchConfig(BaseSearchConfig):
             # Brave Search API only supports single string queries
             query = " ".join(query)
 
-        request_data: Final[BraveSearchRequest] = {
+        request_data: BraveSearchRequest = {
             "q": query,
         }
 
@@ -204,17 +203,17 @@ class BraveSearchConfig(BaseSearchConfig):
         # Transform unified spec parameters to Brave Search API format
         if "max_results" in optional_params:
             # Brave Search API supports 1-20 results per /web/search request
-            num_results: Final = min(optional_params["max_results"], 20)
+            num_results = min(optional_params["max_results"], 20)
             request_data["count"] = num_results
 
         if "search_domain_filter" in optional_params:
             # Convert to multiple "site:domain" clauses, joined by OR
-            domains: Final = optional_params["search_domain_filter"]
+            domains = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
                 request_data["q"] = self._append_domain_filters(request_data["q"], domains)
 
         # Convert to dict before dynamic key assignments
-        result_data: Final = dict(request_data)
+        result_data = dict(request_data)
 
         # Pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -228,32 +227,32 @@ class BraveSearchConfig(BaseSearchConfig):
         }
 
     @staticmethod
-    def _append_domain_filters(query: str, domains: list[str]) -> str:
+    def _append_domain_filters(query: str, domains: List[str]) -> str:
         """
         Add site: filters to emulate domain restriction in Brave.
         """
-        domain_clauses: Final = [f"site:{domain}" for domain in domains]
-        domain_query: Final = " OR ".join(domain_clauses)
+        domain_clauses = [f"site:{domain}" for domain in domains]
+        domain_query = " OR ".join(domain_clauses)
 
         return f"({query}) AND ({domain_query})"
 
     def transform_search_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj | None,
+        logging_obj: Optional[LiteLLMLoggingObj],
         **kwargs,
     ) -> SearchResponse:
         """
         Transform Brave Search API response to LiteLLM unified SearchResponse format.
         """
-        response_json: Final = raw_response.json()
+        response_json = raw_response.json()
 
         # Transform results to SearchResult objects
-        results: Final[list[SearchResult]] = []
+        results: List[SearchResult] = []
 
-        query_params: Final = raw_response.request.url.params if raw_response.request else {}
-        sections_to_process: Final = self._sections_from_params(dict(query_params))
-        max_results: Final = max(1, min(int(query_params.get("count", 20)), 20))
+        query_params = raw_response.request.url.params if raw_response.request else {}
+        sections_to_process = self._sections_from_params(dict(query_params))
+        max_results = max(1, min(int(query_params.get("count", 20)), 20))
 
         for section in sections_to_process:
             for result in response_json.get(section, {}).get("results", []):
@@ -286,17 +285,17 @@ class BraveSearchConfig(BaseSearchConfig):
         )
 
     @staticmethod
-    def _sections_from_params(query_params: dict) -> list[str]:
+    def _sections_from_params(query_params: dict) -> List[str]:
         """
         Returns a list of sections the user has requested via the Brave Search
         API's `result_filter` parameter. If no `result_filter` parameter is
         provided, returns all sections.
         """
-        raw_filter: Final = query_params.get("result_filter")
-        requested_filters: list[str] = []
+        raw_filter = query_params.get("result_filter")
+        requested_filters: List[str] = []
 
         if raw_filter and isinstance(raw_filter, str):
             requested_filters = [part.strip() for part in raw_filter.split(",")]
 
-        sections: Final = [s.lower() for s in requested_filters if s.lower() in BRAVE_SECTIONS]
+        sections = [s.lower() for s in requested_filters if s.lower() in BRAVE_SECTIONS]
         return sections or BRAVE_SECTIONS

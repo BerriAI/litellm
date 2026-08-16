@@ -1,16 +1,15 @@
 """The span engine: dedup, start, run the mapper chain, set status, end."""
 
 from collections import OrderedDict
-from collections.abc import Callable, Sequence
-from typing import Final
+from typing import Callable, Sequence
 
 from opentelemetry.context import Context
 from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -19,6 +18,8 @@ from litellm.integrations.otel.model.payloads import (
     ServiceSpanData,
     SpanError,
 )
+from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
 from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
@@ -29,13 +30,11 @@ from litellm.integrations.otel.model.spans import (
     mcp_tool_call_span_name,
     service_span_name,
 )
-from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
-from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
 
 # Roles emit() knows how to name and emit. PROXY_REQUEST and the management
 # routes are SERVER spans owned by the mounted FastAPI instrumentor, so they
 # have no builder here.
-_NAME_BUILDERS: Final[dict[SpanRole, Callable[..., str]]] = {
+_NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
     SpanRole.LLM_CALL: llm_call_span_name,
     SpanRole.MCP_TOOL_CALL: mcp_tool_call_span_name,
     SpanRole.MCP_LIST_TOOLS: mcp_list_tools_span_name,
@@ -49,7 +48,7 @@ _NAME_BUILDERS: Final[dict[SpanRole, Callable[..., str]]] = {
 # Cap on the dedup cache. It only needs to coalesce the sync+async firing window
 # of a single in-flight request, so a bounded LRU keeps memory flat on a
 # long-running proxy while still covering every concurrently-open call.
-_DEDUP_CACHE_MAX: Final = 10_000
+_DEDUP_CACHE_MAX = 10_000
 
 
 def _stamp_otel_error_attributes(span: Span, error_type: str, resolved_message: str) -> None:
@@ -95,8 +94,8 @@ def stamp_error(
     """
     if not (error.error_type or error.message):
         return None
-    error_type: Final = error.error_type or "error"
-    message: Final = error.message or error.error_type or "error"
+    error_type = error.error_type or "error"
+    message = error.message or error.error_type or "error"
     _stamp_otel_error_attributes(span, error_type, message)
     _stamp_litellm_error_attributes(span, error)
     if set_status:
@@ -127,7 +126,7 @@ class SpanEmitter:
         )
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.
-        self._emitted: OrderedDict[tuple[str, SpanRole], None] = OrderedDict()
+        self._emitted: "OrderedDict[tuple[str, SpanRole], None]" = OrderedDict()
 
     # -- low-level helpers --------------------------------------------------- #
 
@@ -164,7 +163,7 @@ class SpanEmitter:
         """
         if not dedup_key:
             return False
-        marker: Final = (dedup_key, role)
+        marker = (dedup_key, role)
         if marker in self._emitted:
             self._emitted.move_to_end(marker)
             return True
@@ -196,14 +195,14 @@ class SpanEmitter:
         # LLM-call and MCP tool-call spans carry a dedup key (their request's
         # call id), so a sync+async double-firing coalesces. ``isinstance`` narrows
         # the type for mypy and keeps the engine free of duck-typed attribute reads.
-        dedup_key: Final = (
+        dedup_key = (
             data.identity.call_id
             if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData, MCPListToolsSpanData))
             else None
         )
         if self._seen(dedup_key, role):
             return None
-        span: Final = self.start_span(
+        span = self.start_span(
             role,
             _NAME_BUILDERS[role](data),
             parent_context=parent_context,
@@ -235,7 +234,7 @@ class SpanEmitter:
         for mapper in self._mappers:
             for key, value in mapper.map(data).items():
                 span.set_attribute(key, value)
-        error: Final = (
+        error = (
             data.error
             if isinstance(
                 data,
@@ -250,7 +249,7 @@ class SpanEmitter:
             else None
         )
         if error:
-            stamped: Final = stamp_error(span, error)
+            stamped = stamp_error(span, error)
             if stamped is not None and self._event_recorder is not None and role is SpanRole.LLM_CALL:
                 error_type, message = stamped
                 self._event_recorder.record_operation_exception(

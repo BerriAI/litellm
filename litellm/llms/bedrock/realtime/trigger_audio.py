@@ -9,9 +9,8 @@ AWSNovaSonicLLMService assistant-response trigger).
 import base64
 import gzip
 from functools import lru_cache
-from typing import Final
 
-READY_TRIGGER_PCM_16KHZ_MONO_GZIP_B64: Final = (
+READY_TRIGGER_PCM_16KHZ_MONO_GZIP_B64 = (
     "H4sIANGpRWoC/517dXQcR9Bnw+Duis3MzMwkc8xsxxTZMTMzM0PMmJhBjpmZmWKQZSaxFrQ80H0lJXf3vXf/nev17ExPQ3Xh"
     "r2wPQv8/f/D/uMP/zxv8f64YkSyiWU1AIpCcRSqyICtQCApF4SgSRaHsKCfKjfKhgqgIKo5KobKoPKqEqqFaqC5qgBqjFqg1"
     "ao86o+6oF+qDYtAgNBSNQKPQODQeTUZT0Uw0B81D89ECtAgtRcvRMrQCrQRahVajNWgtWo/+QBvQJrQRbQbagraibWg70Da4"

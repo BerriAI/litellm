@@ -2,8 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final, Literal, cast, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -21,7 +20,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         DeepSeek reasoner models support thinking parameter.
         """
-        params: Final = super().get_supported_openai_params(model)
+        params = super().get_supported_openai_params(model)
         params.extend(["thinking", "reasoning_effort"])
         return params
 
@@ -47,8 +46,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         # Pop thinking/reasoning_effort from optional_params first (parent may have added them)
         # Then re-add only if valid for DeepSeek
-        thinking_value: Final = optional_params.pop("thinking", None)
-        reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
+        thinking_value = optional_params.pop("thinking", None)
+        reasoning_effort = optional_params.pop("reasoning_effort", None)
 
         # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
         if isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
@@ -60,7 +59,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         return optional_params
 
-    def _fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
+    def _fill_reasoning_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
         """
         DeepSeek thinking mode requires `reasoning_content` to be passed back on
         every assistant message in multi-turn conversations. If it is missing,
@@ -72,7 +71,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
              (LiteLLM stores provider-specific response fields there).
           2. Otherwise inject a single space — the minimum value the API accepts.
         """
-        result: Final[list[AllMessageValues]] = []
+        result: List[AllMessageValues] = []
         for msg in messages:
             if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
                 patched = dict(cast(dict, msg))
@@ -102,20 +101,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> list[AllMessageValues]: ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         DeepSeek does not support content in list format.
         """
@@ -151,7 +150,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         When a specific `tool_choice` points at a dropped tool, clear it so the
         sanitized request does not reference a tool DeepSeek will never receive.
         """
-        tools: Final = optional_params.get("tools")
+        tools = optional_params.get("tools")
         if not isinstance(tools, list) or not tools:
             return optional_params
 
@@ -161,10 +160,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         def _get_function_tool_name(tool: object) -> str | None:
             if not isinstance(tool, dict):
                 return None
-            function: Final = tool.get("function")
+            function = tool.get("function")
             if not isinstance(function, dict):
                 return None
-            name: Final = function.get("name")
+            name = function.get("name")
             return name if isinstance(name, str) else None
 
         def _tool_choice_matches_function_tool(tool_choice: object, function_tool_names: set[str]) -> bool:
@@ -172,17 +171,17 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 return True
             if tool_choice.get("type") != "function":
                 return False
-            function: Final = tool_choice.get("function")
+            function = tool_choice.get("function")
             if not isinstance(function, dict):
                 return False
-            name: Final = function.get("name")
+            name = function.get("name")
             return isinstance(name, str) and name in function_tool_names
 
-        function_tools: Final = [tool for tool in tools if _is_function_tool(tool)]
+        function_tools = [tool for tool in tools if _is_function_tool(tool)]
         if len(function_tools) == len(tools):
             return optional_params
 
-        dropped_types: Final = sorted(
+        dropped_types = sorted(
             {
                 str(tool.get("type")) if isinstance(tool, dict) else type(tool).__name__
                 for tool in tools
@@ -197,7 +196,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         cleaned = {k: v for k, v in optional_params.items() if k != "tools"}
         if function_tools:
-            function_tool_names: Final = {
+            function_tool_names = {
                 name for tool in function_tools for name in (_get_function_tool_name(tool),) if name is not None
             }
             if not _tool_choice_matches_function_tool(cleaned.get("tool_choice"), function_tool_names):
@@ -208,7 +207,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -236,7 +235,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     async def async_transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -257,20 +256,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         )
 
     def _get_openai_compatible_provider_info(
-        self, api_base: str | None, api_key: str | None
-    ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("DEEPSEEK_API_BASE") or "https://api.deepseek.com/beta"
-        dynamic_api_key: Final = api_key or get_secret_str("DEEPSEEK_API_KEY")
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base = api_base or get_secret_str("DEEPSEEK_API_BASE") or "https://api.deepseek.com/beta"  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         If api_base is not provided, use the default DeepSeek /chat/completions endpoint.

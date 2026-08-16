@@ -1,13 +1,13 @@
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Tooltip } from "@/components/atoms/Tooltip";
-import MemberTable from "@/components/common_components/MemberTable";
 import { Member } from "@/components/networking";
 import { DateCell, MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
-import { CircleHelp } from "lucide-react";
-import type { ComponentProps } from "react";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Space, Tooltip, Typography } from "antd";
+import type { ColumnsType } from "antd/es/table";
+import MemberTable from "@/components/common_components/MemberTable";
 import { TeamData } from "./TeamInfo";
 
 interface TeamMemberTabProps {
@@ -97,71 +97,71 @@ export default function TeamMemberTab({
     return membership?.litellm_budget_table?.budget_reset_at ?? null;
   };
 
-  const extraColumns: NonNullable<ComponentProps<typeof MemberTable>["extraColumns"]> = [
+  const extraColumns: ColumnsType<Member> = [
     {
       title: (
-        <span className="flex items-center gap-1">
+        <Space direction="horizontal">
           Model Scope
-          <Tooltip content="Models this member can access. Empty means they inherit all team models.">
-            <CircleHelp className="size-4" aria-label="Model scope information" />
+          <Tooltip title="Models this member can access. Empty means they inherit all team models.">
+            <InfoCircleOutlined />
           </Tooltip>
-        </span>
+        </Space>
       ),
       key: "model_scope",
       render: (_: unknown, record: Member) => {
         const models = getUserAllowedModels(record.user_id);
         if (!models) {
-          return <span className="text-muted-foreground">(all team models)</span>;
+          return <Typography.Text type="secondary">(all team models)</Typography.Text>;
         }
         const displayed = models.slice(0, 2);
         const remaining = models.length - displayed.length;
         return (
-          <div className="flex flex-wrap gap-1">
+          <Space wrap>
             {displayed.map((m) => (
-              <code key={m} className="rounded bg-muted px-1 py-0.5 text-xs">
+              <Typography.Text key={m} code style={{ fontSize: "12px" }}>
                 {m}
-              </code>
+              </Typography.Text>
             ))}
             {remaining > 0 && (
-              <Tooltip content={models.slice(2).join(", ")}>
-                <span className="text-muted-foreground">+{remaining} more</span>
+              <Tooltip title={models.slice(2).join(", ")}>
+                <Typography.Text type="secondary">+{remaining} more</Typography.Text>
               </Tooltip>
             )}
-          </div>
+          </Space>
         );
       },
     },
     {
       title: (
-        <span className="flex items-center gap-1">
+        <Space direction="horizontal">
           Current Cycle Spend (USD)
-          <Tooltip content="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
-            <CircleHelp className="size-4" aria-label="Current cycle spend information" />
+          <Tooltip title="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
+            <InfoCircleOutlined />
           </Tooltip>
-        </span>
+        </Space>
       ),
       key: "spend",
       render: (_: unknown, record: Member) => (
-        <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />
+        <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={4} />
       ),
     },
     {
       title: (
-        <span className="flex items-center gap-1">
+        <Space direction="horizontal">
           Total Spend (USD)
-          <Tooltip content="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
-            <CircleHelp className="size-4" aria-label="Total spend information" />
+          <Tooltip title="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
+            <InfoCircleOutlined />
           </Tooltip>
-        </span>
+        </Space>
       ),
       key: "total_spend",
-      render: (_: unknown, record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
+      render: (_: unknown, record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={4} />,
     },
     {
       title: "Team Member Budget (USD)",
       key: "budget",
       render: (_: unknown, record: Member) => (
-        <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
+        <MoneyCell value={getUserBudget(record.user_id)} decimals={4} emptyText="Unlimited" showZero />
       ),
     },
     {
@@ -171,15 +171,15 @@ export default function TeamMemberTab({
     },
     {
       title: (
-        <span className="flex items-center gap-1">
+        <Space direction="horizontal">
           Team Member Rate Limits
-          <Tooltip content="Rate limits for this member's usage within this team.">
-            <CircleHelp className="size-4" aria-label="Team member rate limits information" />
+          <Tooltip title="Rate limits for this member's usage within this team.">
+            <InfoCircleOutlined />
           </Tooltip>
-        </span>
+        </Space>
       ),
       key: "rate_limits",
-      render: (_: unknown, record: Member) => <span>{getUserRateLimits(record.user_id)}</span>,
+      render: (_: unknown, record: Member) => <Typography.Text>{getUserRateLimits(record.user_id)}</Typography.Text>,
     },
   ];
 

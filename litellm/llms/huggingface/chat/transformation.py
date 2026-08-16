@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -18,9 +18,9 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import HuggingFaceError, _fetch_inference_provider_mapping
 
-logger: Final = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
-BASE_URL: Final = "https://router.huggingface.co"
+BASE_URL = "https://router.huggingface.co"
 
 
 def _build_chat_completion_url(model_url: str) -> str:
@@ -47,13 +47,13 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
-        default_headers: Final = {
+        default_headers = {
             "content-type": "application/json",
         }
         if api_key is not None:
@@ -63,10 +63,12 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
         return HuggingFaceError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_base_url(self, model: str, base_url: str | None) -> str | None:
+    def get_base_url(self, model: str, base_url: Optional[str]) -> Optional[str]:
         """
         Get the API base for the Huggingface API.
 
@@ -80,12 +82,12 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         Get the complete URL for the API call.
@@ -106,7 +108,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             complete_url = "https://router.huggingface.co/v1/chat/completions"
             first_part, remaining = model.split("/", 1)
             if "/" in remaining:
-                provider: Final = first_part
+                provider = first_part
                 if provider == "hf-inference":
                     route = f"{provider}/models/{model}/v1/chat/completions"
                 elif provider == "novita":
@@ -123,7 +125,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -136,8 +138,8 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         first_part, remaining = model.split("/", 1)
         mapped_model = model
         if "/" in remaining:
-            provider: Final = first_part
-            model_id: Final = remaining
+            provider = first_part
+            model_id = remaining
             provider_mapping = _fetch_inference_provider_mapping(model_id)
             if provider not in provider_mapping:
                 raise HuggingFaceError(
@@ -148,7 +150,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             provider_mapping = provider_mapping[provider]
             if provider_mapping["status"] == "staging":
                 logger.warning(
-                    "Model %s is in staging mode for provider %s. Meant for test purposes only.", model_id, provider
+                    f"Model {model_id} is in staging mode for provider {provider}. Meant for test purposes only."
                 )
             mapped_model = provider_mapping["providerId"]
 

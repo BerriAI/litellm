@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import Final
+from typing import Optional
 
 import httpx
 
@@ -37,8 +37,8 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        watsonx_api_params: Final = _get_api_params(params=optional_params, model=model)
-        watsonx_auth_payload: Final = self._prepare_payload(
+        watsonx_api_params = _get_api_params(params=optional_params, model=model)
+        watsonx_auth_payload = self._prepare_payload(
             model=model,
             api_params=watsonx_api_params,
         )
@@ -60,17 +60,17 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
         endpoint = WatsonXAIEndpoint.EMBEDDINGS.value
         if model.startswith("deployment/"):
-            deployment_id: Final = "/".join(model.split("/")[1:])
+            deployment_id = "/".join(model.split("/")[1:])
             endpoint = endpoint.format(deployment_id=deployment_id)
         url = url.rstrip("/") + endpoint
 
@@ -84,7 +84,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
+        api_key: Optional[str],
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -92,11 +92,11 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         logging_obj.post_call(
             original_response=raw_response.text,
         )
-        json_resp: Final = raw_response.json()
+        json_resp = raw_response.json()
         if model_response is None:
             model_response = EmbeddingResponse(model=json_resp.get("model_id", None))
-        results: Final = json_resp.get("results", [])
-        embedding_response: Final = []
+        results = json_resp.get("results", [])
+        embedding_response = []
         for idx, result in enumerate(results):
             embedding_response.append(
                 {
@@ -107,7 +107,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
             )
         model_response.object = "list"
         model_response.data = embedding_response
-        input_tokens: Final = json_resp.get("input_token_count", 0)
+        input_tokens = json_resp.get("input_token_count", 0)
         setattr(
             model_response,
             "usage",

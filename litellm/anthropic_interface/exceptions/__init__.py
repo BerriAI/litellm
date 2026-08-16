@@ -11,9 +11,9 @@ from .exceptions import (
 )
 
 __all__ = [
-    "ANTHROPIC_ERROR_TYPE_MAP",
+    "AnthropicErrorType",
     "AnthropicErrorDetail",
     "AnthropicErrorResponse",
-    "AnthropicErrorType",
+    "ANTHROPIC_ERROR_TYPE_MAP",
     "AnthropicExceptionMapping",
 ]

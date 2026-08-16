@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -14,7 +14,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> str | None:
+    def custom_llm_provider(self) -> Optional[str]:
         return "bedrock"
 
     def should_strip_billing_metadata(self) -> bool:
@@ -24,13 +24,13 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> dict:
-        workspace_id: Final = self._get_workspace_id(optional_params, litellm_params)
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> Dict:
+        workspace_id = self._get_workspace_id(optional_params, litellm_params)
         if workspace_id is None:
             raise litellm.AuthenticationError(
                 message=(
@@ -42,7 +42,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
             )
 
         api_key = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
-        anthropic_headers: Final = self.get_anthropic_headers(
+        anthropic_headers = self.get_anthropic_headers(
             api_key=api_key,
             auth_token=None,
             computer_tool_used=self.is_computer_tool_used(tools=optional_params.get("tools")),
@@ -70,7 +70,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         self,
         streaming_response: Any,
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: Optional[bool] = False,
     ) -> Any:
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 

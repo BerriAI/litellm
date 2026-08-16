@@ -5,15 +5,14 @@ otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 """
 
 import os
-from collections.abc import Callable
-from typing import Any, Final
+from typing import Any, Callable
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
 
 # Per-model action methods that read from the database. These are routed to
 # the read replica when one is configured.
-_MODEL_READ_METHODS: Final = frozenset(
+_MODEL_READ_METHODS = frozenset(
     {
         "find_first",
         "find_first_or_raise",
@@ -28,7 +27,7 @@ _MODEL_READ_METHODS: Final = frozenset(
 )
 
 # Top-level Prisma client methods that read from the database.
-_TOP_LEVEL_READ_METHODS: Final = frozenset({"query_first", "query_raw"})
+_TOP_LEVEL_READ_METHODS = frozenset({"query_first", "query_raw"})
 
 
 class _RoutedActions:
@@ -39,7 +38,7 @@ class _RoutedActions:
     fails a recreate) is observed without re-fetching the actions accessor.
     """
 
-    __slots__ = ("_reader_actions", "_should_use_reader", "_writer_actions")
+    __slots__ = ("_writer_actions", "_reader_actions", "_should_use_reader")
 
     def __init__(
         self,
@@ -104,17 +103,6 @@ class RoutingPrismaWrapper:
         return self._reader
 
     @property
-    def read_target(self) -> PrismaWrapper:
-        """The wrapper `_TOP_LEVEL_READ_METHODS` dispatch to right now.
-
-        Callers that need to reason about the engine a read actually ran on
-        (e.g. recovering from prepared statements that went stale on it) must
-        consult this rather than `writer`, and `__getattr__` routes through it
-        so the two cannot drift apart.
-        """
-        return self._writer if self._reader_unavailable else self._reader
-
-    @property
     def reader_unavailable(self) -> bool:
         return self._reader_unavailable
 
@@ -145,11 +133,11 @@ class RoutingPrismaWrapper:
             return e
 
     async def connect(self, *args: Any, **kwargs: Any) -> None:
-        writer_error: Final = await self._try_connect(self._writer, *args, **kwargs)
+        writer_error = await self._try_connect(self._writer, *args, **kwargs)
         if writer_error is None:
             self._writer_unavailable = False
             verbose_proxy_logger.info("[writer] DB connected")
-        reader_error: Final = await self._try_connect(self._reader, *args, **kwargs)
+        reader_error = await self._try_connect(self._reader, *args, **kwargs)
         if reader_error is None:
             self._reader_unavailable = False
             verbose_proxy_logger.info("[reader] DB connected")
@@ -225,7 +213,7 @@ class RoutingPrismaWrapper:
         the engine — issue #29176), we skip the reader too rather than churning
         it needlessly, and return ``False``.
         """
-        writer_recreated: Final = await self._writer.recreate_prisma_client(
+        writer_recreated = await self._writer.recreate_prisma_client(
             new_db_url,
             http_client=http_client,
             expected_generation=expected_generation,
@@ -253,26 +241,27 @@ class RoutingPrismaWrapper:
         the URL stored in `DATABASE_URL_READ_REPLICA`.
         """
         if self._reader.iam_token_db_auth:
-            new_reader_url: Final = self._reader.get_rds_iam_token()
+            new_reader_url = self._reader.get_rds_iam_token()
             if not new_reader_url:
                 raise RuntimeError("Failed to generate fresh IAM token for read replica")
             await self._reader.recreate_prisma_client(new_reader_url, http_client=http_client)
             return
-        reader_url: Final = os.getenv("DATABASE_URL_READ_REPLICA", "")
+        reader_url = os.getenv("DATABASE_URL_READ_REPLICA", "")
         if not reader_url:
             raise RuntimeError("DATABASE_URL_READ_REPLICA not set; cannot recreate read replica client")
         await self._reader.recreate_prisma_client(reader_url, http_client=http_client)
 
     def __getattr__(self, name: str) -> Any:
         if name in _TOP_LEVEL_READ_METHODS:
-            return getattr(self.read_target, name)
-        writer_attr: Final = getattr(self._writer, name)
+            target = self._writer if self._reader_unavailable else self._reader
+            return getattr(target, name)
+        writer_attr = getattr(self._writer, name)
         # Per-model action accessors are non-callable instances that expose
         # both `find_many` and `create`. Methods like execute_raw / batch_ /
         # tx are callables and stay on the writer untouched.
         if not callable(writer_attr) and hasattr(writer_attr, "find_many") and hasattr(writer_attr, "create"):
             try:
-                reader_attr: Final = getattr(self._reader, name)
+                reader_attr = getattr(self._reader, name)
             except AttributeError:
                 return writer_attr
             return _RoutedActions(writer_attr, reader_attr, self._should_use_reader)

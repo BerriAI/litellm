@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
+import { Select } from "antd";
 import { Tag } from "./types";
 import { tagListCall } from "../networking";
-import { MultiSelect } from "@/components/shared/MultiSelect";
 
 interface TagSelectorProps {
   onChange: (selectedTags: string[]) => void;
@@ -17,7 +17,6 @@ const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, a
   useEffect(() => {
     const fetchTags = async () => {
       if (!accessToken) return;
-      setLoading(true);
       try {
         const response = await tagListCall(accessToken);
         setTags(Object.values(response));
@@ -32,18 +31,24 @@ const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, a
   }, [accessToken]);
 
   return (
-    <MultiSelect
+    <Select
+      mode="tags"
+      showSearch
       placeholder="Select or create tags"
-      onValueChange={onChange}
+      onChange={onChange}
       value={value}
       loading={loading}
       className={className}
-      allowCustomValues
       options={tags.map((tag) => ({
         label: tag.name,
         value: tag.name,
-        description: tag.description || undefined,
+        title: tag.description || tag.name,
       }))}
+      optionFilterProp="label"
+      tokenSeparators={[","]}
+      maxTagCount="responsive"
+      allowClear
+      style={{ width: "100%" }}
     />
   );
 };

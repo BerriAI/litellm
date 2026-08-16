@@ -1,11 +1,9 @@
 import React, { useState } from "react";
-import { Check, SquarePen, Trash2, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { TextInput, Icon, Text } from "@tremor/react";
+import { TrashIcon, PencilAltIcon, CheckIcon, XIcon } from "@heroicons/react/outline";
 import { SimpleTable } from "@/components/common_components/simple_table";
 import { MarginConfig } from "./types";
-import { getProviderLogoAndName } from "@/components/provider_info_helpers";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { getProviderDisplayInfo, handleImageError } from "./provider_display_helpers";
 
 interface ProviderMarginTableProps {
   marginConfig: MarginConfig;
@@ -17,9 +15,6 @@ interface ProviderMarginRow {
   provider: string;
   margin: number | { percentage?: number; fixed_amount?: number };
 }
-
-const marginRowDisplayName = (provider: string): string =>
-  provider === "global" ? "Global" : getProviderLogoAndName(provider).displayName;
 
 const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
   marginConfig,
@@ -73,6 +68,14 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
     setEditFixedAmount("");
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent, provider: string) => {
+    if (e.key === "Enter") {
+      handleSaveEdit(provider);
+    } else if (e.key === "Escape") {
+      handleCancelEdit();
+    }
+  };
+
   const formatMargin = (margin: number | { percentage?: number; fixed_amount?: number }): string => {
     if (typeof margin === "number") {
       return `${(margin * 100).toFixed(1)}%`;
@@ -93,8 +96,8 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
     .sort((a, b) => {
       if (a.provider === "global") return -1;
       if (b.provider === "global") return 1;
-      const displayA = getProviderLogoAndName(a.provider).displayName;
-      const displayB = getProviderLogoAndName(b.provider).displayName;
+      const displayA = getProviderDisplayInfo(a.provider).displayName;
+      const displayB = getProviderDisplayInfo(b.provider).displayName;
       return displayA.localeCompare(displayB);
     });
 
@@ -112,10 +115,17 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                 </div>
               );
             }
-            const { displayName } = getProviderLogoAndName(row.provider);
+            const { displayName, logo } = getProviderDisplayInfo(row.provider);
             return (
               <div className="flex items-center space-x-2">
-                <Logo provider={row.provider} label={displayName} className="w-5 h-5" />
+                {logo && (
+                  <img
+                    src={logo}
+                    alt={`${displayName} logo`}
+                    className="w-5 h-5"
+                    onError={(e) => handleImageError(e, displayName)}
+                  />
+                )}
                 <span className="font-medium">{displayName}</span>
               </div>
             );
@@ -123,82 +133,67 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
         },
         {
           header: "Margin",
-          cell: (row) => {
-            const displayName = marginRowDisplayName(row.provider);
-            return (
-              <div className="flex items-center gap-2">
-                {editingProvider === row.provider ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        value={editPercentage}
-                        onChange={(e) => setEditPercentage(e.target.value)}
-                        placeholder="10"
-                        className="w-20"
-                        autoFocus
-                      />
-                      <span className="text-gray-600">%</span>
-                      <span className="text-gray-400">+</span>
-                      <span className="text-gray-600">$</span>
-                      <Input
-                        value={editFixedAmount}
-                        onChange={(e) => setEditFixedAmount(e.target.value)}
-                        placeholder="0.001"
-                        className="w-24"
-                      />
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Save margin for ${displayName}`}
-                      onClick={() => handleSaveEdit(row.provider)}
-                      className="cursor-pointer text-green-600 hover:text-green-700"
-                    >
-                      <Check className="size-5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Cancel editing margin for ${displayName}`}
-                      onClick={handleCancelEdit}
-                      className="cursor-pointer text-gray-600 hover:text-gray-700"
-                    >
-                      <X className="size-5" />
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <p className="font-medium">{formatMargin(row.margin)}</p>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Edit margin for ${displayName}`}
-                      onClick={() => handleStartEdit(row.provider, row.margin)}
-                      className="cursor-pointer text-blue-600 hover:text-blue-700"
-                    >
-                      <SquarePen className="size-5" />
-                    </Button>
-                  </>
-                )}
-              </div>
-            );
-          },
+          cell: (row) => (
+            <div className="flex items-center gap-2">
+              {editingProvider === row.provider ? (
+                <>
+                  <div className="flex items-center gap-2">
+                    <TextInput
+                      value={editPercentage}
+                      onValueChange={setEditPercentage}
+                      placeholder="10"
+                      className="w-20"
+                      autoFocus
+                    />
+                    <span className="text-gray-600">%</span>
+                    <span className="text-gray-400">+</span>
+                    <span className="text-gray-600">$</span>
+                    <TextInput
+                      value={editFixedAmount}
+                      onValueChange={setEditFixedAmount}
+                      placeholder="0.001"
+                      className="w-24"
+                    />
+                  </div>
+                  <Icon
+                    icon={CheckIcon}
+                    size="sm"
+                    onClick={() => handleSaveEdit(row.provider)}
+                    className="cursor-pointer text-green-600 hover:text-green-700"
+                  />
+                  <Icon
+                    icon={XIcon}
+                    size="sm"
+                    onClick={handleCancelEdit}
+                    className="cursor-pointer text-gray-600 hover:text-gray-700"
+                  />
+                </>
+              ) : (
+                <>
+                  <Text className="font-medium">{formatMargin(row.margin)}</Text>
+                  <Icon
+                    icon={PencilAltIcon}
+                    size="sm"
+                    onClick={() => handleStartEdit(row.provider, row.margin)}
+                    className="cursor-pointer text-blue-600 hover:text-blue-700"
+                  />
+                </>
+              )}
+            </div>
+          ),
           width: "350px",
         },
         {
           header: "Actions",
           cell: (row) => {
-            const displayName = marginRowDisplayName(row.provider);
+            const displayName = row.provider === "global" ? "Global" : getProviderDisplayInfo(row.provider).displayName;
             return (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Remove margin for ${displayName}`}
+              <Icon
+                icon={TrashIcon}
+                size="sm"
                 onClick={() => onRemoveProvider(row.provider, displayName)}
                 className="cursor-pointer hover:text-red-600"
-              >
-                <Trash2 className="size-5" />
-              </Button>
+              />
             );
           },
           width: "80px",

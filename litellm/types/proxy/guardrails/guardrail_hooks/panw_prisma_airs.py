@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field
 
@@ -6,21 +6,21 @@ from .base import GuardrailConfigModel
 
 
 class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
-    api_key: str | None = Field(
+    api_key: Optional[str] = Field(
         default=None,
         description="The API key for the PANW Prisma AIRS guardrail. If not provided, the `PANW_PRISMA_AIRS_API_KEY` environment variable is checked.",
     )
-    api_base: str | None = Field(
+    api_base: Optional[str] = Field(
         default=None,
         description="The API base for the PANW Prisma AIRS guardrail. Defaults to https://service.api.aisecurity.paloaltonetworks.com. If not provided, the `PANW_PRISMA_AIRS_API_BASE` environment variable is checked.",
     )
 
-    profile_name: str | None = Field(
+    profile_name: Optional[str] = Field(
         default=None,
         description="PANW Prisma AIRS security profile name configured in Strata Cloud Manager. Optional if API key has a linked profile.",
     )
 
-    app_name: str | None = Field(
+    app_name: Optional[str] = Field(
         default=None,
         description="Application name for tracking this LiteLLM instance in Prisma AIRS analytics and dashboards. Defaults to 'LiteLLM' if not specified.",
     )
@@ -52,7 +52,7 @@ class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
         description="PANW API call timeout in seconds (1-60).",
     )
 
-    experimental_use_latest_role_message_only: bool | None = Field(
+    experimental_use_latest_role_message_only: Optional[bool] = Field(
         default=None,
         description="Anthropic /v1/messages only. When unset: scans only latest user/developer "
         "message on request side. Set false to scan all user/system/developer messages. "

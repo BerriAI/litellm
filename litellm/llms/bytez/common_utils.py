@@ -1,10 +1,10 @@
-from typing import Final
+from typing import Optional
 
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-API_BASE: Final = "https://api.bytez.com/models/v2"
+API_BASE = "https://api.bytez.com/models/v2"
 
 
 class BytezError(BaseLLMException):
@@ -12,7 +12,7 @@ class BytezError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: httpx.Headers | None = None,
+        headers: Optional[httpx.Headers] = None,
     ):
         self.status_code = status_code
         self.message = message

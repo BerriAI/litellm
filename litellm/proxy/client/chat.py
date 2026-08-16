@@ -1,6 +1,5 @@
 import json
-from collections.abc import Iterator
-from typing import Any, Final
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import requests
 
@@ -8,7 +7,7 @@ from .exceptions import UnauthorizedError
 
 
 class ChatClient:
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: Optional[str] = None):
         """
         Initialize the ChatClient.
 
@@ -19,14 +18,14 @@ class ChatClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> dict[str, str]:
+    def _get_headers(self) -> Dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers: Final = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
@@ -34,16 +33,16 @@ class ChatClient:
     def completions(
         self,
         model: str,
-        messages: list[dict[str, str]],
-        temperature: float | None = None,
-        top_p: float | None = None,
-        n: int | None = None,
-        max_tokens: int | None = None,
-        presence_penalty: float | None = None,
-        frequency_penalty: float | None = None,
-        user: str | None = None,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        n: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        user: Optional[str] = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> Union[Dict[str, Any], requests.Request]:
         """
         Create a chat completion.
 
@@ -67,10 +66,10 @@ class ChatClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url: Final = f"{self._base_url}/chat/completions"
+        url = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: Final[dict[str, Any]] = {"model": model, "messages": messages}
+        data: Dict[str, Any] = {"model": model, "messages": messages}
 
         # Add optional parameters if provided
         if temperature is not None:
@@ -88,15 +87,15 @@ class ChatClient:
         if user is not None:
             data["user"] = user
 
-        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
         # Prepare and send the request
-        session: Final = requests.Session()
+        session = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -107,15 +106,15 @@ class ChatClient:
     def completions_stream(
         self,
         model: str,
-        messages: list[dict[str, str]],
-        temperature: float | None = None,
-        top_p: float | None = None,
-        n: int | None = None,
-        max_tokens: int | None = None,
-        presence_penalty: float | None = None,
-        frequency_penalty: float | None = None,
-        user: str | None = None,
-    ) -> Iterator[dict[str, Any]]:
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        n: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        user: Optional[str] = None,
+    ) -> Iterator[Dict[str, Any]]:
         """
         Create a streaming chat completion.
 
@@ -137,10 +136,10 @@ class ChatClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url: Final = f"{self._base_url}/chat/completions"
+        url = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: Final[dict[str, Any]] = {"model": model, "messages": messages, "stream": True}
+        data: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
 
         # Add optional parameters if provided
         if temperature is not None:
@@ -159,9 +158,9 @@ class ChatClient:
             data["user"] = user
 
         # Make streaming request
-        session: Final = requests.Session()
+        session = requests.Session()
         try:
-            response: Final = session.post(url, headers=self._get_headers(), json=data, stream=True)
+            response = session.post(url, headers=self._get_headers(), json=data, stream=True)
             response.raise_for_status()
 
             # Parse SSE stream

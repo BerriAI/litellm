@@ -181,8 +181,7 @@ vi.mock("@/components/shared/errorUtils", () => ({
   parseErrorMessage: vi.fn(),
 }));
 
-vi.mock("../utils", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../utils")>()),
+vi.mock("../utils", () => ({
   processSSOSettingsPayload: vi.fn(),
 }));
 
@@ -320,7 +319,7 @@ describe("EditSSOSettingsModal", () => {
         useEditSSOSettings: { mutateAsync: mockMutateAsync, isPending: false },
       });
 
-      renderComponent();
+      const { mockOnSuccess } = renderComponent();
 
       fireEvent.click(screen.getByTestId(TEST_IDS.TRIGGER_FORM_SUBMIT));
 

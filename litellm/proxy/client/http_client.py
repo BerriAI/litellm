@@ -1,14 +1,13 @@
 """HTTP client for making requests to the LiteLLM proxy server."""
 
-from typing import Any, Final
-
+from typing import Any, Dict, Optional, Union
 import requests
 
 
 class HTTPClient:
     """HTTP client for making requests to the LiteLLM proxy server."""
 
-    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 30):
+    def __init__(self, base_url: str, api_key: Optional[str] = None, timeout: int = 30):
         """Initialize the HTTP client.
 
         Args:
@@ -25,9 +24,9 @@ class HTTPClient:
         method: str,
         uri: str,
         *,
-        data: dict[str, Any] | list | bytes | None = None,
-        json: dict[str, Any] | list | None = None,
-        headers: dict[str, str] | None = None,
+        data: Optional[Union[Dict[str, Any], list, bytes]] = None,
+        json: Optional[Union[Dict[str, Any], list]] = None,
+        headers: Optional[Dict[str, str]] = None,
         **kwargs: Any,
     ) -> Any:
         """Make an HTTP request to the LiteLLM proxy server.
@@ -70,16 +69,16 @@ class HTTPClient:
              ...
         """
         # Build complete URL
-        url: Final = f"{self._base_url}/{uri.lstrip('/')}"
+        url = f"{self._base_url}/{uri.lstrip('/')}"
 
         # Prepare headers
-        request_headers: Final = {}
+        request_headers = {}
         if headers:
             request_headers.update(headers)
         if self._api_key:
             request_headers["Authorization"] = f"Bearer {self._api_key}"
 
-        response: Final = requests.request(
+        response = requests.request(
             method=method,
             url=url,
             data=data,

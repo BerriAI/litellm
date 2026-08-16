@@ -6,8 +6,20 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any, Final, Literal, cast, get_type_hints, overload
+from typing import (
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    get_type_hints,
+    overload,
+)
 
 import httpx
 
@@ -17,8 +29,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_none_values_from_message,
 )
 from litellm.llms.openai.chat.gpt_transformation import (
-    OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
+    OpenAIChatCompletionStreamingHandler,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
@@ -52,29 +64,29 @@ class MistralConfig(OpenAIGPTConfig):
     - `response_format` (object or null): An object specifying the format that the model must output. Setting to { "type": "json_object" } enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message.
     """
 
-    temperature: int | None = None
-    top_p: int | None = None
-    max_tokens: int | None = None
-    tools: list | None = None
-    tool_choice: Literal["auto", "any", "none"] | None = None
-    random_seed: int | None = None
-    safe_prompt: bool | None = None
-    response_format: dict | None = None
-    stop: str | list | None = None
+    temperature: Optional[int] = None
+    top_p: Optional[int] = None
+    max_tokens: Optional[int] = None
+    tools: Optional[list] = None
+    tool_choice: Optional[Literal["auto", "any", "none"]] = None
+    random_seed: Optional[int] = None
+    safe_prompt: Optional[bool] = None
+    response_format: Optional[dict] = None
+    stop: Optional[Union[str, list]] = None
 
     def __init__(
         self,
-        temperature: int | None = None,
-        top_p: int | None = None,
-        max_tokens: int | None = None,
-        tools: list | None = None,
-        tool_choice: Literal["auto", "any", "none"] | None = None,
-        random_seed: int | None = None,
-        safe_prompt: bool | None = None,
-        response_format: dict | None = None,
-        stop: str | list | None = None,
+        temperature: Optional[int] = None,
+        top_p: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        tools: Optional[list] = None,
+        tool_choice: Optional[Literal["auto", "any", "none"]] = None,
+        random_seed: Optional[int] = None,
+        safe_prompt: Optional[bool] = None,
+        response_format: Optional[dict] = None,
+        stop: Optional[Union[str, list]] = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -83,8 +95,8 @@ class MistralConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
-        supported_params: Final = [
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        supported_params = [
             "stream",
             "temperature",
             "top_p",
@@ -178,18 +190,20 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["parallel_tool_calls"] = value
         return optional_params
 
-    def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
+    def _get_openai_compatible_provider_info(
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[str, Optional[str]]:
         # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
         api_base = (
             api_base
             or get_secret_str("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
             or "https://api.mistral.ai/v1"
-        )
+        )  # type: ignore
 
         # if api_base does not end with /v1 we add it
         if api_base is not None and not api_base.endswith("/v1"):  # Mistral always needs a /v1 at the end
             api_base = api_base + "/v1"
-        dynamic_api_key: Final = (
+        dynamic_api_key = (
             api_key
             or get_secret_str("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
             or get_secret_str("MISTRAL_API_KEY")
@@ -200,23 +214,23 @@ class MistralConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: 
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: 
         ...
 
     @overload
     def _transform_messages(
         self,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> list[AllMessageValues]: 
+    ) -> List[AllMessageValues]: 
         ...
     # fmt: on
 
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         - handles scenario where content is list and not string
         - content list is just text, and no images
@@ -244,7 +258,7 @@ class MistralConfig(OpenAIGPTConfig):
         messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         ## 3. Handle name in message
-        new_messages: Final[list[AllMessageValues]] = []
+        new_messages: List[AllMessageValues] = []
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
@@ -258,7 +272,7 @@ class MistralConfig(OpenAIGPTConfig):
         else:
             return super()._transform_messages(new_messages, model, False)
 
-    async def _transform_messages_async(self, messages: list[AllMessageValues], model: str) -> list[AllMessageValues]:
+    async def _transform_messages_async(self, messages: List[AllMessageValues], model: str) -> List[AllMessageValues]:
         """
         Handle modification of messages for Mistral API in an async context.
         """
@@ -268,7 +282,7 @@ class MistralConfig(OpenAIGPTConfig):
         messages = self._handle_message_with_file(messages)
         return messages
 
-    def _transform_messages_sync(self, messages: list[AllMessageValues], model: str) -> list[AllMessageValues]:
+    def _transform_messages_sync(self, messages: List[AllMessageValues], model: str) -> List[AllMessageValues]:
         """Handle modification of messages for Mistral API in a sync context."""
         # Call parent sync method to handle basic transformations
         # and then apply Mistral-specific handling for files
@@ -277,7 +291,7 @@ class MistralConfig(OpenAIGPTConfig):
         messages = self._handle_message_with_file(messages)
         return messages
 
-    def _handle_message_with_file(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
+    def _handle_message_with_file(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
         """
         Mistral API supports only 'file_id' in message content with type 'file'.
         """
@@ -292,13 +306,13 @@ class MistralConfig(OpenAIGPTConfig):
                         file_id = file_content.get("file", {}).get("file_id")
                         if file_id:
                             # Replace 'file' with 'file_id'
-                            file_content["file_id"] = file_id
+                            file_content["file_id"] = file_id  # type: ignore
                             file_content.pop("file", None)
         return messages
 
     def _add_reasoning_system_prompt_if_needed(
-        self, messages: list[AllMessageValues], optional_params: dict
-    ) -> list[AllMessageValues]:
+        self, messages: List[AllMessageValues], optional_params: dict
+    ) -> List[AllMessageValues]:
         """
         Add reasoning system prompt for Mistral magistral models when reasoning_effort is specified.
         """
@@ -306,7 +320,7 @@ class MistralConfig(OpenAIGPTConfig):
             return messages
 
         # Check if there's already a system message
-        has_system_message: Final = any(msg.get("role") == "system" for msg in messages)
+        has_system_message = any(msg.get("role") == "system" for msg in messages)
 
         if has_system_message:
             # Prepend reasoning instructions to existing system message
@@ -318,19 +332,19 @@ class MistralConfig(OpenAIGPTConfig):
                     # Handle both string and list content, preserving original format
                     if isinstance(existing_content, str):
                         # String content - prepend reasoning prompt
-                        new_content: str | list = f"{reasoning_prompt}\n\n{existing_content}"
+                        new_content: Union[str, list] = f"{reasoning_prompt}\n\n{existing_content}"
                     elif isinstance(existing_content, list):
                         # List content - prepend reasoning prompt as text block
                         new_content = [{"type": "text", "text": reasoning_prompt + "\n\n"}] + existing_content
                     else:
                         # Fallback for any other type - convert to string
-                        new_content = f"{reasoning_prompt}\n\n{existing_content}"
+                        new_content = f"{reasoning_prompt}\n\n{str(existing_content)}"
 
                     messages[i] = cast(AllMessageValues, {**msg, "content": new_content})
                     break
         else:
             # Add new system message with reasoning instructions
-            reasoning_message: Final[AllMessageValues] = cast(
+            reasoning_message: AllMessageValues = cast(
                 AllMessageValues,
                 {
                     "role": "system",
@@ -398,12 +412,15 @@ class MistralConfig(OpenAIGPTConfig):
         If role == tool, then we keep `name` if it's not an empty string
         Otherwise, we drop `name`
         """
-        _name: Final = message.get("name")
+        _name = message.get("name")  # type: ignore
 
         if _name is not None:
             # Remove name if not a tool message
-            if message["role"] != "tool" or isinstance(_name, str) and len(_name.strip()) == 0:
-                message.pop("name", None)
+            if message["role"] != "tool":
+                message.pop("name", None)  # type: ignore
+            # For tool messages, remove name if it's an empty string
+            elif isinstance(_name, str) and len(_name.strip()) == 0:
+                message.pop("name", None)  # type: ignore
 
         return message
 
@@ -412,17 +429,17 @@ class MistralConfig(OpenAIGPTConfig):
         """
         Mistral API only supports tool_calls in Messages in `MistralToolCallMessage` spec
         """
-        _tool_calls: Final = message.get("tool_calls")
-        mistral_tool_calls: Final[list[MistralToolCallMessage]] = []
+        _tool_calls = message.get("tool_calls")
+        mistral_tool_calls: List[MistralToolCallMessage] = []
         if _tool_calls is not None and isinstance(_tool_calls, list):
             for _tool in _tool_calls:
                 _tool_call_message = MistralToolCallMessage(
                     id=_tool.get("id"),
                     type="function",
-                    function=_tool.get("function"),
+                    function=_tool.get("function"),  # type: ignore
                 )
                 mistral_tool_calls.append(_tool_call_message)
-            message["tool_calls"] = mistral_tool_calls
+            message["tool_calls"] = mistral_tool_calls  # type: ignore
         return message
 
     @classmethod
@@ -432,7 +449,7 @@ class MistralConfig(OpenAIGPTConfig):
         """
         from litellm.types.llms.openai import ChatCompletionAssistantMessage
 
-        set_keys: Final = get_type_hints(ChatCompletionAssistantMessage).keys()
+        set_keys = get_type_hints(ChatCompletionAssistantMessage).keys()
 
         all_expected_values_are_empty = True
         for key in set_keys:
@@ -515,7 +532,7 @@ class MistralConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -547,12 +564,12 @@ class MistralConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         """
         Transform the raw response from Mistral API.
@@ -567,7 +584,7 @@ class MistralConfig(OpenAIGPTConfig):
         response_data = self._handle_empty_content_response(response_data)
         response_data = self._handle_content_list_to_str_conversion(response_data)
 
-        final_response_obj: Final = cast(
+        final_response_obj = cast(
             ModelResponse,
             convert_to_model_response_object(
                 response_object=response_data,
@@ -581,9 +598,9 @@ class MistralConfig(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: Optional[bool] = False,
     ):
         return MistralChatResponseIterator(
             streaming_response=streaming_response,
@@ -619,20 +636,20 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
 
     @staticmethod
     def _normalize_content_blocks(
-        content_blocks: list[dict],
-    ) -> tuple[str | None, list[dict], str | None]:
+        content_blocks: List[dict],
+    ) -> Tuple[Optional[str], List[dict], Optional[str]]:
         """
         Convert Mistral magistral content blocks into OpenAI-compatible content + thinking_blocks.
         """
-        text_segments: Final[list[str]] = []
-        thinking_blocks: Final[list[dict]] = []
-        reasoning_segments: Final[list[str]] = []
+        text_segments: List[str] = []
+        thinking_blocks: List[dict] = []
+        reasoning_segments: List[str] = []
 
         for block in content_blocks:
             block_type = block.get("type")
             if block_type == "thinking":
                 mistral_thinking = block.get("thinking", [])
-                thinking_text_parts: list[str] = []
+                thinking_text_parts: List[str] = []
                 for thinking_block in mistral_thinking:
                     if thinking_block.get("type") == "text":
                         thinking_text_parts.append(thinking_block.get("text", ""))
@@ -649,6 +666,6 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
             elif block_type == "text":
                 text_segments.append(block.get("text", ""))
 
-        normalized_text: Final = "".join(text_segments) if text_segments else None
-        reasoning_content: Final = "\n".join(reasoning_segments) if reasoning_segments else None
+        normalized_text = "".join(text_segments) if text_segments else None
+        reasoning_content = "\n".join(reasoning_segments) if reasoning_segments else None
         return normalized_text, thinking_blocks, reasoning_content

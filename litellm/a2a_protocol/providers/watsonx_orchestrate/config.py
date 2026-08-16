@@ -2,8 +2,7 @@
 A2A provider configuration for IBM watsonx Orchestrate (WXO).
 """
 
-from collections.abc import AsyncIterator
-from typing import Any, Final
+from typing import Any, AsyncIterator, Dict, Optional
 
 from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
 from litellm.a2a_protocol.providers.watsonx_orchestrate.handler import (
@@ -17,12 +16,12 @@ class WatsonxOrchestrateA2AConfig(BaseA2AProviderConfig):
     async def handle_non_streaming(
         self,
         request_id: str,
-        params: dict[str, Any],
-        api_base: str | None = None,
+        params: Dict[str, Any],
+        api_base: Optional[str] = None,
         **kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         """Handle a non-streaming A2A request via WXO runs API."""
-        litellm_params: Final = kwargs.get("litellm_params")
+        litellm_params = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
                 "litellm_params is required for WatsonxOrchestrateA2AConfig "
@@ -37,12 +36,12 @@ class WatsonxOrchestrateA2AConfig(BaseA2AProviderConfig):
     async def handle_streaming(
         self,
         request_id: str,
-        params: dict[str, Any],
-        api_base: str | None = None,
+        params: Dict[str, Any],
+        api_base: Optional[str] = None,
         **kwargs: Any,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[Dict[str, Any]]:
         """Handle a streaming A2A request via WXO streaming runs API."""
-        litellm_params: Final = kwargs.get("litellm_params")
+        litellm_params = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
                 "litellm_params is required for WatsonxOrchestrateA2AConfig "

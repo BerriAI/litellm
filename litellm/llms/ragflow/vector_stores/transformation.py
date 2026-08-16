@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -44,10 +44,10 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
             "write": [],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """Validate environment and set headers for RAGFlow API."""
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key: Final = litellm_params.api_key or get_secret_str("RAGFLOW_API_KEY")
+        api_key = litellm_params.api_key or get_secret_str("RAGFLOW_API_KEY")
 
         if api_key is None:
             raise ValueError("RAGFLOW_API_KEY is required (set env var or pass in litellm_params)")
@@ -62,7 +62,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
         """
@@ -86,13 +86,13 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: str | list[str],
+        query: Union[str, List[str]],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
-    ) -> tuple[str, dict]:
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
         """RAGFlow vector stores are management-only, search is not supported."""
         raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
 
@@ -106,30 +106,30 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> Tuple[str, Dict]:
         """
         Transform create request to RAGFlow POST /api/v1/datasets format.
 
         Maps LiteLLM params to RAGFlow dataset creation parameters.
         RAGFlow-specific fields can be passed via metadata.
         """
-        url: Final = api_base  # Already includes /api/v1/datasets from get_complete_url
+        url = api_base  # Already includes /api/v1/datasets from get_complete_url
 
         # Extract name (required by RAGFlow)
-        name: Final = vector_store_create_optional_params.get("name")
+        name = vector_store_create_optional_params.get("name")
         if not name:
             raise ValueError("name is required for RAGFlow dataset creation")
 
         # Build request body
-        request_body: Final[dict[str, Any]] = {
+        request_body: Dict[str, Any] = {
             "name": name,
         }
 
         # Extract RAGFlow-specific fields from metadata
-        metadata: Final = vector_store_create_optional_params.get("metadata")
+        metadata = vector_store_create_optional_params.get("metadata")
         if metadata:
             # RAGFlow-specific fields that can be in metadata
-            ragflow_fields: Final = [
+            ragflow_fields = [
                 "avatar",
                 "description",
                 "embedding_model",
@@ -173,30 +173,30 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json = response.json()
 
             # Check for RAGFlow error response
             if response_json.get("code") != 0:
-                error_message: Final = response_json.get("message", "Unknown error")
+                error_message = response_json.get("message", "Unknown error")
                 raise self.get_error_class(
                     error_message=error_message,
                     status_code=response.status_code,
                     headers=response.headers,
                 )
 
-            data: Final = response_json.get("data", {})
+            data = response_json.get("data", {})
 
             # Extract dataset ID
-            dataset_id: Final = data.get("id")
+            dataset_id = data.get("id")
             if not dataset_id:
                 raise ValueError("RAGFlow response missing dataset id")
 
             # Extract name
-            name: Final = data.get("name")
+            name = data.get("name")
 
             # Convert create_time from milliseconds to seconds (Unix timestamp)
-            create_time_ms: Final = data.get("create_time", 0)
-            created_at: Final = int(create_time_ms / 1000) if create_time_ms else None
+            create_time_ms = data.get("create_time", 0)
+            created_at = int(create_time_ms / 1000) if create_time_ms else None
 
             # Build VectorStoreCreateResponse
             return VectorStoreCreateResponse(

@@ -1,4 +1,4 @@
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "antd";
 import { useDisableShowNewBadge } from "@/app/(dashboard)/hooks/useDisableShowNewBadge";
 
 export default function BetaBadge({ children, dot = false }: { children?: React.ReactNode; dot?: boolean }) {
@@ -8,14 +8,11 @@ export default function BetaBadge({ children, dot = false }: { children?: React.
     return children ? <>{children}</> : null;
   }
 
-  const badge = dot ? <Badge className="size-1.5 p-0" /> : <Badge>Beta</Badge>;
-
   return children ? (
-    <span className="inline-flex items-center gap-1.5">
+    <Badge color="blue" count={dot ? undefined : "Beta"} dot={dot}>
       {children}
-      {badge}
-    </span>
+    </Badge>
   ) : (
-    badge
+    <Badge color="blue" count={dot ? undefined : "Beta"} dot={dot} />
   );
 }

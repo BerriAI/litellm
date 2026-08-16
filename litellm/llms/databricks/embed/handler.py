@@ -3,7 +3,7 @@ Calling logic for Databricks embeddings
 """
 
 import os
-from typing import Final
+from typing import Optional
 
 from litellm.utils import EmbeddingResponse
 
@@ -18,19 +18,19 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
         input: list,
         timeout: float,
         logging_obj,
-        api_key: str | None,
-        api_base: str | None,
+        api_key: Optional[str],
+        api_base: Optional[str],
         optional_params: dict,
-        model_response: EmbeddingResponse | None = None,
+        model_response: Optional[EmbeddingResponse] = None,
         client=None,
         aembedding=None,
-        custom_endpoint: bool | None = None,
-        headers: dict | None = None,
+        custom_endpoint: Optional[bool] = None,
+        headers: Optional[dict] = None,
     ) -> EmbeddingResponse:
         # Check for custom user agent in optional_params or environment
         # This allows partners building on LiteLLM to set their own telemetry
         # Use pop() to remove these keys so they don't get sent to the API
-        custom_user_agent: Final = (
+        custom_user_agent = (
             optional_params.pop("user_agent", None)
             or optional_params.pop("databricks_user_agent", None)
             or os.getenv("LITELLM_USER_AGENT")

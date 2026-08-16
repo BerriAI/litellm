@@ -10,7 +10,7 @@ Permission logic:
 - end_user_id + mcp_servers    → allow only those servers
 """
 
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -24,7 +24,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
-GUARDRAIL_NAME: Final = "mcp_end_user_permission"
+GUARDRAIL_NAME = "mcp_end_user_permission"
 
 
 class MCPEndUserPermissionGuardrail(CustomGuardrail):
@@ -54,13 +54,13 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"] = "request",
-        logging_obj: Any | None = None,
+        logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
         """
         Filters MCP tools the end user cannot access based on their
         object_permission.mcp_servers / mcp_access_groups settings.
         """
-        object_permission: Final = await self._resolve_end_user_object_permission(request_data)
+        object_permission = await self._resolve_end_user_object_permission(request_data)
         return await self._check_request_tools(inputs, object_permission)
 
     # ------------------------------------------------------------------
@@ -70,20 +70,20 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
     async def _check_request_tools(
         self,
         inputs: GenericGuardrailAPIInputs,
-        object_permission: LiteLLM_ObjectPermissionTable | None,
+        object_permission: Optional[LiteLLM_ObjectPermissionTable],
     ) -> GenericGuardrailAPIInputs:
-        tools: Final = inputs.get("tools")
+        tools = inputs.get("tools")
         if not tools:
             return inputs
 
-        allowed_mcp_servers: Final = await self._get_allowed_mcp_servers_from_object_permission(object_permission)
+        allowed_mcp_servers = await self._get_allowed_mcp_servers_from_object_permission(object_permission)
         if allowed_mcp_servers is None:
             return inputs  # No restrictions → pass through unchanged
 
-        verbose_proxy_logger.debug("MCP guardrail: end user restricted to MCP servers: %s", allowed_mcp_servers)
+        verbose_proxy_logger.debug(f"MCP guardrail: end user restricted to MCP servers: {allowed_mcp_servers}")
 
-        filtered_tools: Final = []
-        removed_tools: Final = []
+        filtered_tools = []
+        removed_tools = []
 
         for tool in tools:
             tool_name = self._get_tool_name_from_definition(tool)
@@ -97,14 +97,13 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
             else:
                 removed_tools.append(tool_name)
                 verbose_proxy_logger.warning(
-                    "MCP guardrail: removing tool '%s' (server: '%s') — not in end user's allowed servers",
-                    tool_name,
-                    server_name,
+                    f"MCP guardrail: removing tool '{tool_name}' "
+                    f"(server: '{server_name}') — not in end user's allowed servers"
                 )
 
         if removed_tools:
             verbose_proxy_logger.debug(
-                "MCP guardrail: removed %s unauthorized MCP tool(s): %s", len(removed_tools), removed_tools
+                f"MCP guardrail: removed {len(removed_tools)} unauthorized MCP tool(s): {removed_tools}"
             )
             inputs["tools"] = filtered_tools
 
@@ -117,28 +116,28 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
     @staticmethod
     async def _resolve_end_user_object_permission(
         request_data: dict,
-    ) -> LiteLLM_ObjectPermissionTable | None:
+    ) -> Optional[LiteLLM_ObjectPermissionTable]:
         """
         Resolve the end user's object_permission via the cached auth lookup.
 
         Uses get_end_user_object (same path as auth) so no extra DB round-trip
         when the cache is warm.
         """
-        end_user_id: Final = MCPEndUserPermissionGuardrail._get_end_user_id_from_request_data(request_data)
+        end_user_id = MCPEndUserPermissionGuardrail._get_end_user_id_from_request_data(request_data)
         if not end_user_id:
             return None
 
-        end_user_object: Final = await MCPEndUserPermissionGuardrail._fetch_end_user_object(end_user_id)
+        end_user_object = await MCPEndUserPermissionGuardrail._fetch_end_user_object(end_user_id)
         return end_user_object.object_permission if end_user_object is not None else None
 
     @staticmethod
-    def _get_end_user_id_from_request_data(request_data: dict) -> str | None:
+    def _get_end_user_id_from_request_data(request_data: dict) -> Optional[str]:
         return request_data.get("user_api_key_end_user_id") or request_data.get("litellm_metadata", {}).get(
             "user_api_key_end_user_id"
         )
 
     @staticmethod
-    async def _fetch_end_user_object(end_user_id: str):
+    async def _fetch_end_user_object(end_user_id: str):  # type: ignore[return]
         """
         Fetch end user object via the same cached path used during auth.
         No extra DB round-trip when the cache is warm.
@@ -163,7 +162,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
                 route="/mcp",
             )
         except Exception as e:
-            verbose_proxy_logger.warning("MCP guardrail: failed to fetch end_user_object for '%s': %s", end_user_id, e)
+            verbose_proxy_logger.warning(f"MCP guardrail: failed to fetch end_user_object for '{end_user_id}': {e}")
             return None
 
     # ------------------------------------------------------------------
@@ -172,8 +171,8 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
 
     @staticmethod
     async def _get_allowed_mcp_servers_from_object_permission(
-        object_permission: LiteLLM_ObjectPermissionTable | None,
-    ) -> list[str] | None:
+        object_permission: Optional[LiteLLM_ObjectPermissionTable],
+    ) -> Optional[List[str]]:
         """
         Returns:
             None  — no restrictions configured, allow all MCP servers
@@ -182,8 +181,8 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         if object_permission is None:
             return None
 
-        direct_mcp_servers: Final = object_permission.mcp_servers or []
-        mcp_access_groups: Final = object_permission.mcp_access_groups or []
+        direct_mcp_servers = object_permission.mcp_servers or []
+        mcp_access_groups = object_permission.mcp_access_groups or []
 
         if not direct_mcp_servers and not mcp_access_groups:
             return None  # Both empty → no restrictions
@@ -192,7 +191,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
             MCPRequestHandler,
         )
 
-        access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(mcp_access_groups)
+        access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(mcp_access_groups)
 
         return list(set(direct_mcp_servers + access_group_servers))
 
@@ -201,7 +200,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.mcp_end_user_permission import (
             MCPEndUserPermissionGuardrailConfigModel,
         )
@@ -209,7 +208,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         return MCPEndUserPermissionGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
         ]
@@ -219,7 +218,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_mcp_server_name(tool_name: str) -> str | None:
+    def _extract_mcp_server_name(tool_name: str) -> Optional[str]:
         """
         Split "github-create_issue" → "github".
         Returns None if the tool name has no '-' prefix (not an MCP tool).
@@ -229,7 +228,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         return tool_name.split("-", 1)[0]
 
     @staticmethod
-    def _get_tool_name_from_definition(tool: Any) -> str | None:
+    def _get_tool_name_from_definition(tool: Any) -> Optional[str]:
         """
         Extract tool name from a definition dict.
 
@@ -238,9 +237,9 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         """
         if not isinstance(tool, dict):
             return None
-        function_def: Final = tool.get("function")
+        function_def = tool.get("function")
         if isinstance(function_def, dict):
-            name: Final = function_def.get("name")
+            name = function_def.get("name")
             if name:
                 return name
         return tool.get("name")

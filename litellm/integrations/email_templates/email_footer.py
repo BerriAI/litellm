@@ -1,6 +1,4 @@
-from typing import Final
-
-EMAIL_FOOTER: Final = """
+EMAIL_FOOTER = """
 <div class="footer">
             <p>© 2025 LiteLLM. All rights reserved.</p>
             <div class="social-links">

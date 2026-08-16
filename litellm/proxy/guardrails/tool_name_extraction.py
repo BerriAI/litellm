@@ -6,19 +6,19 @@ knowledge lives in one place. Uses guardrail translation handlers where availabl
 with standalone extractors for generate_content and MCP.
 """
 
-from typing import Any, Final
+from typing import Any, Dict, List
 
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.types.utils import CallTypes
 
 # Call types that have no guardrail translation handler; we use standalone extractors
-STANDALONE_EXTRACTORS: Final[dict[str, Any]] = {}
+STANDALONE_EXTRACTORS: Dict[str, Any] = {}
 
 
-def _extract_generate_content_tool_names(data: dict) -> list[str]:
+def _extract_generate_content_tool_names(data: dict) -> List[str]:
     """Google generateContent: tools[].functionDeclarations[].name"""
-    names: Final[list[str]] = []
+    names: List[str] = []
     for tool in data.get("tools") or []:
         if not isinstance(tool, dict):
             continue
@@ -28,10 +28,10 @@ def _extract_generate_content_tool_names(data: dict) -> list[str]:
     return names
 
 
-def _extract_mcp_tool_names(data: dict) -> list[str]:
+def _extract_mcp_tool_names(data: dict) -> List[str]:
     """MCP call_tool: name or mcp_tool_name in body"""
-    names: Final[list[str]] = []
-    name: Final = data.get("name") or data.get("mcp_tool_name")
+    names: List[str] = []
+    name = data.get("name") or data.get("mcp_tool_name")
     if name:
         names.append(str(name))
     return names
@@ -46,7 +46,7 @@ def _register_standalone_extractors() -> None:
 
 
 # Tool-capable call types (routes that can send tools in the request)
-TOOL_CAPABLE_CALL_TYPES: Final = frozenset(
+TOOL_CAPABLE_CALL_TYPES = frozenset(
     {
         CallTypes.completion.value,
         CallTypes.acompletion.value,
@@ -60,18 +60,18 @@ TOOL_CAPABLE_CALL_TYPES: Final = frozenset(
 )
 
 
-def extract_request_tool_names(route: str, data: dict) -> list[str]:
+def extract_request_tool_names(route: str, data: dict) -> List[str]:
     """
     Extract tool names from the request body for the given route.
     Uses guardrail translation handlers when available, else standalone extractors
     for generate_content and MCP. Returns [] for non-tool-capable routes or when
     no tools are present.
     """
-    call_types: Final = get_call_types_for_route(route)
+    call_types = get_call_types_for_route(route)
     if not call_types:
         return []
     _register_standalone_extractors()
-    mappings: Final = load_guardrail_translation_mappings()
+    mappings = load_guardrail_translation_mappings()
     for call_type in call_types:
         if not isinstance(call_type, CallTypes):
             continue

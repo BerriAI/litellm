@@ -1,7 +1,5 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { Tooltip } from "@/components/atoms/Tooltip";
-import CopyButton from "@/components/shared/CopyButton";
 import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 import {
   DataTable,
@@ -10,13 +8,13 @@ import {
   DataTableSortHeader,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
-import { Badge } from "@/components/ui/badge";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Input } from "@/components/ui/input";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { Badge, Icon, Text } from "@tremor/react";
+import { Popover, Tooltip, Typography } from "antd";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -149,9 +147,12 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         enableSorting: true,
         cell: (info) => {
           const value = info.getValue() as string;
+          const width = info.cell.column.getSize();
           return (
-            <Tooltip content={value}>
-              <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
+            <Tooltip title={value}>
+              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
+                {value ?? "-"}
+              </span>
             </Tooltip>
           );
         },
@@ -181,9 +182,12 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const user = info.getValue() as { user_email?: string } | undefined;
           const value = user?.user_email;
+          const width = info.cell.column.getSize();
           return (
-            <Tooltip content={value}>
-              <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
+            <Tooltip title={value}>
+              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
+                {value ?? "-"}
+              </span>
             </Tooltip>
           );
         },
@@ -197,9 +201,12 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const userId = info.getValue() as string | null;
           const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
+          const width = info.cell.column.getSize();
           return (
-            <Tooltip content={displayValue}>
-              <span className="block max-w-full truncate font-mono text-xs">{displayValue ?? "-"}</span>
+            <Tooltip title={displayValue}>
+              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
+                {displayValue ?? "-"}
+              </span>
             </Tooltip>
           );
         },
@@ -227,21 +234,21 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const userEmail = created_by_user?.user_email ?? null;
           const isDefaultAdmin = userId === "default_user_id";
           const displayValue = userAlias || userEmail || userId;
+          const width = info.cell.column.getSize();
 
           const popoverContent = (
-            <div className="flex min-w-[200px] max-w-[300px] flex-col gap-2 text-xs">
+            <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
               {[
                 { label: "User Alias", value: userAlias },
                 { label: "User Email", value: userEmail },
                 { label: "User ID", value: userId },
               ].map(({ label, value }) => (
                 <div key={label} className="flex flex-col min-w-0">
-                  <span className="text-muted-foreground">{label}</span>
+                  <span className="text-gray-400">{label}</span>
                   {value ? (
-                    <span className="flex items-center gap-1">
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs">{value}</span>
-                      <CopyButton value={value} label={`Copy ${label}`} />
-                    </span>
+                    <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
+                      {value}
+                    </Typography.Text>
                   ) : (
                     <span className="font-mono">-</span>
                   )}
@@ -252,24 +259,23 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
 
           if (isDefaultAdmin && !userAlias && !userEmail) {
             return (
-              <HoverCard>
-                <HoverCardTrigger render={<span className="cursor-default" />}>
+              <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+                <span className="cursor-default">
                   <DefaultProxyAdminTag userId={userId} />
-                </HoverCardTrigger>
-                <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-              </HoverCard>
+                </span>
+              </Popover>
             );
           }
 
           return (
-            <HoverCard>
-              <HoverCardTrigger
-                render={<span className="block max-w-full cursor-default truncate font-mono text-xs" />}
+            <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+              <span
+                className="font-mono text-xs truncate block cursor-default"
+                style={{ maxWidth: width, overflow: "hidden" }}
               >
                 {displayValue}
-              </HoverCardTrigger>
-              <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-            </HoverCard>
+              </span>
+            </Popover>
           );
         },
       },
@@ -336,14 +342,14 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const models = info.getValue() as string[];
           const scope = deriveKeyModelScope(info.row.original.allowed_routes, info.row.original.key_type);
           const emptyModelsBadge = !scope.hasModelAccess ? (
-            <Tooltip content={`Scoped to ${scope.label} routes; this key cannot call any models`}>
-              <Badge variant="secondary" className="mb-1">
-                No model access
+            <Tooltip title={`Scoped to ${scope.label} routes; this key cannot call any models`}>
+              <Badge size="xs" className="mb-1" color="gray">
+                <Text>No model access</Text>
               </Badge>
             </Tooltip>
           ) : (
-            <Badge variant="destructive" className="mb-1">
-              All Proxy Models
+            <Badge size="xs" className="mb-1" color="red">
+              <Text>All Proxy Models</Text>
             </Badge>
           );
           return (
@@ -356,55 +362,57 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                     <>
                       <div className="flex items-start">
                         {models.length > 3 && (
-                          <button
-                            type="button"
-                            aria-label={expandedAccordions[info.row.id] ? "Collapse models" : "Expand models"}
-                            className="rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                            onClick={() =>
-                              setExpandedAccordions((prev) => ({
-                                ...prev,
-                                [info.row.id]: !prev[info.row.id],
-                              }))
-                            }
-                          >
-                            {expandedAccordions[info.row.id] ? (
-                              <ChevronDown className="size-4" />
-                            ) : (
-                              <ChevronRight className="size-4" />
-                            )}
-                          </button>
+                          <div>
+                            <Icon
+                              icon={expandedAccordions[info.row.id] ? ChevronDownIcon : ChevronRightIcon}
+                              className="cursor-pointer"
+                              size="xs"
+                              onClick={() =>
+                                setExpandedAccordions((prev) => ({
+                                  ...prev,
+                                  [info.row.id]: !prev[info.row.id],
+                                }))
+                              }
+                            />
+                          </div>
                         )}
                         <div className="flex flex-wrap gap-1">
                           {models.slice(0, 3).map((model, index) =>
                             model === "all-proxy-models" ? (
-                              <Badge key={index} variant="destructive">
-                                All Proxy Models
+                              <Badge key={index} size="xs" color="red">
+                                <Text>All Proxy Models</Text>
                               </Badge>
                             ) : (
-                              <Badge key={index}>
-                                {model.length > 30
-                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                  : getModelDisplayName(model)}
+                              <Badge key={index} size="xs" color="blue">
+                                <Text>
+                                  {model.length > 30
+                                    ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                    : getModelDisplayName(model)}
+                                </Text>
                               </Badge>
                             ),
                           )}
                           {models.length > 3 && !expandedAccordions[info.row.id] && (
-                            <Badge variant="secondary">
-                              +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
+                            <Badge size="xs" color="gray" className="cursor-pointer">
+                              <Text>
+                                +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
+                              </Text>
                             </Badge>
                           )}
                           {expandedAccordions[info.row.id] && (
                             <div className="flex flex-wrap gap-1">
                               {models.slice(3).map((model, index) =>
                                 model === "all-proxy-models" ? (
-                                  <Badge key={index + 3} variant="destructive">
-                                    All Proxy Models
+                                  <Badge key={index + 3} size="xs" color="red">
+                                    <Text>All Proxy Models</Text>
                                   </Badge>
                                 ) : (
-                                  <Badge key={index + 3}>
-                                    {model.length > 30
-                                      ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                      : getModelDisplayName(model)}
+                                  <Badge key={index + 3} size="xs" color="blue">
+                                    <Text>
+                                      {model.length > 30
+                                        ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                        : getModelDisplayName(model)}
+                                    </Text>
                                   </Badge>
                                 ),
                               )}

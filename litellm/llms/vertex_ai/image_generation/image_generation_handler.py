@@ -1,5 +1,5 @@
 import json
-from typing import Any, Final
+from typing import Any, Dict, List, Optional
 
 import httpx
 from openai.types.image import Image
@@ -18,9 +18,9 @@ from litellm.types.utils import ImageResponse
 class VertexImageGeneration(VertexLLM):
     def process_image_generation_response(
         self,
-        json_response: dict[str, Any],
+        json_response: Dict[str, Any],
         model_response: ImageResponse,
-        model: str | None = None,
+        model: Optional[str] = None,
     ) -> ImageResponse:
         if "predictions" not in json_response:
             raise litellm.InternalServerError(
@@ -29,8 +29,8 @@ class VertexImageGeneration(VertexLLM):
                 model=model,
             )
 
-        predictions: Final = json_response["predictions"]
-        response_data: Final[list[Image]] = []
+        predictions = json_response["predictions"]
+        response_data: List[Image] = []
 
         for prediction in predictions:
             bytes_base64_encoded = prediction["bytesBase64Encoded"]
@@ -40,12 +40,12 @@ class VertexImageGeneration(VertexLLM):
         model_response.data = response_data
         return model_response
 
-    def transform_optional_params(self, optional_params: dict | None) -> dict:
+    def transform_optional_params(self, optional_params: Optional[dict]) -> dict:
         """
         Transform the optional params to the format expected by the Vertex AI API.
         For example, "aspect_ratio" is transformed to "aspectRatio".
         """
-        default_params: Final = {
+        default_params = {
             "sampleCount": 1,
         }
         if optional_params is None:
@@ -53,10 +53,10 @@ class VertexImageGeneration(VertexLLM):
 
         def snake_to_camel(snake_str: str) -> str:
             """Convert snake_case to camelCase"""
-            components: Final = snake_str.split("_")
+            components = snake_str.split("_")
             return components[0] + "".join(word.capitalize() for word in components[1:])
 
-        transformed_params: Final = default_params.copy()
+        transformed_params = default_params.copy()
         for key, value in optional_params.items():
             if "_" in key:
                 camel_case_key = snake_to_camel(key)
@@ -69,21 +69,21 @@ class VertexImageGeneration(VertexLLM):
     def image_generation(
         self,
         prompt: str,
-        api_base: str | None,
-        vertex_project: str | None,
-        vertex_location: str | None,
-        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        api_base: Optional[str],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         model_response: ImageResponse,
         logging_obj: Any,
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
-        client: Any | None = None,
-        optional_params: dict | None = None,
-        timeout: int | None = None,
+        client: Optional[Any] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[int] = None,
         aimg_generation=False,
-        extra_headers: dict | None = None,
+        extra_headers: Optional[dict] = None,
     ) -> ImageResponse:
         if aimg_generation is True:
-            return self.aimage_generation(
+            return self.aimage_generation(  # type: ignore
                 prompt=prompt,
                 api_base=api_base,
                 vertex_project=vertex_project,
@@ -98,21 +98,21 @@ class VertexImageGeneration(VertexLLM):
             )
 
         if client is None:
-            _params: Final = {}
+            _params = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
-                    _httpx_timeout: Final = httpx.Timeout(timeout)
+                    _httpx_timeout = httpx.Timeout(timeout)
                     _params["timeout"] = _httpx_timeout
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            sync_handler: HTTPHandler = HTTPHandler(**_params)
+            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
         else:
-            sync_handler = client
+            sync_handler = client  # type: ignore
 
         # url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
 
-        auth_header: str | None = None
+        auth_header: Optional[str] = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -136,12 +136,12 @@ class VertexImageGeneration(VertexLLM):
         # Transform optional params to camelCase format
         optional_params = self.transform_optional_params(optional_params)
 
-        request_data: Final = {
+        request_data = {
             "instances": [{"prompt": prompt}],
             "parameters": optional_params,
         }
 
-        headers: Final = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
+        headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
 
         logging_obj.pre_call(
             input=prompt,
@@ -153,7 +153,7 @@ class VertexImageGeneration(VertexLLM):
             },
         )
 
-        response: Final = sync_handler.post(
+        response = sync_handler.post(
             url=api_base,
             headers=headers,
             data=json.dumps(request_data),
@@ -162,30 +162,30 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = response.json()
+        json_response = response.json()
         return self.process_image_generation_response(json_response, model_response, model)
 
     async def aimage_generation(
         self,
         prompt: str,
-        api_base: str | None,
-        vertex_project: str | None,
-        vertex_location: str | None,
-        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        api_base: Optional[str],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         model_response: ImageResponse,
         logging_obj: Any,
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
-        client: AsyncHTTPHandler | None = None,
-        optional_params: dict | None = None,
-        timeout: int | None = None,
-        extra_headers: dict | None = None,
+        client: Optional[AsyncHTTPHandler] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[int] = None,
+        extra_headers: Optional[dict] = None,
     ):
         response = None
         if client is None:
-            _params: Final = {}
+            _params = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
-                    _httpx_timeout: Final = httpx.Timeout(timeout)
+                    _httpx_timeout = httpx.Timeout(timeout)
                     _params["timeout"] = _httpx_timeout
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
@@ -195,7 +195,7 @@ class VertexImageGeneration(VertexLLM):
                 params={"timeout": timeout},
             )
         else:
-            self.async_handler = client
+            self.async_handler = client  # type: ignore
 
         # make POST request to
         # https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict
@@ -217,7 +217,7 @@ class VertexImageGeneration(VertexLLM):
         } \
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
-        auth_header: str | None = None
+        auth_header: Optional[str] = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -240,12 +240,12 @@ class VertexImageGeneration(VertexLLM):
         # Transform optional params to camelCase format
         optional_params = self.transform_optional_params(optional_params)
 
-        request_data: Final = {
+        request_data = {
             "instances": [{"prompt": prompt}],
             "parameters": optional_params,
         }
 
-        headers: Final = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
+        headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
 
         logging_obj.pre_call(
             input=prompt,
@@ -266,10 +266,10 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = response.json()
+        json_response = response.json()
         return self.process_image_generation_response(json_response, model_response, model)
 
-    def is_image_generation_response(self, json_response: dict[str, Any]) -> bool:
+    def is_image_generation_response(self, json_response: Dict[str, Any]) -> bool:
         if "predictions" in json_response:
             if "bytesBase64Encoded" in json_response["predictions"][0]:
                 return True

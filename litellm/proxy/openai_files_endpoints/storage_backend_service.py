@@ -7,8 +7,7 @@ storage backends (e.g., Azure Blob Storage) and managing associated metadata.
 
 import base64
 import time
-from collections.abc import Mapping
-from typing import Any, Final, cast
+from typing import Any, List, Mapping, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
@@ -35,7 +34,7 @@ class StorageBackendFileService:
     async def upload_file_to_storage_backend(
         file_data: Mapping[str, Any],
         target_storage: str,
-        target_model_names: list[str],
+        target_model_names: List[str],
         purpose: OpenAIFilesPurpose,
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
@@ -59,7 +58,7 @@ class StorageBackendFileService:
         """
         # Get storage backend instance
         try:
-            storage_backend: Final = get_storage_backend(target_storage)
+            storage_backend = get_storage_backend(target_storage)
         except ValueError as e:
             raise ProxyException(
                 message=str(e),
@@ -68,23 +67,13 @@ class StorageBackendFileService:
                 code=400,
             )
 
-        if target_model_names:
-            managed_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-            if not isinstance(managed_files_hook, BaseFileEndpoints):
-                raise ProxyException(
-                    message="Uploading with target_model_names requires a database-connected proxy, and this proxy has no database configured",
-                    type="invalid_request_error",
-                    param="target_model_names",
-                    code=400,
-                )
-
         # Extract file information
-        file_content: Final = file_data["content"]
-        filename: Final = file_data.get("filename", "file")
-        content_type: Final = file_data.get("content_type", "application/octet-stream")
+        file_content = file_data["content"]
+        filename = file_data.get("filename", "file")
+        content_type = file_data.get("content_type", "application/octet-stream")
 
         # Upload to storage backend
-        storage_url: Final = await storage_backend.upload_file(
+        storage_url = await storage_backend.upload_file(
             file_content=file_content,
             filename=filename,
             content_type=content_type,
@@ -92,10 +81,10 @@ class StorageBackendFileService:
             file_naming_strategy="uuid",
         )
 
-        verbose_proxy_logger.debug("Storage backend upload complete: backend=%s, url=%s", target_storage, storage_url)
+        verbose_proxy_logger.debug(f"Storage backend upload complete: backend={target_storage}, url={storage_url}")
 
         # Create file object with storage metadata
-        file_object: Final = StorageBackendFileService._create_file_object_with_storage_metadata(
+        file_object = StorageBackendFileService._create_file_object_with_storage_metadata(
             file_content=file_content,
             filename=filename,
             purpose=purpose,
@@ -138,8 +127,8 @@ class StorageBackendFileService:
         Returns:
             OpenAIFileObject: File object with storage metadata in _hidden_params
         """
-        file_id: Final = f"file-{uuid_module.uuid4().hex[:24]}"
-        file_object: Final = OpenAIFileObject(
+        file_id = f"file-{uuid_module.uuid4().hex[:24]}"
+        file_object = OpenAIFileObject(
             id=file_id,
             object="file",
             purpose=purpose,
@@ -164,7 +153,7 @@ class StorageBackendFileService:
     @staticmethod
     def _create_unified_file_id(
         file_type: str,
-        target_model_names: list[str],
+        target_model_names: List[str],
         file_id: str,
     ) -> str:
         """
@@ -178,7 +167,7 @@ class StorageBackendFileService:
         Returns:
             str: Base64-encoded unified file ID
         """
-        unified_file_id_str: Final = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        unified_file_id_str = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
             file_type,
             str(uuid_module.uuid4()),
             ",".join(target_model_names),
@@ -186,7 +175,7 @@ class StorageBackendFileService:
             None,
         )
 
-        base64_unified_file_id: Final = base64.urlsafe_b64encode(unified_file_id_str.encode()).decode().rstrip("=")
+        base64_unified_file_id = base64.urlsafe_b64encode(unified_file_id_str.encode()).decode().rstrip("=")
 
         return base64_unified_file_id
 
@@ -194,7 +183,7 @@ class StorageBackendFileService:
     async def _store_in_managed_files(
         file_object: OpenAIFileObject,
         file_data: Mapping[str, Any],
-        target_model_names: list[str],
+        target_model_names: List[str],
         target_storage: str,
         storage_url: str,
         proxy_logging_obj: ProxyLogging,
@@ -219,11 +208,11 @@ class StorageBackendFileService:
         managed_files_obj = cast(Any, managed_files_obj)
 
         # Create model mappings using storage URL
-        model_mappings: Final = {model_name: storage_url for model_name in target_model_names}
+        model_mappings = {model_name: storage_url for model_name in target_model_names}
 
         # Create unified file ID
-        file_type: Final = file_data.get("content_type", "application/octet-stream")
-        base64_unified_file_id: Final = StorageBackendFileService._create_unified_file_id(
+        file_type = file_data.get("content_type", "application/octet-stream")
+        base64_unified_file_id = StorageBackendFileService._create_unified_file_id(
             file_type=file_type,
             target_model_names=target_model_names,
             file_id=file_object.id,
@@ -233,10 +222,8 @@ class StorageBackendFileService:
         file_object.id = base64_unified_file_id
 
         verbose_proxy_logger.debug(
-            "Storing file in managed files: unified_id=%s, storage_backend=%s, storage_url=%s",
-            base64_unified_file_id,
-            target_storage,
-            storage_url,
+            f"Storing file in managed files: unified_id={base64_unified_file_id}, "
+            f"storage_backend={target_storage}, storage_url={storage_url}"
         )
 
         # Store in managed files

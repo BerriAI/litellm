@@ -1,5 +1,4 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import TestVectorStoreTab from "./TestVectorStoreTab";
 import { VectorStore } from "@/components/vector_store_management/types";
@@ -61,24 +60,31 @@ describe("TestVectorStoreTab", () => {
     expect(screen.getByTestId("tester-access-token")).toHaveTextContent("test-token");
   });
 
-  it("should update VectorStoreTester when selecting different vector store", async () => {
-    const user = userEvent.setup();
+  it("should update VectorStoreTester when selecting different vector store", () => {
     render(<TestVectorStoreTab accessToken="test-token" vectorStores={mockVectorStores} />);
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Test Store 2"));
+    // Find the select component
+    const selectElement = screen.getByRole("combobox");
 
+    // Change selection
+    fireEvent.mouseDown(selectElement);
+
+    // Wait for options to appear and click the second one
+    const option2 = screen.getByText("Test Store 2");
+    fireEvent.click(option2);
+
+    // Verify the tester component updated
     expect(screen.getByTestId("tester-vector-store-id")).toHaveTextContent("vs_456");
   });
 
-  it("should display vector store names in select options", async () => {
-    const user = userEvent.setup();
+  it("should display vector store names in select options", () => {
     render(<TestVectorStoreTab accessToken="test-token" vectorStores={mockVectorStores} />);
 
-    await user.click(screen.getByRole("combobox"));
+    const selectElement = screen.getByRole("combobox");
+    fireEvent.mouseDown(selectElement);
 
-    // The selected store's name may also render in the trigger, so only require at least one match.
-    expect((await screen.findAllByText("Test Store 1")).length).toBeGreaterThan(0);
+    // Use getAllByText since the selected value also shows the name
+    expect(screen.getAllByText("Test Store 1").length).toBeGreaterThan(0);
     expect(screen.getByText("Test Store 2")).toBeInTheDocument();
   });
 });

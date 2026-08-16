@@ -1,5 +1,5 @@
 import os
-from typing import Any, Final
+from typing import Any, Dict, Optional, Union
 
 import httpx
 
@@ -62,9 +62,9 @@ class HashicorpSecretManager(BaseSecretManager):
         Raises:
             ValueError: If no valid authentication credentials are provided
         """
-        has_token: Final = bool(self.vault_token)
-        has_approle: Final = bool(self.approle_role_id and self.approle_secret_id)
-        has_tls_cert: Final = bool(self.tls_cert_path and self.tls_key_path)
+        has_token = bool(self.vault_token)
+        has_approle = bool(self.approle_role_id and self.approle_secret_id)
+        has_tls_cert = bool(self.tls_cert_path and self.tls_key_path)
 
         if not has_token and not has_approle and not has_tls_cert:
             raise ValueError(
@@ -106,21 +106,21 @@ class HashicorpSecretManager(BaseSecretManager):
         verbose_logger.debug("Using AppRole auth for Hashicorp Vault")
 
         # Check cache first
-        cached_token: Final = self.cache.get_cache(key="hcp_vault_approle_token")
+        cached_token = self.cache.get_cache(key="hcp_vault_approle_token")
         if cached_token:
             verbose_logger.debug("Using cached Vault token from AppRole auth")
             return cached_token
 
         # Vault endpoint for AppRole login
-        login_url: Final = f"{self.vault_addr}/v1/auth/{self.approle_mount_path}/login"
+        login_url = f"{self.vault_addr}/v1/auth/{self.approle_mount_path}/login"
 
-        headers: Final = {}
+        headers = {}
         if hasattr(self, "vault_namespace") and self.vault_namespace:
             headers["X-Vault-Namespace"] = self.vault_namespace
 
         try:
-            client: Final = _get_httpx_client()
-            resp: Final = client.post(
+            client = _get_httpx_client()
+            resp = client.post(
                 url=login_url,
                 headers=headers,
                 json={
@@ -130,12 +130,12 @@ class HashicorpSecretManager(BaseSecretManager):
             )
             resp.raise_for_status()
 
-            auth_data: Final = resp.json()["auth"]
-            token: Final = auth_data["client_token"]
-            _lease_duration: Final = auth_data["lease_duration"]
+            auth_data = resp.json()["auth"]
+            token = auth_data["client_token"]
+            _lease_duration = auth_data["lease_duration"]
 
             verbose_logger.debug(
-                "Successfully obtained Vault token via AppRole auth. Lease duration: %ss", _lease_duration
+                f"Successfully obtained Vault token via AppRole auth. Lease duration: {_lease_duration}s"
             )
 
             # Cache the token with its lease duration
@@ -174,25 +174,25 @@ class HashicorpSecretManager(BaseSecretManager):
         """
         verbose_logger.debug("Using TLS cert auth for Hashicorp Vault")
         # Vault endpoint for cert-based login, e.g. '/v1/auth/cert/login'
-        login_url: Final = f"{self.vault_addr}/v1/auth/cert/login"
+        login_url = f"{self.vault_addr}/v1/auth/cert/login"
 
         # Include your Vault namespace in the header if you're using namespaces.
         # E.g. self.vault_namespace = 'mynamespace/'
         # If you only have root namespace, you can omit this header entirely.
-        headers: Final = {}
+        headers = {}
         if hasattr(self, "vault_namespace") and self.vault_namespace:
             headers["X-Vault-Namespace"] = self.vault_namespace
         try:
             # We use the client cert and key for mutual TLS
-            client: Final = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
-            resp: Final = client.post(
+            client = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
+            resp = client.post(
                 login_url,
                 headers=headers,
                 json=self._get_tls_cert_auth_body(),
             )
             resp.raise_for_status()
-            token: Final = resp.json()["auth"]["client_token"]
-            _lease_duration: Final = resp.json()["auth"]["lease_duration"]
+            token = resp.json()["auth"]["client_token"]
+            _lease_duration = resp.json()["auth"]["lease_duration"]
             verbose_logger.debug("Successfully obtained Vault token via TLS cert auth.")
             self.cache.set_cache(key="hcp_vault_token", value=token, ttl=_lease_duration)
             return token
@@ -205,9 +205,9 @@ class HashicorpSecretManager(BaseSecretManager):
     def get_url(
         self,
         secret_name: str,
-        namespace: str | None = None,
-        mount_name: str | None = None,
-        path_prefix: str | None = None,
+        namespace: Optional[str] = None,
+        mount_name: Optional[str] = None,
+        path_prefix: Optional[str] = None,
     ) -> str:
         """
         Constructs the Vault URL for KV v2 secrets.
@@ -225,7 +225,7 @@ class HashicorpSecretManager(BaseSecretManager):
         resolved_mount = self._sanitize_path_component(mount_name if mount_name is not None else self.vault_mount_name)
         if resolved_mount is None:
             resolved_mount = "secret"
-        resolved_path_prefix: Final = self._sanitize_path_component(
+        resolved_path_prefix = self._sanitize_path_component(
             path_prefix if path_prefix is not None else self.vault_path_prefix
         )
 
@@ -238,41 +238,41 @@ class HashicorpSecretManager(BaseSecretManager):
         _url += secret_name
         return _url
 
-    def _sanitize_plain_value(self, value: str | int | None) -> str | None:
+    def _sanitize_plain_value(self, value: Optional[Union[str, int]]) -> Optional[str]:
         if value is None:
             return None
-        value_str: Final = str(value).strip()
+        value_str = str(value).strip()
         if value_str == "":
             return None
         return value_str
 
-    def _sanitize_path_component(self, value: str | int | None) -> str | None:
+    def _sanitize_path_component(self, value: Optional[Union[str, int]]) -> Optional[str]:
         sanitized_value = self._sanitize_plain_value(value)
         if sanitized_value is None:
             return None
         sanitized_value = sanitized_value.strip("/")
         return sanitized_value or None
 
-    def _extract_secret_manager_settings(self, optional_params: dict | None) -> dict[str, Any]:
+    def _extract_secret_manager_settings(self, optional_params: Optional[dict]) -> Dict[str, Any]:
         if not isinstance(optional_params, dict):
             return {}
 
-        candidate: Final = optional_params.get("secret_manager_settings")
-        source: Final = candidate if isinstance(candidate, dict) else optional_params
-        allowed_keys: Final = {"namespace", "mount", "path_prefix", "data"}
+        candidate = optional_params.get("secret_manager_settings")
+        source = candidate if isinstance(candidate, dict) else optional_params
+        allowed_keys = {"namespace", "mount", "path_prefix", "data"}
         return {k: source[k] for k in allowed_keys if k in source}
 
-    def _build_secret_target(self, secret_name: str, optional_params: dict | None) -> dict[str, Any]:
-        settings: Final = self._extract_secret_manager_settings(optional_params)
+    def _build_secret_target(self, secret_name: str, optional_params: Optional[dict]) -> Dict[str, Any]:
+        settings = self._extract_secret_manager_settings(optional_params)
 
-        namespace: Final = settings.get("namespace", self.vault_namespace)
-        mount: Final = settings.get("mount", self.vault_mount_name)
-        path_prefix: Final = settings.get("path_prefix", self.vault_path_prefix)
-        data_key_override: Final = settings.get("data")
+        namespace = settings.get("namespace", self.vault_namespace)
+        mount = settings.get("mount", self.vault_mount_name)
+        path_prefix = settings.get("path_prefix", self.vault_path_prefix)
+        data_key_override = settings.get("data")
 
-        data_key: Final = self._sanitize_plain_value(data_key_override) or "key"
+        data_key = self._sanitize_plain_value(data_key_override) or "key"
 
-        url: Final = self.get_url(
+        url = self.get_url(
             secret_name=secret_name,
             namespace=namespace,
             mount_name=mount,
@@ -308,9 +308,9 @@ class HashicorpSecretManager(BaseSecretManager):
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
-        timeout: float | httpx.Timeout | None = None,
-    ) -> str | None:
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
         """
         Reads a secret from Vault KV v2 using an async HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -318,34 +318,34 @@ class HashicorpSecretManager(BaseSecretManager):
         """
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
-        async_client: Final = get_async_httpx_client(
+        async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
         )
         try:
             # For KV v2: /v1/<mount>/data/<path>
             # Example: http://127.0.0.1:8200/v1/secret/data/myapp/config
-            _url: Final = self.get_url(secret_name)
-            url: Final = _url
+            _url = self.get_url(secret_name)
+            url = _url
 
-            response: Final = await async_client.get(url, headers=self._get_request_headers())
+            response = await async_client.get(url, headers=self._get_request_headers())
             response.raise_for_status()
 
             # For KV v2, the secret is in response.json()["data"]["data"]
-            json_resp: Final = response.json()
-            _value: Final = self._get_secret_value_from_json_response(json_resp)
+            json_resp = response.json()
+            _value = self._get_secret_value_from_json_response(json_resp)
             self.cache.set_cache(secret_name, _value)
             return _value
 
         except Exception as e:
-            verbose_logger.exception("Error reading secret from Hashicorp Vault: %s", e)
+            verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
             return None
 
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
-        timeout: float | httpx.Timeout | None = None,
-    ) -> str | None:
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
         """
         Reads a secret from Vault KV v2 using a sync HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -353,33 +353,33 @@ class HashicorpSecretManager(BaseSecretManager):
         """
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
-        sync_client: Final = _get_httpx_client()
+        sync_client = _get_httpx_client()
         try:
             # For KV v2: /v1/<mount>/data/<path>
-            url: Final = self.get_url(secret_name)
+            url = self.get_url(secret_name)
 
-            response: Final = sync_client.get(url, headers=self._get_request_headers())
+            response = sync_client.get(url, headers=self._get_request_headers())
             response.raise_for_status()
 
             # For KV v2, the secret is in response.json()["data"]["data"]
-            json_resp: Final = response.json()
-            _value: Final = self._get_secret_value_from_json_response(json_resp)
+            json_resp = response.json()
+            _value = self._get_secret_value_from_json_response(json_resp)
             self.cache.set_cache(secret_name, _value)
             return _value
 
         except Exception as e:
-            verbose_logger.exception("Error reading secret from Hashicorp Vault: %s", e)
+            verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
             return None
 
     async def async_write_secret(
         self,
         secret_name: str,
         secret_value: str,
-        description: str | None = None,
-        optional_params: dict | None = None,
-        timeout: float | httpx.Timeout | None = None,
-        tags: dict | list | None = None,
-    ) -> dict[str, Any]:
+        description: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tags: Optional[Union[dict, list]] = None,
+    ) -> Dict[str, Any]:
         """
         Writes a secret to Vault KV v2 using an async HTTPX client.
 
@@ -393,21 +393,21 @@ class HashicorpSecretManager(BaseSecretManager):
         Returns:
             dict: Response containing status and details of the operation
         """
-        async_client: Final = get_async_httpx_client(
+        async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
         )
 
         try:
-            target: Final = self._build_secret_target(secret_name, optional_params)
+            target = self._build_secret_target(secret_name, optional_params)
 
             # Prepare the secret data
-            data: Final = {"data": {target["data_key"]: secret_value}}
+            data = {"data": {target["data_key"]: secret_value}}
 
             if description:
                 data["data"]["description"] = description
 
-            response: Final = await async_client.post(
+            response = await async_client.post(
                 url=target["url"],
                 headers=self._get_request_headers(),
                 json=data,
@@ -415,7 +415,7 @@ class HashicorpSecretManager(BaseSecretManager):
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            verbose_logger.exception("Error writing secret to Hashicorp Vault: %s", e)
+            verbose_logger.exception(f"Error writing secret to Hashicorp Vault: {e}")
             return {"status": "error", "message": str(e)}
 
     async def async_rotate_secret(
@@ -423,9 +423,9 @@ class HashicorpSecretManager(BaseSecretManager):
         current_secret_name: str,
         new_secret_name: str,
         new_secret_value: str,
-        optional_params: dict | None = None,
+        optional_params: Dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> Dict:
         """
         Rotates a secret by creating a new one and deleting the old one.
         Uses _build_secret_target to handle optional_params for namespace, mount, path_prefix customization.
@@ -442,14 +442,14 @@ class HashicorpSecretManager(BaseSecretManager):
                   On success, returns the response from async_write_secret.
                   On error, returns {"status": "error", "message": "error message"}
         """
-        async_client: Final = get_async_httpx_client(
+        async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
         )
 
         try:
             # First verify the old secret exists using _build_secret_target
-            current_target: Final = self._build_secret_target(current_secret_name, optional_params)
+            current_target = self._build_secret_target(current_secret_name, optional_params)
             try:
                 response = await async_client.get(
                     url=current_target["url"],
@@ -459,20 +459,20 @@ class HashicorpSecretManager(BaseSecretManager):
                 # Secret exists, we can proceed
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception("Current secret %s not found", current_secret_name)
+                    verbose_logger.exception(f"Current secret {current_secret_name} not found")
                     return {
                         "status": "error",
                         "message": f"Current secret {current_secret_name} not found",
                     }
                 verbose_logger.exception(
-                    "Error checking current secret existence: %s", e.response.text if hasattr(e, "response") else str(e)
+                    f"Error checking current secret existence: {e.response.text if hasattr(e, 'response') else str(e)}"
                 )
                 return {
                     "status": "error",
                     "message": f"HTTP error occurred while checking current secret: {e.response.text if hasattr(e, 'response') else str(e)}",
                 }
             except Exception as e:
-                verbose_logger.exception("Error checking current secret existence: %s", e)
+                verbose_logger.exception(f"Error checking current secret existence: {e}")
                 return {
                     "status": "error",
                     "message": f"Error checking current secret: {e}",
@@ -480,7 +480,7 @@ class HashicorpSecretManager(BaseSecretManager):
 
             # Create new secret with new name and value
             # Use _build_secret_target to handle optional_params
-            create_response: Final = await self.async_write_secret(
+            create_response = await self.async_write_secret(
                 secret_name=new_secret_name,
                 secret_value=new_secret_value,
                 description=f"Rotated from {current_secret_name}",
@@ -493,22 +493,20 @@ class HashicorpSecretManager(BaseSecretManager):
                 return create_response
 
             # Verify new secret was created successfully using _build_secret_target
-            new_target: Final = self._build_secret_target(new_secret_name, optional_params)
+            new_target = self._build_secret_target(new_secret_name, optional_params)
             try:
                 response = await async_client.get(
                     url=new_target["url"],
                     headers=self._get_request_headers(),
                 )
                 response.raise_for_status()
-                json_resp: Final = response.json()
+                json_resp = response.json()
                 # Use data_key from target to get the correct value
-                data_key: Final = new_target["data_key"]
-                new_secret_value_from_vault: Final = json_resp.get("data", {}).get("data", {}).get(data_key, None)
+                data_key = new_target["data_key"]
+                new_secret_value_from_vault = json_resp.get("data", {}).get("data", {}).get(data_key, None)
                 if new_secret_value_from_vault != new_secret_value:
                     verbose_logger.exception(
-                        "New secret value mismatch. Expected: %s, Got: %s",
-                        new_secret_value,
-                        new_secret_value_from_vault,
+                        f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}"
                     )
                     return {
                         "status": "error",
@@ -516,20 +514,20 @@ class HashicorpSecretManager(BaseSecretManager):
                     }
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception("Failed to verify new secret %s", new_secret_name)
+                    verbose_logger.exception(f"Failed to verify new secret {new_secret_name}")
                     return {
                         "status": "error",
                         "message": f"Failed to verify new secret {new_secret_name}",
                     }
                 verbose_logger.exception(
-                    "Error verifying new secret: %s", e.response.text if hasattr(e, "response") else str(e)
+                    f"Error verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}"
                 )
                 return {
                     "status": "error",
                     "message": f"HTTP error occurred while verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}",
                 }
             except Exception as e:
-                verbose_logger.exception("Error verifying new secret: %s", e)
+                verbose_logger.exception(f"Error verifying new secret: {e}")
                 return {
                     "status": "error",
                     "message": f"Error verifying new secret: {e}",
@@ -538,7 +536,7 @@ class HashicorpSecretManager(BaseSecretManager):
             # If everything is successful, delete the old secret
             # Only delete if the names are different (same name means we're just updating the value)
             if current_secret_name != new_secret_name:
-                delete_response: Final = await self.async_delete_secret(
+                delete_response = await self.async_delete_secret(
                     secret_name=current_secret_name,
                     recovery_window_in_days=7,  # Keep for recovery if needed
                     optional_params=optional_params,
@@ -548,9 +546,7 @@ class HashicorpSecretManager(BaseSecretManager):
                 if isinstance(delete_response, dict) and delete_response.get("status") == "error":
                     # Log the error but don't fail the rotation since new secret was created successfully
                     verbose_logger.warning(
-                        "Failed to delete old secret %s after rotation: %s",
-                        current_secret_name,
-                        delete_response.get("message"),
+                        f"Failed to delete old secret {current_secret_name} after rotation: {delete_response.get('message')}"
                     )
                 else:
                     # Clear cache for the old secret only if deletion was successful
@@ -565,15 +561,15 @@ class HashicorpSecretManager(BaseSecretManager):
             verbose_logger.exception("Timeout error occurred during secret rotation")
             return {"status": "error", "message": "Timeout error occurred"}
         except Exception as e:
-            verbose_logger.exception("Error rotating secret in Hashicorp Vault: %s", e)
+            verbose_logger.exception(f"Error rotating secret in Hashicorp Vault: {e}")
             return {"status": "error", "message": str(e)}
 
     async def async_delete_secret(
         self,
         secret_name: str,
-        recovery_window_in_days: int | None = 7,
-        optional_params: dict | None = None,
-        timeout: float | httpx.Timeout | None = None,
+        recovery_window_in_days: Optional[int] = 7,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> dict:
         """
         Async function to delete a secret from Hashicorp Vault.
@@ -588,14 +584,14 @@ class HashicorpSecretManager(BaseSecretManager):
         Returns:
             dict: Response containing status and details of the operation
         """
-        async_client: Final = get_async_httpx_client(
+        async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
         )
 
         try:
-            target: Final = self._build_secret_target(secret_name, optional_params)
-            response: Final = await async_client.delete(url=target["url"], headers=self._get_request_headers())
+            target = self._build_secret_target(secret_name, optional_params)
+            response = await async_client.delete(url=target["url"], headers=self._get_request_headers())
             response.raise_for_status()
 
             # Clear the cache for this secret
@@ -608,10 +604,10 @@ class HashicorpSecretManager(BaseSecretManager):
                 "message": f"Secret {target['secret_name']} deleted successfully",
             }
         except Exception as e:
-            verbose_logger.exception("Error deleting secret from Hashicorp Vault: %s", e)
+            verbose_logger.exception(f"Error deleting secret from Hashicorp Vault: {e}")
             return {"status": "error", "message": str(e)}
 
-    def _get_secret_value_from_json_response(self, json_resp: dict | None) -> str | None:
+    def _get_secret_value_from_json_response(self, json_resp: Optional[dict]) -> Optional[str]:
         """
         Get the secret value from the JSON response
 

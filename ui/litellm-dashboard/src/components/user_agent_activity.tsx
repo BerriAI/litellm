@@ -1,24 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Combobox,
-  ComboboxChip,
-  ComboboxChips,
-  ComboboxChipsInput,
-  ComboboxClear,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxItem,
-  ComboboxList,
-  ComboboxValue,
-  useComboboxAnchor,
-} from "@/components/ui/combobox";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Card, Title, Text, Grid, Metric, Subtitle, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Select, Tooltip } from "antd";
 import { BarChart } from "@/components/shared/charts";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import PerUserUsage from "./per_user_usage";
-import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
+import { DateRangePickerValue } from "@tremor/react";
 import { ChartLoader } from "./shared/chart_loader";
 
 // New interfaces for the updated API response
@@ -52,6 +38,10 @@ interface DistinctTagResponse {
   tag: string;
 }
 
+interface DistinctTagsResponse {
+  results: DistinctTagResponse[];
+}
+
 interface UserAgentActivityProps {
   accessToken: string | null;
   userRole: string | null;
@@ -60,7 +50,6 @@ interface UserAgentActivityProps {
 }
 
 const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, userRole, dateValue, onDateChange }) => {
-  const anchor = useComboboxAnchor();
   // Maximum number of categories to show in charts to prevent color palette overflow
   const MAX_CATEGORIES = 10;
 
@@ -70,7 +59,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const [mauData, setMauData] = useState<ActiveUsersAnalyticsResponse>({ results: [] });
   const [summaryData, setSummaryData] = useState<TagSummaryResponse>({ results: [] });
 
-  const [userAgentFilter] = useState<string>("");
+  const [userAgentFilter, setUserAgentFilter] = useState<string>("");
 
   // Tag filtering state
   const [availableTags, setAvailableTags] = useState<string[]>([]);
@@ -371,49 +360,39 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     <div className="space-y-6 mt-6">
       {/* Summary Section Card */}
       <Card>
-        <CardContent className="space-y-6">
+        <div className="space-y-6">
           <div className="flex justify-between items-start">
             <div>
-              <h3 className="text-lg font-medium text-foreground">Summary by User Agent</h3>
-              <p className="text-sm text-muted-foreground">Performance metrics for different user agents</p>
+              <Title>Summary by User Agent</Title>
+              <Subtitle>Performance metrics for different user agents</Subtitle>
             </div>
 
             {/* User Agent Filter */}
             <div className="w-96">
-              <label className="text-sm font-medium block mb-2">Filter by User Agents</label>
-              <Combobox
-                multiple
-                items={availableTags}
+              <Text className="text-sm font-medium block mb-2">Filter by User Agents</Text>
+              <Select
+                mode="multiple"
+                placeholder="All User Agents"
                 value={selectedTags}
-                onValueChange={(next: string[]) => setSelectedTags(next)}
+                onChange={setSelectedTags}
+                style={{ width: "100%" }}
+                showSearch={true}
+                allowClear={true}
+                loading={tagsLoading}
+                optionFilterProp="label"
+                className="rounded-md"
+                maxTagCount="responsive"
               >
-                <ComboboxChips render={<div ref={anchor} />} className="w-full" aria-busy={tagsLoading}>
-                  <ComboboxValue>
-                    {(selected: string[]) =>
-                      selected.map((tag) => (
-                        <ComboboxChip key={tag} aria-label={extractUserAgent(tag)}>
-                          {truncateUserAgent(extractUserAgent(tag))}
-                        </ComboboxChip>
-                      ))
-                    }
-                  </ComboboxValue>
-                  <ComboboxChipsInput placeholder="All User Agents" aria-label="All User Agents" />
-                  {selectedTags.length > 0 && <ComboboxClear aria-label="Clear user agent filter" />}
-                </ComboboxChips>
-                <ComboboxContent anchor={anchor}>
-                  <ComboboxEmpty>No user agents found</ComboboxEmpty>
-                  <ComboboxList>
-                    {(tag: string) => {
-                      const userAgent = extractUserAgent(tag);
-                      return (
-                        <ComboboxItem key={tag} value={tag} title={userAgent}>
-                          {userAgent.length > 50 ? `${userAgent.substring(0, 50)}...` : userAgent}
-                        </ComboboxItem>
-                      );
-                    }}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
+                {availableTags.map((tag) => {
+                  const userAgent = extractUserAgent(tag);
+                  const displayName = userAgent.length > 50 ? `${userAgent.substring(0, 50)}...` : userAgent;
+                  return (
+                    <Select.Option key={tag} value={tag} label={displayName} title={userAgent}>
+                      {displayName}
+                    </Select.Option>
+                  );
+                })}
+              </Select>
             </div>
           </div>
 
@@ -423,166 +402,151 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
           {summaryLoading ? (
             <ChartLoader isDateChanging={false} />
           ) : (
-            <div className="grid grid-cols-4 gap-4">
+            <Grid numItems={4} className="gap-4">
               {(summaryData.results || []).slice(0, 4).map((tag, index) => {
                 const userAgent = extractUserAgent(tag.tag);
                 const displayName = truncateUserAgent(userAgent);
                 return (
                   <Card key={index}>
-                    <CardContent>
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={<h4 className="truncate text-lg font-medium text-foreground">{displayName}</h4>}
-                        />
-                        <TooltipContent side="top">{userAgent}</TooltipContent>
-                      </Tooltip>
-                      <div className="mt-4 space-y-3">
-                        <div>
-                          <p className="text-sm text-gray-600">Success Requests</p>
-                          <p className="text-lg font-semibold">{formatAbbreviatedNumber(tag.successful_requests)}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Total Tokens</p>
-                          <p className="text-lg font-semibold">{formatAbbreviatedNumber(tag.total_tokens)}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Total Cost</p>
-                          <p className="text-lg font-semibold">${formatAbbreviatedNumber(tag.total_spend, 4)}</p>
-                        </div>
+                    <Tooltip title={userAgent} placement="top">
+                      <Title className="truncate">{displayName}</Title>
+                    </Tooltip>
+                    <div className="mt-4 space-y-3">
+                      <div>
+                        <Text className="text-sm text-gray-600">Success Requests</Text>
+                        <Metric className="text-lg">{formatAbbreviatedNumber(tag.successful_requests)}</Metric>
                       </div>
-                    </CardContent>
+                      <div>
+                        <Text className="text-sm text-gray-600">Total Tokens</Text>
+                        <Metric className="text-lg">{formatAbbreviatedNumber(tag.total_tokens)}</Metric>
+                      </div>
+                      <div>
+                        <Text className="text-sm text-gray-600">Total Cost</Text>
+                        <Metric className="text-lg">${formatAbbreviatedNumber(tag.total_spend, 4)}</Metric>
+                      </div>
+                    </div>
                   </Card>
                 );
               })}
               {/* Fill remaining slots if less than 4 agents */}
               {Array.from({ length: Math.max(0, 4 - (summaryData.results || []).length) }).map((_, index) => (
                 <Card key={`empty-${index}`}>
-                  <CardContent>
-                    <h4 className="text-lg font-medium text-foreground">No Data</h4>
-                    <div className="mt-4 space-y-3">
-                      <div>
-                        <p className="text-sm text-gray-600">Success Requests</p>
-                        <p className="text-lg font-semibold">-</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-600">Total Tokens</p>
-                        <p className="text-lg font-semibold">-</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-600">Total Cost</p>
-                        <p className="text-lg font-semibold">-</p>
-                      </div>
+                  <Title>No Data</Title>
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <Text className="text-sm text-gray-600">Success Requests</Text>
+                      <Metric className="text-lg">-</Metric>
                     </div>
-                  </CardContent>
+                    <div>
+                      <Text className="text-sm text-gray-600">Total Tokens</Text>
+                      <Metric className="text-lg">-</Metric>
+                    </div>
+                    <div>
+                      <Text className="text-sm text-gray-600">Total Cost</Text>
+                      <Metric className="text-lg">-</Metric>
+                    </div>
+                  </div>
                 </Card>
               ))}
-            </div>
+            </Grid>
           )}
-        </CardContent>
+        </div>
       </Card>
 
-      {/* Main tabs for DAU/WAU/MAU vs Per User Usage */}
+      {/* Main TabGroup for DAU/WAU/MAU vs Per User Usage */}
       <Card>
-        <CardContent>
-          <Tabs defaultValue="active-users">
-            <TabsList className="mb-6">
-              <TabsTrigger value="active-users" className="flex-none px-3">
-                DAU/WAU/MAU
-              </TabsTrigger>
-              <TabsTrigger value="per-user" className="flex-none px-3">
-                Per User Usage (Last 30 Days)
-              </TabsTrigger>
-            </TabsList>
+        <TabGroup>
+          <TabList className="mb-6">
+            <Tab>DAU/WAU/MAU</Tab>
+            <Tab>Per User Usage (Last 30 Days)</Tab>
+          </TabList>
 
+          <TabPanels>
             {/* DAU/WAU/MAU Tab Panel */}
-            <TabsContent value="active-users" keepMounted>
+            <TabPanel>
               <div className="mb-6">
-                <h3 className="text-lg font-medium text-foreground">DAU, WAU &amp; MAU per Agent</h3>
-                <p className="text-sm text-muted-foreground">Active users across different time periods</p>
+                <Title>DAU, WAU & MAU per Agent</Title>
+                <Subtitle>Active users across different time periods</Subtitle>
               </div>
 
-              <Tabs defaultValue="dau">
-                <TabsList className="mb-6">
-                  <TabsTrigger value="dau" className="flex-none px-3">
-                    DAU
-                  </TabsTrigger>
-                  <TabsTrigger value="wau" className="flex-none px-3">
-                    WAU
-                  </TabsTrigger>
-                  <TabsTrigger value="mau" className="flex-none px-3">
-                    MAU
-                  </TabsTrigger>
-                </TabsList>
+              <TabGroup>
+                <TabList className="mb-6">
+                  <Tab>DAU</Tab>
+                  <Tab>WAU</Tab>
+                  <Tab>MAU</Tab>
+                </TabList>
 
-                <TabsContent value="dau" keepMounted>
-                  <div className="mb-4">
-                    <h4 className="text-lg font-medium text-foreground">Daily Active Users - Last 7 Days</h4>
-                  </div>
-                  {dauLoading ? (
-                    <ChartLoader isDateChanging={false} />
-                  ) : (
-                    <BarChart
-                      data={dailyChartData}
-                      index="date"
-                      categories={allDauTags.map(extractUserAgent)}
-                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                      yAxisWidth={60}
-                      showLegend={true}
-                      stack={true}
-                    />
-                  )}
-                </TabsContent>
+                <TabPanels>
+                  <TabPanel>
+                    <div className="mb-4">
+                      <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
+                    </div>
+                    {dauLoading ? (
+                      <ChartLoader isDateChanging={false} />
+                    ) : (
+                      <BarChart
+                        data={dailyChartData}
+                        index="date"
+                        categories={allDauTags.map(extractUserAgent)}
+                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                        yAxisWidth={60}
+                        showLegend={true}
+                        stack={true}
+                      />
+                    )}
+                  </TabPanel>
 
-                <TabsContent value="wau" keepMounted>
-                  <div className="mb-4">
-                    <h4 className="text-lg font-medium text-foreground">Weekly Active Users - Last 7 Weeks</h4>
-                  </div>
-                  {wauLoading ? (
-                    <ChartLoader isDateChanging={false} />
-                  ) : (
-                    <BarChart
-                      data={weeklyChartData}
-                      index="week"
-                      categories={allWauTags.map(extractUserAgent)}
-                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                      yAxisWidth={60}
-                      showLegend={true}
-                      stack={true}
-                    />
-                  )}
-                </TabsContent>
+                  <TabPanel>
+                    <div className="mb-4">
+                      <Title className="text-lg">Weekly Active Users - Last 7 Weeks</Title>
+                    </div>
+                    {wauLoading ? (
+                      <ChartLoader isDateChanging={false} />
+                    ) : (
+                      <BarChart
+                        data={weeklyChartData}
+                        index="week"
+                        categories={allWauTags.map(extractUserAgent)}
+                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                        yAxisWidth={60}
+                        showLegend={true}
+                        stack={true}
+                      />
+                    )}
+                  </TabPanel>
 
-                <TabsContent value="mau" keepMounted>
-                  <div className="mb-4">
-                    <h4 className="text-lg font-medium text-foreground">Monthly Active Users - Last 7 Months</h4>
-                  </div>
-                  {mauLoading ? (
-                    <ChartLoader isDateChanging={false} />
-                  ) : (
-                    <BarChart
-                      data={monthlyChartData}
-                      index="month"
-                      categories={allMauTags.map(extractUserAgent)}
-                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                      yAxisWidth={60}
-                      showLegend={true}
-                      stack={true}
-                    />
-                  )}
-                </TabsContent>
-              </Tabs>
-            </TabsContent>
+                  <TabPanel>
+                    <div className="mb-4">
+                      <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
+                    </div>
+                    {mauLoading ? (
+                      <ChartLoader isDateChanging={false} />
+                    ) : (
+                      <BarChart
+                        data={monthlyChartData}
+                        index="month"
+                        categories={allMauTags.map(extractUserAgent)}
+                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                        yAxisWidth={60}
+                        showLegend={true}
+                        stack={true}
+                      />
+                    )}
+                  </TabPanel>
+                </TabPanels>
+              </TabGroup>
+            </TabPanel>
 
             {/* Per User Usage Tab Panel */}
-            <TabsContent value="per-user" keepMounted>
+            <TabPanel>
               <PerUserUsage
                 accessToken={accessToken}
                 selectedTags={selectedTags}
                 formatAbbreviatedNumber={formatAbbreviatedNumber}
               />
-            </TabsContent>
-          </Tabs>
-        </CardContent>
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
       </Card>
     </div>
   );

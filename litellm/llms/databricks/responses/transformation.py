@@ -8,7 +8,7 @@ Reference: https://docs.databricks.com/aws/en/machine-learning/foundation-model-
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm.llms.databricks.common_utils import DatabricksBase
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -42,11 +42,11 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
         self,
         headers: dict,
         model: str,
-        litellm_params: GenericLiteLLMParams | None,
+        litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key: Final = litellm_params.api_key or os.getenv("DATABRICKS_API_KEY")
-        api_base: Final = litellm_params.api_base or os.getenv("DATABRICKS_API_BASE")
+        api_key = litellm_params.api_key or os.getenv("DATABRICKS_API_KEY")
+        api_base = litellm_params.api_base or os.getenv("DATABRICKS_API_BASE")
 
         # Reuse Databricks auth logic (OAuth M2M, PAT, SDK fallback).
         # custom_endpoint=False allows SDK auth fallback; the appended
@@ -65,7 +65,7 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
         api_base = api_base or os.getenv("DATABRICKS_API_BASE")
@@ -76,11 +76,11 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
     def transform_responses_api_request(
         self,
         model: str,
-        input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> Dict:
         """
         Transform request for Databricks Responses API.
 
@@ -88,7 +88,8 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
         then delegates to OpenAI's transformation.
         """
         # Strip provider prefix if present (e.g., "databricks/databricks-gpt-5-nano" -> "databricks-gpt-5-nano")
-        model = model.removeprefix("databricks/")
+        if model.startswith("databricks/"):
+            model = model[len("databricks/") :]
 
         return super().transform_responses_api_request(
             model=model,

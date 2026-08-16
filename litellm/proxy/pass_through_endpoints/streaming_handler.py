@@ -1,6 +1,5 @@
-from collections.abc import Coroutine
 from datetime import datetime
-from typing import Final, Protocol
+from typing import List, Optional, Tuple
 
 import httpx
 
@@ -25,21 +24,6 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 from .success_handler import PassThroughEndpointLogging
 
 
-class RouteStreamingLogging(Protocol):
-    def __call__(
-        self,
-        *,
-        litellm_logging_obj: LiteLLMLoggingObj,
-        passthrough_success_handler_obj: PassThroughEndpointLogging,
-        url_route: str,
-        request_body: dict,
-        endpoint_type: EndpointType,
-        start_time: datetime,
-        raw_bytes: list[bytes],
-        end_time: datetime,
-    ) -> Coroutine[None, None, None]: ...
-
-
 class PassThroughStreamingHandler:
     @staticmethod
     def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
@@ -49,20 +33,16 @@ class PassThroughStreamingHandler:
     @staticmethod
     async def chunk_processor(
         response: httpx.Response,
-        request_body: dict | None,
+        request_body: Optional[dict],
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
         start_time: datetime,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        route_streaming_logging: RouteStreamingLogging | None = None,
     ):
-        resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
-            route_streaming_logging or PassThroughStreamingHandler._route_streaming_logging_to_handler
-        )
-        raw_bytes: Final[list[bytes]] = []
+        raw_bytes: List[bytes] = []
         logging_scheduled = False
-        model_name: Final = PassThroughStreamingHandler._extract_model_for_cost_injection(
+        model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
             url_route=url_route,
             endpoint_type=endpoint_type,
@@ -73,16 +53,10 @@ class PassThroughStreamingHandler:
         # re-branching on every chunk. ``include_cost_in_streaming_usage`` is
         # set at config load and stable for the process, matching how the
         # proxy-level streaming fast path resolves it.
-        cost_injection_active: Final = (
+        cost_injection_active = (
             bool(getattr(litellm, "include_cost_in_streaming_usage", False))
             and bool(model_name)
-            and (
-                endpoint_type in (EndpointType.ANTHROPIC, EndpointType.OPENAI)
-                or (
-                    endpoint_type == EndpointType.VERTEX_AI
-                    and ("streamRawPredict" in url_route or "rawPredict" in url_route)
-                )
-            )
+            and endpoint_type in (EndpointType.VERTEX_AI, EndpointType.ANTHROPIC)
         )
         try:
             if not cost_injection_active:
@@ -96,22 +70,27 @@ class PassThroughStreamingHandler:
                 # be truthy; pin to a typed local so mypy narrows ``Optional[str]``
                 # -> ``str`` for the per-chunk call site.
                 assert model_name is not None
-                resolved_model_name: Final[str] = model_name
-                pending = b""
+                resolved_model_name: str = model_name
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
-                    complete_frames, pending = PassThroughStreamingHandler._split_complete_sse_frames(
-                        pending + chunk
-                    )  # rebind-ok: SSE frame reassembly buffer across transport chunks
-                    if complete_frames:
-                        yield ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                            complete_frames, resolved_model_name
+                    if endpoint_type == EndpointType.VERTEX_AI:
+                        if "streamRawPredict" in url_route or "rawPredict" in url_route:
+                            modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                                chunk, resolved_model_name
+                            )
+                            if modified_chunk is not None:
+                                chunk = modified_chunk
+                    else:  # EndpointType.ANTHROPIC
+                        modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                            chunk, resolved_model_name
                         )
-                if pending:
-                    yield pending
+                        if modified_chunk is not None:
+                            chunk = modified_chunk
+
+                    yield chunk
         except Exception as e:
-            verbose_proxy_logger.error("Error in chunk_processor: %s", e)
+            verbose_proxy_logger.error(f"Error in chunk_processor: {str(e)}")
             raise
         finally:
             # GeneratorExit (raised on client disconnect) is not caught by
@@ -125,7 +104,7 @@ class PassThroughStreamingHandler:
                 logging_scheduled = True
                 try:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                        async_coroutine=resolved_route_streaming_logging(
+                        async_coroutine=PassThroughStreamingHandler._route_streaming_logging_to_handler(
                             litellm_logging_obj=litellm_logging_obj,
                             passthrough_success_handler_obj=passthrough_success_handler_obj,
                             url_route=url_route,
@@ -137,18 +116,7 @@ class PassThroughStreamingHandler:
                         )
                     )
                 except Exception as e:
-                    verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
-
-    @staticmethod
-    def _split_complete_sse_frames(pending: bytes) -> tuple[bytes, bytes]:
-        lf_boundary_end: Final = pending.rfind(b"\n\n") + 2
-        crlf_boundary_end: Final = pending.rfind(b"\r\n\r\n") + 4
-        boundary_end: Final = max(
-            lf_boundary_end if lf_boundary_end >= 2 else 0, crlf_boundary_end if crlf_boundary_end >= 4 else 0
-        )
-        if boundary_end == 0:
-            return b"", pending
-        return pending[:boundary_end], pending[boundary_end:]
+                    verbose_proxy_logger.error(f"Error scheduling chunk_processor logging: {str(e)}")
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
@@ -158,9 +126,9 @@ class PassThroughStreamingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        raw_bytes: list[bytes],
+        raw_bytes: List[bytes],
         end_time: datetime,
-        model: str | None = None,
+        model: Optional[str] = None,
     ):
         """
         Route the logging for the collected chunks to the appropriate handler
@@ -193,12 +161,12 @@ class PassThroughStreamingHandler:
                 result=standard_logging_response_object,
                 start_time=start_time,
                 end_time=end_time,
-                cache_hit=litellm_logging_obj.model_call_details.get("cache_hit") is True,
+                cache_hit=False,
                 prefer_async_handlers=True,
                 **kwargs,
             )
         except Exception as e:
-            verbose_proxy_logger.error("Error in _route_streaming_logging_to_handler: %s", e)
+            verbose_proxy_logger.error(f"Error in _route_streaming_logging_to_handler: {str(e)}")
 
     @staticmethod
     def _build_passthrough_logging_result(
@@ -208,10 +176,10 @@ class PassThroughStreamingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        raw_bytes: list[bytes],
+        raw_bytes: List[bytes],
         end_time: datetime,
-        model: str | None,
-    ) -> tuple[PassThroughEndpointLoggingResultValues, dict]:
+        model: Optional[str],
+    ) -> Tuple[PassThroughEndpointLoggingResultValues, dict]:
         """
         Synchronous, CPU-bound reconstruction of the standard logging payload
         from collected raw SSE bytes. Extracted from
@@ -219,11 +187,11 @@ class PassThroughStreamingHandler:
         be unit-tested in isolation. Still invoked synchronously on the event
         loop; an off-loop dispatch is a future change, not part of this PR.
         """
-        all_chunks: Final = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
-        standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
+        all_chunks = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+        standard_logging_response_object: Optional[PassThroughEndpointLoggingResultValues] = None
         kwargs: dict = {}
         if endpoint_type == EndpointType.ANTHROPIC:
-            anthropic_passthrough_logging_handler_result: Final = (
+            anthropic_passthrough_logging_handler_result = (
                 AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
@@ -238,7 +206,7 @@ class PassThroughStreamingHandler:
             standard_logging_response_object = anthropic_passthrough_logging_handler_result["result"]
             kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.VERTEX_AI:
-            vertex_passthrough_logging_handler_result: Final = (
+            vertex_passthrough_logging_handler_result = (
                 VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
@@ -254,7 +222,7 @@ class PassThroughStreamingHandler:
             standard_logging_response_object = vertex_passthrough_logging_handler_result["result"]
             kwargs = vertex_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.OPENAI:
-            openai_passthrough_logging_handler_result: Final = (
+            openai_passthrough_logging_handler_result = (
                 OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
@@ -277,11 +245,11 @@ class PassThroughStreamingHandler:
 
     @staticmethod
     def _extract_model_for_cost_injection(
-        request_body: dict | None,
+        request_body: Optional[dict],
         url_route: str,
         endpoint_type: EndpointType,
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> str | None:
+    ) -> Optional[str]:
         """
         Extract model name for cost injection from various sources.
         """
@@ -306,7 +274,7 @@ class PassThroughStreamingHandler:
         return None
 
     @staticmethod
-    def _convert_raw_bytes_to_str_lines(raw_bytes: list[bytes]) -> list[str]:
+    def _convert_raw_bytes_to_str_lines(raw_bytes: List[bytes]) -> List[str]:
         """
         Converts a list of raw bytes into a list of string lines, similar to aiter_lines()
 
@@ -319,9 +287,9 @@ class PassThroughStreamingHandler:
         # errors="replace" so a stream cut mid-multibyte-sequence (client disconnect)
         # still decodes and logs the usage events already received, instead of raising
         # and dropping the whole request from SpendLogs
-        combined_str: Final = b"".join(raw_bytes).decode("utf-8", errors="replace")
+        combined_str = b"".join(raw_bytes).decode("utf-8", errors="replace")
 
         # Split by newlines and filter out empty lines
-        lines: Final = [line.strip() for line in combined_str.split("\n") if line.strip()]
+        lines = [line.strip() for line in combined_str.split("\n") if line.strip()]
 
         return lines

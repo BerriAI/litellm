@@ -24,7 +24,6 @@ interface SearchSelectProps {
   emptyText?: string;
   disabled?: boolean;
   className?: string;
-  inputId?: string;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -41,18 +40,12 @@ export function SearchSelect({
   emptyText = "No results",
   disabled = false,
   className,
-  inputId,
 }: SearchSelectProps) {
-  const selected =
-    value === undefined || value === ""
-      ? null
-      : options.find((option) => option.value === value) ?? { label: value, value };
-  const items =
-    selected !== null && !options.some((option) => option.value === selected.value) ? [selected, ...options] : options;
+  const selected = options.find((option) => option.value === value) ?? null;
 
   return (
     <Combobox
-      items={items}
+      items={options}
       value={selected}
       onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
@@ -61,12 +54,11 @@ export function SearchSelect({
       disabled={disabled}
     >
       <ComboboxInput
-        id={inputId}
         placeholder={placeholder}
         showClear={value != null && value !== ""}
-        className={`h-8 w-full text-sm ${className ?? ""}`}
+        className={`w-full ${className ?? ""}`}
       />
-      <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>
+      <ComboboxContent>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(item: SearchSelectOption) => (

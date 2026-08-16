@@ -5,6 +5,8 @@ LiteLLM Proxy supports the OpenAI Responses API natively when the underlying mod
 This config enables pass-through behavior to the proxy's /v1/responses endpoint.
 """
 
+from typing import Optional
+
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import LlmProviders
@@ -24,7 +26,7 @@ class LiteLLMProxyResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
         """

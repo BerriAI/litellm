@@ -17,7 +17,6 @@ export type AreaChartProps<TDatum extends Record<string, unknown>> = {
   showLegend?: boolean;
   showGridLines?: boolean;
   showTooltip?: boolean;
-  showDots?: boolean;
   customTooltip?: ChartTooltipComponent;
   className?: string;
   style?: React.CSSProperties;
@@ -33,7 +32,6 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
   showLegend = true,
   showGridLines = true,
   showTooltip = true,
-  showDots = false,
   customTooltip,
   className,
   style,
@@ -96,7 +94,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
             strokeWidth={2}
             fill={`url(#fill-${gradientId}-${i})`}
             fillOpacity={1}
-            dot={showDots ? { r: 3.5, strokeWidth: 2, stroke: fills[i], fill: "var(--background, #fff)" } : false}
+            dot={false}
             isAnimationActive={false}
           />
         ))}

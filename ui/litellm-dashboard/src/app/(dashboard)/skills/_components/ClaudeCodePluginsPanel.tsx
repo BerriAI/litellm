@@ -1,14 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Button } from "@tremor/react";
+import { Modal } from "antd";
 import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "@/components/networking";
 import AddPluginForm from "./add_plugin_form";
 import PluginTable from "./PluginTable";
@@ -123,28 +115,20 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
       />
 
       {pluginToDelete && (
-        <AlertDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setPluginToDelete(null);
-          }}
+        <Modal
+          title="Delete Skill"
+          open={pluginToDelete !== null}
+          onOk={handleDeleteConfirm}
+          onCancel={() => setPluginToDelete(null)}
+          confirmLoading={isDeleting}
+          okText="Delete"
+          okButtonProps={{ danger: true }}
         >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete Skill</AlertDialogTitle>
-              <AlertDialogDescription>
-                Are you sure you want to delete skill: <strong>{pluginToDelete.displayName}</strong>?
-              </AlertDialogDescription>
-              <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
-                Delete
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+          <p>
+            Are you sure you want to delete skill: <strong>{pluginToDelete.displayName}</strong>?
+          </p>
+          <p>This action cannot be undone.</p>
+        </Modal>
       )}
     </div>
   );

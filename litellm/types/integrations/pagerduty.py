@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import List, Literal, Optional, Union
 
 from typing_extensions import TypedDict
 
@@ -8,35 +8,35 @@ from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
 
 class LinkDict(TypedDict, total=False):
     href: str
-    text: str | None
+    text: Optional[str]
 
 
 class ImageDict(TypedDict, total=False):
     src: str
-    href: str | None
-    alt: str | None
+    href: Optional[str]
+    alt: Optional[str]
 
 
 class PagerDutyPayload(TypedDict, total=False):
     summary: str
-    timestamp: str | None  # ISO 8601 date-time format
+    timestamp: Optional[str]  # ISO 8601 date-time format
     severity: Literal["critical", "warning", "error", "info"]
     source: str
-    component: str | None
-    group: str | None
-    class_: str | None  # Using class_ since 'class' is a reserved keyword
-    custom_details: dict | None
+    component: Optional[str]
+    group: Optional[str]
+    class_: Optional[str]  # Using class_ since 'class' is a reserved keyword
+    custom_details: Optional[dict]
 
 
 class PagerDutyRequestBody(TypedDict, total=False):
     payload: PagerDutyPayload
     routing_key: str
     event_action: Literal["trigger", "acknowledge", "resolve"]
-    dedup_key: str | None
-    client: str | None
-    client_url: str | None
-    links: list[LinkDict] | None
-    images: list[ImageDict] | None
+    dedup_key: Optional[str]
+    client: Optional[str]
+    client_url: Optional[str]
+    links: Optional[List[LinkDict]]
+    images: Optional[List[ImageDict]]
 
 
 class AlertingConfig(TypedDict, total=False):
@@ -61,6 +61,6 @@ class PagerDutyInternalEvent(StandardLoggingUserAPIKeyMetadata, total=False):
 
     failure_event_type: Literal["failed_response", "hanging_response"]
     timestamp: datetime
-    error_class: str | None
-    error_code: str | None
-    error_llm_provider: str | None
+    error_class: Optional[str]
+    error_code: Optional[str]
+    error_llm_provider: Optional[str]

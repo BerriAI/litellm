@@ -1,14 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Wrench, CircleCheck, Search, Pencil } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { Textarea } from "@/components/ui/textarea";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { cn } from "@/lib/cva.config";
+import { Card, Title, Text } from "@tremor/react";
+import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from "@ant-design/icons";
+import { Badge, Spin, Checkbox, Input, Radio } from "antd";
 import McpCrudPermissionPanel from "@/components/mcp_tools/McpCrudPermissionPanel";
 import { TOOL_DISPLAY_NAME_PATTERN } from "./utils";
 
@@ -74,74 +67,86 @@ const ToolRow: React.FC<ToolRowProps> = ({
 
   return (
     <div
-      className={cn(
-        "rounded-lg border transition-colors",
-        isEnabled ? "border-primary/40 bg-accent" : "border-border bg-muted",
-      )}
+      className={`rounded-lg border transition-colors ${
+        isEnabled
+          ? "bg-blue-50 border-blue-300 hover:border-blue-400"
+          : "bg-gray-50 border-gray-200 hover:border-gray-300"
+      }`}
     >
-      <div className="cursor-pointer p-4" onClick={() => onToggle(tool.name)}>
+      <div className="p-4 cursor-pointer" onClick={() => onToggle(tool.name)}>
         <div className="flex items-start gap-3">
-          <Checkbox checked={isEnabled} onCheckedChange={() => onToggle(tool.name)} />
+          <Checkbox checked={isEnabled} onChange={() => onToggle(tool.name)} />
           <div className="flex-1">
             <div className="flex items-center gap-2">
-              <p className="text-sm font-medium">{toolNameToDisplayName[tool.name] || tool.name}</p>
-              <Badge variant={isEnabled ? "secondary" : "outline"}>{isEnabled ? "Enabled" : "Disabled"}</Badge>
-              {toolNameToDisplayName[tool.name] && <Badge variant="secondary">Custom name</Badge>}
+              <Text className="font-medium text-gray-900">{toolNameToDisplayName[tool.name] || tool.name}</Text>
+              <span
+                className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                  isEnabled ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                }`}
+              >
+                {isEnabled ? "Enabled" : "Disabled"}
+              </span>
+              {toolNameToDisplayName[tool.name] && (
+                <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-purple-100 text-purple-800">
+                  Custom name
+                </span>
+              )}
             </div>
             {(toolNameToDescription[tool.name] || tool.description) && (
-              <p className="mt-1 block text-sm text-muted-foreground">
+              <Text className="text-gray-500 text-sm block mt-1">
                 {toolNameToDescription[tool.name] || tool.description}
-              </p>
+              </Text>
             )}
-            <p className="mt-1 block text-xs text-muted-foreground">
+            <Text className="text-gray-400 text-xs block mt-1">
               {isEnabled ? "✓ Users can call this tool" : "✗ Users cannot call this tool"}
-            </p>
+            </Text>
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
+          <button
+            type="button"
             onClick={(e) => onToggleExpand(tool.name, e)}
+            className={`p-1.5 rounded-md transition-colors ${
+              isEditExpanded ? "bg-blue-100 text-blue-600" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+            }`}
             title="Edit display name and description"
           >
-            <Pencil />
-          </Button>
+            <EditOutlined />
+          </button>
         </div>
       </div>
       {isEditExpanded && (
         <div
-          className="space-y-3 rounded-b-lg border-t border-border bg-muted px-4 pt-3 pb-4"
+          className="px-4 pb-4 pt-3 border-t border-gray-200 space-y-3 bg-gray-50 rounded-b-lg"
           onClick={(e) => e.stopPropagation()}
         >
           <div>
-            <p className="mb-1 block text-xs font-medium">Display Name</p>
+            <Text className="text-xs font-medium text-gray-600 mb-1 block">Display Name</Text>
             <Input
               placeholder={tool.name}
               value={toolNameToDisplayName[tool.name] || ""}
               onChange={(e) => onDisplayNameChange(tool.name, e.target.value)}
-              aria-invalid={isDisplayNameInvalid || undefined}
+              status={isDisplayNameInvalid ? "error" : undefined}
             />
             {isDisplayNameInvalid ? (
-              <p className="mt-1 block text-xs text-destructive">
+              <Text className="text-xs text-red-500 mt-1 block">
                 Only letters, digits, underscores, and hyphens are allowed (no spaces).
-              </p>
+              </Text>
             ) : (
-              <p className="mt-1 block text-xs text-muted-foreground">
+              <Text className="text-xs text-gray-400 mt-1 block">
                 Override how this tool&apos;s name appears to users. Leave blank to use original.
-              </p>
+              </Text>
             )}
           </div>
           <div>
-            <p className="mb-1 block text-xs font-medium">Description</p>
-            <Textarea
-              className="field-sizing-fixed"
+            <Text className="text-xs font-medium text-gray-600 mb-1 block">Description</Text>
+            <Input.TextArea
               placeholder={tool.description || "No description"}
               value={toolNameToDescription[tool.name] || ""}
               onChange={(e) => onDescriptionChange(tool.name, e.target.value)}
               rows={2}
             />
-            <p className="mt-1 block text-xs text-muted-foreground">
+            <Text className="text-xs text-gray-400 mt-1 block">
               Override the tool description shown to users. Leave blank to use original.
-            </p>
+            </Text>
           </div>
         </div>
       )}
@@ -393,62 +398,65 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   }
 
   return (
-    <Card className="p-6">
+    <Card>
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Wrench className="size-4 text-muted-foreground" />
-            <h3 className="text-lg font-medium">Tool Configuration</h3>
-            {tools.length > 0 && <Badge variant="secondary">{tools.length}</Badge>}
+            <ToolOutlined className="text-blue-600" />
+            <Title>Tool Configuration</Title>
+            {tools.length > 0 && (
+              <Badge
+                count={tools.length}
+                style={{
+                  backgroundColor: "#52c41a",
+                }}
+              />
+            )}
           </div>
           {tools.length > 0 && (
-            <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant={viewMode === "crud" ? "default" : "outline"}
-                onClick={() => setViewMode("crud")}
-              >
-                Risk Groups
-              </Button>
-              <Button
-                size="sm"
-                variant={viewMode === "flat" ? "default" : "outline"}
-                onClick={() => setViewMode("flat")}
-              >
-                Flat List
-              </Button>
-            </div>
+            <Radio.Group
+              value={viewMode}
+              onChange={(e) => setViewMode(e.target.value)}
+              size="small"
+              optionType="button"
+              buttonStyle="solid"
+              options={[
+                { label: "Risk Groups", value: "crud" },
+                { label: "Flat List", value: "flat" },
+              ]}
+            />
           )}
         </div>
 
         {/* Description */}
-        <div className="rounded-lg border border-border bg-muted p-3">
-          <p className="text-sm">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <Text className="text-blue-800 text-sm">
             <strong>Select which tools users can call:</strong> Only checked tools will be available for users to
             invoke. Unchecked tools will be blocked from execution.
-          </p>
+          </Text>
         </div>
 
         {/* Loading state */}
         {isLoadingTools && (
-          <div className="flex items-center justify-center gap-3 py-6">
-            <UiLoadingSpinner className="size-6 text-muted-foreground" />
-            <p className="text-sm">Loading tools from spec...</p>
+          <div className="flex items-center justify-center py-6">
+            <Spin size="large" />
+            <Text className="ml-3">Loading tools from spec...</Text>
           </div>
         )}
 
         {/* Error state */}
         {toolsError && !isLoadingTools && isPreviewForbidden && (
-          <div className="rounded-lg border border-border bg-muted p-4">
-            <p className="text-sm">{toolsError}</p>
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+            <Text className="text-sm text-blue-800">{toolsError}</Text>
           </div>
         )}
 
         {toolsError && !isLoadingTools && !isPreviewForbidden && (
-          <div className="rounded-lg border border-dashed border-destructive/40 bg-destructive/5 py-6 text-center">
-            <Wrench className="mx-auto mb-2 size-6 text-destructive" />
-            <p className="text-sm font-medium text-destructive">Unable to load tools</p>
-            <p className="text-sm text-destructive">{toolsError}</p>
+          <div className="text-center py-6 text-red-500 border rounded-lg border-dashed border-red-300 bg-red-50">
+            <ToolOutlined className="text-2xl mb-2" />
+            <Text className="text-red-600 font-medium">Unable to load tools</Text>
+            <br />
+            <Text className="text-sm text-red-500">{toolsError}</Text>
           </div>
         )}
 
@@ -458,50 +466,51 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
           tools.length === 0 &&
           canFetchTools &&
           (keyTools && keyTools.length > 0 ? (
-            <div className="rounded-lg border border-dashed py-4 text-center text-muted-foreground">
-              <Wrench className="mx-auto mb-2 size-6" />
-              <p className="text-sm">No tools loaded from spec</p>
-              <p className="mt-1 block text-sm">Expected tools: {keyTools.map((t) => t.name).join(", ")}</p>
+            <div className="text-center py-4 text-gray-400 border rounded-lg border-dashed">
+              <ToolOutlined className="text-2xl mb-2" />
+              <Text>No tools loaded from spec</Text>
+              <Text className="text-sm block mt-1">Expected tools: {keyTools.map((t) => t.name).join(", ")}</Text>
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed py-6 text-center text-muted-foreground">
-              <Wrench className="mx-auto mb-2 size-6" />
-              <p className="text-sm">No tools available for configuration</p>
-              <p className="text-sm">Connect to an MCP server with tools to configure them</p>
+            <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
+              <ToolOutlined className="text-2xl mb-2" />
+              <Text>No tools available for configuration</Text>
+              <br />
+              <Text className="text-sm">Connect to an MCP server with tools to configure them</Text>
             </div>
           ))}
 
         {/* Incomplete form state */}
         {!canFetchTools && (formValues.url || formValues.spec_path) && (
-          <div className="rounded-lg border border-dashed py-6 text-center text-muted-foreground">
-            <Wrench className="mx-auto mb-2 size-6" />
-            <p className="text-sm">Complete required fields to configure tools</p>
-            <p className="text-sm">Fill in URL, Transport, and Authentication to load available tools</p>
+          <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
+            <ToolOutlined className="text-2xl mb-2" />
+            <Text>Complete required fields to configure tools</Text>
+            <br />
+            <Text className="text-sm">Fill in URL, Transport, and Authentication to load available tools</Text>
           </div>
         )}
 
         {/* Tools loaded successfully */}
         {!isLoadingTools && !toolsError && tools.length > 0 && (
           <div className="space-y-3">
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted p-3">
-              <CircleCheck className="size-4" />
-              <p className="text-sm font-medium">
+            <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200">
+              <CheckCircleOutlined className="text-green-600" />
+              <Text className="text-green-700 font-medium">
                 {effectiveAllowedTools.length} of {tools.length} {tools.length === 1 ? "tool" : "tools"} enabled for
                 user access
-              </p>
+              </Text>
             </div>
 
             {/* Search box shared by both views */}
-            <InputGroup className="w-full">
-              <InputGroupAddon>
-                <Search className="size-4 text-muted-foreground" />
-              </InputGroupAddon>
-              <InputGroupInput
-                placeholder="Search tools by name or description..."
-                value={toolSearchTerm}
-                onChange={(e) => setToolSearchTerm(e.target.value)}
-              />
-            </InputGroup>
+            <Input
+              placeholder="Search tools by name or description..."
+              prefix={<SearchOutlined className="text-gray-400" />}
+              value={toolSearchTerm}
+              onChange={(e) => setToolSearchTerm(e.target.value)}
+              allowClear
+              className="rounded-lg"
+              size="large"
+            />
 
             {/* CRUD grouped view */}
             {viewMode === "crud" && (
@@ -517,25 +526,31 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
             {viewMode === "flat" && (
               <>
                 {filteredTools.length === 0 ? (
-                  <div className="rounded-lg border border-dashed py-6 text-center text-muted-foreground">
-                    <Search className="mx-auto mb-2 size-6" />
-                    <p className="text-sm">No tools found matching &quot;{toolSearchTerm}&quot;</p>
+                  <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
+                    <SearchOutlined className="text-2xl mb-2" />
+                    <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
                   </div>
                 ) : (
                   <div className="space-y-2">
                     {pinnedFiltered.length > 0 && (
                       <>
                         <div className="flex items-center justify-between px-1">
-                          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                            Suggested tools
-                          </p>
+                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Suggested tools</p>
                           <div className="flex gap-2">
-                            <Button variant="link" size="sm" onClick={handleEnableSuggested}>
+                            <button
+                              type="button"
+                              onClick={handleEnableSuggested}
+                              className="text-xs text-blue-600 hover:text-blue-700"
+                            >
                               Enable all
-                            </Button>
-                            <Button variant="link" size="sm" onClick={handleDisableSuggested}>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDisableSuggested}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
                               Disable all
-                            </Button>
+                            </button>
                           </div>
                         </div>
                         {pinnedFiltered.map((tool) => (
@@ -557,16 +572,24 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                     {restFiltered.length > 0 && (
                       <>
                         <div className="flex items-center justify-between px-1 pt-2">
-                          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                             {pinnedFiltered.length > 0 ? "All tools" : "Tools"}
                           </p>
                           <div className="flex gap-2">
-                            <Button variant="link" size="sm" onClick={handleEnableRest}>
+                            <button
+                              type="button"
+                              onClick={handleEnableRest}
+                              className="text-xs text-blue-600 hover:text-blue-700"
+                            >
                               Enable all
-                            </Button>
-                            <Button variant="link" size="sm" onClick={handleDisableRest}>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDisableRest}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
                               Disable all
-                            </Button>
+                            </button>
                           </div>
                         </div>
                         {restFiltered.map((tool) => (

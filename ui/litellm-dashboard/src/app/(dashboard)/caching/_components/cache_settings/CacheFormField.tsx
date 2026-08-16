@@ -7,29 +7,22 @@ export interface EmbeddingModelOption {
   label: string;
 }
 
-export const SECRET_ALREADY_SET_PLACEHOLDER = "Already set. Enter a new value to replace it.";
-
 interface CacheFormFieldProps {
   field: CacheField;
   embeddingModels: EmbeddingModelOption[];
-  isSecretConfigured?: boolean;
 }
 
-const renderControl = (
-  field: CacheField,
-  embeddingModels: EmbeddingModelOption[],
-  placeholder: string,
-): React.ReactNode => {
+const renderControl = (field: CacheField, embeddingModels: EmbeddingModelOption[]): React.ReactNode => {
   switch (field.type) {
     case "boolean":
       return <Switch />;
     case "password":
-      return <Input.Password placeholder={placeholder} autoComplete="new-password" />;
+      return <Input.Password placeholder={field.helpText} autoComplete="new-password" />;
     case "integer":
     case "float":
-      return <Input inputMode="decimal" placeholder={placeholder} />;
+      return <Input inputMode="decimal" placeholder={field.helpText} />;
     case "list":
-      return <Input.TextArea rows={4} placeholder={placeholder} />;
+      return <Input.TextArea rows={4} placeholder={field.helpText} />;
     case "model-select":
       return (
         <Select
@@ -42,11 +35,11 @@ const renderControl = (
         />
       );
     default:
-      return <Input placeholder={placeholder} />;
+      return <Input placeholder={field.helpText} />;
   }
 };
 
-const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels, isSecretConfigured = false }) => (
+const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels }) => (
   <Form.Item
     name={field.name}
     label={field.label}
@@ -54,7 +47,7 @@ const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels,
     rules={field.rules}
     valuePropName={field.type === "boolean" ? "checked" : "value"}
   >
-    {renderControl(field, embeddingModels, isSecretConfigured ? SECRET_ALREADY_SET_PLACEHOLDER : field.helpText)}
+    {renderControl(field, embeddingModels)}
   </Form.Item>
 );
 

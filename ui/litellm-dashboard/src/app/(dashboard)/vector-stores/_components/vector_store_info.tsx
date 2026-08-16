@@ -10,9 +10,8 @@ import {
   CredentialItem,
 } from "@/components/networking";
 import { VectorStore } from "@/components/vector_store_management/types";
-import { Providers, provider_map } from "@/components/provider_info_helpers";
-import { getVectorStoreProviderLogoAndName } from "@/components/vector_store_providers";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { Providers, providerLogoMap, provider_map } from "@/components/provider_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import VectorStoreTester from "./VectorStoreTester";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 
@@ -33,43 +32,39 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [vectorStoreDetails, setVectorStoreDetails] = useState<VectorStore | null>(null);
-  const [loadFailed, setLoadFailed] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(editVectorStore);
   const [metadataString, setMetadataString] = useState<string>("{}");
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
+  const [activeTab, setActiveTab] = useState<string>(editVectorStore ? "details" : "details");
 
   const fetchVectorStoreDetails = async () => {
     if (!accessToken) return;
     try {
-      setLoadFailed(false);
       const response = await vectorStoreInfoCall(accessToken, vectorStoreId);
-      if (!response || !response.vector_store) {
-        setLoadFailed(true);
-        return;
-      }
-      setVectorStoreDetails(response.vector_store);
+      if (response && response.vector_store) {
+        setVectorStoreDetails(response.vector_store);
 
-      // If metadata exists and is an object, stringify it for display/editing
-      if (response.vector_store.vector_store_metadata) {
-        const metadata =
-          typeof response.vector_store.vector_store_metadata === "string"
-            ? JSON.parse(response.vector_store.vector_store_metadata)
-            : response.vector_store.vector_store_metadata;
-        setMetadataString(JSON.stringify(metadata, null, 2));
-      }
+        // If metadata exists and is an object, stringify it for display/editing
+        if (response.vector_store.vector_store_metadata) {
+          const metadata =
+            typeof response.vector_store.vector_store_metadata === "string"
+              ? JSON.parse(response.vector_store.vector_store_metadata)
+              : response.vector_store.vector_store_metadata;
+          setMetadataString(JSON.stringify(metadata, null, 2));
+        }
 
-      if (editVectorStore) {
-        form.setFieldsValue({
-          vector_store_id: response.vector_store.vector_store_id,
-          custom_llm_provider: response.vector_store.custom_llm_provider,
-          vector_store_name: response.vector_store.vector_store_name,
-          vector_store_description: response.vector_store.vector_store_description,
-        });
+        if (editVectorStore) {
+          form.setFieldsValue({
+            vector_store_id: response.vector_store.vector_store_id,
+            custom_llm_provider: response.vector_store.custom_llm_provider,
+            vector_store_name: response.vector_store.vector_store_name,
+            vector_store_description: response.vector_store.vector_store_description,
+          });
+        }
       }
     } catch (error) {
       console.error("Error fetching vector store details:", error);
       NotificationsManager.fromBackend("Error fetching vector store details: " + error);
-      setLoadFailed(true);
     }
   };
 
@@ -117,20 +112,6 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       NotificationsManager.fromBackend("Error updating vector store: " + error);
     }
   };
-
-  if (loadFailed) {
-    return (
-      <div className="p-4 max-w-full">
-        <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onClose}>
-          Back to Vector Stores
-        </Button>
-        <Title>Vector store not found</Title>
-        <Text className="text-gray-500">
-          Vector store {vectorStoreId} could not be loaded. It may have been deleted.
-        </Text>
-      </div>
-    );
-  }
 
   if (!vectorStoreDetails) {
     return <div>Loading...</div>;
@@ -200,7 +181,23 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                             return (
                               <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
                                 <div className="flex items-center space-x-2">
-                                  <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />
+                                  <img
+                                    src={resolveLogoSrc(providerLogoMap[providerDisplayName])}
+                                    alt={`${providerEnum} logo`}
+                                    className="w-5 h-5"
+                                    onError={(e) => {
+                                      // Create a div with provider initial as fallback
+                                      const target = e.target as HTMLImageElement;
+                                      const parent = target.parentElement;
+                                      if (parent) {
+                                        const fallbackDiv = document.createElement("div");
+                                        fallbackDiv.className =
+                                          "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                                        fallbackDiv.textContent = providerDisplayName.charAt(0);
+                                        parent.replaceChild(fallbackDiv, target);
+                                      }
+                                    }}
+                                  />
                                   <span>{providerDisplayName}</span>
                                 </div>
                               </Select2.Option>
@@ -295,11 +292,43 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       <div className="flex items-center space-x-2 mt-1">
                         {(() => {
                           const provider = vectorStoreDetails.custom_llm_provider || "bedrock";
-                          const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
+                          const { displayName, logo } = (() => {
+                            // Find the enum key by matching provider_map values
+                            const enumKey = Object.keys(provider_map).find(
+                              (key) => provider_map[key].toLowerCase() === provider.toLowerCase(),
+                            );
+
+                            if (!enumKey) {
+                              return { displayName: provider, logo: "" };
+                            }
+
+                            // Get the display name from Providers enum and logo from map
+                            const displayName = Providers[enumKey as keyof typeof Providers];
+                            const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
+
+                            return { displayName, logo };
+                          })();
 
                           return (
                             <>
-                              <Logo src={logo} label={displayName} className="w-5 h-5" />
+                              {logo && (
+                                <img
+                                  src={logo}
+                                  alt={`${displayName} logo`}
+                                  className="w-5 h-5"
+                                  onError={(e) => {
+                                    const target = e.target as HTMLImageElement;
+                                    const parent = target.parentElement;
+                                    if (parent) {
+                                      const fallbackDiv = document.createElement("div");
+                                      fallbackDiv.className =
+                                        "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                                      fallbackDiv.textContent = displayName.charAt(0);
+                                      parent.replaceChild(fallbackDiv, target);
+                                    }
+                                  }}
+                                />
+                              )}
                               <Badge color="blue">{displayName}</Badge>
                             </>
                           );

@@ -83,14 +83,10 @@ function ComboboxContent({
   sideOffset = 6,
   align = "start",
   alignOffset = 0,
-  collisionAvoidance,
   anchor,
   ...props
 }: ComboboxPrimitive.Popup.Props &
-  Pick<
-    ComboboxPrimitive.Positioner.Props,
-    "side" | "align" | "sideOffset" | "alignOffset" | "collisionAvoidance" | "anchor"
-  >) {
+  Pick<ComboboxPrimitive.Positioner.Props, "side" | "align" | "sideOffset" | "alignOffset" | "anchor">) {
   return (
     <ComboboxPrimitive.Portal>
       <ComboboxPrimitive.Positioner
@@ -98,7 +94,6 @@ function ComboboxContent({
         sideOffset={sideOffset}
         align={align}
         alignOffset={alignOffset}
-        collisionAvoidance={collisionAvoidance}
         anchor={anchor}
         className="isolate z-50"
       >
@@ -265,7 +260,6 @@ export {
   ComboboxChips,
   ComboboxChip,
   ComboboxChipsInput,
-  ComboboxClear,
   ComboboxTrigger,
   ComboboxValue,
   useComboboxAnchor,

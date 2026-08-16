@@ -1,17 +1,15 @@
 from __future__ import annotations
+from uuid import uuid4
+import httpx
 
 import os
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
 from urllib.parse import urlparse
-from uuid import uuid4
 
-import httpx
 import requests
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from requests.auth import HTTPBasicAuth
-from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -31,55 +29,13 @@ from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from pydantic import BaseModel
-
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-
-
-class _HiddenlayerEvaluation(TypedDict, total=False):
-    action: str
-    threat_level: str
-
-
-class _HiddenlayerAnalysisEntry(TypedDict, total=False):
-    name: str
-    detected: bool
-
-
-class _HiddenlayerModifiedSide(TypedDict):
-    messages: Any
-
-
-class _HiddenlayerResponse(TypedDict, total=False):
-    evaluation: _HiddenlayerEvaluation
-    analysis: Sequence[_HiddenlayerAnalysisEntry]
-    modified_data: Mapping[str, _HiddenlayerModifiedSide]
-
-
-class _LoggedCallMetadata(TypedDict, total=False):
-    headers: ReadOnly[Mapping[str, str]]
-
-
-class _LoggedCallLitellmParams(TypedDict, total=False):
-    metadata: ReadOnly[_LoggedCallMetadata]
-
-
-class _HiddenlayerOutputMessage(TypedDict, total=False):
-    content: ReadOnly[str | Sequence[Mapping[str, str]]]
-
-
-class _HiddenlayerChoiceMessage(TypedDict, total=False):
-    content: ReadOnly[str]
-
-
-class _HiddenlayerChoice(TypedDict, total=False):
-    message: ReadOnly[_HiddenlayerChoiceMessage]
 
 
 def is_saas(host: str) -> bool:
     """Checks whether the connection is to the SaaS platform"""
 
-    o: Final = urlparse(host)
+    o = urlparse(host)
 
     if o.hostname and o.hostname.endswith("hiddenlayer.ai"):
         return True
@@ -87,10 +43,10 @@ def is_saas(host: str) -> bool:
     return False
 
 
-def _get_jwt(auth_url, api_id, api_key) -> str:
-    token_url: Final = f"{auth_url}/oauth2/token?grant_type=client_credentials"
+def _get_jwt(auth_url, api_id, api_key):
+    token_url = f"{auth_url}/oauth2/token?grant_type=client_credentials"
 
-    resp: Final = requests.post(token_url, auth=HTTPBasicAuth(api_id, api_key))
+    resp = requests.post(token_url, auth=HTTPBasicAuth(api_id, api_key))
 
     if not resp.ok:
         raise RuntimeError(
@@ -109,7 +65,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
     """Custom guardrail wrapper for HiddenLayer's safety checks."""
 
     @classmethod
-    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -117,10 +73,10 @@ class HiddenlayerGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        api_id: str | None = None,
-        api_key: str | None = None,
-        api_base: str | None = None,
-        auth_url: str | None = None,
+        api_id: Optional[str] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        auth_url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -158,7 +114,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: LiteLLMLoggingObj | None = None,
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         """Validate (and optionally redact) text via HiddenLayer before/after LLM calls."""
 
@@ -166,8 +122,8 @@ class HiddenlayerGuardrail(CustomGuardrail):
         # I.e request can specify gpt-4o-mini but the response from the server will be
         # gpt-4o-mini-2025-11-01. We need the model to be consistent so that inferences
         # will be grouped correctly on the Hiddenlayer side
-        model_name: Final = logging_obj.model if logging_obj and logging_obj.model else "unknown"
-        hl_request_metadata: Final = {"model": model_name}
+        model_name = logging_obj.model if logging_obj and logging_obj.model else "unknown"
+        hl_request_metadata = {"model": model_name}
 
         # We need the hiddenlayer project id and requester id on both the input and output
         # Since headers aren't available on the response back from the model, we get them
@@ -176,17 +132,14 @@ class HiddenlayerGuardrail(CustomGuardrail):
         # from the logger object on the response from the model.
         headers = request_data.get("proxy_server_request", {}).get("headers", {})
         if not headers and logging_obj and logging_obj.model_call_details:
-            logged_litellm_params: Final[_LoggedCallLitellmParams] = logging_obj.model_call_details.get(
-                "litellm_params", {}
-            )
-            headers = logged_litellm_params.get("metadata", {}).get("headers", {})
+            headers = logging_obj.model_call_details.get("litellm_params", {}).get("metadata", {}).get("headers", {})
 
         hl_request_metadata["requester_id"] = headers.get("hl-requester-id") or "LiteLLM"
-        project_id: Final = headers.get("hl-project-id")
+        project_id = headers.get("hl-project-id")
 
         if scan_params := inputs.get("structured_messages"):
-            last_msg: Final = scan_params[-1]
-            result: _HiddenlayerResponse = await self._call_hiddenlayer(
+            last_msg = scan_params[-1]
+            result = await self._call_hiddenlayer(
                 project_id,
                 hl_request_metadata,
                 {
@@ -210,10 +163,10 @@ class HiddenlayerGuardrail(CustomGuardrail):
             result = {}
 
         if result.get("evaluation", {}).get("action") == HiddenlayerAction.BLOCK:
-            detected_reasons: Final = [
+            detected_reasons = [
                 entry.get("name", "unknown") for entry in result.get("analysis", []) if entry.get("detected")
             ]
-            threat_level: Final = result.get("evaluation", {}).get("threat_level")
+            threat_level = result.get("evaluation", {}).get("threat_level")
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -225,7 +178,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
             )
 
         if result.get("evaluation", {}).get("action") == HiddenlayerAction.REDACT:
-            modified_data: Final = result.get("modified_data", {})
+            modified_data = result.get("modified_data", {})
             if modified_data.get("input") and input_type == "request":
                 last_content = modified_data["input"]["messages"][-1]["content"]
                 if isinstance(last_content, list):
@@ -252,18 +205,18 @@ class HiddenlayerGuardrail(CustomGuardrail):
     async def _call_hiddenlayer(
         self,
         project_id: str | None,
-        metadata: Mapping[str, str],
-        payload: Mapping[str, Sequence[Mapping[str, str]]],
+        metadata: dict[str, str],
+        payload: dict[str, Any],
         input_type: Literal["request", "response"],
-    ) -> _HiddenlayerResponse:
-        data: Final[dict[str, object]] = {"metadata": metadata}
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = {"metadata": metadata}
 
         if input_type == "request":
             data["input"] = payload
         else:
             data["output"] = payload
 
-        headers: Final = {
+        headers = {
             "Content-Type": "application/json",
             "hl-runtime-edge-provider": "litellm",
             "hl-runtime-edge-provider-version": "1",
@@ -282,9 +235,9 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 headers=headers,
             )
             response.raise_for_status()
-            result: _HiddenlayerResponse = response.json()
+            result = response.json()
 
-            verbose_proxy_logger.debug("Hiddenlayer reponse: %s", result)
+            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {result}")
 
             return result
         except HTTPStatusError as e:
@@ -308,11 +261,11 @@ class HiddenlayerGuardrail(CustomGuardrail):
             response.raise_for_status()
             result = response.json()
 
-            verbose_proxy_logger.debug("Hiddenlayer reponse: %s", result)
+            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {result}")
             return result
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel[BaseModel]] | None:
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
             HiddenlayerGuardrailConfigModel,
         )
@@ -325,10 +278,10 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
 
     def __init__(
         self,
-        api_id: str | None = None,
-        api_key: str | None = None,
-        api_base: str | None = None,
-        auth_url: str | None = None,
+        api_id: Optional[str] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        auth_url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
@@ -365,7 +318,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: LiteLLMLoggingObj | None = None,
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         """Validate (and optionally redact) text via HiddenLayer before/after LLM calls."""
 
@@ -380,17 +333,17 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
 
         # put our roundtrip id in the header to the model so we get it on the way back from the model
         if "hl-roundtrip-id" not in headers:
-            proxy_req: Final = request_data.get("proxy_server_request")
+            proxy_req = request_data.get("proxy_server_request")
             if proxy_req is not None and "headers" in proxy_req:
                 proxy_req["headers"]["hl-roundtrip-id"] = str(uuid4())
                 headers["hl-roundtrip-id"] = proxy_req["headers"]["hl-roundtrip-id"]
 
-        hl_headers: Final = {h.lower(): v for h, v in headers.items() if h.lower().startswith("hl-")}
+        hl_headers = {h.lower(): v for h, v in headers.items() if h.lower().startswith("hl-")}
 
         if "hl-requester-id" not in hl_headers:
             hl_headers["hl-requester-id"] = "LiteLLM"
 
-        payload: object
+        payload: Any
         if input_type == "request":
             payload = {
                 "messages": inputs.get("structured_messages"),
@@ -416,8 +369,8 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             else:
                 payload = {}
 
-        response: Final = await self._call_hiddenlayer(payload, input_type, hl_headers)
-        output: Final = response.json()
+        response = await self._call_hiddenlayer(payload, input_type, hl_headers)
+        output = response.json()
 
         if response.headers.get("hl-runtime-action", "").lower() == "block":
             raise HTTPException(
@@ -428,12 +381,11 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 },
             )
 
-        new_texts: Final = []
+        new_texts = []
         if input_type == "request":
             inputs["structured_messages"] = output
 
-            modified_messages: Final[Sequence[_HiddenlayerOutputMessage]] = output.get("messages", [])
-            for message in modified_messages:
+            for message in output.get("messages", []):
                 content = message.get("content", "")
                 if isinstance(content, list):
                     text_parts = [
@@ -447,8 +399,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             inputs["texts"] = new_texts
 
         elif input_type == "response" and inputs.get("texts"):
-            redacted_choices: Final[Sequence[_HiddenlayerChoice]] = output.get("choices", [{}])
-            inputs["texts"] = [redacted_choices[-1].get("message", {}).get("content", "")]
+            inputs["texts"] = [output.get("choices", [{}])[-1].get("message", {}).get("content", "")]
         elif input_type == "response" and inputs.get("tool_calls"):
             inputs["tool_calls"] = output
 
@@ -465,7 +416,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         else:
             path = "detection/v2/response-evaluations"
 
-        headers: Final = {
+        headers = {
             "Content-Type": "application/json",
             "hl-runtime-edge-provider": "litellm",
             "hl-runtime-edge-provider-version": "2",
@@ -483,7 +434,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             )
             response.raise_for_status()
 
-            verbose_proxy_logger.debug("Hiddenlayer reponse: %s", response)
+            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {response}")
 
             return response
         except HTTPStatusError as e:
@@ -506,11 +457,11 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
 
             response.raise_for_status()
 
-            verbose_proxy_logger.debug("Hiddenlayer reponse: %s", response)
+            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {response}")
             return response
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel[BaseModel]] | None:
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
             HiddenlayerGuardrailConfigModel,
         )

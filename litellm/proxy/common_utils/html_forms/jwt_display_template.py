@@ -1,7 +1,5 @@
-from typing import Final
-
 # JWT display template for SSO debug callback
-jwt_display_template: Final = """
+jwt_display_template = """
 <!DOCTYPE html>
 <html lang="en">
 <head>

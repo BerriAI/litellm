@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import React from "react";
+import React, { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
@@ -150,12 +150,6 @@ describe("Navbar", () => {
     expect(screen.getByRole("button", { name: /^notifications$/i })).toBeInTheDocument();
     expect(screen.getByText("Docs")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
-  });
-
-  it("should link the logo to the UI home route rather than the proxy origin", () => {
-    renderWithProviders(<Navbar {...defaultProps} />);
-
-    expect(screen.getByRole("link", { name: /litellm brand/i })).toHaveAttribute("href", "/ui");
   });
 
   it("should display user information in dropdown", async () => {

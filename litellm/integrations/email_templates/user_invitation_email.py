@@ -2,9 +2,7 @@
 Modern Email Templates for LiteLLM Email Service with professional styling
 """
 
-from typing import Final
-
-USER_INVITATION_EMAIL_TEMPLATE: Final = """
+USER_INVITATION_EMAIL_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -131,7 +129,7 @@ USER_INVITATION_EMAIL_TEMPLATE: Final = """
             </div>
 
             <div class="btn-container">
-                <a href="{invitation_link}" class="btn">Accept Invitation</a>
+                <a href="{base_url}" class="btn">Accept Invitation</a>
             </div>
             
             <div class="quickstart">

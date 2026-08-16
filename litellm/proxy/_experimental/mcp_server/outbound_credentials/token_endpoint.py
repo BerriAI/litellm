@@ -20,11 +20,10 @@ import uuid
 import weakref
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final
 
 import httpx
 import jwt
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -52,11 +51,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
-# The cache stores (fingerprint, token); anything else in the slot is treated as absent.
-_CACHED_ENTRY_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[str, str])
-
-CLIENT_ASSERTION_TYPE: Final = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-CLIENT_ASSERTION_LIFETIME_SECONDS: Final = 60
+CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+CLIENT_ASSERTION_LIFETIME_SECONDS = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +77,7 @@ class TokenEndpointClient:
         client_auth: ClientAuth,
     ) -> Result[ExchangedToken, CredError]:
         try:
-            data: Final = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
+            data = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
         except (ValueError, TypeError, NotImplementedError, jwt.PyJWTError):
             verbose_proxy_logger.warning("MCP token endpoint %s: could not sign the client assertion", endpoint)
             return Error(
@@ -91,7 +87,7 @@ class TokenEndpointClient:
                 )
             )
         try:
-            raw: Final = await _post_form(endpoint, data)
+            raw = await _post_form(endpoint, data)
         except httpx.HTTPStatusError as exc:
             verbose_proxy_logger.warning(
                 "MCP token endpoint %s failed with status %s", endpoint, exc.response.status_code
@@ -115,7 +111,7 @@ class TokenEndpointClient:
             verbose_proxy_logger.warning("MCP token endpoint %s returned no response", endpoint)
             return Error(CredError.of_upstream_unavailable("token exchange failed: no response from token endpoint"))
         try:
-            parsed: Final = _TokenEndpointResponse.model_validate(raw)
+            parsed = _TokenEndpointResponse.model_validate(raw)
         except ValidationError:
             verbose_proxy_logger.warning("MCP token endpoint %s response missing access_token", endpoint)
             return Error(
@@ -138,28 +134,19 @@ class ExchangedTokenCache:
         self,
         cache_key: str,
         compute: Callable[[], Awaitable[Result[ExchangedToken, CredError]]],
-        *,
-        fingerprint: str = "",
     ) -> Result[str, CredError]:
-        """The cached token for `cache_key`, minting one when absent.
-
-        `fingerprint` lets a caller address a slot by something stable (a principal) while still
-        guaranteeing the token it gets back was minted for the *current* inputs: a stored entry
-        whose fingerprint differs reads as a miss and is re-minted over. That keeps eviction
-        addressable without the key having to encode the credential material it protects.
-        """
-        cached = self._get(cache_key, fingerprint)
+        cached = self._get(cache_key)
         if cached is not None:
             return Ok(cached)
         async with self._lock(cache_key):
-            cached = self._get(cache_key, fingerprint)
+            cached = self._get(cache_key)
             if cached is not None:
                 return Ok(cached)
             match await compute():
                 case Ok(token):
                     self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
                         cache_key,
-                        (fingerprint, token.access_token),
+                        token.access_token,
                         ttl=_cache_ttl_seconds(token.expires_in),
                     )
                     return Ok(token.access_token)
@@ -170,18 +157,9 @@ class ExchangedTokenCache:
         """Evict one cached token so the next `get_or_compute` re-mints (e.g. after an upstream 401)."""
         self._cache.delete_cache(cache_key)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
 
-    def _get(self, cache_key: str, fingerprint: str) -> str | None:
-        """The stored token, or None when absent or minted for different inputs.
-
-        The fingerprint comparison is what makes a shared slot safe: a mismatch never returns the
-        other party's token, it just reads as a miss.
-        """
-        value = self._cache.get_cache(cache_key)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # InMemoryCache is untyped; the adapter below is the type gate
-        try:
-            stored_fingerprint, token = _CACHED_ENTRY_ADAPTER.validate_python(value)
-        except ValidationError:
-            return None
-        return token if stored_fingerprint == fingerprint else None
+    def _get(self, cache_key: str) -> str | None:
+        value = self._cache.get_cache(cache_key)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # InMemoryCache is untyped; narrowed by isinstance below
+        return value if isinstance(value, str) else None
 
     def _lock(self, cache_key: str) -> asyncio.Lock:
         lock = self._locks.get(cache_key)
@@ -192,7 +170,7 @@ class ExchangedTokenCache:
 
 
 def _cache_ttl_seconds(expires_in: int | None) -> int:
-    lifetime: Final = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+    lifetime = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
     return max(
         lifetime - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
         MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
@@ -231,7 +209,7 @@ def _client_auth_params(endpoint: str, client_id: str, client_auth: ClientAuth) 
 
 
 def _client_assertion(endpoint: str, client_id: str, auth: PrivateKeyJwtAuth) -> str:
-    now: Final = int(time.time())
+    now = int(time.time())
     return jwt.encode(
         {
             "iss": client_id,

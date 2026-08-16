@@ -8,8 +8,7 @@ WXO uses a REST API (not A2A/JSON-RPC) with an async-poll execution model:
 """
 
 import asyncio
-from collections.abc import AsyncIterator
-from typing import Any, Final
+from typing import Any, AsyncIterator, Dict, Optional
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
@@ -29,15 +28,15 @@ class WatsonxOrchestrateTransformation:
         return f"{cp4d_host.rstrip('/')}/orchestrate/cpd/instances/{instance_id}"
 
     @staticmethod
-    def extract_text_from_a2a_params(params: dict[str, Any]) -> str:
+    def extract_text_from_a2a_params(params: Dict[str, Any]) -> str:
         """
         Extract user message text from A2A MessageSendParams.
 
         A2A format: params.message.parts[*] where part.kind == "text"
         """
-        message: Final = params.get("message", {})
-        parts: Final = message.get("parts", [])
-        texts: Final = []
+        message = params.get("message", {})
+        parts = message.get("parts", [])
+        texts = []
         for part in parts:
             if not isinstance(part, dict):
                 continue
@@ -50,10 +49,10 @@ class WatsonxOrchestrateTransformation:
     def build_wxo_run_body(
         wxo_agent_id: str,
         text: str,
-        thread_id: str | None = None,
-    ) -> dict[str, Any]:
+        thread_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Build the WXO POST /v1/orchestrate/runs request body."""
-        body: Final[dict[str, Any]] = {
+        body: Dict[str, Any] = {
             "agent_id": wxo_agent_id,
             "message": {
                 "role": "user",
@@ -96,19 +95,19 @@ class WatsonxOrchestrateTransformation:
             pass
 
         # Tertiary: results as a raw string
-        results: Final = result.get("results")
+        results = result.get("results")
         if results and isinstance(results, str):
             return results
 
         return ""
 
     @staticmethod
-    def extract_text_from_a2a_message_response(a2a_response: dict[str, Any]) -> str:
-        result: Final = a2a_response.get("result")
+    def extract_text_from_a2a_message_response(a2a_response: Dict[str, Any]) -> str:
+        result = a2a_response.get("result")
         if not isinstance(result, dict):
             verbose_logger.warning("WXO: A2A response missing result object")
             return ""
-        parts: Final = result.get("parts")
+        parts = result.get("parts")
         if not isinstance(parts, list):
             verbose_logger.warning("WXO: A2A result has no parts list")
             return ""
@@ -119,7 +118,7 @@ class WatsonxOrchestrateTransformation:
         return ""
 
     @staticmethod
-    def build_a2a_message_response(request_id: str, text: str) -> dict[str, Any]:
+    def build_a2a_message_response(request_id: str, text: str) -> Dict[str, Any]:
         """
         Build a standard A2A non-streaming SendMessageResponse (kind=message).
         """
@@ -140,7 +139,7 @@ class WatsonxOrchestrateTransformation:
         request_id: str,
         chunk_size: int = 50,
         delay_ms: int = 10,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[Dict[str, Any]]:
         """
         Emit standard A2A streaming events from a completed text response.
 
@@ -150,9 +149,9 @@ class WatsonxOrchestrateTransformation:
           3. artifact-update chunks
           4. status-update (kind="status-update", state="completed", final=True)
         """
-        task_id: Final = str(uuid4())
-        context_id: Final = str(uuid4())
-        artifact_id: Final = str(uuid4())
+        task_id = str(uuid4())
+        context_id = str(uuid4())
+        artifact_id = str(uuid4())
 
         # 1. Task submitted
         yield {
@@ -181,7 +180,7 @@ class WatsonxOrchestrateTransformation:
         await asyncio.sleep(delay_ms / 1000.0)
 
         # 3. Artifact chunks (always emit at least one chunk, even for empty text)
-        text_to_chunk: Final = text or ""
+        text_to_chunk = text or ""
         for i in range(0, max(len(text_to_chunk), 1), chunk_size):
             chunk_text = text_to_chunk[i : i + chunk_size]
             is_last = (i + chunk_size) >= max(len(text_to_chunk), 1)
@@ -214,4 +213,4 @@ class WatsonxOrchestrateTransformation:
             },
         }
 
-        verbose_logger.debug("WXO: Fake streaming completed for request_id=%s", request_id)
+        verbose_logger.debug(f"WXO: Fake streaming completed for request_id={request_id}")

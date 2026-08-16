@@ -1,4 +1,4 @@
-import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
+import type { DateRangePickerValue } from "@tremor/react";
 import React, { useCallback, useMemo, useState } from "react";
 import { formatDate } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";

@@ -2,7 +2,7 @@
 Transformation logic for Hosted VLLM rerank
 """
 
-from typing import Final
+from typing import Optional, Union
 
 import httpx
 
@@ -21,7 +21,7 @@ class HostedVLLMAudioTranscriptionError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict | httpx.Headers | None = None,
+        headers: Optional[Union[dict, httpx.Headers]] = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -32,12 +32,12 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         if api_base:
             # Remove trailing slashes and ensure clean base URL
@@ -58,7 +58,7 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         Transform the audio transcription request
         """
 
-        data: Final = {"model": model, "file": audio_file, **optional_params}
+        data = {"model": model, "file": audio_file, **optional_params}
 
         return AudioTranscriptionRequestData(
             data=data,

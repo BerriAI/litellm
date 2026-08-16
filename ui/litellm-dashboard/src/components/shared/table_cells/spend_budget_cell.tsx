@@ -7,8 +7,6 @@ interface SpendBudgetCellProps {
   spend: number | null | undefined;
   maxBudget: number | null | undefined;
   teamMaxBudget?: number | null;
-  spendDecimals?: number;
-  budgetDecimals?: number;
 }
 
 const meterTone = (pct: number): "default" | "warning" | "over" => {
@@ -17,24 +15,16 @@ const meterTone = (pct: number): "default" | "warning" | "over" => {
   return "default";
 };
 
-export function SpendBudgetCell({
-  spend,
-  maxBudget,
-  teamMaxBudget,
-  spendDecimals = 4,
-  budgetDecimals = 0,
-}: SpendBudgetCellProps) {
+export function SpendBudgetCell({ spend, maxBudget, teamMaxBudget }: SpendBudgetCellProps) {
   const spendValue = typeof spend === "number" && !Number.isNaN(spend) ? spend : 0;
   const budget = maxBudget ?? teamMaxBudget ?? null;
   const isTeamBudget = maxBudget == null && teamMaxBudget != null;
   const hasBudget = typeof budget === "number" && budget > 0;
   const pct = hasBudget ? (spendValue / budget) * 100 : 0;
 
-  const spendText = spendValue > 0 ? getSpendString(spendValue, spendDecimals) : "$0.00";
+  const spendText = spendValue > 0 ? getSpendString(spendValue, 4) : "$0.00";
   const budgetLabel =
-    budget === null
-      ? "· Unlimited"
-      : `of $${formatNumberWithCommas(budget, budgetDecimals)}${isTeamBudget ? " (Team)" : ""}`;
+    budget === null ? "· Unlimited" : `of $${formatNumberWithCommas(budget)}${isTeamBudget ? " (Team)" : ""}`;
 
   return (
     <div className="flex min-w-[130px] flex-col gap-1">
@@ -43,11 +33,7 @@ export function SpendBudgetCell({
         <span className="text-muted-foreground">{budgetLabel}</span>
       </div>
       {hasBudget && (
-        <Meter
-          value={spendValue}
-          max={budget}
-          aria-valuetext={`${spendText} of $${formatNumberWithCommas(budget, budgetDecimals)}`}
-        >
+        <Meter value={spendValue} max={budget} aria-valuetext={`${spendText} of $${formatNumberWithCommas(budget)}`}>
           <MeterTrack>
             <MeterIndicator tone={meterTone(pct)} />
           </MeterTrack>

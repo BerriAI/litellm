@@ -1,7 +1,6 @@
 import { useState } from "react";
+import { Button } from "antd";
 import { Eye, EyeOff } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
 
 export default function RedactableField({
   defaultHidden = true,
@@ -14,7 +13,7 @@ export default function RedactableField({
 
   return (
     <div className="flex items-center gap-2">
-      <span className="flex-1 font-mono text-muted-foreground">
+      <span className="font-mono text-gray-600 flex-1">
         {value ? (
           isHidden ? (
             "•".repeat(value.length)
@@ -22,20 +21,17 @@ export default function RedactableField({
             value
           )
         ) : (
-          <span className="text-muted-foreground italic">Not configured</span>
+          <span className="text-gray-400 italic">Not configured</span>
         )}
       </span>
       {value && (
         <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={isHidden ? "Show value" : "Hide value"}
+          type="text"
+          size="small"
+          icon={isHidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
           onClick={() => setIsHidden(!isHidden)}
-          className="text-muted-foreground"
-        >
-          {isHidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
-        </Button>
+          className="text-gray-400 hover:text-gray-600"
+        />
       )}
     </div>
   );

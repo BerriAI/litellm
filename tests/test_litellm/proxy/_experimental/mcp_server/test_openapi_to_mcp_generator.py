@@ -17,7 +17,6 @@ import pytest
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _request_auth_header,
     _request_extra_headers,
-    _request_resolved_auth_headers,
     _resolve_param_list,
     _resolve_ref,
     build_input_schema,
@@ -627,6 +626,13 @@ class TestGetBaseUrl:
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://production.example.com"
 
+    def test_fallback_with_port_number(self):
+        """Test fallback handles URLs with port numbers correctly."""
+        spec = {"openapi": "3.0.0", "paths": {}}
+        spec_path = "http://localhost:8001/openapi.json"
+
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "http://localhost:8001"
 
     def test_fallback_with_nested_path(self):
         """Test fallback with deeply nested spec path."""
@@ -1201,61 +1207,3 @@ class TestRequestExtraHeaders:
             call_args = async_client.get.call_args
             headers_sent = call_args[1]["headers"]
             assert "X-TOKEN" not in headers_sent
-
-    @pytest.mark.asyncio
-    async def test_resolved_auth_headers_win_over_every_other_authorization_source(self):
-        """The gateway-resolved credential (stored per-user OAuth / minted M2M token) is
-        authoritative: it must override the BYOK override, static headers, and forwarded caller
-        headers on the Authorization name, case-insensitively, mirroring _resolve_v2_auth's rule
-        on the MCPClient path. Without this, a spec_path oauth2 server's completed OAuth flow
-        stores a token that never reaches the upstream API (LIT-4629)."""
-        operation = {}
-        func = create_tool_function(
-            path="/secure",
-            method="get",
-            operation=operation,
-            base_url="https://api.example.com",
-            headers={"authorization": "Bearer static-operator"},
-        )
-
-        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
-            async_client = _create_mock_client("get", "secure-data")
-            mock_client.return_value = async_client
-
-            extra_token = _request_extra_headers.set({"Authorization": "Bearer caller-forwarded"})
-            auth_token = _request_auth_header.set("Bearer byok-credential")
-            resolved_token = _request_resolved_auth_headers.set({"Authorization": "Bearer resolved-oauth"})
-            try:
-                result = await func()
-            finally:
-                _request_auth_header.reset(auth_token)
-                _request_extra_headers.reset(extra_token)
-                _request_resolved_auth_headers.reset(resolved_token)
-
-            assert result == "secure-data"
-            headers_sent = async_client.get.call_args[1]["headers"]
-            authorization_values = [v for k, v in headers_sent.items() if k.lower() == "authorization"]
-            assert authorization_values == ["Bearer resolved-oauth"]
-
-    @pytest.mark.asyncio
-    async def test_resolved_auth_headers_not_leaked_between_calls(self):
-        """After resetting the resolved-auth ContextVar, subsequent calls send no credential."""
-        operation = {}
-        func = create_tool_function(
-            path="/data",
-            method="get",
-            operation=operation,
-            base_url="https://api.example.com",
-        )
-
-        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
-            async_client = _create_mock_client("get", "ok")
-            mock_client.return_value = async_client
-
-            token = _request_resolved_auth_headers.set({"Authorization": "Bearer resolved-oauth"})
-            _request_resolved_auth_headers.reset(token)
-
-            await func()
-
-            headers_sent = async_client.get.call_args[1]["headers"]
-            assert "Authorization" not in headers_sent

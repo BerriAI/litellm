@@ -1,5 +1,3 @@
-import type { TokenUsage } from "./ResponseMetrics";
-
 export interface VectorStoreSearchResult {
   score: number;
   content: Array<{ text: string; type: string }>;
@@ -35,7 +33,13 @@ export interface MessageType {
   reasoningContent?: string;
   timeToFirstToken?: number;
   totalLatency?: number;
-  usage?: TokenUsage;
+  usage?: {
+    completionTokens?: number;
+    promptTokens?: number;
+    totalTokens?: number;
+    reasoningTokens?: number;
+    cost?: number;
+  };
   toolName?: string;
   imagePreviewUrl?: string;
   image?: {

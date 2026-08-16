@@ -1,5 +1,4 @@
 import { renderWithProviders, screen, within } from "@/../tests/test-utils";
-import { waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AccessGroupsPage } from "./AccessGroupsPage";
@@ -39,7 +38,6 @@ const mockAccessGroups: AccessGroupResponse[] = [
 const mockUseAccessGroups = vi.fn();
 const mockUseDeleteAccessGroup = vi.fn();
 const mockMutate = vi.fn();
-const mockUseAuthorized = vi.fn();
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   useAccessGroups: () => mockUseAccessGroups(),
@@ -47,10 +45,6 @@ vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup", () => ({
   useDeleteAccessGroup: () => mockUseDeleteAccessGroup(),
-}));
-
-vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => mockUseAuthorized(),
 }));
 
 vi.mock("./AccessGroupsDetailsPage", () => ({
@@ -62,51 +56,58 @@ vi.mock("./AccessGroupsDetailsPage", () => ({
   ),
 }));
 
-vi.mock("./access-group-create/AccessGroupCreateDialog", () => ({
-  AccessGroupCreateDialog: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) =>
-    open ? (
+vi.mock("./AccessGroupsModal/AccessGroupCreateModal", () => ({
+  AccessGroupCreateModal: ({ visible, onCancel }: { visible: boolean; onCancel: () => void }) =>
+    visible ? (
       <div data-testid="create-access-group-modal">
-        <button onClick={() => onOpenChange(false)}>Cancel</button>
+        <button onClick={onCancel}>Cancel</button>
       </div>
     ) : null,
 }));
 
-const makeGroups = (count: number): AccessGroupResponse[] =>
-  Array.from({ length: count }, (_, index) => {
-    const suffix = String(index + 1).padStart(2, "0");
-    return {
-      ...mockAccessGroups[0],
-      access_group_id: `ag-${suffix}`,
-      access_group_name: `Group ${suffix}`,
-      description: `Group ${suffix} description`,
-    };
-  });
-
-const openRowMenu = async (user: ReturnType<typeof userEvent.setup>, groupId: string) => {
-  await user.click(screen.getByTestId(`access-group-actions-${groupId}`));
-  return screen.findByTestId("access-group-action-delete");
-};
+vi.mock("@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton", () => ({
+  default: ({ variant, tooltipText, onClick }: { variant: string; tooltipText: string; onClick: () => void }) => (
+    <button data-testid={`action-button-${variant.toLowerCase()}`} aria-label={tooltipText} onClick={onClick}>
+      {variant}
+    </button>
+  ),
+}));
 
 describe("AccessGroupsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseAccessGroups.mockReturnValue({ data: mockAccessGroups, isLoading: false });
-    mockUseDeleteAccessGroup.mockReturnValue({ mutate: mockMutate, isPending: false });
-    mockUseAuthorized.mockReturnValue({ userRole: "Admin", accessToken: "sk-test" });
+    mockUseAccessGroups.mockReturnValue({
+      data: mockAccessGroups,
+      isLoading: false,
+    });
+    mockUseDeleteAccessGroup.mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+    });
   });
 
-  it("renders the page title and subtitle", () => {
+  it("should render", () => {
+    renderWithProviders(<AccessGroupsPage />);
+    expect(screen.getByRole("heading", { name: "Access Groups" })).toBeInTheDocument();
+  });
+
+  it("should display page title and subtitle", () => {
     renderWithProviders(<AccessGroupsPage />);
     expect(screen.getByRole("heading", { name: "Access Groups" })).toBeInTheDocument();
     expect(screen.getByText("Manage resource permissions for your organization")).toBeInTheDocument();
   });
 
-  it("shows the Create Access Group button for an admin", () => {
+  it("should display Create Access Group button", () => {
     renderWithProviders(<AccessGroupsPage />);
     expect(screen.getByRole("button", { name: /create access group/i })).toBeInTheDocument();
   });
 
-  it("renders every access group row", () => {
+  it("should display search input with placeholder", () => {
+    renderWithProviders(<AccessGroupsPage />);
+    expect(screen.getByPlaceholderText("Search groups by name, ID, or description...")).toBeInTheDocument();
+  });
+
+  it("should display access groups in table", () => {
     renderWithProviders(<AccessGroupsPage />);
     expect(screen.getByText("ag-1")).toBeInTheDocument();
     expect(screen.getByText("Admin Group")).toBeInTheDocument();
@@ -114,70 +115,57 @@ describe("AccessGroupsPage", () => {
     expect(screen.getByText("Read Only")).toBeInTheDocument();
   });
 
-  it("renders resource counts for each group", () => {
+  it("should display resource counts for each group", () => {
     renderWithProviders(<AccessGroupsPage />);
-    // ag-1 has 2 models, 1 mcp server, 1 agent.
-    const adminRow = screen.getByText("ag-1").closest("tr") as HTMLElement;
-    expect(within(adminRow).getByTitle("2 Models")).toHaveTextContent("2");
-    expect(within(adminRow).getByTitle("1 MCP Servers")).toHaveTextContent("1");
-    expect(within(adminRow).getByTitle("1 Agents")).toHaveTextContent("1");
+    const table = screen.getByRole("table");
+    expect(table).toHaveTextContent("2");
+    expect(table).toHaveTextContent("1");
   });
 
-  it("shows the expected column headers", () => {
-    renderWithProviders(<AccessGroupsPage />);
-    expect(screen.getByRole("columnheader", { name: /^ID$/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /Name/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /Resources/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /Created/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /Updated/i })).toBeInTheDocument();
-  });
-
-  it("filters by name", async () => {
+  it("should filter groups by search text matching name", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "Admin");
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
+    await user.type(searchInput, "Admin");
     expect(screen.getByText("Admin Group")).toBeInTheDocument();
     expect(screen.queryByText("Read Only")).not.toBeInTheDocument();
   });
 
-  it("filters by ID", async () => {
+  it("should filter groups by search text matching ID", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "ag-2");
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
+    await user.type(searchInput, "ag-2");
     expect(screen.getByText("Read Only")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
   });
 
-  it("filters by description", async () => {
+  it("should filter groups by search text matching description", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "read-only");
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
+    await user.type(searchInput, "read-only");
     expect(screen.getByText("Read Only")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
   });
 
-  it("shows the filtered empty state when nothing matches", async () => {
+  it("should reset to first page when search text changes", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "no-such-group");
-    expect(screen.getByText("No matching access groups")).toBeInTheDocument();
-    expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
+    await user.type(searchInput, "Admin");
+    const pagination = screen.getByText(/groups/);
+    expect(pagination).toHaveTextContent("1 groups");
   });
 
-  it("shows the empty state when there are no groups", () => {
-    mockUseAccessGroups.mockReturnValue({ data: [], isLoading: false });
+  it("should open create modal when Create Access Group button is clicked", async () => {
+    const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    expect(screen.getByText("No access groups yet")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /create access group/i }));
+    expect(screen.getByTestId("create-access-group-modal")).toBeInTheDocument();
   });
 
-  it("renders loading skeletons on the initial load", () => {
-    mockUseAccessGroups.mockReturnValue({ data: undefined, isLoading: true });
-    renderWithProviders(<AccessGroupsPage />);
-    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
-  });
-
-  it("opens and closes the create modal", async () => {
+  it("should close create modal when cancel is clicked", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
     await user.click(screen.getByRole("button", { name: /create access group/i }));
@@ -186,22 +174,33 @@ describe("AccessGroupsPage", () => {
     expect(screen.queryByTestId("create-access-group-modal")).not.toBeInTheDocument();
   });
 
-  it("opens the detail view when the ID cell is clicked and returns via Back", async () => {
+  it("should navigate to detail view when group ID is clicked", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
     await user.click(screen.getByText("ag-1"));
     expect(screen.getByTestId("access-group-detail")).toBeInTheDocument();
     expect(screen.getByText("Detail for ag-1")).toBeInTheDocument();
+  });
+
+  it("should return to list view when Back is clicked from detail", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AccessGroupsPage />);
+    await user.click(screen.getByText("ag-1"));
+    expect(screen.getByTestId("access-group-detail")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.queryByTestId("access-group-detail")).not.toBeInTheDocument();
     expect(screen.getByText("Admin Group")).toBeInTheDocument();
   });
 
-  it("opens the delete modal from the row actions menu", async () => {
+  it("should open delete modal when delete action is clicked", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.click(await openRowMenu(user, "ag-1"));
+    const deleteButtons = screen.getAllByRole("button", {
+      name: "Delete access group",
+    });
+    await user.click(deleteButtons[0]);
     const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
+    expect(dialog).toBeInTheDocument();
     expect(
       within(dialog).getByText("Are you sure you want to delete this access group? This action cannot be undone."),
     ).toBeInTheDocument();
@@ -210,51 +209,71 @@ describe("AccessGroupsPage", () => {
     expect(within(dialog).getByText("Admin Group")).toBeInTheDocument();
   });
 
-  it("closes the delete modal on cancel without deleting", async () => {
+  it("should close delete modal when cancel is clicked", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.click(await openRowMenu(user, "ag-1"));
+    const deleteButtons = screen.getAllByRole("button", {
+      name: "Delete access group",
+    });
+    await user.click(deleteButtons[0]);
     const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Delete Access Group" })).not.toBeInTheDocument();
-    });
-    expect(mockMutate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Delete Access Group" })).not.toBeInTheDocument();
   });
 
-  it("calls the delete mutation with the group ID when confirmed", async () => {
+  it("should call delete mutation when delete is confirmed", async () => {
     const user = userEvent.setup();
     mockMutate.mockImplementation((_id: string, opts?: { onSuccess?: () => void }) => {
       opts?.onSuccess?.();
     });
     renderWithProviders(<AccessGroupsPage />);
-    await user.click(await openRowMenu(user, "ag-1"));
+    const deleteButtons = screen.getAllByRole("button", {
+      name: "Delete access group",
+    });
+    await user.click(deleteButtons[0]);
     const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
-    await user.click(within(dialog).getByRole("button", { name: /delete/i }));
+    const deleteConfirmButton = within(dialog).getByRole("button", { name: /delete/i });
+    await user.click(deleteConfirmButton);
     expect(mockMutate).toHaveBeenCalledWith("ag-1", expect.any(Object));
   });
 
-  it("still shows matches when searching from a later page", async () => {
-    const user = userEvent.setup();
-    mockUseAccessGroups.mockReturnValue({ data: makeGroups(25), isLoading: false });
+  it("should display pagination with total count", () => {
     renderWithProviders(<AccessGroupsPage />);
-
-    await user.click(screen.getByTestId("pagination-next"));
-    expect(screen.getByText("ag-11")).toBeInTheDocument();
-    expect(screen.queryByText("ag-01")).not.toBeInTheDocument();
-
-    // The only match lives on page 1, so the page index must reset or the table reads as empty.
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "ag-01");
-    expect(await screen.findByText("ag-01")).toBeInTheDocument();
-    expect(screen.queryByText("No matching access groups")).not.toBeInTheDocument();
+    expect(screen.getByText("2 groups")).toBeInTheDocument();
   });
 
-  it("hides the Create button and row actions for a non-admin", () => {
-    mockUseAuthorized.mockReturnValue({ userRole: "Admin Viewer", accessToken: "sk-test" });
+  it("should show table headers for ID, Name, Resources, and Actions", () => {
     renderWithProviders(<AccessGroupsPage />);
-    expect(screen.queryByRole("button", { name: /create access group/i })).not.toBeInTheDocument();
-    expect(screen.queryByTestId("access-group-actions-ag-1")).not.toBeInTheDocument();
-    // The read-only view still lists the groups.
-    expect(screen.getByText("Admin Group")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /ID/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /Name/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /Resources/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /Actions/i })).toBeInTheDocument();
+  });
+
+  it("should display loading state when data is loading", () => {
+    mockUseAccessGroups.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+    });
+    renderWithProviders(<AccessGroupsPage />);
+    const table = screen.getByRole("table");
+    expect(table).toBeInTheDocument();
+  });
+
+  it("should display empty state when no groups match search", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AccessGroupsPage />);
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
+    await user.type(searchInput, "nonexistent-group-xyz");
+    expect(screen.getByRole("table")).toBeInTheDocument();
+  });
+
+  it("should display empty data when useAccessGroups returns empty array", () => {
+    mockUseAccessGroups.mockReturnValue({
+      data: [],
+      isLoading: false,
+    });
+    renderWithProviders(<AccessGroupsPage />);
+    expect(screen.getByRole("table")).toBeInTheDocument();
   });
 });

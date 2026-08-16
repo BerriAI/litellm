@@ -11,7 +11,7 @@ export const CustomLegend = ({
   categories: readonly string[];
   colors: readonly ChartColor[];
 }) => (
-  <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+  <div className="flex items-center justify-end space-x-4">
     {categories.map((category, idx) => (
       <div key={category} className="flex items-center space-x-2">
         <span

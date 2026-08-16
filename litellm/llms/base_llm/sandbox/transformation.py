@@ -6,14 +6,15 @@ returns whatever the sandbox produced. The lifecycle is create container ->
 run code -> delete container; `code_interpreter_tool` combines all three.
 """
 
-from typing import Any, Final
+from typing import Any, Union
 
 import httpx
+
 from pydantic import Field, PrivateAttr
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
-SANDBOX_MAX_OUTPUT_BYTES: Final = 10 * 1024 * 1024
+SANDBOX_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 
 
 class ContainerHandle(LiteLLMPydanticObjectBase):
@@ -63,7 +64,7 @@ class BaseSandboxConfig:
     async def arun_code(
         self,
         *,
-        container: ContainerHandle | str,
+        container: Union[ContainerHandle, str],
         code: str,
         api_key: str | None = None,
         **kwargs,
@@ -73,14 +74,14 @@ class BaseSandboxConfig:
     async def adelete_sandbox(
         self,
         *,
-        container: ContainerHandle | str,
+        container: Union[ContainerHandle, str],
         api_key: str | None = None,
         **kwargs,
     ) -> bool:
         raise NotImplementedError("adelete_sandbox must be implemented by provider")
 
     async def _read_capped_lines(self, response: httpx.Response) -> list[str]:
-        lines: Final[list[str]] = []
+        lines: list[str] = []
         total = 0
         async for line in response.aiter_lines():
             total += len(line.encode("utf-8"))

@@ -3,7 +3,6 @@ import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -14,49 +13,6 @@ import {
 } from "./code_interpreter_handler";
 
 export type { CodeInterpreterResult } from "./code_interpreter_handler";
-
-interface ResponseOutputPart {
-  type?: string;
-  text?: string;
-}
-
-interface ResponseOutputItem {
-  type?: string;
-  content?: ResponseOutputPart[];
-  summary?: ResponseOutputPart[];
-}
-
-interface NonStreamedResponse {
-  output?: ResponseOutputItem[];
-}
-
-type SynthesizedResponseEvent =
-  | { type: "response.output_item.done"; item: ResponseOutputItem }
-  | { type: "response.reasoning.delta"; delta: string }
-  | { type: "response.output_text.delta"; delta: string }
-  | { type: "response.completed"; response: NonStreamedResponse };
-
-const responseAsEvents = (response: NonStreamedResponse): SynthesizedResponseEvent[] => {
-  const outputItems = response.output ?? [];
-  const outputText = outputItems
-    .filter((item) => item.type === "message")
-    .flatMap((item) => item.content ?? [])
-    .filter((part) => part.type === "output_text")
-    .map((part) => part.text ?? "")
-    .join("");
-  const reasoningText = outputItems
-    .filter((item) => item.type === "reasoning")
-    .flatMap((item) => item.summary ?? [])
-    .map((part) => part.text ?? "")
-    .join("");
-
-  return [
-    ...outputItems.map((item) => ({ type: "response.output_item.done" as const, item })),
-    ...(reasoningText ? [{ type: "response.reasoning.delta" as const, delta: reasoningText }] : []),
-    ...(outputText ? [{ type: "response.output_text.delta" as const, delta: outputText }] : []),
-    { type: "response.completed" as const, response },
-  ];
-};
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
@@ -82,8 +38,6 @@ export async function makeOpenAIResponsesRequest(
   mcpServers?: MCPServer[],
   mcpServerToolRestrictions?: Record<string, string[]>,
   mcpToolsets?: MCPToolset[],
-  streamingEnabled: boolean = true,
-  onTotalLatency?: (latency: number) => void,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -189,26 +143,27 @@ export async function makeOpenAIResponsesRequest(
       });
     }
 
-    const requestBody = {
-      model: selectedModel,
-      input: formattedInput,
-      litellm_trace_id: traceId,
-      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
-      ...(vector_store_ids ? { vector_store_ids } : {}),
-      ...(guardrails ? { guardrails } : {}),
-      ...(policies ? { policies } : {}),
-      ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-    };
-
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
-    const response = await (client as any).responses.create({ ...requestBody, stream: streamingEnabled }, { signal });
-    const events = streamingEnabled ? response : responseAsEvents(response);
+    const response = await (client as any).responses.create(
+      {
+        model: selectedModel,
+        input: formattedInput,
+        stream: true,
+        litellm_trace_id: traceId,
+        ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+        ...(vector_store_ids ? { vector_store_ids } : {}),
+        ...(guardrails ? { guardrails } : {}),
+        ...(policies ? { policies } : {}),
+        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
+      },
+      { signal },
+    );
 
     let mcpToolUsed = "";
     let codeInterpreterState: CodeInterpreterState = { code: "", containerId: "" };
 
-    for await (const event of events) {
+    for await (const event of response) {
       // Use a type-safe approach to handle events
       if (typeof event === "object" && event !== null) {
         // Handle MCP events first
@@ -260,7 +215,7 @@ export async function makeOpenAIResponsesRequest(
               firstTokenReceived = true;
               const timeToFirstToken = Date.now() - startTime;
 
-              if (onTimingData && streamingEnabled) {
+              if (onTimingData) {
                 onTimingData(timeToFirstToken);
               }
             }
@@ -291,7 +246,6 @@ export async function makeOpenAIResponsesRequest(
               completionTokens: usage.output_tokens,
               promptTokens: usage.input_tokens,
               totalTokens: usage.total_tokens,
-              ...extractPromptCacheTokens(usage),
             };
 
             // Add reasoning tokens if available
@@ -299,18 +253,10 @@ export async function makeOpenAIResponsesRequest(
               usageData.reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
             }
 
-            if (usage.cost !== undefined && usage.cost !== null) {
-              usageData.cost = Number(usage.cost);
-            }
-
             onUsageData(usageData, mcpToolUsed);
           }
         }
       }
-    }
-
-    if (onTotalLatency) {
-      onTotalLatency(Date.now() - startTime);
     }
 
     return response;

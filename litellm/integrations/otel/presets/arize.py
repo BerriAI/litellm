@@ -1,7 +1,5 @@
 """Arize preset — OTLP exporter to Arize + OpenInference vocabulary."""
 
-from typing import Final
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,9 +25,9 @@ def arize_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
 ) -> OpenTelemetryV2Config:
-    arize_cfg: Final = _V1ArizeLogger.get_arize_config()
-    headers: Final = _arize_headers(arize_cfg)
-    base: Final = config_overrides or OpenTelemetryV2Config()
+    arize_cfg = _V1ArizeLogger.get_arize_config()
+    headers = _arize_headers(arize_cfg)
+    base = config_overrides or OpenTelemetryV2Config()
     return base.model_copy(
         update={
             "exporters": [
@@ -51,7 +49,7 @@ def arize_preset(
 
 
 def _arize_headers(arize_cfg) -> str | None:
-    pieces: Final = []
+    pieces = []
     if arize_cfg.space_id or arize_cfg.space_key:
         pieces.append(f"space_id={arize_cfg.space_id or arize_cfg.space_key}")
     if arize_cfg.api_key:
@@ -65,12 +63,12 @@ def _arize_headers(arize_cfg) -> str | None:
 
 def arize_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
     """Per-request Arize OTLP headers from team/key dynamic params."""
-    headers: Final[dict[str, str]] = {}
+    headers: dict[str, str] = {}
     # ``arize_space_key`` is the suggested param and wins over ``arize_space_id``.
-    space: Final = params.get("arize_space_key") or params.get("arize_space_id")
+    space = params.get("arize_space_key") or params.get("arize_space_id")
     if space:
         headers["arize-space-id"] = space
-    api_key: Final = params.get("arize_api_key")
+    api_key = params.get("arize_api_key")
     if api_key:
         headers["api_key"] = api_key
     return headers

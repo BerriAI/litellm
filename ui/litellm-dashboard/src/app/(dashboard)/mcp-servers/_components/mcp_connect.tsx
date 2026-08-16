@@ -1,13 +1,14 @@
 /* eslint-disable react/no-unescaped-entities */
 
 import React, { useState } from "react";
-import { Card, Typography, Space, Alert, Button, Switch, Form } from "antd";
+import { Card, Typography, Space, Alert, Button, Switch, Form, Collapse } from "antd";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Title as TremorTitle, Text as TremorText } from "@tremor/react";
 import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 
 const { Title, Text } = Typography;
+const { Panel } = Collapse;
 
 interface CodeBlockProps {
   code: string;
@@ -116,6 +117,12 @@ interface MCPConnectProps {
 const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
   const proxyBaseUrl = getProxyBaseUrl();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [serverHeaders, setServerHeaders] = useState<Record<string, string[]>>({
+    openai: [],
+    litellm: [],
+    cursor: [],
+    http: [],
+  });
   const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
 
   const copyToClipboard = async (text: string, key: string) => {
@@ -126,6 +133,22 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         setCopiedStates((prev) => ({ ...prev, [key]: false }));
       }, 2000);
     }
+  };
+
+  const getHeadersConfig = (type: string) => {
+    const headers: Record<string, any> = {
+      "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+    };
+
+    if (serverHeaders[type]?.length > 0) {
+      // Format server names (replace spaces with underscores)
+      const formattedServers = serverHeaders[type].map((s) => s.replace(/\s+/g, "_"));
+
+      // Use comma-separated string (can include both servers and access groups)
+      headers["x-mcp-servers"] = formattedServers.join(",");
+    }
+
+    return headers;
   };
 
   const CodeBlock: React.FC<{

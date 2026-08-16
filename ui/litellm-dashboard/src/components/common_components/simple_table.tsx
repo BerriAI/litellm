@@ -1,5 +1,5 @@
 import React from "react";
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
+import { Table, TableHead, TableRow, TableHeaderCell, TableBody, TableCell, Text } from "@tremor/react";
 
 export interface SimpleTableColumn<T> {
   header: string;
@@ -31,20 +31,20 @@ export function SimpleTable<T>({
 }: SimpleTableProps<T>) {
   return (
     <Table>
-      <TableHeader>
+      <TableHead>
         <TableRow>
           {columns.map((column, index) => (
-            <TableHead key={index} style={{ width: column.width }}>
+            <TableHeaderCell key={index} style={{ width: column.width }}>
               {column.header}
-            </TableHead>
+            </TableHeaderCell>
           ))}
         </TableRow>
-      </TableHeader>
+      </TableHead>
       <TableBody>
         {isLoading ? (
           <TableRow>
             <TableCell colSpan={columns.length} className="text-center">
-              <span className="text-gray-500">{loadingMessage}</span>
+              <Text className="text-gray-500">{loadingMessage}</Text>
             </TableCell>
           </TableRow>
         ) : data.length > 0 ? (
@@ -60,7 +60,7 @@ export function SimpleTable<T>({
         ) : (
           <TableRow>
             <TableCell colSpan={columns.length} className="text-center">
-              <span className="text-gray-500">{emptyMessage}</span>
+              <Text className="text-gray-500">{emptyMessage}</Text>
             </TableCell>
           </TableRow>
         )}

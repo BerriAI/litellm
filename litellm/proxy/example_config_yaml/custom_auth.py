@@ -3,12 +3,11 @@ import os
 from fastapi import Request
 
 from litellm.proxy._types import GenerateKeyRequest, UserAPIKeyAuth
-from typing import Final
 
 
 async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
     try:
-        modified_master_key: Final = f"{os.getenv('LITELLM_MASTER_KEY')}-1234"
+        modified_master_key = f"{os.getenv('LITELLM_MASTER_KEY')}-1234"
         if api_key == modified_master_key:
             return UserAPIKeyAuth(api_key=api_key)
         raise Exception
@@ -27,10 +26,10 @@ async def generate_key_fn(data: GenerateKeyRequest):
         bool: True if a key should be generated, False otherwise.
     """
     # decide if a key should be generated or not
-    data_json: Final = data.json()
+    data_json = data.json()  # type: ignore
 
     # Unpacking variables
-    team_id: Final = data_json.get("team_id")
+    team_id = data_json.get("team_id")
     data_json.get("duration")
     data_json.get("models")
     data_json.get("aliases")

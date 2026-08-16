@@ -1,5 +1,5 @@
 import React from "react";
-import { Input } from "@/components/ui/input";
+import { Input } from "antd";
 
 interface routingStrategyArgs {
   ttl?: number;

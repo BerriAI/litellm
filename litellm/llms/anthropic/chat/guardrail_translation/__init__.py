@@ -1,11 +1,9 @@
-from typing import Final
-
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
 from litellm.types.utils import CallTypes
 
-guardrail_translation_mappings: Final = {
+guardrail_translation_mappings = {
     CallTypes.anthropic_messages: AnthropicMessagesHandler,
 }
 

@@ -1,8 +1,11 @@
+from typing import Optional
+
+
 class SnowflakeBase:
     def validate_environment(
         self,
         headers: dict,
-        JWT: str | None = None,
+        JWT: Optional[str] = None,
     ) -> dict:
         """
         Return headers to use for Snowflake completion request

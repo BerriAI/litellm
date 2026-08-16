@@ -7,14 +7,13 @@ V2 is not the active logger — so a call site can wrap a request phase or seed
 identity unconditionally.
 """
 
-from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import cache
-from typing import Any, Final
+from typing import Any, Callable, Iterator, Optional
 
 
 @cache
-def _otel_runtime() -> "tuple[Callable[[str], Any], Callable[..., None]] | None":
+def _otel_runtime() -> "Optional[tuple[Callable[[str], Any], Callable[..., None]]]":
     """Resolve the SDK-backed hooks once and cache the outcome, absence included.
 
     CPython never caches a failed import, so without this memoization every call
@@ -35,7 +34,7 @@ def phase_span(name: str) -> "Iterator[Any]":
     Yields ``None`` (a plain no-op) when the OTel SDK is unavailable or V2 is not
     the active logger.
     """
-    runtime: Final = _otel_runtime()
+    runtime = _otel_runtime()
     if runtime is None:
         yield None
         return
@@ -45,7 +44,7 @@ def phase_span(name: str) -> "Iterator[Any]":
 
 def seed_request_identity(user_api_key_dict: Any, model: Any = None) -> None:
     """Seed request-identity Baggage at the auth boundary (no-op without V2)."""
-    runtime: Final = _otel_runtime()
+    runtime = _otel_runtime()
     if runtime is None:
         return
     runtime[1](user_api_key_dict, model=model)

@@ -1,17 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Button, Select, Input, Spin } from "antd";
 import ReactMarkdown from "react-markdown";
-import { Button } from "@/components/ui/button";
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
-import { Textarea } from "@/components/ui/textarea";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { modelHubCall, usageAiChatStream, UsageAiToolCallEvent } from "@/components/networking";
+
+const { TextArea } = Input;
 
 interface ToolCallStep {
   tool_name: string;
@@ -49,7 +41,7 @@ const ToolCallDisplay: React.FC<{ step: ToolCallStep }> = ({ step }) => {
     <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-100 border border-gray-200 text-xs">
       <span className="shrink-0 mt-0.5">
         {step.status === "running" ? (
-          <UiLoadingSpinner className="size-3.5" />
+          <Spin size="small" />
         ) : step.status === "error" ? (
           <span className="text-red-500">✗</span>
         ) : (
@@ -267,29 +259,18 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
 
       {/* Model selector */}
       <div className="px-5 py-3 border-b border-gray-100 shrink-0">
-        <Combobox
-          items={availableModels}
-          value={selectedModel ?? null}
-          onValueChange={(value: string | null) => setSelectedModel(value ?? undefined)}
-        >
-          <ComboboxInput
-            className="w-full"
-            placeholder="Select a model (optional, defaults to gpt-4o-mini)"
-            aria-label="Select a model (optional, defaults to gpt-4o-mini)"
-            aria-busy={isLoadingModels}
-            showClear={selectedModel !== undefined}
-          />
-          <ComboboxContent>
-            <ComboboxEmpty>{isLoadingModels ? "Loading models…" : "No models found"}</ComboboxEmpty>
-            <ComboboxList>
-              {(model: string) => (
-                <ComboboxItem key={model} value={model}>
-                  {model}
-                </ComboboxItem>
-              )}
-            </ComboboxList>
-          </ComboboxContent>
-        </Combobox>
+        <Select
+          placeholder="Select a model (optional, defaults to gpt-4o-mini)"
+          value={selectedModel}
+          onChange={(value) => setSelectedModel(value)}
+          loading={isLoadingModels}
+          showSearch
+          allowClear
+          size="small"
+          className="w-full"
+          options={availableModels.map((m) => ({ label: m, value: m }))}
+          filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+        />
       </div>
 
       {/* Chat messages */}
@@ -348,7 +329,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
         {/* Status / spinner */}
         {isLoading && !streamingContent && (
           <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-500">
-            <UiLoadingSpinner className="size-3.5" />
+            <Spin size="small" />
             <span className="italic">{statusMessage || "Thinking..."}</span>
           </div>
         )}
@@ -366,17 +347,16 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
       {/* Input area */}
       <div className="px-4 py-3 border-t border-gray-200 bg-white shrink-0">
         <div className="flex gap-2">
-          <Textarea
+          <TextArea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Ask about your usage..."
-            rows={1}
-            className="flex-1 min-h-9 max-h-24"
+            autoSize={{ minRows: 1, maxRows: 3 }}
+            className="flex-1"
             disabled={isLoading}
           />
-          <Button onClick={handleSend} disabled={!inputText.trim() || isLoading}>
-            {isLoading && <UiLoadingSpinner className="size-4" />}
+          <Button type="primary" onClick={handleSend} disabled={!inputText.trim() || isLoading} loading={isLoading}>
             Send
           </Button>
         </div>

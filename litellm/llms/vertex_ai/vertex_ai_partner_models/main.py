@@ -1,10 +1,9 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
-from collections.abc import Callable
 from enum import Enum
-from typing import Final
+from typing import Callable, Optional, Union
 
-import httpx
+import httpx  # type: ignore
 
 import litellm
 from litellm import LlmProviders
@@ -73,7 +72,7 @@ class VertexAIPartnerModels(VertexBase):
 
     @staticmethod
     def should_use_openai_handler(model: str):
-        OPENAI_LIKE_VERTEX_PROVIDERS: Final = [
+        OPENAI_LIKE_VERTEX_PROVIDERS = [
             "llama",
             PartnerModelPrefixes.DEEPSEEK_PREFIX,
             PartnerModelPrefixes.QWEN_PREFIX,
@@ -95,11 +94,11 @@ class VertexAIPartnerModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: str | None,
+        api_base: Optional[str],
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: dict | None,
-        timeout: float | httpx.Timeout,
+        headers: Optional[dict],
+        timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,
@@ -134,12 +133,12 @@ class VertexAIPartnerModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            openai_like_chat_completions: Final = OpenAILikeChatHandler()
-            codestral_fim_completions: Final = CodestralTextCompletion()
-            anthropic_chat_completions: Final = AnthropicChatCompletion()
+            openai_like_chat_completions = OpenAILikeChatHandler()
+            codestral_fim_completions = CodestralTextCompletion()
+            anthropic_chat_completions = AnthropicChatCompletion()
 
             ## CONSTRUCT API BASE
-            stream: Final[bool] = optional_params.get("stream", False) or False
+            stream: bool = optional_params.get("stream", False) or False
 
             optional_params["stream"] = stream
 
@@ -169,7 +168,7 @@ class VertexAIPartnerModels(VertexBase):
 
             if "codestral" in model and litellm_params.get("text_completion") is True:
                 optional_params["model"] = model
-                text_completion_model_response: Final = litellm.TextCompletionResponse(stream=stream)
+                text_completion_model_response = litellm.TextCompletionResponse(stream=stream)
                 return codestral_fim_completions.completion(
                     model=model,
                     messages=messages,
@@ -190,7 +189,7 @@ class VertexAIPartnerModels(VertexBase):
                 # Build a new dict so we never mutate the shared deployment extra_headers object.
                 headers = {
                     **(headers or {}),
-                    "Authorization": f"Bearer {access_token}",
+                    "Authorization": "Bearer {}".format(access_token),
                 }
 
                 optional_params.update(
@@ -300,13 +299,13 @@ class VertexAIPartnerModels(VertexBase):
             )
 
             # Prepare request data in Anthropic Messages API format
-            request_data: Final = {
+            request_data = {
                 "model": model,
                 "messages": messages,
             }
 
             # Prepare litellm_params with credentials
-            _litellm_params: Final = litellm_params.copy()
+            _litellm_params = litellm_params.copy()
             if vertex_project:
                 _litellm_params["vertex_project"] = vertex_project
             if vertex_location:
@@ -315,8 +314,8 @@ class VertexAIPartnerModels(VertexBase):
                 _litellm_params["vertex_credentials"] = vertex_credentials
 
             # Call the token counter
-            token_counter: Final = VertexAIPartnerModelsTokenCounter()
-            result: Final = await token_counter.handle_count_tokens_request(
+            token_counter = VertexAIPartnerModelsTokenCounter()
+            result = await token_counter.handle_count_tokens_request(
                 model=model,
                 request_data=request_data,
                 litellm_params=_litellm_params,

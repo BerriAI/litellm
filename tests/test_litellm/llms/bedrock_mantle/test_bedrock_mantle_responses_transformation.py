@@ -154,6 +154,12 @@ class TestBedrockMantleResponsesURL:
         assert url == "https://bedrock-mantle.us-east-2.api.aws/v1/responses"
         assert url.count("/responses") == 1
 
+    def test_default_construction_keeps_openai_path(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(api_base=None, litellm_params={})
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
 
     def test_url_aws_region_name_overrides_stale_api_base(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -365,265 +371,6 @@ class TestBedrockMantleResponsesTools:
             )
         assert mock_warning.call_count == 1
         assert "web_search" in str(mock_warning.call_args)
-
-
-def _codex_exec_tool():
-    return {
-        "type": "custom",
-        "name": "exec",
-        "description": "Run JavaScript code to orchestrate/compose tool calls",
-        "format": {
-            "type": "grammar",
-            "syntax": "lark",
-            "definition": "start: SOURCE\nSOURCE: /[\\s\\S]+/",
-        },
-    }
-
-
-def _codex_wait_tool():
-    return {
-        "type": "function",
-        "name": "wait",
-        "strict": False,
-        "parameters": {
-            "type": "object",
-            "properties": {"cell_id": {"type": "string"}},
-            "required": ["cell_id"],
-            "additionalProperties": False,
-        },
-    }
-
-
-class TestBedrockMantleServiceTier:
-    @pytest.mark.parametrize("tier", ["priority", "flex"])
-    def test_unsupported_service_tier_dropped_when_drop_params_true(self, tier):
-        cfg = BedrockMantleResponsesAPIConfig()
-        params = cfg.map_openai_params(
-            response_api_optional_params={"service_tier": tier},
-            model="openai.gpt-5.5",
-            drop_params=True,
-        )
-        assert "service_tier" not in params
-
-    @pytest.mark.parametrize("tier", ["priority", "flex"])
-    def test_unsupported_service_tier_raises_when_drop_params_false(self, tier):
-        cfg = BedrockMantleResponsesAPIConfig()
-        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
-            cfg.map_openai_params(
-                response_api_optional_params={"service_tier": tier},
-                model="openai.gpt-5.5",
-                drop_params=False,
-            )
-        assert tier in str(excinfo.value)
-        assert "drop_params" in str(excinfo.value)
-
-    @pytest.mark.parametrize("drop_params", [True, False])
-    @pytest.mark.parametrize("tier", ["auto", "default"])
-    def test_supported_service_tier_kept(self, tier, drop_params):
-        cfg = BedrockMantleResponsesAPIConfig()
-        params = cfg.map_openai_params(
-            response_api_optional_params={"service_tier": tier},
-            model="openai.gpt-5.5",
-            drop_params=drop_params,
-        )
-        assert params["service_tier"] == tier
-
-    def test_absent_service_tier_untouched(self):
-        cfg = BedrockMantleResponsesAPIConfig()
-        params = cfg.map_openai_params(
-            response_api_optional_params={"stream": True},
-            model="openai.gpt-5.5",
-            drop_params=False,
-        )
-        assert "service_tier" not in params
-        assert params["stream"] is True
-
-    def test_drop_logged_at_warning_level(self):
-        from unittest.mock import patch
-
-        cfg = BedrockMantleResponsesAPIConfig()
-        with patch(
-            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
-        ) as mock_warning:
-            cfg.map_openai_params(
-                response_api_optional_params={"service_tier": "priority"},
-                model="openai.gpt-5.5",
-                drop_params=True,
-            )
-        assert mock_warning.call_count == 1
-        assert "priority" in str(mock_warning.call_args)
-
-
-class TestBedrockMantleCodexRequestEndToEnd:
-    def test_codex_priority_tier_request_becomes_mantle_acceptable(self):
-        cfg = BedrockMantleResponsesAPIConfig()
-        params = cfg.map_openai_params(
-            response_api_optional_params={
-                "service_tier": "priority",
-                "stream": True,
-                "store": False,
-                "tool_choice": "auto",
-                "parallel_tool_calls": False,
-                "tools": [_codex_exec_tool(), _codex_wait_tool()],
-            },
-            model="openai.gpt-5.5",
-            drop_params=True,
-        )
-        body = cfg.transform_responses_api_request(
-            model="openai.gpt-5.5",
-            input=[
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "hi"}],
-                }
-            ],
-            response_api_optional_request_params=params,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-        assert "service_tier" not in body
-        assert [tool["name"] for tool in body["tools"]] == ["exec", "wait"]
-        assert body["stream"] is True
-        assert body["tool_choice"] == "auto"
-
-
-class TestBedrockMantleCodexAdditionalTools:
-    """Codex CLI's "responses lite" wire mode ships tool definitions inside
-    `input` as {"type": "additional_tools", "role": "developer", "tools": [...]}
-    items instead of the top-level `tools` param. api.openai.com accepts that
-    item; Mantle 400s the whole request with "Invalid 'input': value did not
-    match any expected variant" but accepts the same tools at the top level
-    (verified against bedrock-mantle.us-east-2.api.aws with openai.gpt-5.6-sol),
-    so the config must hoist them."""
-
-    _USER_MESSAGE = {
-        "type": "message",
-        "role": "user",
-        "content": [{"type": "input_text", "text": "Say hi in one word."}],
-    }
-    _DEVELOPER_MESSAGE = {
-        "type": "message",
-        "role": "developer",
-        "content": [{"type": "input_text", "text": "You are Codex."}],
-    }
-    _CODEX_TOOLS = [
-        {"type": "custom", "name": "exec", "format": {"type": "grammar", "syntax": "lark", "definition": "start: X"}},
-        {"type": "function", "name": "wait", "parameters": {"type": "object"}},
-        {"type": "namespace", "name": "collaboration", "tools": [{"type": "function", "name": "spawn_agent"}]},
-    ]
-
-    def _transform(self, input, params=None):
-        cfg = BedrockMantleResponsesAPIConfig()
-        return cfg.transform_responses_api_request(
-            model="openai.gpt-5.6-sol",
-            input=input,
-            response_api_optional_request_params=params if params is not None else {},
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-
-    def test_additional_tools_item_hoisted_to_top_level_tools(self):
-        body = self._transform(
-            input=[
-                {"type": "additional_tools", "role": "developer", "tools": self._CODEX_TOOLS},
-                self._DEVELOPER_MESSAGE,
-                self._USER_MESSAGE,
-            ]
-        )
-        assert body["input"] == [self._DEVELOPER_MESSAGE, self._USER_MESSAGE]
-        assert body["tools"] == self._CODEX_TOOLS
-
-    def test_hoisted_tools_append_after_existing_tools(self):
-        existing_tool = {"type": "function", "name": "preexisting"}
-        body = self._transform(
-            input=[
-                {"type": "additional_tools", "role": "developer", "tools": self._CODEX_TOOLS},
-                self._USER_MESSAGE,
-            ],
-            params={"tools": [existing_tool]},
-        )
-        assert body["tools"] == [existing_tool, *self._CODEX_TOOLS]
-
-    def test_unsupported_hoisted_tool_types_are_dropped(self):
-        body = self._transform(
-            input=[
-                {
-                    "type": "additional_tools",
-                    "role": "developer",
-                    "tools": [
-                        {"type": "web_search"},
-                        {"type": "function", "name": "wait"},
-                    ],
-                },
-                self._USER_MESSAGE,
-            ]
-        )
-        assert body["tools"] == [{"type": "function", "name": "wait"}]
-
-    def test_item_stripped_even_when_no_hoisted_tool_survives(self):
-        body = self._transform(
-            input=[
-                {"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]},
-                self._USER_MESSAGE,
-            ]
-        )
-        assert body["input"] == [self._USER_MESSAGE]
-        assert "tools" not in body
-
-    def test_multiple_additional_tools_items_merge_in_order(self):
-        first = {"type": "function", "name": "first"}
-        second = {"type": "function", "name": "second"}
-        body = self._transform(
-            input=[
-                {"type": "additional_tools", "role": "developer", "tools": [first]},
-                self._USER_MESSAGE,
-                {"type": "additional_tools", "role": "developer", "tools": [second]},
-            ]
-        )
-        assert body["input"] == [self._USER_MESSAGE]
-        assert body["tools"] == [first, second]
-
-    def test_string_input_passes_through(self):
-        body = self._transform(input="hello")
-        assert body["input"] == "hello"
-        assert "tools" not in body
-
-    def test_input_without_additional_tools_is_unchanged(self):
-        codex_agentic_items = [
-            self._USER_MESSAGE,
-            {"type": "reasoning", "summary": [], "encrypted_content": "gAAAA=="},
-            {"type": "function_call", "name": "wait", "arguments": "{}", "call_id": "call_1"},
-            {"type": "function_call_output", "call_id": "call_1", "output": "done"},
-        ]
-        body = self._transform(input=list(codex_agentic_items))
-        assert body["input"] == codex_agentic_items
-        assert "tools" not in body
-
-    def test_malformed_additional_tools_item_without_tools_list_is_stripped(self):
-        body = self._transform(
-            input=[
-                {"type": "additional_tools", "role": "developer"},
-                self._USER_MESSAGE,
-            ]
-        )
-        assert body["input"] == [self._USER_MESSAGE]
-        assert "tools" not in body
-
-    def test_hoist_is_logged_at_debug_level(self):
-        from unittest.mock import patch
-
-        with patch(
-            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.debug"
-        ) as mock_debug:
-            self._transform(
-                input=[
-                    {"type": "additional_tools", "role": "developer", "tools": self._CODEX_TOOLS},
-                    self._USER_MESSAGE,
-                ]
-            )
-        assert mock_debug.call_count == 1
-        assert "additional_tools" in str(mock_debug.call_args)
 
 
 class TestBedrockMantleResponsesRegistry:
@@ -1513,8 +1260,8 @@ class TestBedrockMantleResponsesPricing:
         "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
         [
             ("openai.gpt-5.6-sol", 5.5e-06, 6.875e-06, 5.5e-07, 3.3e-05),
-            ("openai.gpt-5.6-terra", 2.2e-06, 2.75e-06, 2.2e-07, 1.32e-05),
-            ("openai.gpt-5.6-luna", 2.2e-07, 2.75e-07, 2.2e-08, 1.32e-06),
+            ("openai.gpt-5.6-terra", 2.75e-06, 3.4375e-06, 2.75e-07, 1.65e-05),
+            ("openai.gpt-5.6-luna", 1.1e-06, 1.375e-06, 1.1e-07, 6.6e-06),
         ],
     )
     def test_gpt_5_6_pricing_and_mode(
@@ -1526,44 +1273,7 @@ class TestBedrockMantleResponsesPricing:
         assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
         assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
         assert info["output_cost_per_token"] == pytest.approx(output_cost)
-        assert info["max_input_tokens"] == 1000000
-        assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(input_cost * 2)
-        assert info["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(cache_creation_cost * 2)
-        assert info["cache_read_input_token_cost_above_272k_tokens"] == pytest.approx(cache_read_cost * 2)
-        assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(output_cost * 1.5)
-
-    @pytest.mark.parametrize(
-        "model, input_cost, output_cost",
-        [
-            ("openai.gpt-5.6-sol", 5.5e-06, 3.3e-05),
-            ("openai.gpt-5.6-terra", 2.2e-06, 1.32e-05),
-            ("openai.gpt-5.6-luna", 2.2e-07, 1.32e-06),
-        ],
-    )
-    def test_gpt_5_6_responses_call_cost(self, local_cost_map, model, input_cost, output_cost):
-        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-
-        input_tokens = 100000
-        output_tokens = 10000
-        response = ResponsesAPIResponse(
-            id="resp-1",
-            created_at=1700000000,
-            model=model,
-            output=[],
-            usage=ResponseAPIUsage(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=input_tokens + output_tokens,
-            ),
-        )
-
-        cost = litellm.completion_cost(
-            completion_response=response,
-            model=f"bedrock_mantle/{model}",
-            custom_llm_provider="bedrock_mantle",
-        )
-
-        assert cost == pytest.approx(input_tokens * input_cost + output_tokens * output_cost)
+        assert info["max_input_tokens"] == 272000
 
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models

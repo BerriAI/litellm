@@ -7,7 +7,7 @@ https://github.com/BerriAI/litellm/issues/6592
 New config to ensure we introduce this without causing breaking changes for users
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from aiohttp import ClientResponse
 
@@ -26,12 +26,12 @@ else:
 class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         Ensure - /v1/chat/completions is at the end of the url
@@ -48,29 +48,29 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         return {"Authorization": f"Bearer {api_key}"}
 
-    async def transform_response(
+    async def transform_response(  # type: ignore
         self,
         model: str,
         raw_response: ClientResponse,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        _json_response: Final = await raw_response.json()
+        _json_response = await raw_response.json()
         model_response.id = _json_response.get("id")
         model_response.choices = [Choices(**choice) for choice in _json_response.get("choices")]
         model_response.created = _json_response.get("created")

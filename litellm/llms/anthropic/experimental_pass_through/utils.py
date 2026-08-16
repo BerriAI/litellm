@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import litellm
 from litellm.types.utils import ModelInfo
@@ -12,7 +13,7 @@ def is_reasoning_auto_summary_enabled() -> bool:
 def normalize_reasoning_effort_value(
     effort: str,
     model: str,
-    custom_llm_provider: str | None = None,
+    custom_llm_provider: Optional[str] = None,
 ) -> str:
     """
     Normalize a reasoning effort value based on model capabilities.
@@ -28,7 +29,7 @@ def normalize_reasoning_effort_value(
 
     from litellm.utils import get_model_info
 
-    model_info: ModelInfo | None = None
+    model_info: Optional[ModelInfo] = None
     try:
         model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:

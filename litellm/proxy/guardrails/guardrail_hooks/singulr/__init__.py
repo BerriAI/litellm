@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,7 +14,7 @@ def initialize_guardrail(
 ):
     import litellm
 
-    _cb: Final = SingulrGuardrail(
+    _cb = SingulrGuardrail(
         singulr_api_base=getattr(litellm_params, "singulr_api_base", None) or litellm_params.api_base,
         singulr_api_key=getattr(litellm_params, "singulr_api_key", None) or litellm_params.api_key,
         singulr_application_id=getattr(litellm_params, "singulr_application_id", None),
@@ -35,10 +35,10 @@ def initialize_guardrail(
     return _cb
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.SINGULR.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {
+guardrail_class_registry = {
     SupportedGuardrailIntegrations.SINGULR.value: SingulrGuardrail,
 }

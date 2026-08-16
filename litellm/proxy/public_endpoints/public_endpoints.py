@@ -1,12 +1,10 @@
 import json
 import os
 import re
-from collections.abc import Awaitable, Mapping, Sequence
 from importlib.resources import files
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -34,66 +32,14 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
 )
 from litellm.types.utils import LlmProviders
 
-if TYPE_CHECKING:
-    from datetime import datetime
-
-router: Final = APIRouter()
-
-
-class _ProviderSupportEntry(TypedDict, total=False):
-    display_name: ReadOnly[str]
-    endpoints: ReadOnly[Mapping[str, bool]]
-
-
-class _ProvidersFile(TypedDict, total=False):
-    providers: ReadOnly[Mapping[str, _ProviderSupportEntry]]
-
-
-class _EndpointProviderEntry(TypedDict):
-    slug: ReadOnly[str]
-    display_name: ReadOnly[str]
-
-
-class _EndpointEntry(TypedDict):
-    key: ReadOnly[str]
-    label: ReadOnly[str]
-    endpoint: ReadOnly[str]
-    providers: ReadOnly[Sequence[_EndpointProviderEntry]]
-
-
-class _PluginRow(Protocol):
-    @property
-    def id(self) -> str: ...
-
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def enabled(self) -> bool: ...
-
-    @property
-    def created_at(self) -> "datetime | None": ...
-
-    @property
-    def updated_at(self) -> "datetime | None": ...
-
-    @property
-    def manifest_json(self) -> str | None: ...
-
-
-class _PluginTableActions(Protocol):
-    def find_many(self, *, where: Mapping[str, bool]) -> Awaitable[Sequence[_PluginRow]]: ...
-
-
-def _plugin_table(prisma_client: object) -> _PluginTableActions:
-    return ClaudeCodePluginRepository(prisma_client).table
+router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
 # /public/endpoints — helpers
 # ---------------------------------------------------------------------------
 
-_ENDPOINT_METADATA: Final[Mapping[str, Mapping[str, str]]] = {
+_ENDPOINT_METADATA: Dict[str, Dict[str, str]] = {
     "chat_completions": {"label": "Chat Completions", "endpoint": "/chat/completions"},
     "messages": {"label": "Messages", "endpoint": "/messages"},
     "responses": {"label": "Responses", "endpoint": "/responses"},
@@ -152,36 +98,36 @@ _ENDPOINT_METADATA: Final[Mapping[str, Mapping[str, str]]] = {
     "rag_query": {"label": "RAG Query", "endpoint": "/rag/query"},
 }
 
-_SLUG_SUFFIX_RE: Final = re.compile(r"\s*\(`[^`]+`\)\s*$")
+_SLUG_SUFFIX_RE = re.compile(r"\s*\(`[^`]+`\)\s*$")
 
 # Loaded once on first request; never invalidated (local file, no TTL needed).
-_cached_endpoints: SupportedEndpointsResponse | None = None
+_cached_endpoints: Optional[SupportedEndpointsResponse] = None
 
 
 def _clean_display_name(raw: str) -> str:
     return _SLUG_SUFFIX_RE.sub("", raw).strip()
 
 
-def _build_endpoints(raw: _ProvidersFile) -> list[_EndpointEntry]:
+def _build_endpoints(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Transform raw provider_endpoints_support_backup.json into the response shape."""
-    providers: Final = raw.get("providers", {})
+    providers: Dict[str, Any] = raw.get("providers", {})
 
     # Collect endpoint keys in insertion order (union across all providers).
-    seen: Final[set[str]] = set()
-    all_keys: Final[list[str]] = []
+    seen: set = set()
+    all_keys: List[str] = []
     for provider_data in providers.values():
         for key in provider_data.get("endpoints", {}):
             if key not in seen:
                 seen.add(key)
                 all_keys.append(key)
 
-    result: Final[list[_EndpointEntry]] = []
+    result: List[Dict[str, Any]] = []
     for key in all_keys:
         meta = _ENDPOINT_METADATA.get(key)
         label = meta["label"] if meta else key.replace("_", " ").title()
         path = meta["endpoint"] if meta else "/" + key.replace("_", "/")
 
-        supporting: list[_EndpointProviderEntry] = [
+        supporting: List[Dict[str, str]] = [
             {
                 "slug": slug,
                 "display_name": _clean_display_name(pd.get("display_name", slug)),
@@ -194,10 +140,8 @@ def _build_endpoints(raw: _ProvidersFile) -> list[_EndpointEntry]:
     return result
 
 
-def _load_endpoints() -> list[_EndpointEntry]:
-    raw: Final[_ProvidersFile] = json.loads(
-        files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8")
-    )
+def _load_endpoints() -> List[Dict[str, Any]]:
+    raw = json.loads(files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8"))
     return _build_endpoints(raw)
 
 
@@ -207,7 +151,7 @@ def _load_endpoints() -> list[_EndpointEntry]:
 @router.get(
     "/public/model_hub",
     tags=["public", "model management"],
-    response_model=list[ModelGroupInfoProxy],
+    response_model=List[ModelGroupInfoProxy],
 )
 async def public_model_hub():
     import litellm
@@ -223,7 +167,7 @@ async def public_model_hub():
     if llm_router is None:
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 
-    model_groups: list[ModelGroupInfoProxy] = []
+    model_groups: List[ModelGroupInfoProxy] = []
     if litellm.public_model_groups is not None:
         model_groups = _get_model_group_info(
             llm_router=llm_router,
@@ -232,10 +176,10 @@ async def public_model_hub():
         )
 
     # Fetch health check information if available
-    health_checks_map: Final = {}
+    health_checks_map = {}
     if prisma_client is not None:
         try:
-            latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+            latest_checks = await prisma_client.get_all_latest_health_checks()
             for check in latest_checks:
                 key = check.model_id if check.model_id else check.model_name
                 if key:
@@ -259,13 +203,13 @@ async def public_model_hub():
 @router.get(
     "/public/agent_hub",
     tags=["[beta] Agents", "public"],
-    response_model=list[AgentCard],
+    response_model=List[AgentCard],
 )
 async def get_agents(request: Request):
     import litellm
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-    agents: Final = global_agent_registry.get_public_agent_list()
+    agents = global_agent_registry.get_public_agent_list()
 
     if litellm.public_agent_groups is None:
         return []
@@ -276,22 +220,27 @@ async def get_agents(request: Request):
             "url": get_custom_url(str(request.base_url), route=f"a2a/{agent.agent_id}"),
         }
         for agent in agents
-        if not global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
+        if agent.agent_id in litellm.public_agent_groups
     ]
 
 
 @router.get(
     "/public/mcp_hub",
     tags=["[beta] MCP", "public"],
-    response_model=list[MCPPublicServer],
+    response_model=List[MCPPublicServer],
 )
 async def get_mcp_servers():
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
-    public_mcp_servers: Final = global_mcp_server_manager.get_public_mcp_servers()
-    return [MCPPublicServer.model_validate(server.model_dump()) for server in public_mcp_servers]
+    public_mcp_servers = global_mcp_server_manager.get_public_mcp_servers()
+    return [
+        MCPPublicServer(
+            **server.model_dump(),
+        )
+        for server in public_mcp_servers
+    ]
 
 
 @router.get(
@@ -309,9 +258,9 @@ async def public_skill_hub():
     )
 
     try:
-        prisma_client: Final = await _get_prisma_client()
-        plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
-        items: Final = []
+        prisma_client = await _get_prisma_client()
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
+        items = []
         for plugin in plugins:
             raw = plugin.manifest_json or {}
             manifest = json.loads(raw) if isinstance(raw, str) else raw
@@ -365,9 +314,9 @@ async def public_model_hub_info():
 @router.get(
     "/public/providers",
     tags=["public", "providers"],
-    response_model=list[str],
+    response_model=List[str],
 )
-async def get_supported_providers() -> list[str]:
+async def get_supported_providers() -> List[str]:
     """
     Return a sorted list of all providers supported by LiteLLM.
     """
@@ -378,14 +327,14 @@ async def get_supported_providers() -> list[str]:
 @router.get(
     "/public/providers/fields",
     tags=["public", "providers"],
-    response_model=list[ProviderCreateInfo],
+    response_model=List[ProviderCreateInfo],
 )
-async def get_provider_fields() -> list[ProviderCreateInfo]:
+async def get_provider_fields() -> List[ProviderCreateInfo]:
     """
     Return provider metadata required by the dashboard create-model flow.
     """
 
-    provider_create_fields_path: Final = os.path.join(
+    provider_create_fields_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "proxy",
         "public_endpoints",
@@ -393,7 +342,7 @@ async def get_provider_fields() -> list[ProviderCreateInfo]:
     )
 
     with open(provider_create_fields_path, "r") as f:
-        provider_create_fields: Final = json.load(f)
+        provider_create_fields = json.load(f)
 
     return provider_create_fields
 
@@ -410,12 +359,12 @@ async def get_litellm_model_cost_map():
     import litellm
 
     try:
-        _model_cost_map: Final = litellm.model_cost
+        _model_cost_map = litellm.model_cost
         return _model_cost_map
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Internal Server Error ({e})",
+            detail=f"Internal Server Error ({str(e)})",
         )
 
 
@@ -437,7 +386,7 @@ async def get_litellm_blog_posts():
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
         posts_data = GetBlogPosts.load_local_blog_posts()
 
-    posts: Final = [BlogPost(**p) for p in posts_data[:5]]
+    posts = [BlogPost(**p) for p in posts_data[:5]]
     return BlogPostsResponse(posts=posts)
 
 
@@ -455,39 +404,39 @@ async def get_supported_endpoints() -> SupportedEndpointsResponse:
     """
     global _cached_endpoints
     if _cached_endpoints is None:
-        _cached_endpoints = SupportedEndpointsResponse(endpoints=_load_endpoints())
+        _cached_endpoints = SupportedEndpointsResponse(endpoints=_load_endpoints())  # type: ignore[arg-type]
     return _cached_endpoints
 
 
 @router.get(
     "/public/agents/fields",
     tags=["public", "[beta] Agents"],
-    response_model=list[AgentCreateInfo],
+    response_model=List[AgentCreateInfo],
 )
-async def get_agent_fields() -> list[AgentCreateInfo]:
+async def get_agent_fields() -> List[AgentCreateInfo]:
     """
     Return agent type metadata required by the dashboard create-agent flow.
 
     If an agent has `inherit_credentials_from_provider`, the provider's credential
     fields are automatically appended to the agent's credential_fields.
     """
-    base_path: Final = os.path.join(
+    base_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "proxy",
         "public_endpoints",
     )
 
-    agent_create_fields_path: Final = os.path.join(base_path, "agent_create_fields.json")
-    provider_create_fields_path: Final = os.path.join(base_path, "provider_create_fields.json")
+    agent_create_fields_path = os.path.join(base_path, "agent_create_fields.json")
+    provider_create_fields_path = os.path.join(base_path, "provider_create_fields.json")
 
     with open(agent_create_fields_path, "r") as f:
-        agent_create_fields: Final = json.load(f)
+        agent_create_fields = json.load(f)
 
     with open(provider_create_fields_path, "r") as f:
-        provider_create_fields: Final = json.load(f)
+        provider_create_fields = json.load(f)
 
     # Build a lookup map for providers by name
-    provider_map: Final = {p["provider"]: p for p in provider_create_fields}
+    provider_map = {p["provider"]: p for p in provider_create_fields}
 
     # Merge inherited credential fields
     for agent in agent_create_fields:

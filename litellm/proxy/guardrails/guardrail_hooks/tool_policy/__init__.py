@@ -1,5 +1,3 @@
-from typing import Final
-
 import litellm
 from litellm.types.guardrails import Guardrail, LitellmParams
 
@@ -9,7 +7,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail):
         ToolPolicyGuardrail,
     )
 
-    _callback: Final = ToolPolicyGuardrail(
+    _callback = ToolPolicyGuardrail(
         guardrail_name=guardrail.get("guardrail_name", "tool_policy"),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,

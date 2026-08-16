@@ -1,7 +1,6 @@
 """Shared helpers for the integration presets."""
 
-from collections.abc import Iterable
-from typing import Final
+from typing import Iterable
 
 
 def ensure_mappers(mapper_names: Iterable[str], *names: str) -> list[str]:
@@ -10,7 +9,7 @@ def ensure_mappers(mapper_names: Iterable[str], *names: str) -> list[str]:
     Order is preserved and duplicates are skipped, so composing several presets
     (or re-applying one) never double-adds a vocabulary.
     """
-    result: Final = list(mapper_names)
+    result = list(mapper_names)
     for name in names:
         if name not in result:
             result.append(name)

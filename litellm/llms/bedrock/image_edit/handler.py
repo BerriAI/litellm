@@ -7,7 +7,7 @@ Handles image edit requests for Bedrock stability models.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 from pydantic import BaseModel
@@ -70,18 +70,18 @@ class BedrockImageEdit(BaseAWSLLM):
         self,
         model: str,
         image: list,
-        prompt: str | None,
+        prompt: Optional[str],
         model_response: ImageResponse,
         optional_params: dict,
         logging_obj: LitellmLogging,
-        timeout: float | httpx.Timeout | None,
+        timeout: Optional[Union[float, httpx.Timeout]],
         aimage_edit: bool = False,
-        api_base: str | None = None,
-        extra_headers: dict | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
-        api_key: str | None = None,
+        api_base: Optional[str] = None,
+        extra_headers: Optional[dict] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_key: Optional[str] = None,
     ):
-        prepared_request: Final = self._prepare_request(
+        prepared_request = self._prepare_request(
             model=model,
             image=image,
             prompt=prompt,
@@ -106,14 +106,14 @@ class BedrockImageEdit(BaseAWSLLM):
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
         try:
-            response: Final = client.post(
+            response = client.post(
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
+            error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
@@ -132,30 +132,30 @@ class BedrockImageEdit(BaseAWSLLM):
     async def async_image_edit(
         self,
         prepared_request: BedrockImageEditPreparedRequest,
-        timeout: float | httpx.Timeout | None,
+        timeout: Optional[Union[float, httpx.Timeout]],
         model: str,
         logging_obj: LitellmLogging,
-        prompt: str | None,
+        prompt: Optional[str],
         model_response: ImageResponse,
-        client: AsyncHTTPHandler | None = None,
+        client: Optional[AsyncHTTPHandler] = None,
     ) -> ImageResponse:
         """
         Asynchronous handler for bedrock image edit
         """
-        async_client: Final = client or get_async_httpx_client(
+        async_client = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.BEDROCK,
             params={"timeout": timeout},
         )
 
         try:
-            response: Final = await async_client.post(
+            response = await async_client.post(
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
+            error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
@@ -175,12 +175,12 @@ class BedrockImageEdit(BaseAWSLLM):
         self,
         model: str,
         image: list,
-        prompt: str | None,
+        prompt: Optional[str],
         optional_params: dict,
-        api_base: str | None,
-        extra_headers: dict | None,
+        api_base: Optional[str],
+        extra_headers: Optional[dict],
         logging_obj: LitellmLogging,
-        api_key: str | None,
+        api_key: Optional[str],
     ) -> BedrockImageEditPreparedRequest:
         """
         Prepare the request body, headers, and endpoint URL for the Bedrock Image Edit API
@@ -198,12 +198,12 @@ class BedrockImageEdit(BaseAWSLLM):
         Returns:
             BedrockImageEditPreparedRequest: The prepared request object
         """
-        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
+        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         # Use the existing ARN-aware provider detection method
-        bedrock_provider: Final = self.get_bedrock_invoke_provider(model)
+        bedrock_provider = self.get_bedrock_invoke_provider(model)
         ### SET RUNTIME ENDPOINT ###
-        modelId: Final = self.get_bedrock_model_id(
+        modelId = self.get_bedrock_model_id(
             model=model,
             provider=bedrock_provider,
             optional_params=optional_params,
@@ -214,7 +214,7 @@ class BedrockImageEdit(BaseAWSLLM):
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
         proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
-        data: Final = self._get_request_body(
+        data = self._get_request_body(
             model=model,
             image=image,
             prompt=prompt,
@@ -222,12 +222,12 @@ class BedrockImageEdit(BaseAWSLLM):
         )
 
         # Make POST Request
-        body: Final = json.dumps(data).encode("utf-8")
+        body = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
 
-        prepped: Final = self.get_request_headers(
+        prepped = self.get_request_headers(
             credentials=boto3_credentials_info.credentials,
             aws_region_name=boto3_credentials_info.aws_region_name,
             extra_headers=extra_headers,
@@ -258,7 +258,7 @@ class BedrockImageEdit(BaseAWSLLM):
         self,
         model: str,
         image: list,
-        prompt: str | None,
+        prompt: Optional[str],
         optional_params: dict,
     ) -> dict:
         """
@@ -269,8 +269,8 @@ class BedrockImageEdit(BaseAWSLLM):
         Returns:
             dict: The request body to use for the Bedrock Image Edit API
         """
-        config_class: Final = self.get_config_class(model=model)
-        config_instance: Final = config_class()
+        config_class = self.get_config_class(model=model)
+        config_instance = config_class()
         request_body, _ = config_instance.transform_image_edit_request(
             model=model,
             prompt=prompt,
@@ -286,7 +286,7 @@ class BedrockImageEdit(BaseAWSLLM):
         model_response: ImageResponse,
         model: str,
         logging_obj: LitellmLogging,
-        prompt: str | None,
+        prompt: Optional[str],
         response: httpx.Response,
         data: dict,
     ) -> ImageResponse:
@@ -303,12 +303,12 @@ class BedrockImageEdit(BaseAWSLLM):
                 additional_args={"complete_input_dict": data},
             )
         verbose_logger.debug("raw model_response: %s", response.text)
-        response_dict: Final = response.json()
+        response_dict = response.json()
         if response_dict is None:
             raise ValueError("Error in response object format, got None")
 
-        config_class: Final = self.get_config_class(model=model)
-        config_instance: Final = config_class()
+        config_class = self.get_config_class(model=model)
+        config_instance = config_class()
 
         model_response = config_instance.transform_image_edit_response(
             model=model,

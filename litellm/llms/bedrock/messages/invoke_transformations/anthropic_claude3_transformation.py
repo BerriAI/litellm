@@ -1,5 +1,14 @@
-from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 
@@ -33,9 +42,9 @@ from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
-    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
+    remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -44,8 +53,9 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+from litellm.types.utils import GenericStreamingChunk
 from litellm.types.utils import GenericStreamingChunk as GChunk
+from litellm.types.utils import ModelResponseStream
 from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
@@ -67,10 +77,8 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
 
-    WEBSEARCH_INTERCEPTION_DOCS_URL = "https://docs.litellm.ai/docs/integrations/websearch_interception"
-
     @property
-    def custom_llm_provider(self) -> str | None:
+    def custom_llm_provider(self) -> Optional[str]:
         return "bedrock"
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
@@ -79,16 +87,77 @@ class AmazonAnthropicClaudeMessagesConfig(
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
 
+    @staticmethod
+    def _as_system_content_blocks(value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, str):
+            return [{"type": "text", "text": value}]
+        return [value]
+
+    @staticmethod
+    def _is_system_role_message(message: Any) -> bool:
+        return isinstance(message, dict) and message.get("role") == "system"
+
+    def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict, model: str) -> None:
+        """Bedrock Invoke validates ``role: "system"`` entries inside ``messages``
+        per model. Models carrying ``supports_mid_conversation_system`` in the
+        cost map (the Opus 4.8 family) only reject a leading run ("messages.0:
+        use the top-level 'system' parameter for the initial system prompt") and
+        accept mid-conversation entries (e.g. Claude Code's
+        ``mid-conversation-system-2026-04-07`` reminders) in place, where they
+        MUST stay: hoisting one mutates the ``system`` prefix and invalidates the
+        prompt cache for the entire message history. Older Claude models (Opus
+        4.7, Sonnet 4.6, Haiku 4.5, ...) reject the role in every position
+        ("role 'system' is not supported on this model"), so without the flag
+        every system entry is hoisted into the top-level ``system`` field.
+        Billing-header system blocks are stripped from the top-level ``system``
+        field regardless of whether anything was hoisted."""
+        messages = anthropic_messages_request.get("messages")
+        if not isinstance(messages, list):
+            return
+        if _supports_factory(
+            model=model,
+            custom_llm_provider="bedrock",
+            key="supports_mid_conversation_system",
+        ):
+            leading_count = next(
+                (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
+                len(messages),
+            )
+            hoisted = messages[:leading_count]
+            remaining = messages[leading_count:]
+        else:
+            hoisted = [m for m in messages if self._is_system_role_message(m)]
+            remaining = [m for m in messages if not self._is_system_role_message(m)]
+        if hoisted:
+            anthropic_messages_request["messages"] = remaining
+        system_content = [
+            block
+            for source in (
+                anthropic_messages_request.get("system"),
+                *(m.get("content") for m in hoisted),
+            )
+            for block in self._as_system_content_blocks(source)
+        ]
+        filtered_system = self._filter_billing_headers_from_system(system_content)
+        if filtered_system:
+            anthropic_messages_request["system"] = filtered_system
+        else:
+            anthropic_messages_request.pop("system", None)
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: List[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> Tuple[dict, Optional[str]]:
         return headers, api_base
 
     def sign_request(
@@ -97,11 +166,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: str | None = None,
-        model: str | None = None,
-        stream: bool | None = None,
-        fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
         return AmazonInvokeConfig.sign_request(
             self=self,
             headers=headers,
@@ -116,12 +185,12 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         return AmazonInvokeConfig.get_complete_url(
             self=self,
@@ -133,7 +202,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             stream=stream,
         )
 
-    def _remove_ttl_from_cache_control(self, anthropic_messages_request: dict, model: str | None = None) -> None:
+    def _remove_ttl_from_cache_control(self, anthropic_messages_request: Dict, model: Optional[str] = None) -> None:
         """
         Remove unsupported fields from cache_control for Bedrock.
 
@@ -158,7 +227,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             cache_control.pop("scope", None)
             # Remove ttl for models that don't support it
             if "ttl" in cache_control:
-                ttl: Final = cache_control["ttl"]
+                ttl = cache_control["ttl"]
                 if is_claude_4_5 and ttl in ["5m", "1h"]:
                     return
                 cache_control.pop("ttl", None)
@@ -176,7 +245,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # Process system (list of content blocks)
         if "system" in anthropic_messages_request:
-            system: Final = anthropic_messages_request["system"]
+            system = anthropic_messages_request["system"]
             if isinstance(system, list):
                 _process_content_list(system)
 
@@ -207,8 +276,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         if AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
             return True
 
-        model_lower: Final = model.lower()
-        non_adaptive_patterns: Final = [
+        model_lower = model.lower()
+        non_adaptive_patterns = [
             "opus-4.5",
             "opus_4.5",
             "opus-4-5",
@@ -227,7 +296,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def _ensure_thinking_for_clear_thinking_context_management(
         self,
-        anthropic_messages_request: dict,
+        anthropic_messages_request: Dict,
         model: str,
     ) -> bool:
         """
@@ -242,29 +311,29 @@ class AmazonAnthropicClaudeMessagesConfig(
             True if ``thinking`` was added or upgraded for this fix (caller may
             need to add the interleaved-thinking beta header).
         """
-        cm: Final = anthropic_messages_request.get("context_management")
+        cm = anthropic_messages_request.get("context_management")
         if not isinstance(cm, dict):
             return False
-        edits: Final = cm.get("edits")
+        edits = cm.get("edits")
         if not isinstance(edits, list):
             return False
-        needs_thinking: Final = any(isinstance(e, dict) and e.get("type") == "clear_thinking_20251015" for e in edits)
+        needs_thinking = any(isinstance(e, dict) and e.get("type") == "clear_thinking_20251015" for e in edits)
         if not needs_thinking:
             return False
         if not self._supports_extended_thinking_on_bedrock(model):
             return False
 
-        is_adaptive_thinking_model: Final = AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock")
+        is_adaptive_thinking_model = AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock")
 
-        thinking: Final = anthropic_messages_request.get("thinking")
+        thinking = anthropic_messages_request.get("thinking")
         if isinstance(thinking, dict):
-            t: Final = thinking.get("type")
+            t = thinking.get("type")
             if t == "adaptive":
                 return False
             if t == "enabled" and not is_adaptive_thinking_model:
                 return False
             if t == "enabled":
-                budget_tokens: Final = self._resolve_clear_thinking_budget_tokens(thinking.get("budget_tokens"))
+                budget_tokens = self._resolve_clear_thinking_budget_tokens(thinking.get("budget_tokens"))
                 self._inject_adaptive_thinking_for_clear_thinking(anthropic_messages_request, budget_tokens, model)
                 return True
             verbose_logger.debug(
@@ -272,8 +341,8 @@ class AmazonAnthropicClaudeMessagesConfig(
                 thinking,
             )
 
-        max_tokens: Final = anthropic_messages_request.get("max_tokens")
-        budget: Final = BEDROCK_MIN_THINKING_BUDGET_TOKENS
+        max_tokens = anthropic_messages_request.get("max_tokens")
+        budget = BEDROCK_MIN_THINKING_BUDGET_TOKENS
         if isinstance(max_tokens, int) and max_tokens <= budget:
             verbose_logger.warning(
                 "Bedrock clear_thinking_20251015: max_tokens=%s is not greater than "
@@ -345,8 +414,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model is Claude Opus 4.5
         """
-        model_lower: Final = model.lower()
-        opus_4_5_patterns: Final = [
+        model_lower = model.lower()
+        opus_4_5_patterns = [
             "opus-4.5",
             "opus_4.5",
             "opus-4-5",
@@ -372,9 +441,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Check if the model supports tool search on Bedrock.
 
-        The model map's ``supports_tool_search`` flag is authoritative when
-        ``model`` resolves to an entry that sets it; the name patterns below
-        cover ids the map cannot resolve (ARNs, unlisted regional variants).
+        On Amazon Bedrock, server-side tool search is supported on Claude Opus 4.5
+        and Claude Sonnet 4.5 with the tool-search-tool-2025-10-19 beta header.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
@@ -384,13 +452,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports tool search on Bedrock
         """
-        catalog: Final = AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock")
-        if catalog is not None:
-            return catalog
+        model_lower = model.lower()
 
-        model_lower: Final = model.lower()
-
-        supported_patterns: Final = [
+        # Supported models for tool search on Bedrock
+        supported_patterns = [
             # Opus 4.5
             "opus-4.5",
             "opus_4.5",
@@ -411,16 +476,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             "sonnet_4.6",
             "sonnet-4-6",
             "sonnet_4_6",
-            # Opus 4.7
-            "opus-4.7",
-            "opus_4.7",
-            "opus-4-7",
-            "opus_4_7",
-            # Haiku 4.5
-            "haiku-4.5",
-            "haiku_4.5",
-            "haiku-4-5",
-            "haiku_4_5",
+            # NOTE: Opus 4.7 on Bedrock does not support server-side tool search
+            # as of launch (2026-04-16). Bedrock rejects the tool type with:
+            # "tool type 'tool_search_tool_..._20251119' is not supported for this model".
+            # Re-add the opus-4.7 patterns here once AWS announces support.
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -436,10 +495,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Adjust tool search beta header for Bedrock.
 
-        Bedrock requires a different beta header for tool search than the
-        Anthropic API when tool search is used without programmatic tool
-        calling or input examples: `tool-search-tool-2025-10-19`, and only on
-        the models listed in `_supports_tool_search_on_bedrock`.
+        Bedrock requires a different beta header for tool search on Opus 4 models
+        when tool search is used without programmatic tool calling or input examples.
+
+        Note: On Amazon Bedrock, server-side tool search is only supported on Claude Opus 4
+        with the `tool-search-tool-2025-10-19` beta header.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
@@ -465,14 +525,14 @@ class AmazonAnthropicClaudeMessagesConfig(
     # Bedrock InvokeModel DOES support ``clear_tool_uses_20250919`` under the
     # ``context-management-2025-06-27`` beta. AWS docs:
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.md
-    _BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS: dict[str, str] = {
+    _BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS: Dict[str, str] = {
         "compact_20260112": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
         "clear_tool_uses_20250919": ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
     }
 
     @staticmethod
     def _filter_context_management_for_bedrock_invoke(
-        anthropic_messages_request: dict,
+        anthropic_messages_request: Dict,
         beta_set: set,
     ) -> None:
         """
@@ -493,16 +553,16 @@ class AmazonAnthropicClaudeMessagesConfig(
           * https://github.com/BerriAI/litellm/issues/27532
           * https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.md
         """
-        cm: Final = anthropic_messages_request.get("context_management")
+        cm = anthropic_messages_request.get("context_management")
         if not isinstance(cm, dict):
             return
-        edits: Final = cm.get("edits")
+        edits = cm.get("edits")
         if not isinstance(edits, list):
             anthropic_messages_request.pop("context_management", None)
             return
 
-        supported: Final = AmazonAnthropicClaudeMessagesConfig._BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS
-        retained_edits: Final = [e for e in edits if isinstance(e, dict) and e.get("type") in supported]
+        supported = AmazonAnthropicClaudeMessagesConfig._BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS
+        retained_edits = [e for e in edits if isinstance(e, dict) and e.get("type") in supported]
         if not retained_edits:
             anthropic_messages_request.pop("context_management", None)
             return
@@ -516,22 +576,22 @@ class AmazonAnthropicClaudeMessagesConfig(
     def _get_bedrock_invoke_anthropic_beta_headers(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: List[Dict],
+        anthropic_messages_optional_request_params: Dict,
         headers: dict,
-        anthropic_messages_request: dict,
+        anthropic_messages_request: Dict,
         injected_thinking_for_clear_thinking: bool,
-    ) -> list[str]:
-        anthropic_model_info: Final = AnthropicModelInfo()
-        tools: Final = anthropic_messages_optional_request_params.get("tools")
-        messages_typed: Final = cast(list[AllMessageValues], messages)
-        tool_search_used: Final = anthropic_model_info.is_tool_search_used(tools)
-        programmatic_tool_calling_used: Final = anthropic_model_info.is_programmatic_tool_calling_used(tools)
-        input_examples_used: Final = anthropic_model_info.is_input_examples_used(tools)
+    ) -> List[str]:
+        anthropic_model_info = AnthropicModelInfo()
+        tools = anthropic_messages_optional_request_params.get("tools")
+        messages_typed = cast(List[AllMessageValues], messages)
+        tool_search_used = anthropic_model_info.is_tool_search_used(tools)
+        programmatic_tool_calling_used = anthropic_model_info.is_programmatic_tool_calling_used(tools)
+        input_examples_used = anthropic_model_info.is_input_examples_used(tools)
 
-        user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
-        beta_set: Final = set(user_beta_set)
-        auto_betas: Final = anthropic_model_info.get_anthropic_beta_list(
+        user_beta_set = set(get_anthropic_beta_from_headers(headers))
+        beta_set = set(user_beta_set)
+        auto_betas = anthropic_model_info.get_anthropic_beta_list(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             computer_tool_used=anthropic_model_info.is_computer_tool_used(tools),
@@ -563,14 +623,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        filtered_betas: Final = sorted(
+        filtered_betas = sorted(
             filter_and_transform_beta_headers(
                 beta_headers=list(beta_set),
                 provider="bedrock",
             )
         )
 
-        dropped_user_betas: Final = sorted(
+        dropped_user_betas = sorted(
             b for b in user_beta_set if not filter_and_transform_beta_headers([b], provider="bedrock")
         )
         if dropped_user_betas:
@@ -583,51 +643,12 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         return filtered_betas
 
-    @staticmethod
-    def _reject_unsupported_web_search_tools(anthropic_messages_request: dict[str, object], model: str) -> None:
-        """
-        Bedrock's Anthropic endpoints cannot execute Anthropic's server-side
-        ``web_search_*`` tool; forwarding it returns an opaque
-        "The provided request is not valid" 400 from Bedrock. Fail fast with an
-        error that names the problem and the fix instead.
-
-        When web search interception is enabled
-        (``litellm_settings.callbacks: ["websearch_interception"]``), the tool
-        is converted to a regular function tool before this transform runs, so
-        this guard never fires.
-        """
-        from litellm.integrations.websearch_interception.tools import (
-            is_anthropic_native_web_search_tool,
-        )
-
-        tools: Final = anthropic_messages_request.get("tools")
-        if not isinstance(tools, list):
-            return
-        web_search_tool: Final = next(
-            (t for t in tools if isinstance(t, dict) and is_anthropic_native_web_search_tool(t)),
-            None,
-        )
-        if web_search_tool is None:
-            return
-        raise litellm.BadRequestError(
-            message=(
-                f"Bedrock does not support Anthropic's server-side web search tool "
-                f"(tool type '{web_search_tool.get('type')}', model '{model}'). "
-                "To use web search with this model, enable LiteLLM's web search interception "
-                "so the proxy executes the search instead: "
-                f"{AmazonAnthropicClaudeMessagesConfig.WEBSEARCH_INTERCEPTION_DOCS_URL}. "
-                "Alternatively, remove the web_search tool from the request."
-            ),
-            model=model,
-            llm_provider="bedrock",
-        )
-
     def _strip_unsupported_bedrock_invoke_fields(
         self,
-        anthropic_messages_request: dict,
-    ) -> dict:
-        allowed: Final = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
-        stripped: Final = sorted(k for k in anthropic_messages_request if k not in allowed)
+        anthropic_messages_request: Dict,
+    ) -> Dict:
+        allowed = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
+        stripped = sorted(k for k in anthropic_messages_request if k not in allowed)
         if stripped:
             verbose_logger.debug(
                 "Bedrock Invoke: stripping unsupported top-level request fields: %s",
@@ -636,7 +657,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return {k: v for k, v in anthropic_messages_request.items() if k in allowed}
 
     @staticmethod
-    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, optional_params: dict) -> None:
+    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, optional_params: Dict) -> None:
         """Lower ``reasoning_effort`` to the Bedrock effort ceiling before validation.
 
         The shared ``/v1/messages`` effort gate rejects tiers a model does not
@@ -648,21 +669,21 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         if not AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
             return
-        effort: Final = optional_params.get("reasoning_effort")
+        effort = optional_params.get("reasoning_effort")
         if not isinstance(effort, str):
             return
-        clamped: Final = {"effort": effort}
+        clamped = {"effort": effort}
         normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
         optional_params["reasoning_effort"] = clamped["effort"]
 
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: List[Dict],
+        anthropic_messages_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> Dict:
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -675,12 +696,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages_for_bedrock(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
-
-        self._reject_unsupported_web_search_tools(anthropic_messages_request=anthropic_messages_request, model=model)
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
@@ -694,7 +713,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
 
-        injected_thinking_for_clear_thinking: Final = self._ensure_thinking_for_clear_thinking_context_management(
+        injected_thinking_for_clear_thinking = self._ensure_thinking_for_clear_thinking_context_management(
             anthropic_messages_request=anthropic_messages_request,
             model=model,
         )
@@ -707,11 +726,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         # accepted `output_config` subset is also narrower than Anthropic's, so
         # consume the newer `output_config.format` shape here instead of
         # forwarding it as an unknown nested key.
-        existing_output_config: Final = anthropic_messages_request.get("output_config")
+        existing_output_config = anthropic_messages_request.get("output_config")
         if isinstance(existing_output_config, dict):
             anthropic_messages_request["output_config"] = dict(existing_output_config)
-        output_format: Final = anthropic_messages_request.pop("output_format", None)
-        output_config_format: Final = pop_bedrock_invoke_output_config_format(anthropic_messages_request)
+        output_format = anthropic_messages_request.pop("output_format", None)
+        output_config_format = pop_bedrock_invoke_output_config_format(anthropic_messages_request)
         if output_format:
             convert_bedrock_invoke_output_format_to_inline_schema(
                 output_format=output_format,
@@ -749,14 +768,16 @@ class AmazonAnthropicClaudeMessagesConfig(
                     model,
                 )
 
-        # 5b. Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
+        # 5b. Remove `custom` field from tools (Bedrock doesn't support it)
+        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
+        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
         # Ref: https://github.com/BerriAI/litellm/issues/22847
-        normalize_custom_field_on_tools(anthropic_messages_request)
+        remove_custom_field_from_tools(anthropic_messages_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
-        filtered_betas: Final = self._get_bedrock_invoke_anthropic_beta_headers(
+        filtered_betas = self._get_bedrock_invoke_anthropic_beta_headers(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
@@ -794,10 +815,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         request_body: dict,
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> AsyncIterator:
-        aws_decoder: Final = AmazonAnthropicClaudeMessagesStreamDecoder(
+        aws_decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
             model=model,
         )
-        completion_stream: Final = aws_decoder.aiter_bytes(
+        completion_stream = aws_decoder.aiter_bytes(
             httpx_response.aiter_bytes(chunk_size=aws_decoder.DEFAULT_CHUNK_SIZE)
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
@@ -809,7 +830,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     async def bedrock_sse_wrapper(
         self,
-        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
+        completion_stream: AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]],
         litellm_logging_obj: LiteLLMLoggingObj,
         request_body: dict,
     ):
@@ -829,20 +850,20 @@ class AmazonAnthropicClaudeMessagesConfig(
             BaseAnthropicMessagesStreamingIterator,
         )
 
-        handler: Final = BaseAnthropicMessagesStreamingIterator(
+        handler = BaseAnthropicMessagesStreamingIterator(
             litellm_logging_obj=litellm_logging_obj,
             request_body=request_body,
         )
 
-        patched_stream: Final = self._promote_message_stop_usage(completion_stream)
+        patched_stream = self._promote_message_stop_usage(completion_stream)
 
         async for chunk in handler.async_sse_wrapper(patched_stream):
             yield chunk
 
     @staticmethod
     def _merge_message_start_cache_into_delta_usage(
-        delta_usage: dict[str, Any],
-        start_usage: dict[str, Any] | None,
+        delta_usage: Dict[str, Any],
+        start_usage: Optional[Dict[str, Any]],
     ) -> None:
         """
         Copy cache breakdown from message_start onto message_delta usage when
@@ -856,22 +877,22 @@ class AmazonAnthropicClaudeMessagesConfig(
                 if val is not None:
                     delta_usage[field] = val
         if "cache_creation" not in delta_usage:
-            cc: Final = start_usage.get("cache_creation")
+            cc = start_usage.get("cache_creation")
             if cc is not None:
                 delta_usage["cache_creation"] = cc
 
     @staticmethod
     async def _promote_message_stop_usage(
-        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
-    ) -> AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict]:
+        completion_stream: AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]],
+    ) -> AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]]:
         """
         Promote cache usage fields onto message_delta from message_stop (and,
         when stop lacks them, from message_start).  Ensures the final usage
         chunk that logging/cost sees is always self-consistent.
         """
-        _CACHE_FIELDS: Final = ("cache_creation_input_tokens", "cache_read_input_tokens")
-        pending_delta: dict[str, Any] | None = None
-        start_usage_snapshot: dict[str, Any] | None = None
+        _CACHE_FIELDS = ("cache_creation_input_tokens", "cache_read_input_tokens")
+        pending_delta: Optional[Dict[str, Any]] = None
+        start_usage_snapshot: Optional[Dict[str, Any]] = None
 
         async for chunk in completion_stream:
             if not isinstance(chunk, dict):
@@ -884,7 +905,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             chunk_type = chunk.get("type")
 
             if chunk_type == "message_start":
-                msg: dict[str, Any] = cast(dict[str, Any], chunk.get("message") or {})
+                msg: Dict[str, Any] = cast(Dict[str, Any], chunk.get("message") or {})
                 u = msg.get("usage")
                 if isinstance(u, dict):
                     start_usage_snapshot = dict(u)
@@ -895,7 +916,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 continue
 
             if chunk_type == "message_delta":
-                pending_delta = cast(dict[str, Any], chunk)
+                pending_delta = cast(Dict[str, Any], chunk)
                 continue
 
             if chunk_type == "message_stop" and pending_delta is not None:
@@ -915,7 +936,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 )
 
                 if delta_usage:
-                    pending_delta["usage"] = delta_usage
+                    pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
 
                 yield pending_delta
                 pending_delta = None
@@ -934,7 +955,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 delta_usage, start_usage_snapshot
             )
             if delta_usage:
-                pending_delta["usage"] = delta_usage
+                pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
             yield pending_delta
 
 
@@ -949,7 +970,7 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         super().__init__(model=model)
         self.DEFAULT_CHUNK_SIZE = 1024
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
+    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream, dict]:
         """
         Parse the chunk data into anthropic /messages format
 
@@ -957,9 +978,9 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         the Anthropic `/v1/messages` specification so callers receive a
         consistent response shape when streaming.
         """
-        amazon_bedrock_invocation_metrics: Final = chunk_data.pop("amazon-bedrock-invocationMetrics", {})
+        amazon_bedrock_invocation_metrics = chunk_data.pop("amazon-bedrock-invocationMetrics", {})
         if amazon_bedrock_invocation_metrics:
-            anthropic_usage: Final = {}
+            anthropic_usage = {}
             if "inputTokenCount" in amazon_bedrock_invocation_metrics:
                 anthropic_usage["input_tokens"] = amazon_bedrock_invocation_metrics["inputTokenCount"]
             if "outputTokenCount" in amazon_bedrock_invocation_metrics:

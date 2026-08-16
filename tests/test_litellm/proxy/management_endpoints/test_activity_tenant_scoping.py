@@ -13,10 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-    RestrictedAgentAccess,
-    UnrestrictedAgentAccess,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -231,8 +227,8 @@ async def test_agent_activity_non_admin_no_perms_falls_back_to_owned():
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
-            new=AsyncMock(return_value=UnrestrictedAgentAccess()),  # no explicit agent permissions
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            new=AsyncMock(return_value=[]),  # no explicit agent permissions
         ),
         patch(
             "litellm.proxy.agent_endpoints.endpoints.get_daily_activity",
@@ -279,8 +275,8 @@ async def test_agent_activity_non_admin_intersects_explicit_agent_ids():
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
-            new=AsyncMock(return_value=RestrictedAgentAccess(frozenset({"agent-permitted"}))),
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            new=AsyncMock(return_value=["agent-permitted"]),
         ),
         patch(
             "litellm.proxy.agent_endpoints.endpoints.get_daily_activity",
@@ -325,8 +321,8 @@ async def test_agent_activity_keyless_caller_does_not_query_created_by_null():
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
-            new=AsyncMock(return_value=UnrestrictedAgentAccess()),
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            new=AsyncMock(return_value=[]),
         ),
         patch(
             "litellm.proxy.agent_endpoints.endpoints.get_daily_activity",
@@ -370,8 +366,8 @@ async def test_agent_activity_non_admin_no_access_returns_empty_page():
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
-            new=AsyncMock(return_value=UnrestrictedAgentAccess()),
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            new=AsyncMock(return_value=[]),
         ),
         patch(
             "litellm.proxy.agent_endpoints.endpoints.get_daily_activity",

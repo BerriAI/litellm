@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import httpx
 from httpx._types import RequestFiles
@@ -58,7 +58,7 @@ class BaseImageEditConfig(ABC):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> Dict:
         pass
 
     @abstractmethod
@@ -66,9 +66,9 @@ class BaseImageEditConfig(ABC):
         self,
         headers: dict,
         model: str,
-        api_key: str | None = None,
-        litellm_params: dict | None = None,
-        api_base: str | None = None,
+        api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         return {}
 
@@ -76,7 +76,7 @@ class BaseImageEditConfig(ABC):
     def get_complete_url(
         self,
         model: str,
-        api_base: str | None,
+        api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
         """
@@ -94,12 +94,12 @@ class BaseImageEditConfig(ABC):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str | None,
-        image: FileTypes | None,
-        image_edit_optional_request_params: dict,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
+        image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+    ) -> Tuple[Dict, RequestFiles]:
         pass
 
     def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:

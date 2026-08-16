@@ -2,11 +2,12 @@
 Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+
+from litellm.types.llms.openai import ChatCompletionToolParam
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -15,9 +16,9 @@ class DashScopeChatConfig(OpenAIGPTConfig):
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
-        messages: list[AllMessageValues],
-        tools: list[ChatCompletionToolParam] | None = None,
-    ) -> tuple[list[AllMessageValues], list[ChatCompletionToolParam] | None]:
+        messages: List[AllMessageValues],
+        tools: Optional[List[ChatCompletionToolParam]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List[ChatCompletionToolParam]]]:
         """
         Override to preserve cache_control for DashScope.
         DashScope supports cache_control - don't strip it.
@@ -26,42 +27,42 @@ class DashScopeChatConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> list[AllMessageValues]: ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         if is_async:
             return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:
             return super()._transform_messages(messages=messages, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
-        self, api_base: str | None, api_key: str | None
-    ) -> tuple[str | None, str | None]:
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
         api_base = (
             api_base or get_secret_str("DASHSCOPE_API_BASE") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
-        dynamic_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("DASHSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         If api_base is not provided, use the default DashScope /chat/completions endpoint.

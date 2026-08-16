@@ -3,8 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final, Literal
+from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 
@@ -36,31 +35,31 @@ class TritonConfig(BaseConfig):
     Handles routing between /infer and /generate triton completion llms
     """
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[Dict, Headers]) -> BaseLLMException:
         return TritonError(status_code=status_code, message=error_message, headers=headers)
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Dict,
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
         litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> dict:
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> Dict:
         return {"Content-Type": "application/json"}
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> List:
         return ["max_tokens", "max_completion_tokens"]
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Dict,
+        optional_params: Dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> Dict:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params[param] = value
@@ -68,16 +67,16 @@ class TritonConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required")
-        llm_type: Final = self._get_triton_llm_type(api_base)
+        llm_type = self._get_triton_llm_type(api_base)
         if llm_type == "generate" and stream:
             return api_base + "_stream"
         return api_base
@@ -88,16 +87,16 @@ class TritonConfig(BaseConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        api_base: Final = litellm_params.get("api_base", "")
-        llm_type: Final = self._get_triton_llm_type(api_base)
+        api_base = litellm_params.get("api_base", "")
+        llm_type = self._get_triton_llm_type(api_base)
         if llm_type == "generate":
             return TritonGenerateConfig().transform_response(
                 model=model,
@@ -131,13 +130,13 @@ class TritonConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        api_base: Final = litellm_params.get("api_base", "")
-        llm_type: Final = self._get_triton_llm_type(api_base)
+        api_base = litellm_params.get("api_base", "")
+        llm_type = self._get_triton_llm_type(api_base)
         if llm_type == "generate":
             return TritonGenerateConfig().transform_request(
                 model=model,
@@ -166,9 +165,9 @@ class TritonConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: Optional[bool] = False,
     ) -> Any:
         return TritonResponseIterator(
             streaming_response=streaming_response,
@@ -185,14 +184,14 @@ class TritonGenerateConfig(TritonConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        inference_params: Final = optional_params.copy()
-        stream: Final = inference_params.pop("stream", False)
-        data_for_triton: Final[dict[str, Any]] = {
+        inference_params = optional_params.copy()
+        stream = inference_params.pop("stream", False)
+        data_for_triton: Dict[str, Any] = {
             "text_input": prompt_factory(model=model, messages=messages),
             "parameters": {
                 "max_tokens": int(optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)),
@@ -208,16 +207,16 @@ class TritonGenerateConfig(TritonConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json = raw_response.json()
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
         model_response.choices = [Choices(index=0, message=Message(content=raw_response_json["text_output"]))]
@@ -233,13 +232,13 @@ class TritonInferConfig(TritonConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        text_input: Final = messages[0].get("content", "")
-        data_for_triton: Final = {
+        text_input = messages[0].get("content", "")
+        data_for_triton = {
             "inputs": [
                 {
                     "name": "text_input",
@@ -273,21 +272,21 @@ class TritonInferConfig(TritonConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json = raw_response.json()
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
 
-        _triton_response_data: Final = raw_response_json["outputs"][0]["data"]
-        triton_response_data: str | None = None
+        _triton_response_data = raw_response_json["outputs"][0]["data"]
+        triton_response_data: Optional[str] = None
         if isinstance(_triton_response_data, list):
             triton_response_data = "".join(_triton_response_data)
         else:
@@ -307,12 +306,12 @@ class TritonResponseIterator(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             text = ""
-            tool_use: Final[ChatCompletionToolCallChunk | None] = None
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
             finish_reason = ""
-            usage: Final[ChatCompletionUsageBlock | None] = None
-            provider_specific_fields: Final = None
-            index: Final = int(chunk.get("index", 0))
+            usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields = None
+            index = int(chunk.get("index", 0))
 
             # set values
             text = chunk.get("text_output", "")

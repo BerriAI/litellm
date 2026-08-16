@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Literal, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
 from pydantic import Field
 
@@ -23,7 +23,7 @@ class CompetitorIntentEvidenceEntry(TypedDict, total=False):
 
     type: Literal["entity", "signal"]
     key: str  # e.g. "competitor", "ranking", "brand_self"
-    value: str | None  # resolved canonical value (e.g. "qatar_airways")
+    value: Optional[str]  # resolved canonical value (e.g. "qatar_airways")
     match: str  # matched substring
 
 
@@ -32,10 +32,10 @@ class CompetitorIntentResult(TypedDict, total=False):
 
     intent: CompetitorIntentType
     confidence: float
-    entities: dict[str, list[str]]  # brand_self, competitors, category
-    signals: list[str]
+    entities: Dict[str, List[str]]  # brand_self, competitors, category
+    signals: List[str]
     action_hint: CompetitorActionHint
-    evidence: list[CompetitorIntentEvidenceEntry]
+    evidence: List[CompetitorIntentEvidenceEntry]
 
 
 # Detection type enum
@@ -57,7 +57,7 @@ class BlockedWordDetection(TypedDict):
     type: Literal["blocked_word"]
     keyword: str
     action: str  # ContentFilterAction.value
-    description: str | None
+    description: Optional[str]
 
 
 class CategoryKeywordDetection(TypedDict):
@@ -75,12 +75,17 @@ class CompetitorIntentDetection(TypedDict):
     intent: str
     confidence: float
     action_hint: str
-    entities: dict[str, list[str]]
-    signals: list[str]
-    evidence: list[dict[str, Any]]
+    entities: Dict[str, List[str]]
+    signals: List[str]
+    evidence: List[Dict[str, Any]]
 
 
-ContentFilterDetection = PatternDetection | BlockedWordDetection | CategoryKeywordDetection | CompetitorIntentDetection
+ContentFilterDetection = Union[
+    PatternDetection,
+    BlockedWordDetection,
+    CategoryKeywordDetection,
+    CompetitorIntentDetection,
+]
 
 
 class ContentFilterCategoryConfig(BaseLiteLLMOpenAIResponseObject):
@@ -106,7 +111,7 @@ class ContentFilterCategoryConfig(BaseLiteLLMOpenAIResponseObject):
         default="medium",
         description="The severity threshold to detect the category",
     )
-    category_file: str | None = Field(
+    category_file: Optional[str] = Field(
         default=None,
         description="Optional override. Use your own category file instead of the default one.",
     )
@@ -123,21 +128,21 @@ class LitellmContentFilterGuardrailConfigModel(GuardrailConfigModel):
     """
 
     # Traditional patterns and keywords
-    patterns: list[dict] | None = Field(
+    patterns: Optional[List[dict]] = Field(
         default=None,
         description="List of regex patterns to detect (prebuilt or custom)",
     )
-    blocked_words: list[dict] | None = Field(
+    blocked_words: Optional[List[dict]] = Field(
         default=None,
         description="List of blocked keywords with actions",
     )
-    blocked_words_file: str | None = Field(
+    blocked_words_file: Optional[str] = Field(
         default=None,
         description="Path to YAML file containing blocked words",
     )
 
     # Category-based detection
-    categories: list[ContentFilterCategoryConfig] | None = Field(
+    categories: Optional[List[ContentFilterCategoryConfig]] = Field(
         default=None,
         description="List of prebuilt categories to enable (harmful_*, bias_*)",
     )
@@ -147,17 +152,17 @@ class LitellmContentFilterGuardrailConfigModel(GuardrailConfigModel):
     )
 
     # Redaction customization
-    pattern_redaction_format: str | None = Field(
+    pattern_redaction_format: Optional[str] = Field(
         default="[{pattern_name}_REDACTED]",
         description="Format string for pattern redaction (use {pattern_name} placeholder)",
     )
-    keyword_redaction_tag: str | None = Field(
+    keyword_redaction_tag: Optional[str] = Field(
         default="[KEYWORD_REDACTED]",
         description="Tag to use for keyword redaction",
     )
 
     # Competitor intent blocker (generic; industry presets add domain_words, etc.)
-    competitor_intent_config: dict[str, Any] | None = Field(
+    competitor_intent_config: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional config for intent-based competitor comparison detection. "
         "Keys: brand_self (list), competitors (list), competitor_aliases (dict), "

@@ -3,10 +3,12 @@
  */
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Wrench } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Typography, Tag } from "antd";
+import { ToolOutlined, RightOutlined, DownOutlined } from "@ant-design/icons";
 import { ParsedTool } from "./types";
 import { ToolExpandedContent } from "./ToolExpandedContent";
+
+const { Text } = Typography;
 
 interface ToolItemProps {
   tool: ParsedTool;
@@ -37,18 +39,18 @@ export function ToolItem({ tool }: ToolItemProps) {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Wrench className="size-3.5 text-muted-foreground" />
-          <span style={{ fontSize: 14 }}>
+          <ToolOutlined style={{ color: "#8c8c8c", fontSize: 14 }} />
+          <Text style={{ fontSize: 14 }}>
             {tool.index}. {tool.name}
-          </span>
+          </Text>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Badge variant={tool.called ? "default" : "secondary"}>{tool.called ? "called" : "not called"}</Badge>
+          <Tag color={tool.called ? "blue" : "default"}>{tool.called ? "called" : "not called"}</Tag>
           {expanded ? (
-            <ChevronDown className="size-3 text-muted-foreground" />
+            <DownOutlined style={{ fontSize: 12, color: "#8c8c8c" }} />
           ) : (
-            <ChevronRight className="size-3 text-muted-foreground" />
+            <RightOutlined style={{ fontSize: 12, color: "#8c8c8c" }} />
           )}
         </div>
       </div>

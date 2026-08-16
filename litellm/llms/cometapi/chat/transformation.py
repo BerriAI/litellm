@@ -5,8 +5,7 @@ Based on OpenAI-compatible API interface implementation
 Documentation: [CometAPI Documentation Link]
 """
 
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
 
 import httpx
 
@@ -37,10 +36,10 @@ class CometAPIConfig(OpenAIGPTConfig):
         """
         Map OpenAI format parameters to CometAPI format
         """
-        mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # CometAPI-specific parameters (if any)
-        extra_body: Final[dict[str, Any]] = {}
+        extra_body: dict[str, Any] = {}
         # TODO: Add CometAPI-specific parameter handling here
         # Example:
         # custom_param = non_default_params.pop("custom_param", None)
@@ -55,9 +54,9 @@ class CometAPIConfig(OpenAIGPTConfig):
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
-        messages: list[AllMessageValues],
-        tools: list["ChatCompletionToolParam"] | None = None,
-    ) -> tuple[list[AllMessageValues], list["ChatCompletionToolParam"] | None]:
+        messages: List[AllMessageValues],
+        tools: Optional[List["ChatCompletionToolParam"]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
         """
         Remove cache control flags from messages and tools if not supported
         """
@@ -67,7 +66,7 @@ class CometAPIConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -78,19 +77,19 @@ class CometAPIConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        extra_body: Final = optional_params.pop("extra_body", {})
-        response: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        extra_body = optional_params.pop("extra_body", {})
+        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
         return response
 
     def get_complete_url(
         self,
-        api_base: str | None,
-        api_key: str | None,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: bool | None = None,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         Get the complete URL for the CometAPI call.
@@ -101,7 +100,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         # Default base
         if api_base is None:
             api_base = "https://api.cometapi.com/v1"
-        endpoint: Final = "chat/completions"
+        endpoint = "chat/completions"
 
         # Normalize
         api_base = api_base.rstrip("/")
@@ -123,7 +122,9 @@ class CometAPIConfig(OpenAIGPTConfig):
             return f"{api_base}/v1/{endpoint}"
         return f"{api_base}/{endpoint}"
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
         """
         Return CometAPI-specific error class
         """
@@ -135,9 +136,9 @@ class CometAPIConfig(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: Optional[bool] = False,
     ) -> Any:
         """
         Get model response iterator for streaming responses
@@ -161,8 +162,8 @@ class CometAPIChatCompletionStreamingHandler(BaseModelResponseIterator):
         try:
             # Handle error in chunk
             if "error" in chunk:
-                error_chunk: Final = chunk["error"]
-                error_message: Final = "CometAPI Error: {}".format(error_chunk.get("message", "Unknown error"))
+                error_chunk = chunk["error"]
+                error_message = "CometAPI Error: {}".format(error_chunk.get("message", "Unknown error"))
                 raise CometAPIException(
                     message=error_message,
                     status_code=error_chunk.get("code", 400),
@@ -170,7 +171,7 @@ class CometAPIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 )
 
             # Process choices
-            new_choices: Final = []
+            new_choices = []
             for choice in chunk["choices"]:
                 # Handle reasoning content if present
                 if "delta" in choice and "reasoning" in choice["delta"]:

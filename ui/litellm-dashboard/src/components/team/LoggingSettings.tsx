@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 /* eslint-disable react/no-unescaped-entities */
 import React from "react";
 import { Select, Tooltip, Divider } from "antd";
@@ -5,7 +6,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, Card, TextInput } from "@tremor/react";
 import { PlusIcon, TrashIcon, CogIcon, BanIcon } from "@heroicons/react/outline";
 import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import NumericalInput from "../shared/numerical_input";
 
 const { Option } = Select;
@@ -117,6 +118,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             <div key={paramName} className="space-y-2">
               <label className="text-sm font-medium text-gray-700 capitalize flex items-center space-x-1">
                 <span>{paramName.replace(/_/g, " ")}</span>
+                <Tooltip title={`Environment variable reference recommended: os.environ/${paramName.toUpperCase()}`}>
+                  <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
+                </Tooltip>
                 {paramType === "password" && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium bg-yellow-100 text-yellow-800">
                     Sensitive
@@ -175,16 +179,31 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             optionLabelProp="label"
           >
             {allCallbacks.map((callbackName) => {
+              const logo = resolveLogoSrc(callbackInfo[callbackName]?.logo);
               const description = callbackInfo[callbackName]?.description;
               return (
                 <Option key={callbackName} value={callbackName} label={callbackName}>
                   <Tooltip title={description} placement="right">
                     <div className="flex items-center space-x-2">
-                      <Logo
-                        src={callbackInfo[callbackName]?.logo}
-                        label={callbackName}
-                        className="w-4 h-4 object-contain"
-                      />
+                      {logo && (
+                        <img
+                          src={logo}
+                          alt={callbackName}
+                          className="w-4 h-4 object-contain"
+                          onError={(e) => {
+                            // Create a div with callback initial as fallback
+                            const target = e.target as HTMLImageElement;
+                            const parent = target.parentElement;
+                            if (parent) {
+                              const fallbackDiv = document.createElement("div");
+                              fallbackDiv.className =
+                                "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                              fallbackDiv.textContent = callbackName.charAt(0);
+                              parent.replaceChild(fallbackDiv, target);
+                            }
+                          }}
+                        />
+                      )}
                       <span>{callbackName}</span>
                     </div>
                   </Tooltip>
@@ -226,6 +245,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           const callbackDisplayName = config.callback_name
             ? Object.entries(callback_map).find(([_, value]) => value === config.callback_name)?.[0]
             : undefined;
+          const logoUrl = callbackDisplayName ? resolveLogoSrc(callbackInfo[callbackDisplayName]?.logo) : null;
 
           return (
             <Card
@@ -236,13 +256,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             >
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center space-x-2">
-                  {callbackDisplayName && (
-                    <Logo
-                      src={callbackInfo[callbackDisplayName]?.logo}
-                      label={callbackDisplayName}
-                      className="w-5 h-5 object-contain"
-                    />
-                  )}
+                  {logoUrl && <img src={logoUrl} alt={callbackDisplayName} className="w-5 h-5 object-contain" />}
                   <span className="text-sm font-medium">{callbackDisplayName || "New Integration"} Configuration</span>
                 </div>
                 <Button
@@ -269,16 +283,31 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                       optionLabelProp="label"
                     >
                       {supportedCallbacks.map((callbackName) => {
+                        const logo = resolveLogoSrc(callbackInfo[callbackName]?.logo);
                         const description = callbackInfo[callbackName]?.description;
                         return (
                           <Option key={callbackName} value={callbackName} label={callbackName}>
                             <Tooltip title={description} placement="right">
                               <div className="flex items-center space-x-2">
-                                <Logo
-                                  src={callbackInfo[callbackName]?.logo}
-                                  label={callbackName}
-                                  className="w-4 h-4 object-contain"
-                                />
+                                {logo && (
+                                  <img
+                                    src={logo}
+                                    alt={callbackName}
+                                    className="w-4 h-4 object-contain"
+                                    onError={(e) => {
+                                      // Create a div with callback initial as fallback
+                                      const target = e.target as HTMLImageElement;
+                                      const parent = target.parentElement;
+                                      if (parent) {
+                                        const fallbackDiv = document.createElement("div");
+                                        fallbackDiv.className =
+                                          "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                                        fallbackDiv.textContent = callbackName.charAt(0);
+                                        parent.replaceChild(fallbackDiv, target);
+                                      }
+                                    }}
+                                  />
+                                )}
                                 <span>{callbackName}</span>
                               </div>
                             </Tooltip>

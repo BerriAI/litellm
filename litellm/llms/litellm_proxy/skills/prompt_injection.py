@@ -8,7 +8,7 @@ and injection into the system prompt for non-Anthropic models.
 import posixpath
 import zipfile
 from io import BytesIO
-from typing import Any, Final
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import LiteLLM_SkillsTable
@@ -25,7 +25,7 @@ class SkillPromptInjectionHandler:
     - Create execute_code tool definition
     """
 
-    def extract_skill_content(self, skill: LiteLLM_SkillsTable) -> str | None:
+    def extract_skill_content(self, skill: LiteLLM_SkillsTable) -> Optional[str]:
         """
         Extract skill content from the stored zip file.
 
@@ -42,7 +42,7 @@ class SkillPromptInjectionHandler:
             return skill.instructions
 
         try:
-            zip_buffer: Final = BytesIO(skill.file_content)
+            zip_buffer = BytesIO(skill.file_content)
             with zipfile.ZipFile(zip_buffer, "r") as zf:
                 # Look for SKILL.md first
                 for name in zf.namelist():
@@ -66,12 +66,12 @@ class SkillPromptInjectionHandler:
                             return f"## Skill: {skill.display_title or skill.skill_id}\n\n{content}"
         except Exception as e:
             verbose_logger.warning(
-                "SkillPromptInjectionHandler: Error extracting content from skill %s: %s", skill.skill_id, e
+                f"SkillPromptInjectionHandler: Error extracting content from skill {skill.skill_id}: {e}"
             )
 
         return skill.instructions
 
-    def extract_all_files(self, skill: LiteLLM_SkillsTable) -> dict[str, bytes]:
+    def extract_all_files(self, skill: LiteLLM_SkillsTable) -> Dict[str, bytes]:
         """
         Extract ALL files from skill ZIP for code execution.
 
@@ -84,13 +84,13 @@ class SkillPromptInjectionHandler:
         Returns:
             Dict mapping file paths to binary content
         """
-        files: Final[dict[str, bytes]] = {}
+        files: Dict[str, bytes] = {}
 
         if not skill.file_content:
             return files
 
         try:
-            zip_buffer: Final = BytesIO(skill.file_content)
+            zip_buffer = BytesIO(skill.file_content)
             with zipfile.ZipFile(zip_buffer, "r") as zf:
                 for name in zf.namelist():
                     # Skip directories
@@ -111,22 +111,20 @@ class SkillPromptInjectionHandler:
                     normalized = posixpath.normpath(clean_path)
                     if normalized.startswith("..") or posixpath.isabs(normalized):
                         verbose_logger.warning(
-                            "SkillPromptInjectionHandler: Skipping entry with invalid path in skill %s: %s",
-                            skill.skill_id,
-                            name,
+                            f"SkillPromptInjectionHandler: Skipping entry with invalid path in skill {skill.skill_id}: {name}"
                         )
                         continue
 
                     files[normalized] = zf.read(name)
         except Exception as e:
             verbose_logger.warning(
-                "SkillPromptInjectionHandler: Error extracting files from skill %s: %s", skill.skill_id, e
+                f"SkillPromptInjectionHandler: Error extracting files from skill {skill.skill_id}: {e}"
             )
 
         return files
 
     def inject_skill_content_to_messages(
-        self, data: dict, skill_contents: list[str], use_anthropic_format: bool = False
+        self, data: dict, skill_contents: List[str], use_anthropic_format: bool = False
     ) -> dict:
         """
         Inject skill content into the system prompt.
@@ -149,11 +147,11 @@ class SkillPromptInjectionHandler:
             return data
 
         # Build the skill injection text
-        skill_section: Final = "\n\n---\n\n# Available Skills\n\n" + "\n\n---\n\n".join(skill_contents)
+        skill_section = "\n\n---\n\n# Available Skills\n\n" + "\n\n---\n\n".join(skill_contents)
 
         if use_anthropic_format:
             # Anthropic messages API: use top-level 'system' parameter
-            current_system: Final = data.get("system", "")
+            current_system = data.get("system", "")
             if current_system:
                 data["system"] = current_system + skill_section
             else:
@@ -161,7 +159,7 @@ class SkillPromptInjectionHandler:
             return data
 
         # OpenAI-style: inject into messages array
-        messages: Final = data.get("messages", [])
+        messages = data.get("messages", [])
         if not messages:
             return data
 
@@ -174,7 +172,7 @@ class SkillPromptInjectionHandler:
 
         if system_msg_idx is not None:
             # Append to existing system message
-            current_content: Final = messages[system_msg_idx].get("content", "")
+            current_content = messages[system_msg_idx].get("content", "")
             messages[system_msg_idx]["content"] = current_content + skill_section
         else:
             # Create new system message at the beginning
@@ -183,7 +181,7 @@ class SkillPromptInjectionHandler:
         data["messages"] = messages
         return data
 
-    def create_execute_code_tool(self, skill_modules: list[str]) -> dict[str, Any]:
+    def create_execute_code_tool(self, skill_modules: List[str]) -> Dict[str, Any]:
         """
         Create the execute_code tool definition.
 
@@ -197,7 +195,7 @@ class SkillPromptInjectionHandler:
             OpenAI-style tool definition
         """
         # Format module list for description
-        module_examples: Final = []
+        module_examples = []
         for mod in skill_modules[:5]:  # Limit to 5 examples
             if mod.endswith(".py"):
                 # Convert path to import: "core/gif_builder.py" -> "from core.gif_builder import ..."
@@ -226,7 +224,7 @@ class SkillPromptInjectionHandler:
             },
         }
 
-    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
+    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> Dict[str, Any]:
         """
         Convert a LiteLLM skill to an OpenAI-style tool.
 
@@ -240,17 +238,17 @@ class SkillPromptInjectionHandler:
             OpenAI-style tool definition
         """
         # Create a function name from skill_id (sanitize for function naming)
-        func_name: Final = skill.skill_id.replace("-", "_").replace(" ", "_")
+        func_name = skill.skill_id.replace("-", "_").replace(" ", "_")
 
         # Use instructions as description, fall back to description or title
         description = skill.instructions or skill.description or skill.display_title or f"Skill: {skill.skill_id}"
 
         # Truncate description if too long (OpenAI has limits)
-        max_desc_length: Final = 1024
+        max_desc_length = 1024
         if len(description) > max_desc_length:
             description = description[: max_desc_length - 3] + "..."
 
-        tool: Final[dict[str, Any]] = {
+        tool: Dict[str, Any] = {
             "type": "function",
             "function": {
                 "name": func_name,
@@ -265,13 +263,13 @@ class SkillPromptInjectionHandler:
 
         # If skill has metadata with parameter definitions, use them
         if skill.metadata and isinstance(skill.metadata, dict):
-            params: Final = skill.metadata.get("parameters")
+            params = skill.metadata.get("parameters")
             if params and isinstance(params, dict):
                 tool["function"]["parameters"] = params
 
         return tool
 
-    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
+    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> Dict[str, Any]:
         """
         Convert a LiteLLM skill to an Anthropic-style tool (messages API format).
 
@@ -281,22 +279,22 @@ class SkillPromptInjectionHandler:
         Returns:
             Anthropic-style tool definition with name, description, input_schema
         """
-        func_name: Final = skill.skill_id.replace("-", "_").replace(" ", "_")
+        func_name = skill.skill_id.replace("-", "_").replace(" ", "_")
 
         description = skill.instructions or skill.description or skill.display_title or f"Skill: {skill.skill_id}"
 
-        max_desc_length: Final = 1024
+        max_desc_length = 1024
         if len(description) > max_desc_length:
             description = description[: max_desc_length - 3] + "..."
 
-        input_schema: dict[str, Any] = {
+        input_schema: Dict[str, Any] = {
             "type": "object",
             "properties": {},
             "required": [],
         }
 
         if skill.metadata and isinstance(skill.metadata, dict):
-            params: Final = skill.metadata.get("parameters")
+            params = skill.metadata.get("parameters")
             if params and isinstance(params, dict):
                 input_schema = params
 

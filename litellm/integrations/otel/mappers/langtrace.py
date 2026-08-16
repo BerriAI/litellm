@@ -8,7 +8,7 @@ Scalar attributes are declared as a flat ``key -> extractor`` table (one lambda
 per mapping operation); the prompt/completion blobs are serialized as a tail.
 """
 
-from collections.abc import Callable
+from typing import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (

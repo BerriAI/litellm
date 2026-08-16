@@ -4,118 +4,158 @@ import { describe, expect, it, vi } from "vitest";
 import { UnifiedSelector } from "./UnifiedSelector";
 import { EndpointId, ENDPOINT_CONFIGS } from "../endpoint_config";
 
-const CHAT = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
-const AGENTS = ENDPOINT_CONFIGS[EndpointId.A2A_AGENTS];
-
-const promptIsVisible = (text: string) =>
-  screen.queryByText(text) !== null || screen.queryByPlaceholderText(text) !== null;
-
-const openList = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(screen.getByRole("combobox"));
-};
-
 describe("UnifiedSelector", () => {
-  it("renders a combobox", () => {
-    render(
-      <UnifiedSelector
-        value=""
-        options={[{ value: "option1", label: "Option One" }]}
-        loading={false}
-        config={CHAT}
-        onChange={vi.fn()}
-      />,
+  it("should render", () => {
+    const onChange = vi.fn();
+    const options = [
+      { value: "option1", label: "Option 1" },
+      { value: "option2", label: "Option 2" },
+    ];
+    const config = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
+
+    render(<UnifiedSelector value="" options={options} loading={false} config={config} onChange={onChange} />);
+
+    const select = screen.getByRole("combobox");
+    expect(select).toBeInTheDocument();
+  });
+
+  it("should display placeholder when not loading", () => {
+    const onChange = vi.fn();
+    const options = [{ value: "option1", label: "Option 1" }];
+    const config = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
+
+    const { container } = render(
+      <UnifiedSelector value="" options={options} loading={false} config={config} onChange={onChange} />,
     );
 
-    expect(screen.getByRole("combobox")).toBeInTheDocument();
+    const placeholder = container.querySelector(".ant-select-selection-placeholder");
+    expect(placeholder).toHaveTextContent(config.selectorPlaceholder);
   });
 
-  it("prompts with the endpoint's own selector copy", () => {
-    render(<UnifiedSelector value="" options={[]} loading={false} config={CHAT} onChange={vi.fn()} />);
+  it("should display loading placeholder when loading", () => {
+    const onChange = vi.fn();
+    const options = [{ value: "option1", label: "Option 1" }];
+    const config = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
 
-    expect(promptIsVisible(CHAT.selectorPlaceholder)).toBe(true);
+    const { container } = render(
+      <UnifiedSelector value="" options={options} loading={true} config={config} onChange={onChange} />,
+    );
+
+    const placeholder = container.querySelector(".ant-select-selection-placeholder");
+    expect(placeholder).toHaveTextContent(`Loading ${config.selectorLabel.toLowerCase()}s...`);
   });
 
-  it("prompts with the agent endpoint's copy when configured for agents", () => {
-    render(<UnifiedSelector value="" options={[]} loading={false} config={AGENTS} onChange={vi.fn()} />);
-
-    expect(promptIsVisible(AGENTS.selectorPlaceholder)).toBe(true);
-  });
-
-  it("swaps the prompt for a loading message while options are in flight", () => {
-    render(<UnifiedSelector value="" options={[]} loading config={CHAT} onChange={vi.fn()} />);
-
-    expect(promptIsVisible(`Loading ${CHAT.selectorLabel.toLowerCase()}s...`)).toBe(true);
-  });
-
-  it("reports the chosen option's value, not its label", async () => {
+  it("should call onChange when option is selected", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(
-      <UnifiedSelector
-        value=""
-        options={[
-          { value: "option1", label: "Option One" },
-          { value: "option2", label: "Option Two" },
-        ]}
-        loading={false}
-        config={CHAT}
-        onChange={onChange}
-      />,
-    );
+    const options = [
+      { value: "option1", label: "Option 1" },
+      { value: "option2", label: "Option 2" },
+    ];
+    const config = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
 
-    await openList(user);
+    render(<UnifiedSelector value="" options={options} loading={false} config={config} onChange={onChange} />);
 
-    const matches = await screen.findAllByText("Option Two");
-    await user.click(matches[matches.length - 1]);
-
-    await waitFor(() => expect(onChange).toHaveBeenCalled());
-    expect(onChange.mock.calls[0][0]).toBe("option2");
-  });
-
-  it("narrows the list as the user searches", async () => {
-    const user = userEvent.setup();
-    render(
-      <UnifiedSelector
-        value=""
-        options={[
-          { value: "option1", label: "Option One" },
-          { value: "option2", label: "Option Two" },
-          { value: "option3", label: "Different" },
-        ]}
-        loading={false}
-        config={CHAT}
-        onChange={vi.fn()}
-      />,
-    );
-
-    const combobox = screen.getByRole("combobox");
-    await user.click(combobox);
-    await user.type(combobox, "One");
+    const select = screen.getByRole("combobox");
+    await user.click(select);
 
     await waitFor(() => {
-      expect(screen.getAllByText("Option One").length).toBeGreaterThan(0);
+      const option = screen.getByText("Option 1");
+      expect(option).toBeInTheDocument();
+    });
+
+    const option = screen.getByText("Option 1");
+    await user.click(option);
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+    const callArgs = onChange.mock.calls[0];
+    expect(callArgs[0]).toBe("option1");
+  });
+
+  it("should display selected value", () => {
+    const onChange = vi.fn();
+    const options = [
+      { value: "option1", label: "Option 1" },
+      { value: "option2", label: "Option 2" },
+    ];
+    const config = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
+
+    const { container } = render(
+      <UnifiedSelector value="option1" options={options} loading={false} config={config} onChange={onChange} />,
+    );
+
+    const selectedValue = container.querySelector(".ant-select-selection-item");
+    expect(selectedValue).toHaveTextContent("Option 1");
+  });
+
+  it("should filter options by search input", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const options = [
+      { value: "option1", label: "Option One" },
+      { value: "option2", label: "Option Two" },
+      { value: "option3", label: "Different" },
+    ];
+    const config = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
+
+    render(<UnifiedSelector value="" options={options} loading={false} config={config} onChange={onChange} />);
+
+    const select = screen.getByRole("combobox");
+    await user.click(select);
+    await user.type(select, "One");
+
+    await waitFor(() => {
+      expect(screen.getByText("Option One")).toBeInTheDocument();
       expect(screen.queryByText("Option Two")).not.toBeInTheDocument();
       expect(screen.queryByText("Different")).not.toBeInTheDocument();
     });
   });
 
-  it("shows a busy indicator in the empty list while loading", async () => {
+  it("should show loading spinner in notFoundContent when loading", async () => {
     const user = userEvent.setup();
-    render(<UnifiedSelector value="" options={[]} loading config={CHAT} onChange={vi.fn()} />);
+    const onChange = vi.fn();
+    const options: { value: string; label: string }[] = [];
+    const config = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
 
-    await openList(user);
+    render(<UnifiedSelector value="" options={options} loading={true} config={config} onChange={onChange} />);
+
+    const select = screen.getByRole("combobox");
+    await user.click(select);
 
     await waitFor(() => {
-      expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument();
+      const spin = document.querySelector(".ant-spin");
+      expect(spin).toBeInTheDocument();
     });
   });
 
-  it("says so when there is nothing to pick and nothing is loading", async () => {
+  it("should show no options message when not loading and no options", async () => {
     const user = userEvent.setup();
-    render(<UnifiedSelector value="" options={[]} loading={false} config={CHAT} onChange={vi.fn()} />);
+    const onChange = vi.fn();
+    const options: { value: string; label: string }[] = [];
+    const config = ENDPOINT_CONFIGS[EndpointId.CHAT_COMPLETIONS];
 
-    await openList(user);
+    render(<UnifiedSelector value="" options={options} loading={false} config={config} onChange={onChange} />);
 
-    expect(await screen.findByText(`No ${CHAT.selectorLabel.toLowerCase()}s available`)).toBeInTheDocument();
+    const select = screen.getByRole("combobox");
+    await user.click(select);
+
+    await waitFor(() => {
+      expect(screen.getByText(`No ${config.selectorLabel.toLowerCase()}s available`)).toBeInTheDocument();
+    });
+  });
+
+  it("should work with agent endpoint config", () => {
+    const onChange = vi.fn();
+    const options = [{ value: "agent1", label: "Agent One" }];
+    const config = ENDPOINT_CONFIGS[EndpointId.A2A_AGENTS];
+
+    const { container } = render(
+      <UnifiedSelector value="" options={options} loading={false} config={config} onChange={onChange} />,
+    );
+
+    const placeholder = container.querySelector(".ant-select-selection-placeholder");
+    expect(placeholder).toHaveTextContent(config.selectorPlaceholder);
   });
 });

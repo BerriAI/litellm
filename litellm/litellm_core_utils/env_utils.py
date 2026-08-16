@@ -3,7 +3,6 @@ Utility helpers for reading and parsing environment variables.
 """
 
 import os
-from typing import Final
 
 
 def get_env_int(env_var: str, default: int) -> int:
@@ -29,7 +28,7 @@ def get_env_int_or_none(env_var: str) -> int | None:
     from "left at the default", for example when an override should take precedence over a
     value resolved from somewhere else.
     """
-    raw: Final = os.getenv(env_var)
+    raw = os.getenv(env_var)
     if raw is None:
         return None
     try:

@@ -2,28 +2,30 @@
 Translate from OpenAI's `/v1/chat/completions` to Perplexity's `/v1/chat/completions`
 """
 
-from typing import Any, Final
+from typing import Any, List, Optional, Tuple
 
 import httpx
-
 import litellm
 from litellm._logging import verbose_logger
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import Usage, PromptTokensDetailsWrapper
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAnnotation, ChatCompletionAnnotationURLCitation
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelResponse
+from litellm.types.llms.openai import ChatCompletionAnnotation
+from litellm.types.llms.openai import ChatCompletionAnnotationURLCitation
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):
     @property
-    def custom_llm_provider(self) -> str | None:
+    def custom_llm_provider(self) -> Optional[str]:
         return "perplexity"
 
     def _get_openai_compatible_provider_info(
-        self, api_base: str | None, api_key: str | None
-    ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return api_base, dynamic_api_key
 
@@ -35,7 +37,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         Eg. Perplexity does not support tools, tool_choice, function_call, functions, etc.
         """
-        base_openai_params: Final = [
+        base_openai_params = [
             "frequency_penalty",
             "max_tokens",
             "max_completion_tokens",
@@ -52,13 +54,13 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_openai_params.append("reasoning_effort")
         except Exception as e:
-            verbose_logger.debug("Error checking if model supports reasoning: %s", e)
+            verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
 
         try:
             if litellm.supports_web_search(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_openai_params.append("web_search_options")
         except Exception as e:
-            verbose_logger.debug("Error checking if model supports web search: %s", e)
+            verbose_logger.debug(f"Error checking if model supports web search: {e}")
 
         return base_openai_params
 
@@ -69,12 +71,12 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         # Call the parent transform_response first to handle the standard transformation
         model_response = super().transform_response(
@@ -93,11 +95,11 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         # Extract and enhance usage with Perplexity-specific fields
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json = raw_response.json()
             self._enhance_usage_with_perplexity_fields(model_response, raw_response_json)
             self._add_citations_as_annotations(model_response, raw_response_json)
         except Exception as e:
-            verbose_logger.debug("Error extracting Perplexity-specific usage fields: %s", e)
+            verbose_logger.debug(f"Error extracting Perplexity-specific usage fields: {e}")
 
         return model_response
 
@@ -108,24 +110,26 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         """
         if not hasattr(model_response, "usage") or model_response.usage is None:
             # Create a usage object if it doesn't exist (when usage was None)
-            model_response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+            model_response.usage = Usage(  # type: ignore[attr-defined]
+                prompt_tokens=0, completion_tokens=0, total_tokens=0
+            )
 
-        usage: Final = model_response.usage
+        usage = model_response.usage  # type: ignore[attr-defined]
 
         # Extract citation tokens count
-        citations: Final = raw_response_json.get("citations", [])
+        citations = raw_response_json.get("citations", [])
         citation_tokens = 0
         if citations:
             # Count total characters in citations as a proxy for citation tokens
             # This is an estimation - in practice, you might want to use proper tokenization
-            total_citation_chars: Final = sum(len(str(citation)) for citation in citations if citation)
+            total_citation_chars = sum(len(str(citation)) for citation in citations if citation)
             # Rough estimation: ~4 characters per token (OpenAI's general rule)
             if total_citation_chars > 0:
                 citation_tokens = max(1, total_citation_chars // 4)
 
         # Extract search queries count from usage or response metadata
         # Perplexity might include this in the usage object or as separate metadata
-        perplexity_usage: Final = raw_response_json.get("usage", {})
+        perplexity_usage = raw_response_json.get("usage", {})
 
         # Try to extract search queries from usage field first, then root level
         num_search_queries = perplexity_usage.get("num_search_queries")
@@ -158,36 +162,36 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             return
 
         # Get the first choice (assuming single response)
-        choice: Final = model_response.choices[0]
+        choice = model_response.choices[0]
         if not hasattr(choice, "message") or choice.message is None:
             return
 
-        message: Final = choice.message
-        annotations: Final = []
+        message = choice.message
+        annotations = []
 
         # Extract citations from the response
-        citations: Final = raw_response_json.get("citations", [])
-        search_results: Final = raw_response_json.get("search_results", [])
+        citations = raw_response_json.get("citations", [])
+        search_results = raw_response_json.get("search_results", [])
 
         # Create a mapping of URLs to search result titles
-        url_to_title: Final = {}
+        url_to_title = {}
         for result in search_results:
             if isinstance(result, dict) and "url" in result and "title" in result:
                 url_to_title[result["url"]] = result["title"]
 
         # Get the message content to find citation positions
-        content: Final = getattr(message, "content", "")
+        content = getattr(message, "content", "")
         if not content:
             return
 
         # Find all citation markers like [1], [2], [3], [4] in the text
         import re
 
-        citation_pattern: Final = r"\[(\d+)\]"
-        citation_matches: Final = list(re.finditer(citation_pattern, content))
+        citation_pattern = r"\[(\d+)\]"
+        citation_matches = list(re.finditer(citation_pattern, content))
 
         # Create a mapping of citation numbers to URLs
-        citation_number_to_url: Final = {}
+        citation_number_to_url = {}
         for i, citation in enumerate(citations):
             if isinstance(citation, str):
                 citation_number_to_url[i + 1] = citation  # 1-indexed

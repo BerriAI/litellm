@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from typing import Final
 from urllib.parse import quote_plus
 
 from litellm.types.mcp_server.mcp_server_manager import MCPTokenEndpointAuthMethod
@@ -67,8 +66,8 @@ def build_token_endpoint_client_auth(
             )
         # RFC 6749 section 2.3.1: form-urlencode each value before joining with ':' so a
         # client_id/secret containing reserved characters (':', '+', '%', ...) is transmitted intact.
-        userpass: Final = f"{quote_plus(client_id)}:{quote_plus(client_secret)}"
-        encoded: Final = base64.b64encode(userpass.encode()).decode()
+        userpass = f"{quote_plus(client_id)}:{quote_plus(client_secret)}"
+        encoded = base64.b64encode(userpass.encode()).decode()
         return TokenEndpointClientAuth(headers={"Authorization": f"Basic {encoded}"}, body={})
     return TokenEndpointClientAuth(
         headers={},

@@ -3,7 +3,7 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 """
 
 import os
-from typing import Any, Final
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
@@ -13,7 +13,7 @@ from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
-azure_ai_anthropic_count_tokens_handler: Final = AzureAIAnthropicCountTokensHandler()
+azure_ai_anthropic_count_tokens_handler = AzureAIAnthropicCountTokensHandler()
 
 
 class AzureAIAnthropicTokenCounter(BaseTokenCounter):
@@ -21,20 +21,20 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
 
     def should_use_token_counting_api(
         self,
-        custom_llm_provider: str | None = None,
+        custom_llm_provider: Optional[str] = None,
     ) -> bool:
         return custom_llm_provider == LlmProviders.AZURE_AI.value
 
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
-        deployment: dict[str, Any] | None = None,
+        messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[List[Dict[str, Any]]],
+        deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
-    ) -> TokenCountResponse | None:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system: Optional[Any] = None,
+    ) -> Optional[TokenCountResponse]:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.
 
@@ -54,7 +54,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             return None
 
         deployment = deployment or {}
-        litellm_params: Final = deployment.get("litellm_params", {})
+        litellm_params = deployment.get("litellm_params", {})
 
         # Get Azure AI API key from deployment config or environment
         api_key = litellm_params.get("api_key")
@@ -75,7 +75,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             return None
 
         try:
-            result: Final = await azure_ai_anthropic_count_tokens_handler.handle_count_tokens_request(
+            result = await azure_ai_anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
@@ -95,7 +95,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 )
         except AnthropicError as e:
             verbose_logger.warning(
-                "Azure AI Anthropic CountTokens API error: status=%s, message=%s", e.status_code, e.message
+                f"Azure AI Anthropic CountTokens API error: status={e.status_code}, message={e.message}"
             )
             return TokenCountResponse(
                 total_tokens=0,
@@ -107,7 +107,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 status_code=e.status_code,
             )
         except Exception as e:
-            verbose_logger.warning("Error calling Azure AI Anthropic CountTokens API: %s", e)
+            verbose_logger.warning(f"Error calling Azure AI Anthropic CountTokens API: {e}")
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

@@ -6,7 +6,7 @@ so this config enables direct routing instead of falling back to
 the chat completions → responses conversion pipeline.
 """
 
-from typing import Final
+from typing import Optional
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -32,10 +32,10 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         headers: dict,
         model: str,
-        litellm_params: GenericLiteLLMParams | None,
+        litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key: Final = (
+        api_key = (
             litellm_params.api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         )  # vllm does not require an api key
         headers.update(
@@ -47,7 +47,7 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: str | None,
+        api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
         api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
