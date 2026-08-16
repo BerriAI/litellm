@@ -1571,9 +1571,7 @@ class CustomStreamWrapper:
 
             if hasattr(chunk, "usage") and chunk.usage is not None:
                 model_response.usage = (
-                    litellm.Usage(**chunk.usage.model_dump())
-                    if isinstance(chunk.usage, BaseModel)
-                    else chunk.usage
+                    litellm.Usage(**chunk.usage.model_dump()) if isinstance(chunk.usage, BaseModel) else chunk.usage
                 )
 
             ## RETURN ARG
