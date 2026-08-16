@@ -11,6 +11,7 @@ from starlette.requests import Request
 import litellm
 from litellm.files.main import openai_files_instance
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy.openai_files_endpoints.common_utils import extract_model_param
 from litellm.proxy.anthropic_endpoints.skills_endpoints import (
     _native_skill_data,
 )
@@ -215,12 +216,12 @@ async def test_router_model_configuration_overrides_request_provider() -> None:
 )
 @pytest.mark.asyncio
 async def test_native_endpoint_model_priority(
-    body_model: str | None,
+    body_model: object | None,
     query: str,
     header_model: str | None,
     expected: str | None,
 ) -> None:
-    body = json.dumps({"model": body_model} if body_model else {}).encode()
+    body = json.dumps({"model": body_model} if body_model is not None else {}).encode()
 
     async def receive() -> dict[str, Any]:
         return {"type": "http.request", "body": body, "more_body": False}
@@ -251,9 +252,24 @@ async def test_native_endpoint_model_priority(
     assert data["_skill_operation"] == "update"
 
 
+def test_extract_model_param_ignores_non_string_body_model() -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/skills/skill_1",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+
+    assert extract_model_param(request, {"model": {"unexpected": "type"}}) is None
+
+
 @pytest.mark.parametrize(
     ("api_base", "expected"),
     [
+        (None, None),
         ("https://resource.openai.azure.com", "https://resource.openai.azure.com"),
         ("https://resource.openai.azure.com/openai", "https://resource.openai.azure.com"),
         ("https://resource.openai.azure.com/openai/v1", "https://resource.openai.azure.com"),
@@ -261,7 +277,7 @@ async def test_native_endpoint_model_priority(
         ("https://resource.openai.azure.com/openai/v1/responses", "https://resource.openai.azure.com"),
     ],
 )
-def test_azure_skills_api_base(api_base: str, expected: str) -> None:
+def test_azure_skills_api_base(api_base: str | None, expected: str | None) -> None:
     assert _azure_skills_api_base(api_base) == expected
 
 
