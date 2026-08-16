@@ -1,26 +1,39 @@
-import json
+from typing import Final, TypedDict
 from unittest.mock import Mock
 
 from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+
+
+class _ExaSearchResult(TypedDict, total=False):
+    title: str
+    url: str
+    publishedDate: str
+    text: str
+    highlights: list[str]
+    summary: str
+
+
+class _ExaSearchPayload(TypedDict):
+    results: list[_ExaSearchResult]
 
 
 def _config() -> ExaAISearchConfig:
     return ExaAISearchConfig()
 
 
-def _resp(payload):
-    r = Mock()
+def _resp(payload: _ExaSearchPayload) -> Mock:
+    r: Final = Mock()
     r.json.return_value = payload
     return r
 
 
-def _result(**overrides):
-    base = {
+def _result(**overrides: str | list[str]) -> _ExaSearchResult:
+    base: Final[_ExaSearchResult] = {
         "title": "Lion Finance Group (LON:BGEO) Q1 2026 Earnings Call Transcript & Audio",
         "url": "https://stockanalysis.com/quote/lon/BGEO/transcripts/557900-q1-2026/",
         "publishedDate": "2026-05-01T00:00:00.000Z",
     }
-    return {**base, **overrides}
+    return {**base, **overrides}  # type: ignore[return-value]
 
 
 def test_transform_search_response_uses_text_when_present():
