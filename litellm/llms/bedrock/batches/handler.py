@@ -25,6 +25,8 @@ _BEDROCK_MIJ_STATUS_TO_OPENAI: Final = {
     "Expired": "expired",
 }
 
+_CANCEL_IDEMPOTENT_STATUSES: Final = frozenset({"cancelling", "cancelled", "completed", "failed", "expired"})
+
 
 def _extract_region_from_bedrock_arn(arn: str) -> str | None:
     """ARN shape: ``arn:aws:bedrock:<region>:<account>:<type>/<id>``"""
@@ -132,31 +134,33 @@ class BedrockBatchesHandler:
             aws_session_token=creds.token,
         )
 
+        def job_status() -> "LiteLLMBatch":
+            return BedrockBatchesHandler._handle_model_invocation_job_status(
+                batch_id=batch_id,
+                aws_region_name=region,
+                logging_obj=logging_obj,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
+                aws_role_name=aws_role_name,
+                aws_web_identity_token=aws_web_identity_token,
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_external_id=aws_external_id,
+            )
+
         try:
             client.stop_model_invocation_job(jobIdentifier=batch_id)
         except ClientError as e:
-            error_code: Final = e.response.get("Error", {}).get("Code")
-            error_msg: Final = e.response.get("Error", {}).get("Message", "").lower()
-            already_terminal: Final = error_code == "ValidationException" and any(
-                term in error_msg for term in ("stop", "terminal", "completed", "already")
-            )
-            if not already_terminal:
+            if e.response.get("Error", {}).get("Code") != "ValidationException":
                 raise
+            current_batch: Final = job_status()
+            if current_batch.status not in _CANCEL_IDEMPOTENT_STATUSES:
+                raise
+            return current_batch
 
-        return BedrockBatchesHandler._handle_model_invocation_job_status(
-            batch_id=batch_id,
-            aws_region_name=region,
-            logging_obj=logging_obj,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
-        )
+        return job_status()
 
     @staticmethod
     def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
