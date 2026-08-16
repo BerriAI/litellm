@@ -78,8 +78,12 @@ class TestAudioTranscriptions:
         )
         match result:
             case UnknownApiError(status_code=400, body=body):
-                assert "file" in body.lower() or "audio" in body.lower(), (
-                    f"empty audio error must identify the invalid file: {body[:300]}"
+                assert "OpenAIException" in body, (
+                    f"the rejection must relay the provider's own error rather than a "
+                    f"litellm-internal failure that hides why the upload was refused: {body[:300]}"
+                )
+                assert "invalid_request_error" in body, (
+                    f"an unusable upload must be typed as a client input error: {body[:300]}"
                 )
             case other:
                 pytest.fail(f"empty audio expected a file-specific 400, got {other!r}")
