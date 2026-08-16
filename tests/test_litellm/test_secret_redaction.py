@@ -1,3 +1,4 @@
+import json
 import logging
 import logging.config
 import sys
@@ -9,6 +10,7 @@ import pytest
 
 from litellm._logging import (
     JsonFormatter,
+    _get_uvicorn_json_log_config,
     _redact_string,
     _secret_filter,
     verbose_logger,
@@ -452,7 +454,63 @@ def test_third_party_logger_tracebacks_are_redacted():
 UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
 
-def test_redaction_survives_uvicorn_logging_reconfiguration():
+@pytest.fixture
+def uvicorn_logger_state():
+    """Snapshot and restore the process-wide uvicorn loggers around a `dictConfig` call.
+
+    `dictConfig` swaps their handlers, flips `propagate`, and appends filters. The repo
+    conftest only snapshots ALL_LOGGERS (root plus the three litellm loggers), so without
+    this every later test in the process inherits stdout handlers and `propagate = False`.
+    """
+    saved = tuple(
+        (lg, lg.handlers[:], lg.filters[:], lg.level, lg.propagate) for lg in map(logging.getLogger, UVICORN_LOGGERS)
+    )
+    yield
+    for lg, handlers, filters, level, propagate in saved:
+        lg.handlers[:] = handlers
+        lg.filters[:] = filters
+        lg.setLevel(level)
+        lg.propagate = propagate
+
+
+@pytest.fixture
+def bare_uvicorn_loggers(uvicorn_logger_state):
+    """Strip the uvicorn loggers so only the config under test can supply redaction.
+
+    Clearing the filters is what makes the `uvicorn.error` case mean anything:
+    `_redact_third_party_loggers()` already attached `_secret_filter` to that logger at
+    import time, so a test that skipped this step would still pass with the config's own
+    filter entry deleted. Once cleared, the config is the only possible source of
+    redaction, which is also the situation in a fresh uvicorn worker.
+    """
+    for lg in map(logging.getLogger, UVICORN_LOGGERS):
+        lg.handlers.clear()
+        lg.filters.clear()
+    yield
+
+
+def _apply_uvicorn_json_log_config() -> None:
+    """Configure logging exactly as the proxy does when it starts uvicorn with JSON logs.
+
+    Call this from the test body, never from a fixture. The config's handlers write to
+    `ext://sys.stdout`, which `dictConfig` resolves to whatever `sys.stdout` is bound to at
+    that instant, and pytest swaps that object between the setup and call phases: resolving
+    it during setup captures the stream `capsys` is about to replace, and every assertion
+    then reads an empty buffer.
+    """
+    logging.config.dictConfig(_get_uvicorn_json_log_config())
+
+
+def _emit_uvicorn_access_line(path: str, status: int = 200) -> None:
+    """Log the record uvicorn's access logger emits, argument-for-argument.
+
+    uvicorn builds it as a template plus a 5-tuple (see `uvicorn.protocols.http`), never as
+    a pre-rendered string, so a test that passed one string would not exercise the same path.
+    """
+    logging.getLogger("uvicorn.access").info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:52814", "GET", path, "1.1", status)
+
+
+def test_redaction_survives_uvicorn_logging_reconfiguration(uvicorn_logger_state):
     """Proxy startup hands uvicorn a logging config, and `dictConfig` replaces the handlers
     of every logger it names. Redaction is attached to the logger rather than to a handler
     so that it outlives that; moving it onto a handler would fail here.
@@ -463,35 +521,101 @@ def test_redaction_survives_uvicorn_logging_reconfiguration():
     coverage. The capture reads the reconfigured logger's own handler because the config
     sets `propagate = False`, which is where uvicorn's handler sits in a running proxy.
     """
-    saved = tuple(
-        (logging.getLogger(name), logging.getLogger(name).handlers[:], logging.getLogger(name).level)
-        for name in UVICORN_LOGGERS
-    )
     uvicorn_shaped_config: dict[str, object] = {
         "version": 1,
         "disable_existing_loggers": False,
         "handlers": {"default": {"class": "logging.StreamHandler"}},
         "loggers": {name: {"handlers": ["default"], "level": "INFO", "propagate": False} for name in UVICORN_LOGGERS},
     }
-    try:
-        logging.config.dictConfig(uvicorn_shaped_config)
+    logging.config.dictConfig(uvicorn_shaped_config)
 
-        for logger_name in THIRD_PARTY_LOGGERS:
-            filters = logging.getLogger(logger_name).filters
-            assert _secret_filter in filters, f"{logger_name} lost redaction across reconfiguration"
+    for logger_name in THIRD_PARTY_LOGGERS:
+        filters = logging.getLogger(logger_name).filters
+        assert _secret_filter in filters, f"{logger_name} lost redaction across reconfiguration"
 
-        buf = StringIO()
-        reconfigured = logging.getLogger("uvicorn.error")
-        reconfigured.addHandler(logging.StreamHandler(buf))
-        reconfigured.setLevel(logging.DEBUG)
-        reconfigured.error("value %s", SECRET)
-        output = buf.getvalue()
+    buf = StringIO()
+    reconfigured = logging.getLogger("uvicorn.error")
+    reconfigured.addHandler(logging.StreamHandler(buf))
+    reconfigured.setLevel(logging.DEBUG)
+    reconfigured.error("value %s", SECRET)
+    output = buf.getvalue()
 
-        assert output.strip(), "no record captured for uvicorn.error"
-        assert SECRET not in output, "uvicorn.error leaked a secret after reconfiguration"
-        assert "REDACTED" in output, "uvicorn.error was not redacted after reconfiguration"
-    finally:
-        for lg, handlers, level in saved:
-            lg.handlers[:] = handlers
-            lg.setLevel(level)
-            lg.propagate = True
+    assert output.strip(), "no record captured for uvicorn.error"
+    assert SECRET not in output, "uvicorn.error leaked a secret after reconfiguration"
+    assert "REDACTED" in output, "uvicorn.error was not redacted after reconfiguration"
+
+
+@pytest.mark.parametrize("logger_name", UVICORN_LOGGERS)
+def test_uvicorn_log_config_redacts_on_every_uvicorn_logger(logger_name, bare_uvicorn_loggers, capsys):
+    """Every logger the proxy's uvicorn log config names must redact.
+
+    `uvicorn.access` is the one that carries request paths, but `uvicorn` and `uvicorn.error`
+    log connection and startup detail that can carry a credential too, and only `uvicorn.error`
+    is covered by `_redact_third_party_loggers()`. The level is set explicitly because the
+    config takes its level from `LITELLM_LOG`, and level is not what is under test.
+    """
+    _apply_uvicorn_json_log_config()
+    lg = logging.getLogger(logger_name)
+    lg.setLevel(logging.INFO)
+
+    lg.error("token=%s", SECRET)
+
+    out = capsys.readouterr().out
+    assert out.strip(), f"no record captured for {logger_name}"
+    assert SECRET not in out, f"{logger_name} leaked a secret through the uvicorn log config"
+    assert "REDACTED" in out, f"{logger_name} was not redacted by the uvicorn log config"
+    assert json.loads(out.strip())["component"] == logger_name
+
+
+@pytest.mark.parametrize(
+    "path, secret",
+    [
+        (f"/key/info?key={SECRET}", SECRET),
+        (
+            "/gemini/v1beta/models/gemini-2.5-flash:generateContent?key=AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r",
+            "AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r",
+        ),
+    ],
+    ids=["virtual_key_on_key_info", "google_api_key_on_gemini_passthrough"],
+)
+def test_uvicorn_access_log_redacts_credential_in_query_string(path, secret, bare_uvicorn_loggers, capsys):
+    """Routes that take a credential as a query parameter must not persist it to the access log.
+
+    `/key/info` declares `key` as a `fastapi.Query` parameter and the gemini passthrough takes
+    `?key=<google api key>`, so both land in uvicorn's request line verbatim. Asserting the
+    surrounding line survives keeps the log useful and fails a filter that just blanks the record.
+    """
+    _apply_uvicorn_json_log_config()
+
+    _emit_uvicorn_access_line(path)
+
+    line = capsys.readouterr().out.strip()
+    assert line, "no record captured for uvicorn.access"
+    message = json.loads(line)["message"]
+    assert secret not in message, f"uvicorn.access leaked a credential: {message}"
+    assert "REDACTED" in message
+    assert path.split("?")[0] in message
+    assert "GET" in message
+    assert "200" in message
+
+
+def test_uvicorn_access_log_leaves_clean_request_lines_intact(bare_uvicorn_loggers, capsys):
+    """A request with nothing to redact is logged unchanged, so over-redaction fails here."""
+    _apply_uvicorn_json_log_config()
+
+    _emit_uvicorn_access_line("/health/liveliness")
+
+    message = json.loads(capsys.readouterr().out.strip())["message"]
+    assert message == '127.0.0.1:52814 - "GET /health/liveliness HTTP/1.1" 200'
+
+
+def test_uvicorn_log_config_declares_secret_filter_on_every_logger():
+    """No logger may be added to the config without redaction.
+
+    The behavioral tests above only cover the loggers that exist today; this one fails when a
+    fourth is added unfiltered.
+    """
+    loggers = _get_uvicorn_json_log_config()["loggers"]
+    unfiltered = tuple(name for name, cfg in loggers.items() if _secret_filter not in cfg.get("filters", ()))
+
+    assert unfiltered == (), f"uvicorn log config leaves these loggers unredacted: {unfiltered}"
