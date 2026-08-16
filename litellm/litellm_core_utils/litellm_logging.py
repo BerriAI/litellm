@@ -580,6 +580,17 @@ class Logging(LiteLLMLoggingBaseClass):
                 return model_id
         return None
 
+    def get_deployment_model_for_cost(self) -> str | None:
+        """The provider-qualified model to price against.
+
+        self.model can be the router's model_group alias, which no cost map
+        resolves, so the deployment's own litellm_params model wins when present.
+        """
+        deployment_model: Final = self.litellm_params.get("model") if hasattr(self, "litellm_params") else None
+        if isinstance(deployment_model, str) and deployment_model:
+            return deployment_model
+        return self.model
+
     def get_router_deployment_model_info(self) -> ModelInfo | None:
         """Pricing the router registered under this deployment's model_info.id.
 
@@ -2627,7 +2638,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ) = await _handle_completed_batch(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
-                    model_name=self.model,
+                    model_name=self.get_deployment_model_for_cost(),
                     litellm_params=self.litellm_params,
                     model_info=self.get_router_deployment_model_info(),
                 )
