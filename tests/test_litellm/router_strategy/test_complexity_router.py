@@ -3883,7 +3883,7 @@ class TestSessionAffinity:
         cache.async_set_cache.assert_called_once()
         call_kwargs = cache.async_set_cache.call_args.kwargs
         assert call_kwargs["ttl"] == 120
-        assert call_kwargs["value"] == ("gpt-4o-mini", "SIMPLE")
+        assert call_kwargs["value"] == {"model": "gpt-4o-mini", "tier": "SIMPLE"}
 
     @pytest.mark.asyncio
     async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
@@ -3907,7 +3907,7 @@ class TestSessionAffinity:
         assert result.model == "o1-preview"
         cache.async_set_cache.assert_called_once()
         call_kwargs = cache.async_set_cache.call_args.kwargs
-        assert call_kwargs["value"] == "o1-preview"
+        assert call_kwargs["value"] == {"model": "o1-preview", "tier": "REASONING"}
         assert call_kwargs["ttl"] == 90
 
     @pytest.mark.asyncio
@@ -8322,3 +8322,33 @@ async def test_session_pin_uses_recorded_tier_when_model_is_in_multiple_tiers(mo
     assert response.litellm_params == {"reasoning_effort": "low"}
     assert response.routing_decision is not None
     assert response.routing_decision["tier"] == "SIMPLE"
+
+
+@pytest.mark.asyncio
+async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
+    cache = AsyncMock()
+    cache.async_get_cache = AsyncMock(return_value=["shared", "SIMPLE"])
+    mock_router_instance.cache = cache
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "tiers": {
+                "SIMPLE": {"model_name": "shared", "litellm_params": {"reasoning_effort": "low"}},
+                "REASONING": {"model_name": "shared", "litellm_params": {"reasoning_effort": "xhigh"}},
+            },
+            "session_affinity": True,
+        },
+    )
+    request_kwargs = {"metadata": {"session_id": "json-round-trip-session"}}
+
+    response = await router.async_pre_routing_hook(
+        model="test-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert response is not None
+    assert response.model == "shared"
+    assert response.litellm_params == {"reasoning_effort": "low"}
+    assert cache.async_set_cache.call_args.kwargs["value"] == {"model": "shared", "tier": "SIMPLE"}
