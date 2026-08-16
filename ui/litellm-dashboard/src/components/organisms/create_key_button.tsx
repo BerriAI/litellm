@@ -18,7 +18,7 @@ import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import ModelAliasManager from "../common_components/ModelAliasManager";
@@ -540,6 +540,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       if (Object.keys(budgetFallbacks).length > 0) {
         formValues.budget_fallbacks = budgetFallbacks;
+      }
+
+      if (formValues.budget_duration === NEVER_RESETS_BUDGET_DURATION) {
+        formValues.budget_duration = null;
       }
 
       let response;
@@ -1064,7 +1068,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                   >
                     <BudgetDurationDropdown
-                      placeholder="Never resets"
+                      showNeverResets
+                      placeholder="Not set"
                       onChange={(value) => form.setFieldValue("budget_duration", value)}
                     />
                   </Form.Item>

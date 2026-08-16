@@ -24,7 +24,7 @@ from typing import (
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
+from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -462,6 +462,23 @@ def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
     return call_id if isinstance(call_id, str) else None
 
 
+def _declared_output_budget(value: object) -> int | None:
+    """Coerce a declared output budget to tokens, or None when it names no budget.
+
+    Accepts every shape the pre-existing ``int(...)`` coercion did, floats and numeric
+    strings included, because a budget this cannot read is a budget this cannot reserve
+    against, which is the bypass the caller-declared limits are checked for.
+    """
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return None
+    return None
+
+
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def __init__(
         self,
@@ -604,7 +621,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         estimated_input_tokens: Final = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
 
-        explicit_max_tokens: Final = data.get("max_tokens") or data.get("max_completion_tokens")
+        # Both spellings can arrive together, e.g. a deployment-level max_tokens default under a
+        # client-supplied max_completion_tokens. Reserving against the larger keeps the estimate an
+        # upper bound on what the provider can emit, whichever one it ends up honouring.
+        declared_output_budgets: Final = tuple(
+            budget
+            for budget in (
+                _declared_output_budget(data.get("max_tokens")),
+                _declared_output_budget(data.get("max_completion_tokens")),
+            )
+            if budget is not None
+        )
+        explicit_max_tokens: Final = max(declared_output_budgets) if declared_output_budgets else None
 
         match (explicit_max_tokens, input_text):
             case (mt, _) if mt is not None:
@@ -2991,6 +3019,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rate_limit_type: Literal["output", "input", "total"],
     ) -> list[RedisPipelineIncrementOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""
+        from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -2998,6 +3027,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Get metadata from standard_logging_object - this correctly handles both
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
+        request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
+        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
+            # Internal sub-calls bill spend to the caller but are not the caller's
+            # traffic; charging them here would let background evals eat TPM headroom.
+            return []
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
 
         model_group: Final = get_model_group_from_litellm_kwargs(kwargs)

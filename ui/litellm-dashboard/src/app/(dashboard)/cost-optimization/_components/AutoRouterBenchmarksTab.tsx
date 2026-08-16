@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -31,6 +31,7 @@ import {
   type BucketRow,
 } from "./autoRouterBenchmarks";
 import { usd } from "./costOptimizationUtils";
+import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 
@@ -63,7 +64,7 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
               variant="secondary"
               className={cheaper ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-destructive"}
             >
-              {cheaper ? "-" : "+"}
+              {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
               {Math.abs(stats.saved_pct).toFixed(0)}%
             </Badge>
           </div>
@@ -94,7 +95,7 @@ const StackedTurnBar: React.FC<{ buckets: BucketRow[] }> = ({ buckets }) => {
   return (
     <div className="flex flex-col gap-1">
       <div
-        className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-sm"
+        className={`flex h-2.5 w-full gap-0.5 overflow-hidden rounded-sm ${segments.length === 0 ? "bg-muted" : ""}`}
         role="img"
         aria-label="Share of turns by bucket"
       >
@@ -229,7 +230,6 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
     return <Message>Auto-router usage is visible to proxy admin roles only</Message>;
   }
   if (error || !data) return <Message>Auto-router usage is unavailable right now</Message>;
-  if (data.groups.length === 0) return <Message>No auto-router sessions in this window yet</Message>;
 
   const view = viewFor(data, selectedKey);
   const stats = view.stats;
@@ -268,7 +268,7 @@ interface AutoRouterBenchmarksTabProps {
   accessToken: string | null;
 }
 
-const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
+const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
   const [range, setRange] = useState<BenchmarkWindow>("30d");
   const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, range);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
@@ -318,6 +318,38 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
         autoRouters={autoRouters ?? []}
       />
     </div>
+  );
+};
+
+const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
+  const [visitedTabs, setVisitedTabs] = useState<readonly string[]>(["usage"]);
+
+  const handleTabChange = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+
+    setVisitedTabs((currentTabs) => (currentTabs.includes(value) ? currentTabs : [...currentTabs, value]));
+  };
+
+  return (
+    <Tabs defaultValue="usage" onValueChange={handleTabChange} className="w-full gap-4">
+      <TabsList>
+        <TabsTrigger value="usage" className="px-3">
+          Usage
+        </TabsTrigger>
+        <TabsTrigger value="shadow-evals" className="px-3">
+          Shadow Evals
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
+        <UsageView accessToken={accessToken} />
+      </TabsContent>
+      <TabsContent value="shadow-evals" keepMounted={visitedTabs.includes("shadow-evals")}>
+        <ShadowEvalSection />
+      </TabsContent>
+    </Tabs>
   );
 };
 

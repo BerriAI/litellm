@@ -1138,7 +1138,11 @@ async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
     # DISPATCH - router fired, direct litellm did not.
     assert retrieve_harness.router_aretrieve.call_count == 1
     retrieve_harness.litellm_aretrieve.assert_not_called()
-    retrieve_harness.creds_resolver.assert_not_called()
+
+    # Credentials are resolved for the deployment behind the unified id so the batch's
+    # output file can be read for cost accounting. This id resolves to nothing here, and
+    # the retrieve must still serve the batch rather than fail on the lookup.
+    retrieve_harness.creds_resolver.assert_called_once_with(model_id="gpt-4o-mini")
 
     # router receives the (still-encoded) batch id verbatim - this layer does
     # not decode it for the unified path.
@@ -1510,26 +1514,14 @@ async def test_list__managed_files_beats_model_param(list_harness):
 
 
 # --------------------------------------------------------------------------- #
-# Branch 2 - model from body/query/header. CURRENTLY BROKEN: the endpoint
-# forwards custom_llm_provider both explicitly and via **data (it calls
-# data.update(credentials) but never pops custom_llm_provider the way
-# create/retrieve do through prepare_data_with_credentials), so every call
-# raises "multiple values for keyword argument 'custom_llm_provider'".
-#
-# The strict xfail below encodes the INTENDED contract (litellm seam fires,
-# creds resolved for the body model, response ids encoded). It xfails today on
-# the duplicate-kwarg TypeError; the day that branch is fixed it will XPASS and
-# strict-mode turns the green into a failure, forcing whoever fixes it to drop
-# the marker and adopt this as a live regression test.
+# Branch 2 - model from body/query/header. The endpoint resolves credentials
+# for the body model, forwards custom_llm_provider once (it pops it from data
+# via prepare_data_with_credentials the way create/retrieve do), and encodes
+# the response ids. Regression guard for the duplicate-kwarg
+# "multiple values for keyword argument 'custom_llm_provider'" bug.
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ProxyException,
-    reason="list_batches model branch passes custom_llm_provider twice "
-    "(explicit kwarg + **data after data.update(credentials)); remove when fixed",
-)
 @pytest.mark.asyncio
 async def test_list__model_from_body_routes_and_encodes(list_harness):
     list_harness.litellm_alist.return_value = FakeListPage([make_batch(id="batch-1"), make_batch(id="batch-2")])
@@ -1991,19 +1983,11 @@ async def test_cancel__fallback_provider_from_query(cancel_harness):
     assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "azure"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ProxyException,
-    reason="cancel SCENARIO 3: `provider or data.pop('custom_llm_provider')` "
-    "short-circuits when provider (path param) is set, so a body "
-    "custom_llm_provider is left in data and forwarded twice -> duplicate-kwarg "
-    "TypeError. Intended: path param wins cleanly. Remove marker when fixed.",
-)
 @pytest.mark.asyncio
 async def test_cancel__fallback_provider_precedence_path_over_body(cancel_harness):
     """Intended contract: provider path param beats a body custom_llm_provider.
-    CURRENTLY raises because the `or` short-circuit skips the data.pop, leaving
-    the body value to collide with the explicit kwarg."""
+    Regression guard: the body value is popped from data before the fallback
+    chain, so it never collides with the explicit kwarg."""
     await call_cancel(
         cancel_harness,
         "batch-raw-xyz",
@@ -2426,3 +2410,34 @@ async def test_cancel__unified_batch_id_allowed_when_managed_files_required(canc
         await call_cancel(cancel_harness, _unified_batch_id())
 
     assert cancel_harness.router_acancel.call_count == 1
+
+
+
+
+@pytest.mark.asyncio
+async def test_retrieve__managed_batch_defers_cost_to_the_poller_when_it_is_running(retrieve_harness):
+    with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
+        await call_retrieve(retrieve_harness, _unified_batch_id())
+
+    assert retrieve_harness.router.aretrieve_batch.await_count == 1
+    metadata = retrieve_harness.router.aretrieve_batch.await_args.kwargs.get("litellm_metadata") or {}
+    assert metadata.get("batch_ignore_default_logging") is True
+
+
+@pytest.mark.asyncio
+async def test_retrieve__managed_batch_still_accounts_inline_without_a_poller(retrieve_harness):
+    with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=False)):
+        await call_retrieve(retrieve_harness, _unified_batch_id())
+
+    assert retrieve_harness.router.aretrieve_batch.await_count == 1
+    metadata = retrieve_harness.router.aretrieve_batch.await_args.kwargs.get("litellm_metadata") or {}
+    assert metadata.get("batch_ignore_default_logging") is None
+
+
+@pytest.mark.asyncio
+async def test_retrieve__raw_batch_id_is_untouched_by_the_poller_handoff(retrieve_harness):
+    with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
+        await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    metadata = retrieve_harness.litellm_aretrieve.await_args.kwargs.get("litellm_metadata") or {}
+    assert metadata.get("batch_ignore_default_logging") is None
