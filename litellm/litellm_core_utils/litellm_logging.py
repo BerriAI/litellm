@@ -582,13 +582,17 @@ class Logging(LiteLLMLoggingBaseClass):
     def get_deployment_model_for_cost(self) -> str | None:
         """The provider-qualified model to price against.
 
-        self.model can be the router's model_group alias, which no cost map
-        resolves, so the deployment's own litellm_params model wins when present.
+        On a batch retrieve both self.model and litellm_params["model"] can be
+        unset, and self.model can otherwise carry the router's model_group alias,
+        which no cost map resolves. model_call_details holds the deployment's own
+        provider-qualified model, so it is preferred.
         """
-        deployment_model: Final = self.litellm_params.get("model") if hasattr(self, "litellm_params") else None
-        if isinstance(deployment_model, str) and deployment_model:
-            return deployment_model
-        return self.model
+        candidates: Final = (
+            (self.model_call_details or {}).get("model") if hasattr(self, "model_call_details") else None,
+            self.litellm_params.get("model") if hasattr(self, "litellm_params") else None,
+            self.model,
+        )
+        return next((candidate for candidate in candidates if isinstance(candidate, str) and candidate), None)
 
     def get_router_deployment_model_info(self) -> ModelInfo | None:
         """Pricing the router registered under this deployment's model_info.id.
