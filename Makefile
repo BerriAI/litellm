@@ -4,11 +4,11 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	info lint lint-dev lint-checks format \
+	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
-	install-helm-unittest check-circular-imports check-import-safety pre-commit \
+	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
 	lint-install lint-fetch-base bootstrap
 
 # Default target
@@ -22,7 +22,8 @@ help:
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
 	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
-	@echo "  make pre-commit         - Run CI-equivalent lint on staged files (run before committing)"
+	@echo "  make check              - Run CI-equivalent lint on staged files, or on the diff vs the base branch when nothing is staged"
+	@echo "  make pre-commit         - Legacy alias for make check"
 	@echo "  make format             - Apply ruff format code formatting"
 	@echo "  make format-check       - Check ruff format code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
@@ -51,9 +52,16 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
+	@echo ""
+	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
+	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
 
 UV := uv
 UV_RUN := $(UV) run --no-sync
+
+# Machine-wide slot queue for the heavy targets below; python3 + stdlib only, so
+# it runs before any venv exists. See scripts/gate_slot_lock.py.
+GATE_SLOT_LOCK := python3 scripts/gate_slot_lock.py
 
 LINT_DEP_INSTALL ?= install-dev
 LINT_E2E_DEP_INSTALL ?= lint-install
@@ -72,6 +80,8 @@ info:
 install-dev:
 	$(UV) sync --inexact --frozen
 
+# Deliberately unqueued: provisioning is I/O bound, so it doesn't need one of the
+# machine-wide slots the CPU-bound gates below share.
 bootstrap:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
@@ -228,7 +238,10 @@ check-import-safety: $(LINT_DEP_INSTALL)
 # does (merge-base with origin/litellm_internal_staging). Setup (env sync, Prisma client,
 # base fetch) runs once up front; the checks themselves are independent, so a sub-make
 # fans them out with -j and the fast ones finish under basedpyright's shadow.
-lint: lint-install lint-fetch-base
+lint:
+	@$(GATE_SLOT_LOCK) $(MAKE) lint-inner
+
+lint-inner: lint-install lint-fetch-base
 	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
 lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
@@ -236,12 +249,22 @@ lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
 
-# Run the gating CI checks against your staged files right before committing. Mirrors
+# Run the gating CI checks against your changes. Scopes to staged files when anything
+# is staged (warning about changed files left unstaged); with nothing staged it falls
+# back to the working tree's diff against the merge base with the base branch, so a
+# fresh merge commit or an unstaged working tree still gets checked. Mirrors
 # test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
-# check-ui-api-types.yml (API-type drift), skipping any whose files you didn't stage.
+# check-ui-api-types.yml (API-type drift), skipping any whose files aren't in scope.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
-pre-commit: bootstrap
+check:
+	@$(GATE_SLOT_LOCK) $(MAKE) check-inner
+
+check-inner: bootstrap
 	./scripts/pre_commit_lint.sh
+
+pre-commit:
+	@echo "make pre-commit is a legacy alias; use make check" >&2
+	@$(MAKE) check
 
 # Testing targets
 test: install-test-deps

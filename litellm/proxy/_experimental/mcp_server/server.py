@@ -13,9 +13,9 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -58,9 +58,11 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
     MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
+    build_synthetic_mcp_request,
     extract_mcp_tool_result_error_message,
     get_server_prefix,
     iter_known_server_prefixes,
+    logging_safe_mcp_headers,
     match_known_tool_name,
 )
 from litellm.proxy._types import (
@@ -145,7 +147,7 @@ try:
     )
 
     # Robust auth lookup keyed by session_object.
-    _session_obj_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = weakref.WeakKeyDictionary()
+    _session_obj_auth_storage: "weakref.WeakKeyDictionary[object, MCPAuthenticatedUser]" = weakref.WeakKeyDictionary()
 except ImportError as e:
     verbose_logger.debug("MCP module not found: %s", e)
     MCP_AVAILABLE = False
@@ -493,14 +495,14 @@ if MCP_AVAILABLE:
     def _gateway_create_initialization_options(
         self,
         notification_options: NotificationOptions | None = None,
-        experimental_capabilities: dict[str, dict[str, Any]] | None = None,
+        experimental_capabilities: dict[str, dict[str, object]] | None = None,
     ) -> InitializationOptions:
         opts: Final = Server.create_initialization_options(
             self,
             notification_options=notification_options,
             experimental_capabilities=experimental_capabilities or {},
         )
-        updates: Final[dict[str, Any]] = {}
+        updates: Final[dict[str, str]] = {}
         merged: Final = _mcp_gateway_initialize_instructions.get()
         if merged is not None:
             updates["instructions"] = merged
@@ -549,6 +551,17 @@ if MCP_AVAILABLE:
     _stateful_session_locks: Final[dict[str, asyncio.Lock]] = {}
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
 
+    class _TerminableTransport(Protocol):
+        async def terminate(self) -> None: ...
+
+    class _TransportRegistry(Protocol):
+        def __contains__(self, session_id: object, /) -> bool: ...
+
+        def pop(self, session_id: str, default: None, /) -> "_TerminableTransport | None": ...
+
+    def _stateful_server_instances() -> _TransportRegistry:
+        return getattr(session_manager_stateful, "_server_instances", {})
+
     def _remove_stateful_session_tracking(session_id: str) -> None:
         _stateful_session_auth_contexts.pop(session_id, None)
         _stateful_session_auth_context_last_seen.pop(session_id, None)
@@ -578,8 +591,8 @@ if MCP_AVAILABLE:
     ) -> None:
         """Terminate expired stateful sessions and drop their auth contexts."""
         now = time.monotonic() if now is None else now
-        server_instances: Final = getattr(session_manager_stateful, "_server_instances", {})
-        expired_session_ids: Final = []
+        server_instances: Final = _stateful_server_instances()
+        expired_session_ids: Final[list[str]] = []
         for session_id, last_seen in _stateful_session_auth_context_last_seen.items():
             if _stateful_session_active_request_counts.get(session_id, 0) > 0:
                 continue
@@ -619,7 +632,7 @@ if MCP_AVAILABLE:
         session may proceed, or ``False`` when the caller is already at the cap
         with every session in flight (the new ``initialize`` should be rejected).
         """
-        server_instances: Final = getattr(session_manager_stateful, "_server_instances", {})
+        server_instances: Final = _stateful_server_instances()
 
         def _owned_live_session_ids() -> list[str]:
             return [
@@ -778,7 +791,7 @@ if MCP_AVAILABLE:
                     get_virtual_tool_definitions,
                 )
 
-                return [Tool(**d) for d in get_virtual_tool_definitions()]
+                return [Tool.model_validate(d) for d in get_virtual_tool_definitions()]
 
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
@@ -847,13 +860,13 @@ if MCP_AVAILABLE:
 
     async def _build_virtual_call_logging_obj(
         name: str,
-        arguments: dict[str, Any],
+        arguments: dict[str, object],
         user_api_key_auth: UserAPIKeyAuth,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> LiteLLMLoggingObj | None:
         """Run the pre-call pipeline (guardrails + logging setup) for a virtual
         mcp_tool_call so the SSE path spend-logs like the REST path."""
-        from fastapi import Request
-
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
         )
@@ -863,13 +876,10 @@ if MCP_AVAILABLE:
             proxy_logging_obj,
         )
 
-        request: Final = Request(
-            scope={
-                "type": "http",
-                "method": "POST",
-                "path": "/mcp/tools/call",
-                "headers": [(b"content-type", b"application/json")],
-            }
+        request: Final = build_synthetic_mcp_request(
+            path="/mcp/tools/call",
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
         _, virtual_logging_obj = await ProxyBaseLLMRequestProcessing(
             data={"name": name, "arguments": arguments}
@@ -885,7 +895,7 @@ if MCP_AVAILABLE:
 
     async def _dispatch_virtual_mcp_tool(
         name: str,
-        arguments: dict[str, Any] | None,
+        arguments: dict[str, object] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
         mcp_servers: list[str] | None = None,
@@ -941,7 +951,11 @@ if MCP_AVAILABLE:
 
         assert user_api_key_auth is not None  # guaranteed by the flag check above
         virtual_logging_obj: Final = await _build_virtual_call_logging_obj(
-            name=name, arguments=args, user_api_key_auth=user_api_key_auth
+            name=name,
+            arguments=args,
+            user_api_key_auth=user_api_key_auth,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
         return await handle_mcp_tool_call(
             tool_name=args.get("tool_name", ""),
@@ -957,7 +971,7 @@ if MCP_AVAILABLE:
         )
 
     @server.call_tool()
-    async def mcp_server_tool_call(name: str, arguments: dict[str, Any] | None) -> CallToolResult:
+    async def mcp_server_tool_call(name: str, arguments: dict[str, object] | None) -> CallToolResult:
         """
         Call a specific tool with the provided arguments
         Args:
@@ -968,7 +982,6 @@ if MCP_AVAILABLE:
         Raises:
             HTTPException: If tool not found or arguments missing
         """
-        from fastapi import Request
         from mcp.server.lowlevel.server import request_ctx
         from mcp.types import CallToolResult
 
@@ -1030,13 +1043,10 @@ if MCP_AVAILABLE:
                     body_data["litellm_trace_id"] = chain_id
                     body_data["litellm_session_id"] = chain_id
 
-                request: Final = Request(
-                    scope={
-                        "type": "http",
-                        "method": "POST",
-                        "path": "/mcp/tools/call",
-                        "headers": [(b"content-type", b"application/json")],
-                    }
+                request: Final = build_synthetic_mcp_request(
+                    path="/mcp/tools/call",
+                    raw_headers=raw_headers,
+                    client_ip=_client_ip,
                 )
                 if user_api_key_auth is not None:
                     data = await add_litellm_data_to_request(
@@ -1621,7 +1631,7 @@ if MCP_AVAILABLE:
     async def _get_user_oauth_extra_headers_from_db(
         server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
-        prefetched_creds: dict[str, dict[str, Any]] | None = None,
+        prefetched_creds: 'Mapping[str, "OAuthCredentialPayload"] | None' = None,
     ) -> dict[str, str] | None:
         """Stored OAuth2 token for (user, server) as an ``Authorization: Bearer`` header, or None.
 
@@ -1646,7 +1656,7 @@ if MCP_AVAILABLE:
 
         Returns a dict keyed by server_id to avoid N+1 queries in asyncio.gather loops.
         """
-        user_id: Final = getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None
+        user_id: Final[str | None] = getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None
         if not user_id:
             return {}
         try:
@@ -1871,7 +1881,7 @@ if MCP_AVAILABLE:
 
         list_tools_start_time: Final = datetime.now()
         litellm_logging_obj: LiteLLMLoggingObj | None = None
-        list_tools_request_data: dict[str, Any] = {}
+        list_tools_request_data: dict[str, object] = {}
 
         if log_list_tools_to_spendlogs:
             # This is intentionally minimal: only async_success_handler / post_call_failure_hook
@@ -1879,7 +1889,7 @@ if MCP_AVAILABLE:
             list_tools_call_id: Final = str(uuid.uuid4())
             # Derive trace_id from raw_headers when not explicitly passed (same as A2A / MCP call_tool)
             effective_litellm_trace_id: Final = litellm_trace_id or get_chain_id_from_headers(raw_headers)
-            spend_logs_metadata: Final[dict[str, Any]] = {
+            spend_logs_metadata: Final[dict[str, object]] = {
                 "mcp_operation": "list_tools",
             }
             if isinstance(list_tools_log_source, str):
@@ -1894,6 +1904,7 @@ if MCP_AVAILABLE:
                 "litellm_trace_id": effective_litellm_trace_id,
                 "metadata": {
                     "spend_logs_metadata": spend_logs_metadata,
+                    "headers": logging_safe_mcp_headers(raw_headers),
                     **({"tags": request_tags} if request_tags else {}),
                 },
                 # Provide a small input payload for standard logging
@@ -2615,7 +2626,7 @@ if MCP_AVAILABLE:
 
     async def execute_mcp_tool(
         name: str,
-        arguments: dict[str, Any],
+        arguments: dict[str, object],
         allowed_mcp_servers: list[MCPServer],
         start_time: datetime,
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -2882,7 +2893,7 @@ if MCP_AVAILABLE:
                 _request_auth_header.reset(_auth_token)
                 _request_extra_headers.reset(_extra_token)
                 _request_resolved_auth_headers.reset(_resolved_token)
-            response = CallToolResult(content=cast(Any, local_content), isError=False)
+            response = CallToolResult(content=local_content, isError=False)
 
         # Try managed MCP server tool (the name is bare; the prefix boundary was
         # already resolved above against this server's registered prefixes)
@@ -2956,7 +2967,7 @@ if MCP_AVAILABLE:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
 
             local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
-            response = CallToolResult(content=cast(Any, local_content), isError=False)
+            response = CallToolResult(content=local_content, isError=False)
 
         return await _run_post_mcp_call_guardrails(
             result=response,
@@ -3003,7 +3014,7 @@ if MCP_AVAILABLE:
 
     async def _fire_mcp_tool_call_logging(
         logging_obj: LiteLLMLoggingObj,
-        result: Any,
+        result: CallToolResult,
         start_time: datetime,
         end_time: datetime,
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -3070,7 +3081,7 @@ if MCP_AVAILABLE:
     @client
     async def call_mcp_tool(
         name: str,
-        arguments: dict[str, Any] | None = None,
+        arguments: dict[str, object] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         mcp_auth_header: str | None = None,
         mcp_servers: list[str] | None = None,
@@ -3161,7 +3172,7 @@ if MCP_AVAILABLE:
 
     async def mcp_get_prompt(
         name: str,
-        arguments: dict[str, Any] | None = None,
+        arguments: dict[str, object] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         mcp_auth_header: str | None = None,
         mcp_servers: list[str] | None = None,
@@ -3262,7 +3273,7 @@ if MCP_AVAILABLE:
 
     def _get_standard_logging_mcp_tool_call(
         name: str,
-        arguments: dict[str, Any],
+        arguments: dict[str, object],
         server_name: str | None,
         session_id: str | None = None,
     ) -> StandardLoggingMCPToolCall:
@@ -3291,13 +3302,13 @@ if MCP_AVAILABLE:
     async def _handle_managed_mcp_tool(
         server_name: str,
         name: str,
-        arguments: dict[str, Any],
+        arguments: dict[str, object],
         user_api_key_auth: UserAPIKeyAuth | None = None,
         mcp_auth_header: str | None = None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
         host_progress_callback: Callable | None = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
@@ -3320,7 +3331,7 @@ if MCP_AVAILABLE:
         return call_tool_result
 
     async def _handle_local_mcp_tool(
-        name: str, arguments: dict[str, Any]
+        name: str, arguments: dict[str, object]
     ) -> list[TextContent | ImageContent | EmbeddedResource]:
         """
         Handle tool execution for local registry tools
@@ -3426,7 +3437,8 @@ if MCP_AVAILABLE:
         Extract mcp-session-id from ASGI scope headers.
         Returns None if not present.
         """
-        for header_name, header_value in scope.get("headers", []):
+        scope_headers: Final[Sequence[tuple[bytes | str, bytes | str]]] = scope.get("headers", [])
+        for header_name, header_value in scope_headers:
             name = header_name if isinstance(header_name, bytes) else header_name.encode()
             if name.lower() == b"mcp-session-id":
                 return header_value.decode() if isinstance(header_value, bytes) else str(header_value)
@@ -3528,7 +3540,7 @@ if MCP_AVAILABLE:
             if message.get("type") != "http.request":
                 break
 
-            body = message.get("body", b"") or b""
+            body: bytes = message.get("body", b"") or b""
             if body:
                 # Only retain up to the remaining peek budget for sniffing.
                 # The full ``message`` is already in memory (delivered by
@@ -3571,9 +3583,9 @@ if MCP_AVAILABLE:
         Fixes https://github.com/BerriAI/litellm/issues/20992
         """
         _mcp_session_header: Final = b"mcp-session-id"
-        _headers: Final = scope.get("headers", [])
+        _headers: Final[Sequence[tuple[bytes | str, bytes | str]]] = scope.get("headers", [])
 
-        def _normalize_header_name(header_name: Any) -> bytes | None:
+        def _normalize_header_name(header_name: object) -> bytes | None:
             if isinstance(header_name, bytes):
                 return header_name.lower()
             if isinstance(header_name, str):
@@ -3902,7 +3914,8 @@ if MCP_AVAILABLE:
 
     def _get_authorization_header_from_scope(scope: Scope) -> str | None:
         """First ``Authorization`` header value in the ASGI scope, or None."""
-        for key, value in scope.get("headers", []):
+        scope_headers: Final[Sequence[tuple[bytes, bytes]]] = scope.get("headers", [])
+        for key, value in scope_headers:
             if key.lower() == b"authorization":
                 return value.decode("latin-1")
         return None
@@ -3921,7 +3934,8 @@ if MCP_AVAILABLE:
         ``MCPRequestHandler.process_mcp_request``), and forwarding it upstream
         would leak the proxy key to a third-party MCP server.
         """
-        has_litellm_key_header: Final = any(key.lower() == b"x-litellm-api-key" for key, _ in scope.get("headers", []))
+        scope_headers: Final[Sequence[tuple[bytes, bytes]]] = scope.get("headers", [])
+        has_litellm_key_header: Final = any(key.lower() == b"x-litellm-api-key" for key, _ in scope_headers)
         if not has_litellm_key_header:
             return None
         return _get_authorization_header_from_scope(scope)
@@ -4115,7 +4129,7 @@ if MCP_AVAILABLE:
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
-            path: Final = scope.get("path", "")
+            path: Final[str] = scope.get("path", "")
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -4135,7 +4149,8 @@ if MCP_AVAILABLE:
             )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
-            scope["headers"] = [(k, v) for k, v in scope.get("headers", []) if k.lower() != b"x-mcp-toolset-id"]
+            scope_headers: Final[Sequence[tuple[bytes, bytes]]] = scope.get("headers", [])
+            scope["headers"] = [(k, v) for k, v in scope_headers if k.lower() != b"x-mcp-toolset-id"]
 
             # Apply toolset scope if set server-side via ContextVar (set by
             # /toolset/{name}/mcp and /{name}/mcp route handlers in proxy_server.py).
@@ -4436,7 +4451,7 @@ if MCP_AVAILABLE:
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
         try:
-            path: Final = scope.get("path", "")
+            path: Final[str] = scope.get("path", "")
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -4456,7 +4471,8 @@ if MCP_AVAILABLE:
             )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
-            scope["headers"] = [(k, v) for k, v in scope.get("headers", []) if k.lower() != b"x-mcp-toolset-id"]
+            scope_headers: Final[Sequence[tuple[bytes, bytes]]] = scope.get("headers", [])
+            scope["headers"] = [(k, v) for k, v in scope_headers if k.lower() != b"x-mcp-toolset-id"]
 
             # Apply toolset scope if set server-side via ContextVar so the
             # downstream probe list matches the fully-authorized server set
@@ -4680,7 +4696,8 @@ if MCP_AVAILABLE:
     ) -> Send:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
-                for key, value in message.get("headers", []):
+                response_headers: Final[Sequence[tuple[bytes | str, bytes | str]]] = message.get("headers", [])
+                for key, value in response_headers:
                     header_name = key if isinstance(key, bytes) else str(key).encode()
                     if header_name.lower() == b"mcp-session-id":
                         session_id = value.decode() if isinstance(value, bytes) else str(value)

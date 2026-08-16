@@ -39,7 +39,7 @@ async def test_openai_websocket_forwards_query_and_keeps_provider_auth(prefix):
             return_value="sk-provider",
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._join_url_paths",
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._join_url_paths",
             return_value="https://api.openai.com/v1/realtime",
         ),
         patch(

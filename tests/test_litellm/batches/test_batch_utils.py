@@ -17,6 +17,7 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 import json
 import os
 import sys
+from types import MappingProxyType
 
 import httpx
 import pytest
@@ -1229,3 +1230,72 @@ async def test_calculate_batch_cost_and_usage_anthropic_end_to_end():
     assert cost == pytest.approx(1000 * 3e-6 / 2 + 8000 * 3e-7 / 2 + 2000 * 3.75e-6 / 2 + 200 * 15e-6 / 2)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (11000, 200, 11200)
     assert models == ["claude-sonnet-4-5"]
+
+
+def test_extract_credentials_forwards_the_trusted_model_credential_snapshot():
+    """Bedrock resolves a batch's output bucket only from the immutable server-side
+    snapshot, never from a request param, so cost accounting on the retrieve path cannot
+    read the output file unless this key is forwarded. Without it the accounting raises
+    "S3 bucket_name is required" for a bucket the deployment has configured, and the
+    batch's cost is never recorded."""
+    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"})
+
+    credentials = bu._extract_file_access_credentials({"_litellm_internal_model_credentials": snapshot})
+
+    assert credentials["_litellm_internal_model_credentials"] is snapshot
+
+
+def test_extract_credentials_forwards_the_deployment_aws_credentials():
+    """The retrieve path's logging object carries the deployment's AWS keys in its
+    litellm_params, and the S3 read of the output file signs with whatever afile_content
+    receives. Dropping them here sent the read to the ambient credential chain, so a
+    deployment whose only AWS credentials live in its litellm_params never recorded
+    batch cost on retrieve even once the bucket resolved."""
+    params = {
+        "aws_access_key_id": "AKIA-deployment",
+        "aws_secret_access_key": "secret-deployment",
+        "aws_session_token": "token-deployment",
+        "aws_region_name": "us-west-2",
+        "aws_role_name": "arn:aws:iam::123456789012:role/batch-reader",
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    }
+
+    credentials = bu._extract_file_access_credentials(params)
+
+    assert credentials == {key: value for key, value in params.items() if key != "model"}
+
+
+@pytest.mark.asyncio
+async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials(monkeypatch):
+    import litellm.files.main as files_main
+
+    captured: dict = {}
+
+    async def fake_afile_content(**kw):
+        captured.update(kw)
+        return type("R", (), {"content": b""})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket", "aws_region_name": "us-west-2"})
+
+    await bu._fetch_batch_output_file_content(
+        _batch("s3://configured-bucket/litellm-batch-outputs/job-1/out.jsonl.out"),
+        custom_llm_provider="bedrock",
+        litellm_params={
+            "aws_access_key_id": "AKIA-deployment",
+            "aws_secret_access_key": "secret-deployment",
+            "aws_session_token": "token-deployment",
+            "aws_region_name": "us-west-2",
+            "_litellm_internal_model_credentials": snapshot,
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        },
+    )
+
+    assert captured["file_id"] == "s3://configured-bucket/litellm-batch-outputs/job-1/out.jsonl.out"
+    assert captured["custom_llm_provider"] == "bedrock"
+    assert captured["aws_access_key_id"] == "AKIA-deployment"
+    assert captured["aws_secret_access_key"] == "secret-deployment"
+    assert captured["aws_session_token"] == "token-deployment"
+    assert captured["aws_region_name"] == "us-west-2"
+    assert captured["_litellm_internal_model_credentials"] is snapshot
+    assert "model" not in captured

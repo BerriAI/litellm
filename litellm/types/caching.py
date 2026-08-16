@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
@@ -30,7 +31,26 @@ CachingSupportedCallTypes = Literal[
     "rerank",
     "responses",
     "aresponses",
+    "anthropic_messages",
+    "aanthropic_messages",
 ]
+
+DEFAULT_CACHING_SUPPORTED_CALL_TYPES: tuple[CachingSupportedCallTypes, ...] = (
+    "completion",
+    "acompletion",
+    "embedding",
+    "aembedding",
+    "atranscription",
+    "transcription",
+    "atext_completion",
+    "text_completion",
+    "arerank",
+    "rerank",
+    "responses",
+    "aresponses",
+    "anthropic_messages",
+    "aanthropic_messages",
+)
 
 
 class RedisPipelineIncrementOperation(TypedDict):
@@ -59,7 +79,7 @@ class RedisPipelineRpushOperation(TypedDict):
     """
 
     key: str
-    values: list[Any]
+    values: Sequence[Any]
 
 
 class RedisPipelineLpopOperation(TypedDict):

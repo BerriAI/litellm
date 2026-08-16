@@ -5,7 +5,8 @@ from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.utils import _parse_prompt_tokens_details
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import token_counter
@@ -101,7 +102,7 @@ def _iter_successful_output_line_stats(
             continue
         response_body = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
         usage = _get_batch_job_usage_from_response_body(response_body, custom_llm_provider)
-        prompt_details = _parse_prompt_tokens_details(usage)
+        prompt_details = parse_prompt_tokens_details(usage)
         raw_model = response_body.get("model")
         response_model = raw_model if isinstance(raw_model, str) and raw_model else None
         if model_info is not None or custom_llm_provider in ("anthropic", "bedrock"):
@@ -295,7 +296,7 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
 
     if litellm_params:
         # List of credential keys that should be passed to file operations
-        credential_keys: Final = [
+        credential_keys: Final = (
             "api_key",
             "api_base",
             "api_version",
@@ -309,7 +310,9 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "bucket_name",
             "timeout",
             "max_retries",
-        ]
+            "_litellm_internal_model_credentials",
+            *AWS_CREDENTIAL_KWARGS_KEYS,
+        )
         for key in credential_keys:
             if key in litellm_params:
                 credentials[key] = litellm_params[key]

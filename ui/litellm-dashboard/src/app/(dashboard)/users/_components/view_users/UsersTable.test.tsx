@@ -123,6 +123,12 @@ describe("UsersTable", () => {
     });
   });
 
+  it("renders spend with two decimal places", () => {
+    render(<Harness data={[makeUser({ spend: 98.854 })]} />);
+
+    expect(screen.getByText("$98.85")).toBeInTheDocument();
+  });
+
   // Sorting is server-side and the backend only accepts these five keys, so a sort
   // control on any other column would send an invalid sort_by. Assert the exact set:
   // a missing control and an extra one both have to fail.
