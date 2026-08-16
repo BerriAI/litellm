@@ -682,6 +682,51 @@ def _count_anthropic_content(
     return tokens
 
 
+def _anthropic_image_source_to_data_uri(source: object) -> str | None:
+    """Convert an Anthropic image source to the URL / data-URI form ``calculate_img_tokens`` expects."""
+    if not isinstance(source, dict):
+        return None
+    source_type: Final = source.get("type")
+    if source_type == "url":
+        url: Final = source.get("url")
+        return url if isinstance(url, str) and url else None
+    if source_type == "base64":
+        raw_data: Final = source.get("data")
+        if not isinstance(raw_data, str) or not raw_data:
+            return None
+        media_type: Final = source.get("media_type") or "image/png"
+        return f"data:{media_type};base64,{raw_data}"
+    return None
+
+
+def _count_anthropic_image_tokens(
+    source: object,
+    use_default_image_token_count: bool,
+) -> int:
+    """
+    Count tokens for an Anthropic image content block source
+    ({"type": "base64", "media_type": ..., "data": ...} or {"type": "url", "url": ...}).
+
+    Converts the source to the URL / data-URI form understood by
+    _count_image_tokens so the dimension-aware estimate applies; falls back to
+    DEFAULT_IMAGE_TOKEN_COUNT when the source cannot be interpreted.
+    """
+    data: Final = _anthropic_image_source_to_data_uri(source)
+    if data is None:
+        return DEFAULT_IMAGE_TOKEN_COUNT
+    try:
+        # mode="high" applies the dimension-based tile math; "auto" resolves to
+        # the flat low-detail estimate, and anthropic image billing always
+        # scales with dimensions (there is no detail tier to select)
+        return calculate_img_tokens(
+            data=data,
+            mode="high",
+            use_default_image_token_count=use_default_image_token_count,
+        )
+    except (ValueError, TypeError, struct.error):
+        return DEFAULT_IMAGE_TOKEN_COUNT
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: OpenAIMessageContent,
@@ -701,6 +746,12 @@ def _count_content_list(
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
+            elif c["type"] == "image":
+                # Anthropic-format image block ({"type": "image", "source": ...}).
+                # Reuse the dimension-aware image_url counting by converting the
+                # source to a URL / data URI; a flat default would under-count
+                # large images since billed tokens scale with dimensions.
+                num_tokens += _count_anthropic_image_tokens(c.get("source"), use_default_image_token_count)
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -729,7 +780,7 @@ def _count_content_list(
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
+                    f"Expected str or dict with 'type' field (text, image, image_url, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:
