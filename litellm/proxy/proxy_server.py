@@ -10947,7 +10947,13 @@ async def elevenlabs_tts_stream_input_endpoint(
         }.items()
         if v is not None
     }
-    voice_settings: Final[VoiceSettings | None] = cast(VoiceSettings, raw_voice_settings) if raw_voice_settings else None  # cast-ok: dict built from typed float query params; structural match is guaranteed
+    _cast_voice_settings: Final[VoiceSettings] = (
+        cast(  # cast-ok: dict built from typed float query params; structural match is guaranteed
+            VoiceSettings,
+            raw_voice_settings,
+        )
+    )
+    voice_settings: Final[VoiceSettings | None] = _cast_voice_settings if raw_voice_settings else None
 
     # Run guardrails and rate-limit checks before opening the upstream connection.
     # This mirrors what the batch TTS endpoint does via proxy_logging_obj.pre_call_hook().
@@ -11004,9 +11010,7 @@ async def elevenlabs_tts_stream_input_endpoint(
         end_time: Final = datetime.now(tz=timezone.utc)
 
         try:
-            model_info: Final = litellm.get_model_info(
-                model=litellm_model, custom_llm_provider="elevenlabs"
-            )
+            model_info: Final = litellm.get_model_info(model=litellm_model, custom_llm_provider="elevenlabs")
             cost_per_char: Final = model_info.get("input_cost_per_character") or 0.0
         except Exception:  # noqa: BLE001  # litellm.get_model_info raises multiple undocumented error types
             cost_per_char = 0.0
