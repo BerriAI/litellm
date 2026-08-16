@@ -500,7 +500,15 @@ class NeedlepathGuardrail(CustomGuardrail):
         structured_messages: Final = inputs.get("structured_messages")
         if not isinstance(structured_messages, list) or not structured_messages:
             return inputs
-        messages: Final = tuple(m for m in structured_messages if isinstance(m, dict))
+        # The static type says every entry is an AllMessageValues TypedDict, but this
+        # is the proxy's client-facing boundary: the list arrives from arbitrary
+        # request JSON, so the runtime check is the guarantee the annotation only
+        # promises.
+        messages: Final = tuple(
+            m
+            for m in structured_messages
+            if isinstance(m, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime boundary check on client JSON
+        )
         if len(messages) != len(structured_messages):
             return inputs
 
@@ -539,9 +547,9 @@ class NeedlepathGuardrail(CustomGuardrail):
         # touching the frozen `messages` tuple; only replaced indices differ from
         # the original list -- see the identity note below.
         selected_messages: Final = list(messages)  # mutable-ok: see comment above
-        messages_selected: Final = 0
-        chars_before: Final = 0
-        chars_after: Final = 0
+        messages_selected = 0  # rebind-ok: loop accumulator, incremented per selection below
+        chars_before = 0  # rebind-ok: loop accumulator, incremented per selection below
+        chars_after = 0  # rebind-ok: loop accumulator, incremented per selection below
         for (idx, _query), selection in zip(selected_pairs, selections):
             original = selected_messages[idx]
             original_text = content_to_text(original.get("content"))
