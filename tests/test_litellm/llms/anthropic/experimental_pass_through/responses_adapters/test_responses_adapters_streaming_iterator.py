@@ -181,6 +181,43 @@ class TestProcessEventReasoningDeltaWithoutOutputItemAdded:
         ]
         assert chunks[3]["content_block"] == {"type": "text", "text": ""}
 
+    def test_resumed_item_id_opens_a_fresh_block(self):
+        """A provider that reuses one item id per run, then interleaves channels, would
+        otherwise address a delta to a block that has already stopped."""
+        response = SimpleNamespace(status="completed", output=[], usage=None)
+        chunks = _process_all(
+            [
+                {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "Think A"},
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Answer A"},
+                {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "Think B"},
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Answer B"},
+                {"type": "response.completed", "response": response},
+            ]
+        )
+
+        assert [(chunk["type"], chunk.get("index")) for chunk in chunks] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+            ("content_block_stop", 0),
+            ("content_block_start", 1),
+            ("content_block_delta", 1),
+            ("content_block_stop", 1),
+            ("content_block_start", 2),
+            ("content_block_delta", 2),
+            ("content_block_stop", 2),
+            ("content_block_start", 3),
+            ("content_block_delta", 3),
+            ("content_block_stop", 3),
+            ("message_delta", None),
+            ("message_stop", None),
+        ]
+        assert [chunk["content_block"]["type"] for chunk in chunks if chunk["type"] == "content_block_start"] == [
+            "thinking",
+            "text",
+            "thinking",
+            "text",
+        ]
+
 
 class TestResponseCompletedUsage:
     """The Anthropic ``message_delta`` usage must report cache reads/writes and

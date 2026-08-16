@@ -101,8 +101,11 @@ class AnthropicResponsesStreamWrapper:
         content_block: Mapping[str, object],
     ) -> int:
         mapped_index: Final = self._item_id_to_block_index.get(item_id) if item_id else None
-        if mapped_index is not None:
+        if mapped_index is not None and mapped_index == self._open_block_index:
             return mapped_index
+        # A resumed item whose block already closed needs a fresh one: Anthropic rejects
+        # a delta addressed to a stopped block. Providers that reuse one item id for a
+        # whole run, then interleave channels, land here.
         if item_id is None and self._open_block_index is not None and self._open_block_type == block_type:
             return self._open_block_index
 
