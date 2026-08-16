@@ -29,6 +29,14 @@ const userRow = (userId: string, userAgent: string | null, successfulRequests: n
   spend: 1,
 });
 
+// The distribution panel owns the only chart in this component, so resolving it by slot keeps
+// the assertions independent of how many wrappers the tab library puts around a panel.
+const distributionChart = (): HTMLElement => {
+  const chart = document.querySelector('[data-slot="chart"]');
+  expect(chart).not.toBeNull();
+  return chart as HTMLElement;
+};
+
 describe("PerUserUsage", () => {
   const mockPerUserAnalyticsCall = vi.mocked(networking.perUserAnalyticsCall);
 
@@ -70,6 +78,22 @@ describe("PerUserUsage", () => {
     });
   });
 
+  it("keeps both tab panels mounted so switching tabs does not reset their state", async () => {
+    render(<PerUserUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("u1")).toBeInTheDocument();
+    });
+
+    // Still on the User Details tab: the distribution panel is mounted alongside it.
+    expect(screen.getByText("User Usage Distribution")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Usage Distribution"));
+
+    // And the details panel survives the switch rather than unmounting.
+    expect(screen.getByText("u1")).toBeInTheDocument();
+  });
+
   it("renders the usage distribution as a stacked bar chart with the explicit palette and users formatter", async () => {
     render(<PerUserUsage {...defaultProps} />);
 
@@ -79,26 +103,22 @@ describe("PerUserUsage", () => {
 
     fireEvent.click(screen.getByText("Usage Distribution"));
 
-    const panel = screen.getByText("User Usage Distribution").closest("div")?.parentElement;
-    expect(panel).not.toBeNull();
-
     await waitFor(() => {
-      expect(panel!.querySelectorAll("path.recharts-rectangle")).toHaveLength(4);
+      expect(distributionChart().querySelectorAll("path.recharts-rectangle")).toHaveLength(4);
     });
 
-    const chart = panel!.querySelector('[data-slot="chart"]');
-    expect(chart).not.toBeNull();
-    expect(chart!.querySelectorAll(".recharts-bar")).toHaveLength(2);
+    const chart = distributionChart();
+    expect(chart.querySelectorAll(".recharts-bar")).toHaveLength(2);
 
-    const rectangles = Array.from(chart!.querySelectorAll("path.recharts-rectangle"));
+    const rectangles = Array.from(chart.querySelectorAll("path.recharts-rectangle"));
     const fills = new Set(rectangles.map((rect) => rect.getAttribute("fill")));
     expect(fills).toEqual(new Set(["var(--color-blue-500, #3b82f6)", "var(--color-green-500, #22c55e)"]));
 
     const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.match(/^M\s*([\d.]+)/)?.[1]));
     expect(xPositions.size).toBe(3);
 
-    expect(chart!.textContent).toContain("curl/8.0");
-    expect(chart!.textContent).toContain("Unknown");
+    expect(chart.textContent).toContain("curl/8.0");
+    expect(chart.textContent).toContain("Unknown");
     for (const bucket of [
       "1-9 requests",
       "10-99 requests",
@@ -107,10 +127,10 @@ describe("PerUserUsage", () => {
       "10K-99.9K requests",
       "100K+ requests",
     ]) {
-      expect(chart!.textContent).toContain(bucket);
+      expect(chart.textContent).toContain(bucket);
     }
 
-    const tickTexts = Array.from(chart!.querySelectorAll(".recharts-cartesian-axis-tick-value")).map(
+    const tickTexts = Array.from(chart.querySelectorAll(".recharts-cartesian-axis-tick-value")).map(
       (tick) => tick.textContent ?? "",
     );
     expect(tickTexts.some((tick) => / users$/.test(tick))).toBe(true);

@@ -137,13 +137,6 @@ test_paths:
 
 dockerfiles:
   - reason: >-
-      The componentized images the microservices chart deploys are built by no job; wiring both into
-      the scan workflow costs a full image build each and is deferred to a change that prices the
-      whole set
-    paths:
-      - backend/Dockerfile
-      - gateway/Dockerfile
-  - reason: >-
       The dashboard container is a static Next.js export served by nginx, and the dashboard build
       and lint workflows already exercise that output, so building the image adds no signal about it
     paths:

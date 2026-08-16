@@ -31,6 +31,7 @@ resource "aws_cloudwatch_log_group" "ui" {
 }
 
 resource "aws_cloudwatch_log_group" "migrations" {
+  count             = local.database_enabled ? 1 : 0
   name              = "/ecs/${local.name}/migrations"
   retention_in_days = var.log_retention_days
 
@@ -38,11 +39,13 @@ resource "aws_cloudwatch_log_group" "migrations" {
 }
 
 # Shared env block fed to gateway, backend, and the migration task. Mirrors
-# the helm chart's `litellm.serverEnv` helper on the IAM-auth branch:
-# DATABASE_URL is assembled at runtime by
+# the helm chart's `litellm.serverEnv` helper on the IAM-auth branch: for the
+# module-created Aurora, DATABASE_URL is assembled at runtime by
 # litellm/proxy/auth/rds_iam_token.py::init_iam_db_url_from_env from
 # HOST/PORT/USER/NAME plus an IAM-signed token, so no DB password is needed
-# in the task definition.
+# in the task definition. An existing database instead arrives as a
+# DATABASE_URL secret (var.database_url), which run.py and the proxy both
+# take as-is.
 locals {
   # OTel v2 is opt-in and gated on otel_endpoint, matching the GCP stack.
   # When set, LITELLM_OTEL_V2 flips on alongside the OTEL_* block, with
@@ -103,29 +106,50 @@ locals {
     ] : [],
   )
 
-  shared_env = [
+  managed_db_env = var.create_database ? [
     { name = "IAM_TOKEN_DB_AUTH", value = "true" },
-    { name = "DATABASE_HOST", value = aws_rds_cluster.this.endpoint },
-    { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this.port) },
+    { name = "DATABASE_HOST", value = aws_rds_cluster.this[0].endpoint },
+    { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this[0].port) },
     { name = "DATABASE_USER", value = var.db_username },
     { name = "DATABASE_NAME", value = var.db_name },
-    { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this.reader_endpoint },
-    { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this.port) },
-    { name = "REDIS_HOST", value = aws_elasticache_replication_group.this.primary_endpoint_address },
-    { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this.port) },
+    { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this[0].reader_endpoint },
+    { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this[0].port) },
+  ] : []
+
+  managed_redis_env = var.create_redis ? [
+    { name = "REDIS_HOST", value = aws_elasticache_replication_group.this[0].primary_endpoint_address },
+    { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this[0].port) },
     # transit_encryption_enabled = true on the replication group means the
     # proxy must connect via rediss://. _redis.get_redis_url_from_environment
     # honors REDIS_SSL to flip the scheme.
     { name = "REDIS_SSL", value = "true" },
-    # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
-    # (e.g. cache backend, request log archival, /files passthrough).
-    { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
-    { name = "S3_REGION_NAME", value = var.region },
-    # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
-    # AWS_REGION. Set both for compatibility.
-    { name = "AWS_REGION", value = var.region },
-    { name = "AWS_REGION_NAME", value = var.region },
-  ]
+  ] : []
+
+  shared_env = concat(
+    local.managed_db_env,
+    local.managed_redis_env,
+    [
+      # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
+      # (e.g. cache backend, request log archival, /files passthrough).
+      { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
+      { name = "S3_REGION_NAME", value = var.region },
+      # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
+      # AWS_REGION. Set both for compatibility.
+      { name = "AWS_REGION", value = var.region },
+      { name = "AWS_REGION_NAME", value = var.region },
+    ],
+  )
+
+  # DATABASE_URL / REDIS_URL both outrank the discrete host/port vars in the
+  # proxy, so the BYO branch needs nothing removed from shared_env: the
+  # managed_*_env blocks are already empty whenever these are set.
+  byo_database_secrets = local.byo_database ? [
+    { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url[0].arn },
+  ] : []
+
+  byo_redis_secrets = local.byo_redis ? [
+    { name = "REDIS_URL", valueFrom = aws_secretsmanager_secret.redis_url[0].arn },
+  ] : []
 
   shared_secrets = concat(
     [
@@ -134,6 +158,8 @@ locals {
     var.litellm_license == "" ? [] : [
       { name = "LITELLM_LICENSE", valueFrom = aws_secretsmanager_secret.license[0].arn },
     ],
+    local.byo_database_secrets,
+    local.byo_redis_secrets,
     local.otel_secrets,
     local.billing_metrics_secrets,
   )
@@ -151,9 +177,11 @@ locals {
     for k, v in var.backend_extra_env : { name = k, value = v }
   ]
 
-  backend_default_env = [
+  # Storing models in the DB needs a DB. Without one the backend reads its
+  # model list from proxy_config only.
+  backend_default_env = local.database_enabled ? [
     { name = "STORE_MODEL_IN_DB", value = "true" },
-  ]
+  ] : []
   gateway_extra_secrets_list = [
     for k, v in var.gateway_extra_secrets : { name = k, valueFrom = v }
   ]
@@ -286,8 +314,8 @@ resource "aws_ecs_service" "gateway" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.tasks.id]
+    subnets          = local.private_subnet_ids
+    security_groups  = local.task_security_group_ids
     assign_public_ip = false
   }
 
@@ -308,10 +336,20 @@ resource "aws_ecs_service" "gateway" {
 
   # Don't start until the schema migration has run. Otherwise the proxy
   # boots, Prisma fails on the missing tables, and ECS thrashes the task.
+  # The _version entries are listed because a task reads its secrets by ARN,
+  # which gives Terraform no edge to the resource that writes the value; the
+  # migration covers that ordering only while a database exists.
   depends_on = [
     aws_lb_listener.http,
     aws_lb_listener.https,
     terraform_data.migration,
+    aws_secretsmanager_secret_version.master_key,
+    aws_secretsmanager_secret_version.license,
+    aws_secretsmanager_secret_version.database_url,
+    aws_secretsmanager_secret_version.redis_url,
+    aws_secretsmanager_secret_version.billing_metrics_client_cert,
+    aws_secretsmanager_secret_version.billing_metrics_client_key,
+    aws_secretsmanager_secret_version.billing_metrics_ca_cert,
   ]
 
   tags = local.tags
@@ -381,8 +419,8 @@ resource "aws_ecs_service" "backend" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.tasks.id]
+    subnets          = local.private_subnet_ids
+    security_groups  = local.task_security_group_ids
     assign_public_ip = false
   }
 
@@ -399,10 +437,20 @@ resource "aws_ecs_service" "backend" {
     ignore_changes = [desired_count]
   }
 
+  # Same secret-version ordering as the gateway, plus UI_PASSWORD, which only
+  # the backend consumes.
   depends_on = [
     aws_lb_listener.http,
     aws_lb_listener.https,
     terraform_data.migration,
+    aws_secretsmanager_secret_version.master_key,
+    aws_secretsmanager_secret_version.license,
+    aws_secretsmanager_secret_version.ui_password,
+    aws_secretsmanager_secret_version.database_url,
+    aws_secretsmanager_secret_version.redis_url,
+    aws_secretsmanager_secret_version.billing_metrics_client_cert,
+    aws_secretsmanager_secret_version.billing_metrics_client_key,
+    aws_secretsmanager_secret_version.billing_metrics_ca_cert,
   ]
 
   tags = local.tags
@@ -451,8 +499,8 @@ resource "aws_ecs_service" "ui" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.tasks.id]
+    subnets          = local.private_subnet_ids
+    security_groups  = local.task_security_group_ids
     assign_public_ip = false
   }
 

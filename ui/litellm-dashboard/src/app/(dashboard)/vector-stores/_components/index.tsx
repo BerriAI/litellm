@@ -13,7 +13,8 @@ import DeleteResourceModal from "@/components/common_components/DeleteResourceMo
 import VectorStoreInfoView from "./vector_store_info";
 import CreateVectorStore from "./CreateVectorStore";
 import TestVectorStoreTab from "./TestVectorStoreTab";
-import { isAdminRole } from "@/utils/roles";
+import IndexesTab from "./IndexesTab";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -153,7 +154,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
         </p>
 
         <Tabs defaultValue="create" onValueChange={onTabChange}>
-          <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
             <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
               Create Vector Store
             </TabsTrigger>
@@ -163,6 +164,11 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
             <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
               Test Vector Store
             </TabsTrigger>
+            {isProxyAdminRole(userRole || "") && (
+              <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
+                Indexes
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent keepMounted={hasVisited("create")} value="create">
@@ -188,6 +194,12 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           <TabsContent keepMounted={hasVisited("test")} value="test">
             <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
           </TabsContent>
+
+          {isProxyAdminRole(userRole || "") && (
+            <TabsContent keepMounted={hasVisited("indexes")} value="indexes">
+              <IndexesTab accessToken={accessToken} vectorStores={vectorStores} onViewVectorStore={handleView} />
+            </TabsContent>
+          )}
         </Tabs>
 
         {/* Create Vector Store Modal */}

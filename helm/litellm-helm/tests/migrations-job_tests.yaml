@@ -290,3 +290,27 @@ tests:
           value:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+  - it: should schedule onto the same nodes as the gateway
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      nodeSelector:
+        karpenter.sh/nodepool: litellm-e2e
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: litellm-e2e
+          effect: NoSchedule
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            karpenter.sh/nodepool: litellm-e2e
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: workload
+              operator: Equal
+              value: litellm-e2e
+              effect: NoSchedule

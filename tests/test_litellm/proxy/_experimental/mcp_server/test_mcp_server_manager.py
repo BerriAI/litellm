@@ -480,6 +480,35 @@ class TestMCPServerManager:
         assert server.needs_user_oauth_token is True
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_keeps_configured_endpoints_for_management_view(self):
+        """A yaml server with a pinned issuer still reports its configured endpoints to the management
+        view, even though the runtime fields are empty because the anchored issuer is the sole endpoint
+        source. The dashboard edits that view, so emptied values there load as blank fields and the next
+        save writes the blanks over the config."""
+        manager = MCPServerManager()
+
+        config = self._oauth2_config(
+            oauth2_flow="authorization_code",
+            issuer="https://idp.example.com",
+            authorization_url="https://example.com/oauth/authorize",
+            token_url="https://example.com/oauth/token",
+            registration_url="https://example.com/oauth/register",
+        )
+        with patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.authorization_url is None
+        assert server.token_url is None
+        assert server.registration_url is None
+
+        view = manager._build_mcp_server_table(server)
+
+        assert view.authorization_url == "https://example.com/oauth/authorize"
+        assert view.token_url == "https://example.com/oauth/token"
+        assert view.registration_url == "https://example.com/oauth/register"
+
+    @pytest.mark.asyncio
     async def test_load_servers_from_config_rejects_uncorroborated_endpoints_but_keeps_resource_scopes(self):
         """A yaml server with a manual authorization_url has the same config-time mix-up exposure as a
         DB row: a document advertising a different authorize endpoint has its token_url rejected. The
@@ -1610,6 +1639,43 @@ class TestMCPServerManager:
         assert built.authorization_url == "https://idp.example.com/authorize"
         assert built.token_url == "https://idp.example.com/token"
         assert built.token_url != "https://attacker.example.com/steal"
+
+    @pytest.mark.asyncio
+    async def test_management_view_keeps_stored_endpoints_when_issuer_is_pinned(self):
+        """A pinned issuer empties the endpoints the runtime uses, but the management view must still
+        report what the admin stored. Serving the emptied values made the dashboard edit form load the
+        three endpoint fields blank, so saving with no edits sent them back as explicit nulls and wiped
+        the row, and re-entering them looked like it never saved."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="issuer-anchored-management-view",
+            alias="issuer_anchored_management_view",
+            description="issuer pinned with admin-entered endpoints",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            issuer="https://idp.example.com",
+            authorization_url="https://up.example.com/oauth/authorize",
+            token_url="https://up.example.com/oauth/token",
+            registration_url="https://up.example.com/oauth/register",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        with patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=None)):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        assert built.authorization_url is None
+        assert built.token_url is None
+        assert built.registration_url is None
+
+        view = manager._build_mcp_server_table(built)
+
+        assert view.issuer == "https://idp.example.com"
+        assert view.authorization_url == "https://up.example.com/oauth/authorize"
+        assert view.token_url == "https://up.example.com/oauth/token"
+        assert view.registration_url == "https://up.example.com/oauth/register"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -9793,3 +9859,66 @@ class TestToolAuthorizationIsNotConditionalOnLogging:
             )
 
         upstream.assert_awaited_once()
+
+
+class TestSessionResourceScopeIntersect:
+    """LIT-4917: the sealed session scope intersects the admitted subject's resolved server
+    set at the single convergence point every fan-out and tool call reads, covering the
+    exception fallback so a resolver fault never widens a scoped bearer."""
+
+    def _admitted_auth(self, scope):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        auth = UserAPIKeyAuth(user_id="scoped-user")
+        auth.mcp_admitted_user_subject = True
+        auth.mcp_session_resource_server_id = scope
+        return auth
+
+    def test_scope_reader_is_none_for_keys_and_unscoped_subjects(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        assert MCPServerManager._admitted_session_resource_scope(None) is None
+        assert MCPServerManager._admitted_session_resource_scope(UserAPIKeyAuth(user_id="u")) is None
+        assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth(None)) is None
+
+    def test_scope_reader_returns_sealed_scope_for_admitted_subjects(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+        assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth("b")) == "b"
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_scopes_past_operator_open_union(self):
+        """The intersect applies AFTER the operator-open (allow_all_keys) union, so a scoped
+        bearer cannot reach an allow-all server outside its scope, and applies on the
+        exception fallback so a resolver fault yields the scoped subset of allow-all rather
+        than the whole set."""
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+        manager = MCPServerManager()
+        auth = self._admitted_auth("granted-id")
+        with (
+            patch.object(MCPServerManager, "get_allow_all_keys_server_ids", return_value=["open-id", "granted-id"]),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["granted-id", "other-id"],
+            ),
+            patch.object(MCPServerManager, "_get_active_submitted_mcp_server_ids_for_user", new_callable=AsyncMock, return_value=[]),
+        ):
+            allowed = await manager.get_allowed_mcp_servers(auth)
+        assert allowed == ["granted-id"]
+
+        with (
+            patch.object(MCPServerManager, "get_allow_all_keys_server_ids", return_value=["open-id", "granted-id"]),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("resolver down"),
+            ),
+            patch.object(MCPServerManager, "_get_active_submitted_mcp_server_ids_for_user", new_callable=AsyncMock, return_value=[]),
+        ):
+            fallback = await manager.get_allowed_mcp_servers(auth)
+        assert fallback == ["granted-id"]

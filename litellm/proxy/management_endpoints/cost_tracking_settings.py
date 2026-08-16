@@ -10,6 +10,8 @@ PATCH /config/cost_margin_config - Update cost margin configuration
 POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,28 +26,64 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.utils import LlmProvidersSet
+from litellm.types.utils import CostPerToken, LlmProvidersSet, ModelInfo
 
 router: Final = APIRouter()
 
 
-def _resolve_model_for_cost_lookup(model: str) -> tuple[str, str | None]:
+@dataclass(frozen=True, slots=True)
+class ResolvedCostModel:
+    model: str
+    provider: str | None
+    custom_cost_per_token: CostPerToken | None
+
+
+def _configured_price(key: str, sources: tuple[Mapping[str, object], ...]) -> float | None:
+    values: Final = (source.get(key) for source in sources)
+    numeric: Final = (float(value) for value in values if isinstance(value, (int, float)))
+    return next(numeric, None)
+
+
+def _extract_custom_pricing(
+    litellm_params: Mapping[str, object], model_info: Mapping[str, object]
+) -> CostPerToken | None:
+    """
+    Pull per-token pricing configured on a deployment so on-prem / self-hosted
+    models (absent from the public cost map) still estimate a real cost.
+    Pricing may live on ``litellm_params`` or ``model_info``; ``litellm_params``
+    wins, matching the router's cost-map registration precedence.
+    """
+    sources: Final = (litellm_params, model_info)
+    input_price: Final = _configured_price("input_cost_per_token", sources)
+    output_price: Final = _configured_price("output_cost_per_token", sources)
+
+    if input_price is None and output_price is None:
+        return None
+
+    return CostPerToken(
+        input_cost_per_token=input_price or 0.0,
+        output_cost_per_token=output_price or 0.0,
+    )
+
+
+def _lookup_model_info(model: str) -> ModelInfo | None:
+    try:
+        return litellm.get_model_info(model=model)
+    except Exception:
+        return None
+
+
+def _resolve_model_for_cost_lookup(model: str) -> ResolvedCostModel:
     """
     Resolve a model name (which may be a router alias/model_group) to the
-    underlying litellm model name for cost lookup.
+    underlying litellm model name, provider, and any deployment-configured
+    pricing used for cost lookup.
 
     Args:
         model: The model name from the request (could be a router alias like 'e-model-router'
                or an actual model name like 'azure_ai/gpt-4')
-
-    Returns:
-        Tuple of (resolved_model_name, custom_llm_provider)
-        - resolved_model_name: The actual model name to use for cost lookup
-        - custom_llm_provider: The provider if resolved from router, None otherwise
     """
     from litellm.proxy.proxy_server import llm_router
-
-    custom_llm_provider: str | None = None
 
     # Try to resolve from router if available
     if llm_router is not None:
@@ -57,31 +95,25 @@ def _resolve_model_for_cost_lookup(model: str) -> tuple[str, str | None]:
                 first_deployment: Final = deployments[0]
                 litellm_params: Final = first_deployment.get("litellm_params", {})
                 model_info: Final = first_deployment.get("model_info", {})
+                custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+                provider: Final = str(custom_llm_provider) if custom_llm_provider is not None else None
+                custom_cost_per_token: Final = _extract_custom_pricing(litellm_params, model_info)
 
                 # Check base_model first (needed for Azure custom deployment names)
                 base_model: Final = model_info.get("base_model") or litellm_params.get("base_model")
                 if base_model:
                     verbose_proxy_logger.debug("Resolved model '%s' to base_model '%s' from router", model, base_model)
-                    custom_llm_provider = litellm_params.get("custom_llm_provider")
-                    return (
-                        str(base_model),
-                        (str(custom_llm_provider) if custom_llm_provider is not None else None),
-                    )
+                    return ResolvedCostModel(str(base_model), provider, custom_cost_per_token)
 
                 resolved_model: Final = litellm_params.get("model")
-
                 if resolved_model:
                     verbose_proxy_logger.debug("Resolved model '%s' to '%s' from router", model, resolved_model)
-                    custom_llm_provider = litellm_params.get("custom_llm_provider")
-                    return (
-                        str(resolved_model),
-                        (str(custom_llm_provider) if custom_llm_provider is not None else None),
-                    )
+                    return ResolvedCostModel(str(resolved_model), provider, custom_cost_per_token)
         except Exception as e:
             verbose_proxy_logger.debug("Could not resolve model '%s' from router: %s", model, e)
 
     # Return original model if not resolved
-    return model, custom_llm_provider
+    return ResolvedCostModel(model, None, None)
 
 
 def _calculate_period_costs(num_requests, cost_per_request, input_cost, output_cost, margin_cost):
@@ -450,7 +482,9 @@ async def estimate_cost(
     from litellm.types.utils import ModelResponse, Usage
 
     # Resolve model name (handles router aliases like 'e-model-router' -> 'azure_ai/gpt-4')
-    resolved_model, resolved_provider = _resolve_model_for_cost_lookup(request.model)
+    resolved: Final = _resolve_model_for_cost_lookup(request.model)
+    resolved_model: Final = resolved.model
+    resolved_provider: Final = resolved.provider
 
     verbose_proxy_logger.debug("Cost estimate: request.model='%s' resolved to '%s'", request.model, resolved_model)
 
@@ -480,6 +514,8 @@ async def estimate_cost(
         cost_per_request: Final = completion_cost(
             completion_response=mock_response,
             model=resolved_model,
+            custom_llm_provider=resolved_provider,
+            custom_cost_per_token=resolved.custom_cost_per_token,
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
@@ -497,20 +533,22 @@ async def estimate_cost(
     output_cost: Final = cost_breakdown.get("output_cost", 0.0) if cost_breakdown else 0.0
     margin_cost: Final = cost_breakdown.get("margin_total_amount", 0.0) if cost_breakdown else 0.0
 
-    # Get model info for per-token pricing display
-    try:
-        model_info: Final = litellm.get_model_info(model=resolved_model)
-        input_cost_per_token = model_info.get("input_cost_per_token")
-        output_cost_per_token = model_info.get("output_cost_per_token")
-        custom_llm_provider = model_info.get("litellm_provider")
-    except Exception:
-        input_cost_per_token = None
-        output_cost_per_token = None
-        custom_llm_provider = None
+    model_info: Final = _lookup_model_info(resolved_model)
+    mapped_input_price: Final = model_info.get("input_cost_per_token") if model_info is not None else None
+    mapped_output_price: Final = model_info.get("output_cost_per_token") if model_info is not None else None
+    mapped_provider: Final = model_info.get("litellm_provider") if model_info is not None else None
 
-    # Use provider from router resolution if not found in model_info
-    if custom_llm_provider is None and resolved_provider is not None:
-        custom_llm_provider = resolved_provider
+    input_cost_per_token: Final = (
+        resolved.custom_cost_per_token["input_cost_per_token"]
+        if resolved.custom_cost_per_token is not None
+        else mapped_input_price
+    )
+    output_cost_per_token: Final = (
+        resolved.custom_cost_per_token["output_cost_per_token"]
+        if resolved.custom_cost_per_token is not None
+        else mapped_output_price
+    )
+    custom_llm_provider: Final = mapped_provider if mapped_provider is not None else resolved_provider
 
     # Calculate daily and monthly costs
     (

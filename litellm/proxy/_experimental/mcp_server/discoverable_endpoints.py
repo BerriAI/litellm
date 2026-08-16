@@ -1655,6 +1655,7 @@ async def authorize(
     code_challenge_method: str | None = None,
     response_type: str | None = None,
     scope: str | None = None,
+    resource: str | None = None,
 ):
     # Redirect to real OAuth provider with PKCE support
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -1671,6 +1672,7 @@ async def authorize(
             code_challenge_method=code_challenge_method,
             response_type=response_type,
             session_user_id=_session_cookie_user_id(request),
+            resource=resource,
         )
 
     lookup_name: Final[str | None] = mcp_server_name or client_id
@@ -1721,6 +1723,7 @@ async def token_endpoint(
     code_verifier: str = Form(None),
     refresh_token: str | None = Form(None),
     scope: str | None = Form(None),
+    resource: str | None = Form(None),
     mcp_server_name: str | None = None,
 ):
     """
@@ -1753,6 +1756,7 @@ async def token_endpoint(
             master_key=master_key,
             reload_user=_reload_active_user_by_id,
             cache=user_api_key_cache,
+            resource=resource,
         )
 
     lookup_name: Final = mcp_server_name or client_id

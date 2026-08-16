@@ -1728,6 +1728,87 @@ class TestEnableAnthropicPromptCaching:
         assert result_msgs[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
         assert "cache_control" not in result_msgs[0]["content"][-1]
 
+
+class TestPerKeyEnablePromptCaching:
+    """Per-request enable_prompt_caching override (stamped from key metadata) with the global flag off."""
+
+    MESSAGES: List[AllMessageValues] = [
+        {"role": "system", "content": "a long system prompt"},
+        {"role": "user", "content": "latest turn"},
+    ]
+
+    def _points(self, enable_prompt_caching, model="claude-sonnet-4-5", provider="anthropic", messages=None):
+        return AnthropicCacheControlHook.get_default_injection_points(
+            messages=copy.deepcopy(self.MESSAGES) if messages is None else messages,
+            system=None,
+            model=model,
+            custom_llm_provider=provider,
+            enable_prompt_caching=enable_prompt_caching,
+        )
+
+    def test_true_injects_with_global_flag_off(self):
+        assert litellm.enable_anthropic_prompt_caching is False
+        assert self._points(True) == [
+            {"location": "message", "role": "system", "index": None, "control": {"type": "ephemeral"}},
+            {"location": "message", "role": None, "index": -1, "control": {"type": "ephemeral"}},
+        ]
+
+    @pytest.mark.parametrize("enable_prompt_caching", [False, None])
+    def test_false_and_none_fall_back_to_global_flag(self, enable_prompt_caching):
+        assert self._points(enable_prompt_caching) == []
+
+    def test_false_does_not_suppress_global_flag(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert [p["index"] for p in self._points(False)] == [None, -1]
+
+    def test_provider_gate_still_applies(self):
+        assert self._points(True, model="gpt-4o", provider="openai") == []
+
+    def test_unsupported_model_gate_still_applies(self):
+        assert self._points(True, model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
+
+    def test_client_markers_still_win(self):
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": "latest turn"},
+        ]
+        assert self._points(True, messages=messages) == []
+
+    def test_seed_injects_with_global_flag_off(self):
+        params: dict = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            enable_prompt_caching=True,
+        )
+        assert [p["index"] for p in params["cache_control_injection_points"]] == [None, -1]
+
+    def test_v1_messages_injects_and_pops_flag_from_kwargs(self):
+        kwargs: dict = {"enable_prompt_caching": True}
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": [{"type": "text", "text": "latest"}]}],
+            "a system prompt",
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert result_sys == [{"type": "text", "text": "a system prompt", "cache_control": {"type": "ephemeral"}}]
+        assert result_msgs[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+        assert "enable_prompt_caching" not in kwargs
+
+    def test_v1_messages_pops_flag_even_when_noop(self):
+        kwargs: dict = {"enable_prompt_caching": True}
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            None,
+            kwargs,
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+        assert "enable_prompt_caching" not in kwargs
+
     def test_v1_messages_is_noop_when_disabled(self):
         messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
         result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
