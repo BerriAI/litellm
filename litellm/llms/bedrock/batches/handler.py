@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, Optional, cast
 
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
@@ -21,10 +21,10 @@ _BEDROCK_MIJ_STATUS_TO_OPENAI = {
 }
 
 _CANCEL_IDEMPOTENT_CODES = {"ValidationException", "ConflictException"}
-_CANCEL_IDEMPOTENT_TERMS = {"stop", "terminal", "completed", "already", "conflict"}
+_CANCEL_IDEMPOTENT_TERMS = {"stop", "terminal", "completed", "already"}
 
 
-def _extract_region_from_bedrock_arn(arn: str) -> str | None:
+def _extract_region_from_bedrock_arn(arn: str) -> Optional[str]:
     """ARN shape: ``arn:aws:bedrock:<region>:<account>:<type>/<id>``"""
     try:
         parts = arn.split(":")
@@ -35,14 +35,14 @@ def _extract_region_from_bedrock_arn(arn: str) -> str | None:
     return None
 
 
-def _extract_job_id_from_arn(arn: str) -> str | None:
+def _extract_job_id_from_arn(arn: str) -> Optional[str]:
     """``arn:aws:bedrock:<region>:<acct>:model-invocation-job/<job-id>`` -> ``<job-id>``."""
     if ":model-invocation-job/" not in arn:
         return None
     return arn.rsplit("/", 1)[-1] or None
 
 
-def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: str | None) -> str | None:
+def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: Optional[str]) -> Optional[str]:
     if not output_prefix or not input_uri or not job_id:
         return None
     if not output_prefix.endswith("/"):
@@ -53,7 +53,7 @@ def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: str | N
     return f"{output_prefix}{job_id}/{input_basename}.out"
 
 
-def _to_epoch(value: Any) -> int | None:
+def _to_epoch(value: Any) -> Optional[int]:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -69,9 +69,9 @@ class BedrockBatchesHandler:
     @staticmethod
     def cancel_batch(
         batch_id: str,
-        aws_region_name: str | None = None,
-        logging_obj=None,
-        **kwargs,
+        aws_region_name: Optional[str] = None,
+        logging_obj: Any = None,
+        **kwargs: Any,
     ) -> "LiteLLMBatch":
         """
         Cancel an AWS Bedrock batch model invocation job using StopModelInvocationJob.
@@ -112,7 +112,9 @@ class BedrockBatchesHandler:
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code")
             error_msg = e.response.get("Error", {}).get("Message", "").lower()
-            if error_code in _CANCEL_IDEMPOTENT_CODES and any(term in error_msg for term in _CANCEL_IDEMPOTENT_TERMS):
+            if error_code == "ConflictException" or (
+                error_code == "ValidationException" and any(term in error_msg for term in _CANCEL_IDEMPOTENT_TERMS)
+            ):
                 pass
             else:
                 raise e
@@ -125,9 +127,10 @@ class BedrockBatchesHandler:
         )
 
     @staticmethod
-    def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+    def _handle_async_invoke_status(
+        batch_id: str, aws_region_name: str, logging_obj: Any = None, **kwargs: Any
+    ) -> "LiteLLMBatch":
         import asyncio
-
         from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
 
         async def _async_get_status():
@@ -181,9 +184,9 @@ class BedrockBatchesHandler:
     @staticmethod
     def _handle_model_invocation_job_status(
         batch_id: str,
-        aws_region_name: str | None = None,
-        logging_obj=None,
-        **kwargs,
+        aws_region_name: Optional[str] = None,
+        logging_obj: Any = None,
+        **kwargs: Any,
     ) -> "LiteLLMBatch":
         try:
             import boto3
