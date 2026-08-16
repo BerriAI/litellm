@@ -2,7 +2,7 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine
 from typing import Any, Final, Literal, overload
 
 from litellm._logging import verbose_logger
@@ -15,17 +15,6 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from .json_loader import SimpleProviderConfig
-
-
-def _clamp_temperature(temperature: float, n: int, constraints: Mapping[str, float]) -> float:
-    capped: Final = (
-        min(temperature, constraints["temperature_max"]) if "temperature_max" in constraints else temperature
-    )
-    floored: Final = max(capped, constraints["temperature_min"]) if "temperature_min" in constraints else capped
-    floor_for_multiple_choices: Final = constraints.get("temperature_min_with_n_gt_1")
-    if n > 1 and floor_for_multiple_choices is not None:
-        return max(floored, floor_for_multiple_choices)
-    return floored
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -142,36 +131,37 @@ def create_config_class(provider: SimpleProviderConfig):
             """Apply parameter mappings and constraints"""
 
             supported_params: Final = self.get_supported_openai_params(model)
-            mapped: Final = {
-                **optional_params,
-                **{
-                    provider.param_mappings.get(param, param): value
-                    for param, value in non_default_params.items()
-                    if param in provider.param_mappings or param in supported_params
-                },
-            }
 
-            constrained: Final = (
-                mapped
-                if "temperature" not in mapped
-                else {
-                    **mapped,
-                    "temperature": _clamp_temperature(
-                        temperature=mapped["temperature"],
-                        n=mapped.get("n", 1),
-                        constraints=provider.constraints,
-                    ),
-                }
-            )
+            # Apply supported params
+            for param, value in non_default_params.items():
+                # Check parameter mappings first
+                if param in provider.param_mappings:
+                    optional_params[provider.param_mappings[param]] = value
+                elif param in supported_params:
+                    optional_params[param] = value
 
-            # The OpenAI SDK omits `stream` entirely when it is false, which makes
-            # stream-by-default providers answer a non-streaming call with SSE. Pin it
-            # on the wire through extra_body, which the SDK merges into the request body.
-            if not provider.special_handling.get("send_explicit_stream_false") or constrained.get("stream"):
-                return constrained
-            requested_extra_body: Final = constrained.get("extra_body")
-            extra_body: Final[dict] = requested_extra_body if isinstance(requested_extra_body, dict) else {}
-            return {**constrained, "extra_body": {"stream": False, **extra_body}}
+            # Apply temperature constraints if present
+            if "temperature" in optional_params:
+                temp = optional_params["temperature"]
+                constraints: Final = provider.constraints
+
+                # Clamp to max
+                if "temperature_max" in constraints:
+                    temp = min(temp, constraints["temperature_max"])
+
+                # Clamp to min
+                if "temperature_min" in constraints:
+                    temp = max(temp, constraints["temperature_min"])
+
+                # Special case: temperature_min_with_n_gt_1
+                if "temperature_min_with_n_gt_1" in constraints:
+                    n: Final = optional_params.get("n", 1)
+                    if n > 1 and temp < constraints["temperature_min_with_n_gt_1"]:
+                        temp = constraints["temperature_min_with_n_gt_1"]
+
+                optional_params["temperature"] = temp
+
+            return optional_params
 
         @property
         def custom_llm_provider(self) -> str | None:
@@ -242,8 +232,6 @@ def create_responses_config_class(provider: SimpleProviderConfig):
         ) -> dict:
             if provider.special_handling.get("force_store_false"):
                 response_api_optional_request_params["store"] = False
-            if provider.special_handling.get("send_explicit_stream_false"):
-                response_api_optional_request_params.setdefault("stream", False)
             return super().transform_responses_api_request(
                 model=model,
                 input=input,

@@ -349,9 +349,10 @@ def get_llm_provider(
                     elif endpoint == "https://api.meta.ai/v1":
                         custom_llm_provider = "meta"
                         dynamic_api_key = get_secret_str("META_API_KEY")
-                    elif endpoint == "https://api.apodex.ai/v1":
-                        custom_llm_provider = "apodex"
-                        dynamic_api_key = get_secret_str("APODEX_API_KEY")
+                    elif endpoint == litellm.ApodexChatConfig.API_BASE_URL:
+                        custom_llm_provider = "apodex"  # rebind-ok: dispatch chain resolves in place
+                        # rebind-ok: dispatch chain resolves in place
+                        dynamic_api_key = litellm.ApodexChatConfig.get_api_key()
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(f"api base needs to be a string. api_base={api_base}")
@@ -757,6 +758,9 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.NscaleConfig()._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
+    elif custom_llm_provider == "apodex":
+        api_base = litellm.ApodexChatConfig.get_api_base(api_base)  # rebind-ok: dispatch chain resolves in place
+        dynamic_api_key = litellm.ApodexChatConfig.get_api_key(api_key)  # rebind-ok: resolved in place
     elif custom_llm_provider == "heroku":
         (
             api_base,
