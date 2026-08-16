@@ -29,15 +29,7 @@ from pydantic import BaseModel, create_model
 from litellm._logging import verbose_router_logger
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
-try:
-    from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
-except ImportError:
-    from contextlib import contextmanager
-
-    @contextmanager
-    def forwarded_internal_call_metadata(*args, **kwargs):
-        yield
-
+from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
@@ -47,12 +39,7 @@ from litellm.types.utils import (
     StandardLoggingRoutingDecisionTierBoundaries,
 )
 
-try:
-    from .classification_rubrics import calibration_examples_section
-except ImportError:
-    def calibration_examples_section(*args, **kwargs):
-        return ""
-
+from .classification_rubrics import calibration_examples_section
 from .config import (
     DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CODE_KEYWORDS,

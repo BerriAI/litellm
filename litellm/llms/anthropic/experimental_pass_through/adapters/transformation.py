@@ -1,7 +1,7 @@
 import copy
 import hashlib
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from litellm.llms.anthropic.experimental_pass_through.utils import (
@@ -307,7 +307,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 # Fallback for non-dict objects (shouldn't happen in practice)
                 cast(dict[str, Any], target)["cache_control"] = cache_control
 
-    def translatable_anthropic_params(self) -> list:
+    def translatable_anthropic_params(self) -> list[str]:
         """
         Which anthropic params, we need to translate to the openai format.
         """
@@ -411,7 +411,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                 # (each tool_use must have exactly one tool_result)
                                 content_items = list(content.get("content", []))
 
-                                # For single-item content, maintain backward compatibility with string/url format
+                                # Single-item text keeps the backward-compatible string format; a single
+                                # image becomes a structured image_url part
                                 if len(content_items) == 1:
                                     c = content_items[0]
                                     if isinstance(c, str):
@@ -432,14 +433,13 @@ class LiteLLMAnthropicMessagesAdapter:
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
                                         elif c.get("type") == "image":
-                                            source = c.get("source", {})
-                                            openai_image_url = (
-                                                self._translate_anthropic_image_to_openai(cast(dict, source)) or ""
-                                            )
+                                            image_part = self._tool_result_image_part(c.get("source"))
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
                                                 tool_call_id=content.get("tool_use_id", ""),
-                                                content=openai_image_url,
+                                                content=[image_part]  # mutable-ok: content must be a json list
+                                                if image_part
+                                                else "",
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
@@ -461,19 +461,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                                     )
                                                 )
                                             elif c.get("type") == "image":
-                                                source = c.get("source", {})
-                                                openai_image_url = (
-                                                    self._translate_anthropic_image_to_openai(cast(dict, source)) or ""
-                                                )
-                                                if openai_image_url:
-                                                    combined_content_parts.append(
-                                                        ChatCompletionImageObject(
-                                                            type="image_url",
-                                                            image_url=ChatCompletionImageUrlObject(
-                                                                url=openai_image_url
-                                                            ),
-                                                        )
-                                                    )
+                                                image_part = self._tool_result_image_part(c.get("source"))
+                                                if image_part:
+                                                    combined_content_parts.append(image_part)
                                     # Create a single tool message with combined content
                                     if combined_content_parts:
                                         tool_result = ChatCompletionToolMessage(
@@ -1140,7 +1130,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return new_kwargs, tool_name_mapping
 
-    def _translate_anthropic_image_to_openai(self, image_source: dict) -> str | None:
+    def _translate_anthropic_image_to_openai(self, image_source: Mapping[str, str]) -> str | None:
         """
         Translate Anthropic image source format to OpenAI-compatible image URL.
 
@@ -1166,6 +1156,14 @@ class LiteLLMAnthropicMessagesAdapter:
             return image_source.get("url", "")
 
         return None
+
+    def _tool_result_image_part(self, image_source: object) -> ChatCompletionImageObject | None:
+        if not isinstance(image_source, dict):
+            return None
+        openai_image_url = self._translate_anthropic_image_to_openai(image_source)
+        if not openai_image_url:
+            return None
+        return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
 
     def _translate_openai_content_to_anthropic(
         self,

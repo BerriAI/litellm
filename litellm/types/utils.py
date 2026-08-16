@@ -2782,11 +2782,13 @@ RoutingDecisionCause = Literal[
 ]
 
 
-InternalCallOrigin = Literal["autorouter_classifier"]
+InternalCallOrigin = Literal["autorouter_classifier", "shadow_eval_router", "shadow_eval_judge"]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
 
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
+SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
+SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
@@ -3260,6 +3262,7 @@ class MirroredPricingParams(BaseModel):
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
+    tiered_pricing: list[dict[str, Any]] | None = None
 
 
 class CustomPricingLiteLLMParams(MirroredPricingParams):
@@ -3327,7 +3330,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
     citation_cost_per_token: float | None = None
-    tiered_pricing: list[dict[str, Any]] | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
     input_cost_per_image_token: float | None = None
@@ -3396,9 +3398,21 @@ agentic_loop_internal_litellm_params: Final = [
 # the provider.
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 
+# Bedrock managed-batch deployment config, read from litellm_params by the batch and
+# files transformations. Listed for the same reason as the fields above: these sit on
+# a deployment that also serves chat, so leaking them into extra_body makes Bedrock
+# reject every non-batch request to that deployment.
+bedrock_batch_litellm_params: Final = (
+    "aws_batch_role_arn",
+    "s3_bucket_name",
+    "s3_region_name",
+    "s3_output_bucket_name",
+    "bedrock_tags",
+)
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD]
+    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params]
     + [
         "metadata",
         "litellm_metadata",
@@ -3756,6 +3770,7 @@ class SearchProviders(str, Enum):
     YOU_COM = "you_com"
     APISERPENT = "apiserpent"
     TINYFISH = "tinyfish"
+    NIMBLE = "nimble"
 
 
 # Create a set of all search provider values for quick lookup

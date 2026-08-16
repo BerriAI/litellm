@@ -11,10 +11,9 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { BadgeLink } from "@/components/shared/BadgeLink";
-import type { ColumnsType } from "antd/es/table";
 import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
-import MemberTable from "../common_components/MemberTable";
+import MemberTable, { type MemberTableColumn } from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
@@ -122,7 +121,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     return <div className="p-4">Organization not found</div>;
   }
 
-  const orgExtraColumns: ColumnsType<Member> = [
+  const orgExtraColumns: MemberTableColumn[] = [
     {
       title: "Spend (USD)",
       key: "spend",
