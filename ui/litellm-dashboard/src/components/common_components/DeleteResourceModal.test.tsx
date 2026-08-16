@@ -159,6 +159,20 @@ describe("DeleteResourceModal", () => {
     expect(cancelButton).toBeDisabled();
   });
 
+  it("should call onCancel when escape is pressed and no deletion is in flight", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<DeleteResourceModal {...defaultProps} />);
+    await user.keyboard("{Escape}");
+    expect(mockOnCancel).toHaveBeenCalled();
+  });
+
+  it("should ignore escape while confirmLoading is true so the modal cannot close mid-deletion", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<DeleteResourceModal {...defaultProps} confirmLoading={true} />);
+    await user.keyboard("{Escape}");
+    expect(mockOnCancel).not.toHaveBeenCalled();
+  });
+
   it("should disable delete button when confirmLoading is true even if requiredConfirmation matches", async () => {
     const user = userEvent.setup();
     renderWithProviders(<DeleteResourceModal {...defaultProps} confirmLoading={true} requiredConfirmation="DELETE" />);

@@ -8,8 +8,8 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
-import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
-import { Tag } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
 import React from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
@@ -71,7 +71,13 @@ const Navbar: React.FC<NavbarProps> = ({
                 className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
                 title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
-                <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
+                <span className="text-lg">
+                  {sidebarCollapsed ? (
+                    <PanelLeftOpen className="size-[18px]" />
+                  ) : (
+                    <PanelLeftClose className="size-[18px]" />
+                  )}
+                </span>
               </button>
             )}
 
@@ -98,7 +104,7 @@ const Navbar: React.FC<NavbarProps> = ({
                       🌑
                     </span>
                   )}
-                  <Tag className="relative z-10 cursor-pointer text-xs font-medium">
+                  <Badge variant="outline" className="relative z-10 cursor-pointer text-xs font-medium">
                     <a
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"
@@ -107,7 +113,7 @@ const Navbar: React.FC<NavbarProps> = ({
                     >
                       v{version}
                     </a>
-                  </Tag>
+                  </Badge>
                 </div>
               )}
             </div>
@@ -138,7 +144,7 @@ const Navbar: React.FC<NavbarProps> = ({
               >
                 Docs
                 {/* Layout parity with Blog chevron — intentional single-level link */}
-                <DownOutlined className="pointer-events-none text-[10px] opacity-0" aria-hidden />
+                <ChevronDown className="pointer-events-none size-2.5 opacity-0" aria-hidden />
               </a>
               <BlogDropdown />
             </nav>

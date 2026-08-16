@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Text, Badge } from "@tremor/react";
 import { ServerIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { Tooltip } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fetchMCPServers, fetchMCPToolsets } from "../networking";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
@@ -111,8 +111,8 @@ export function MCPServerPermissions({
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <ServerIcon className="h-4 w-4 text-blue-600" />
-        <Text className="font-semibold text-gray-900">MCP Servers</Text>
-        <Badge color={blocksAllMcpServers ? "red" : "blue"} size="xs">
+        <p className="text-sm font-semibold text-gray-900">MCP Servers</p>
+        <Badge variant={blocksAllMcpServers ? "destructive" : "secondary"}>
           {blocksAllMcpServers ? "Blocked" : grantsAllProxyMcpServers ? "All" : totalCount}
         </Badge>
       </div>
@@ -120,14 +120,14 @@ export function MCPServerPermissions({
       {blocksAllMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-200">
           <ServerIcon className="h-4 w-4 text-red-400" />
-          <Text className="text-red-700 text-sm">
+          <p className="text-red-700 text-sm">
             No MCP servers — this key is blocked from all MCP servers, including its team&apos;s servers
-          </Text>
+          </p>
         </div>
       ) : grantsAllProxyMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200">
           <ServerIcon className="h-4 w-4 text-blue-400" />
-          <Text className="text-blue-700 text-sm">All Proxy MCP Servers</Text>
+          <p className="text-blue-700 text-sm">All Proxy MCP Servers</p>
         </div>
       ) : totalCount > 0 ? (
         <div className="max-h-[400px] overflow-y-auto space-y-2 pr-1">
@@ -146,13 +146,14 @@ export function MCPServerPermissions({
                 >
                   <div className="flex items-center gap-2 flex-1 min-w-0">
                     {item.type === "server" ? (
-                      <Tooltip title={`Full ID: ${item.value}`} placement="top">
-                        <div className="inline-flex items-center gap-2 min-w-0">
+                      <Tooltip>
+                        <TooltipTrigger render={<div className="inline-flex items-center gap-2 min-w-0" />}>
                           <span className="inline-block w-1.5 h-1.5 bg-blue-500 rounded-full shrink-0"></span>
                           <span className="text-sm font-medium text-gray-900 truncate">
                             {getMCPServerDisplayName(item.value)}
                           </span>
-                        </div>
+                        </TooltipTrigger>
+                        <TooltipContent>{`Full ID: ${item.value}`}</TooltipContent>
                       </Tooltip>
                     ) : (
                       <div className="inline-flex items-center gap-2 min-w-0">
@@ -256,7 +257,7 @@ export function MCPServerPermissions({
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
           <ServerIcon className="h-4 w-4 text-gray-400" />
-          <Text className="text-gray-500 text-sm">No MCP servers, access groups, or toolsets configured</Text>
+          <p className="text-gray-500 text-sm">No MCP servers, access groups, or toolsets configured</p>
         </div>
       )}
     </div>

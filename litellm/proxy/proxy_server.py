@@ -5427,9 +5427,11 @@ class ProxyConfig:
             # Load vector stores from config
             litellm.vector_store_registry.load_vector_stores_from_config(vector_store_registry_config)
 
-        ## WORKER REGISTRY (Control Plane)
+        ## WORKER REGISTRY (Global Control Plane)
         worker_registry_config: Final = config.get("worker_registry", None)
         if worker_registry_config:
+            if premium_user is not True:
+                raise ValueError("Trying to use `worker_registry`" + CommonProxyErrors.not_premium_user.value)
             self.worker_registry = [WorkerRegistryEntry(**e) for e in worker_registry_config]
         else:
             self.worker_registry = []
@@ -8984,6 +8986,7 @@ class ProxyStartupEvent:
                     llm_router=llm_router,
                     track_unmanaged_batch_cost=general_settings.get("track_unmanaged_batch_cost", False),
                 )
+                await check_batch_cost_job.confirm_batch_processed_support()
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
                     "interval",
@@ -9493,6 +9496,7 @@ class ProxyStartupEvent:
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
 async def model_list(
+    request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None default only serves direct in-process callers
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     return_wildcard_routes: bool | None = False,
     team_id: str | None = None,
@@ -9529,12 +9533,21 @@ async def model_list(
 
     settings: Final = cast(dict[str, object], general_settings)  # any-ok: legacy settings
 
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
     from litellm.proxy.management_endpoints.common_utils import (
         _user_has_admin_privileges,
     )
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
+    )
+    from litellm.types.proxy.model_listing import ModelInfoResponse
+
+    http_request: Final = cast(Request | None, request)  # cast-ok: in-process callers pass no request
+    wants_anthropic_format: Final = (
+        http_request is not None and http_request.headers.get("anthropic-version") is not None
     )
 
     # Validate scope parameter if provided
@@ -9619,6 +9632,10 @@ async def model_list(
             model_info["id"] = response_id
             model_data.append(model_info)
 
+        if wants_anthropic_format:
+            admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+            return create_anthropic_model_list_response(admin_listing)
+
         return dict(
             data=model_data,
             object="list",
@@ -9658,6 +9675,10 @@ async def model_list(
         )
         model_info["id"] = response_id
         model_data.append(model_info)
+
+    if wants_anthropic_format:
+        listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+        return create_anthropic_model_list_response(listing)
 
     return dict(
         data=model_data,
@@ -17254,6 +17275,29 @@ async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "Streami
 ########################################################
 # MCP Server
 ########################################################
+
+
+@app.api_route(
+    BASE_MCP_ROUTE,
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def aggregate_mcp_route(request: Request):
+    """Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+    ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+    MCP clients behind TLS-terminating proxies."""
+    from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
+
+    if not is_mcp_available():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        handle_streamable_http_mcp,
+    )
+
+    scope = dict(request.scope)
+    scope["_original_path"] = scope.get("path", "")
+    scope["path"] = BASE_MCP_ROUTE
+    return await _stream_mcp_asgi_response(handle_streamable_http_mcp, scope, request.receive)
 
 
 # Toolset-namespaced MCP routes - handle /toolset/{toolset_name}/mcp

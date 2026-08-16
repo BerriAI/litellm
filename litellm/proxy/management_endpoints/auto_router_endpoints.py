@@ -464,35 +464,38 @@ def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) 
     )
 
 
-def _validate_judge_model(llm_router: "Router | None", judge_model: str) -> None:
-    """Reject a judge model the dispatch path cannot resolve, at start rather than as a
-    silently growing error count once the job is already sampling and billing."""
-    if llm_router is not None and _is_configured_pre_routing_strategy(llm_router, judge_model):
+def _validate_plain_model(llm_router: "Router | None", model: str, field_name: str) -> None:
+    """Reject a model the dispatch path cannot resolve, at start rather than as a silently
+    growing error count once the job is already sampling and billing. Both the judge and a
+    reverse job's baseline must be plain models: an auto-router in either slot would
+    re-route per turn, so the comparison would have no fixed arm to attribute results to."""
+    if llm_router is not None and _is_configured_pre_routing_strategy(llm_router, model):
         raise HTTPException(
             status_code=400,
-            detail=f"judge_model '{judge_model}' is an auto-router; the judge must be a plain model",
+            detail=f"{field_name} '{model}' is an auto-router; it must be a plain model",
         )
-    if router_resolves_model(llm_router, judge_model):
+    if router_resolves_model(llm_router, model):
         return
     import litellm
 
     try:
-        litellm.get_llm_provider(model=judge_model)
+        litellm.get_llm_provider(model=model)
     except Exception as e:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"judge_model '{judge_model}' is neither a model configured on this proxy nor a "
+                f"{field_name} '{model}' is neither a model configured on this proxy nor a "
                 "provider-qualified public model name (e.g. 'anthropic/claude-sonnet-5')"
             ),
         ) from e
 
 
 def _is_unique_violation(error: Exception) -> bool:
-    """Whether a Prisma create failed on a unique index. One active job per key lives in
-    a partial unique index (raw SQL in the migration; schema.prisma cannot express partial
-    indexes), so the read-then-create check above it is advisory: two concurrent starts
-    pass the read, and the loser must surface as the same 409 rather than a 500."""
+    """Whether a Prisma create failed on a unique index. One active job per key and
+    direction lives in a partial unique index (raw SQL in the migration; schema.prisma
+    cannot express partial indexes), so the read-then-create check above it is advisory:
+    two concurrent starts pass the read, and the loser must surface as the same 409
+    rather than a 500."""
     try:
         from prisma.errors import UniqueViolationError
     except ImportError:
@@ -573,8 +576,10 @@ def _slices(rows: Sequence[_AttemptAggRow]) -> tuple[ShadowEvalSlice, ...]:
 
 async def _shadow_eval_results(prisma_client: "PrismaClient", job_id: str) -> ShadowEvalResult | None:
     """Both stratifications of one job's verdicts. Tier answers "where does the router do
-    well"; current-model answers "which of the models this key uses today would the router
-    beat". Reads are bounded by the job's own attempts (<= max_turns) via the job_id index."""
+    well"; the model stratification groups by whichever model served the real arm, so it
+    answers "which of the models this key uses today would the router beat" forward, and
+    "for the turns the router sent to X, did X beat the baseline" in reverse. Reads are
+    bounded by the job's own attempts (<= max_turns) via the job_id index."""
     by_tier: Final = _ATTEMPT_AGG_ROWS.validate_python(
         await prisma_client.db.query_raw(_ATTEMPT_AGG_BY_TIER_SQL, job_id) or ()
     )
@@ -604,9 +609,15 @@ async def start_shadow_eval(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> ShadowEvalJobResponse:
     """
-    Start a pre-adoption shadow eval: duplicate a sampled slice of a key's live traffic
-    through an auto-router, judge real vs. shadow responses blind, and stratify win rates
-    by the router's tier classification and by the incumbent model.
+    Start a shadow eval: duplicate a sampled slice of a key's live traffic against a second
+    arm, judge the two responses blind, and stratify win rates by tier and by the model that
+    served the real arm.
+
+    A forward job answers whether the key should adopt router_name: it samples the requests
+    the router did not serve and duplicates them through it. A reverse job answers whether a
+    key already on the router still gains from it: it samples the requests the router did
+    serve and duplicates them against baseline_model. A key can hold one active job per
+    direction, so both questions can run at once.
 
     Shadow responses are never served to users. The job samples until it has judged
     max_turns turns, reaches the end of its window, or is stopped; sampling changes
@@ -620,7 +631,9 @@ async def start_shadow_eval(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     if llm_router is None or not _is_configured_pre_routing_strategy(llm_router, data.router_name):
         raise HTTPException(status_code=400, detail=f"'{data.router_name}' is not a configured auto-router")
-    _validate_judge_model(llm_router, data.judge_model)
+    _validate_plain_model(llm_router, data.judge_model, "judge_model")
+    if data.baseline_model is not None:
+        _validate_plain_model(llm_router, data.baseline_model, "baseline_model")
     key_row: Final = await prisma_client.db.litellm_verificationtoken.find_unique(
         where={"token": data.api_key_id}  # mutable-ok: Prisma filter
     )
@@ -634,16 +647,20 @@ async def start_shadow_eval(
         )
 
     # A job that expired or exhausted its turn budget stopped sampling on its own, but
-    # still holds the one-active-per-key partial unique index until stamped; free it so
-    # a new eval can start.
+    # still holds its slot in the per-key, per-direction partial unique index until
+    # stamped; free it so a new eval can start. Sweeping both directions is deliberate.
     await prisma_client.db.execute_raw(_SWEEP_FINISHED_JOBS_SQL, data.api_key_id)
     active: Final = await prisma_client.db.litellm_shadowevaljob.find_first(
-        where={"api_key_id": data.api_key_id, "stopped_at": None},  # mutable-ok: Prisma filter
+        where={  # mutable-ok: Prisma filter
+            "api_key_id": data.api_key_id,
+            "direction": data.direction,
+            "stopped_at": None,
+        },
     )
     if active is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"Key already has an active shadow eval job ({active.id}). Stop it first.",
+            detail=f"Key already has an active {data.direction} shadow eval job ({active.id}). Stop it first.",
         )
     now: Final = datetime.now(timezone.utc)
     try:
@@ -651,6 +668,8 @@ async def start_shadow_eval(
             data={  # mutable-ok: Prisma payload
                 "api_key_id": data.api_key_id,
                 "router_name": data.router_name,
+                "direction": data.direction,
+                "baseline_model": data.baseline_model,
                 "judge_model": data.judge_model,
                 "shadow_percentage": data.shadow_percentage,
                 "max_turns": data.max_turns,
@@ -663,7 +682,9 @@ async def start_shadow_eval(
             raise
         raise HTTPException(
             status_code=409,
-            detail="Key already has an active shadow eval job (started concurrently). Stop it first.",
+            detail=(
+                f"Key already has an active {data.direction} shadow eval job (started concurrently). Stop it first."
+            ),
         ) from e
     return ShadowEvalJobResponse.model_validate(job, from_attributes=True)
 

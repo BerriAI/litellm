@@ -24,6 +24,16 @@
 
 set -eu
 
+# Queue for one of the machine-wide heavy-work slots (see scripts/gate_slot_lock.py)
+# before anything else, so N parallel `make check` runs across worktrees execute two
+# at a time instead of thrashing the machine. The wrapper exports
+# LITELLM_GATE_SLOT_HELD, so this re-exec happens exactly once and everything this
+# script spawns (make lint, the budget gates) skips its own acquisition.
+if [ -z "${LITELLM_GATE_SLOT_HELD:-}" ]; then
+    script_dir=$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")
+    exec python3 "$script_dir/gate_slot_lock.py" "$0" "$@"
+fi
+
 if [ -z "${PRE_COMMIT_LINT_INNER:-}" ]; then
     log_file=$(git rev-parse --path-format=absolute --git-path pre_commit_lint.log)
     if : > "$log_file" 2>/dev/null; then

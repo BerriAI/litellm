@@ -154,7 +154,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
         </p>
 
         <Tabs defaultValue="create" onValueChange={onTabChange}>
-          <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
             <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
               Create Vector Store
             </TabsTrigger>

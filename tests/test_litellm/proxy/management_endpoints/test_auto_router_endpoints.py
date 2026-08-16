@@ -559,7 +559,7 @@ def _start_request(**overrides: object) -> StartShadowEvalRequest:
 @pytest.mark.asyncio
 async def test_start_shadow_eval_creates_job_and_frees_expired_or_exhausted_ones(monkeypatch: pytest.MonkeyPatch):
     """Expiry and turn-budget exhaustion both end sampling on their own; either must
-    release the one-active-per-key index so a new eval can start."""
+    release the key's slot in the active-job index so a new eval can start."""
     import litellm.proxy.proxy_server as proxy_server
 
     prisma = _shadow_prisma()
@@ -592,8 +592,21 @@ async def test_start_shadow_eval_creates_job_and_frees_expired_or_exhausted_ones
         (ADMIN, {"judge_model": "not/a real model!"}, None, 400),
         (ADMIN, {"judge_model": "my-router"}, None, 400),
         (ADMIN, {}, "active", 409),
+        (ADMIN, {"direction": "reverse", "baseline_model": "my-router"}, None, 400),
+        (ADMIN, {"direction": "reverse", "baseline_model": "not/a real model!"}, None, 400),
+        (ADMIN, {"direction": "reverse", "baseline_model": "openai/gpt-4o", "router_name": "not-a-router"}, None, 400),
     ],
-    ids=["non-admin", "view-only", "unknown-router", "unresolvable-judge", "router-as-judge", "already-active"],
+    ids=[
+        "non-admin",
+        "view-only",
+        "unknown-router",
+        "unresolvable-judge",
+        "router-as-judge",
+        "already-active",
+        "router-as-baseline",
+        "unresolvable-baseline",
+        "reverse-still-needs-an-auto-router",
+    ],
 )
 async def test_start_shadow_eval_rejections(
     monkeypatch: pytest.MonkeyPatch, caller, request_overrides, active, expected_status
@@ -607,6 +620,68 @@ async def test_start_shadow_eval_rejections(
     with pytest.raises(HTTPException) as exc:
         await start_shadow_eval(_start_request(**request_overrides), caller)
     assert exc.value.status_code == expected_status
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"direction": "reverse"},
+        {"baseline_model": "openai/gpt-4o"},
+        {"direction": "sideways", "baseline_model": "openai/gpt-4o"},
+    ],
+    ids=["reverse-without-baseline", "forward-with-baseline", "unknown-direction"],
+)
+def test_start_request_pins_baseline_model_to_reverse(overrides):
+    """A forward job has no second arm to name and a reverse job cannot run without one,
+    so neither shape reaches the endpoint to be half-validated there."""
+    with pytest.raises(ValidationError):
+        _start_request(**overrides)
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_reverse_records_its_arms_and_holds_its_own_slot(monkeypatch: pytest.MonkeyPatch):
+    """The two directions ask opposite questions of the same key, so a forward job holding
+    the slot must not block a reverse one. The second reverse start still 409s."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    active = {"forward": _job_record()}
+    prisma.db.litellm_shadowevaljob.find_first = AsyncMock(
+        side_effect=lambda where, **_: active.get(str(where.get("direction")))
+    )
+    prisma.db.litellm_shadowevaljob.create = AsyncMock(
+        return_value=_job_record(direction="reverse", baseline_model="openai/gpt-4o")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    reverse = _start_request(direction="reverse", baseline_model="openai/gpt-4o")
+    response = await start_shadow_eval(reverse, ADMIN)
+
+    assert (response.direction, response.baseline_model) == ("reverse", "openai/gpt-4o")
+    create_data = prisma.db.litellm_shadowevaljob.create.call_args.kwargs["data"]
+    assert create_data["direction"] == "reverse"
+    assert create_data["baseline_model"] == "openai/gpt-4o"
+
+    active["reverse"] = _job_record(id="job-2", direction="reverse")
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(reverse, ADMIN)
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    await start_shadow_eval(_start_request(), ADMIN)
+
+    create_data = prisma.db.litellm_shadowevaljob.create.call_args.kwargs["data"]
+    assert create_data["direction"] == "forward"
+    assert create_data["baseline_model"] is None
 
 
 @pytest.mark.asyncio

@@ -2980,7 +2980,7 @@
   },
   {
     "provider": "Hosted_Vllm",
-    "provider_display_name": "vllm",
+    "provider_display_name": "Hosted vLLM",
     "litellm_provider": "hosted_vllm",
     "credential_fields": [
       {
@@ -3008,7 +3008,7 @@
   },
   {
     "provider": "VLLM",
-    "provider_display_name": "Vllm",
+    "provider_display_name": "Local vLLM",
     "litellm_provider": "vllm",
     "credential_fields": [
       {

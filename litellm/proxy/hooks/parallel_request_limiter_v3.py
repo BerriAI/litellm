@@ -462,6 +462,23 @@ def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
     return call_id if isinstance(call_id, str) else None
 
 
+def _declared_output_budget(value: object) -> int | None:
+    """Coerce a declared output budget to tokens, or None when it names no budget.
+
+    Accepts every shape the pre-existing ``int(...)`` coercion did, floats and numeric
+    strings included, because a budget this cannot read is a budget this cannot reserve
+    against, which is the bypass the caller-declared limits are checked for.
+    """
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return None
+    return None
+
+
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def __init__(
         self,
@@ -604,7 +621,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         estimated_input_tokens: Final = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
 
-        explicit_max_tokens: Final = data.get("max_tokens") or data.get("max_completion_tokens")
+        # Both spellings can arrive together, e.g. a deployment-level max_tokens default under a
+        # client-supplied max_completion_tokens. Reserving against the larger keeps the estimate an
+        # upper bound on what the provider can emit, whichever one it ends up honouring.
+        declared_output_budgets: Final = tuple(
+            budget
+            for budget in (
+                _declared_output_budget(data.get("max_tokens")),
+                _declared_output_budget(data.get("max_completion_tokens")),
+            )
+            if budget is not None
+        )
+        explicit_max_tokens: Final = max(declared_output_budgets) if declared_output_budgets else None
 
         match (explicit_max_tokens, input_text):
             case (mt, _) if mt is not None:
