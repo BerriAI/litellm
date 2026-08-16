@@ -348,6 +348,64 @@ class TestGPTImage15OutputImageTokens:
         )
 
 
+class TestAzureGPTImage15TextOutputTokens:
+    """
+    Test for GitHub issue #36637:
+    "azure/gpt-image-1.5" was missing ``output_cost_per_token``, so the text
+    portion of the output was billed at $0 while the identical OpenAI entry
+    ("gpt-image-1.5") charged $10/1M. Azure publishes a "gpt img 1.5 out txt"
+    meter at $10/1M, so both entries must price text output the same.
+    """
+
+    @pytest.mark.parametrize(
+        "model",
+        ["azure/gpt-image-1.5", "azure/gpt-image-1.5-2025-12-16"],
+    )
+    def test_azure_gpt_image_15_charges_text_output_tokens(self, model):
+        usage = Usage(
+            prompt_tokens=169,
+            completion_tokens=4599,
+            total_tokens=4768,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=169,
+                image_tokens=0,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                text_tokens=439,
+                image_tokens=4160,
+            ),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(b64_json="test")],
+        )
+        image_response.usage = usage
+        image_response._hidden_params = {"custom_llm_provider": "azure"}
+
+        cost = litellm.completion_cost(
+            completion_response=image_response,
+            model=model,
+            call_type="image_generation",
+            custom_llm_provider="azure",
+        )
+
+        text_output_cost = 439 * 1e-05
+        expected_cost = 169 * 5e-06 + text_output_cost + 4160 * 3.2e-05
+
+        assert abs(cost - expected_cost) < 1e-6, (
+            f"Expected {expected_cost}, got {cost}. The {text_output_cost} of text "
+            f"output is likely being billed at $0 because {model} has no "
+            f"output_cost_per_token."
+        )
+
+    def test_azure_gpt_image_15_text_output_matches_openai_entry(self):
+        azure_info = litellm.get_model_info(model="azure/gpt-image-1.5", custom_llm_provider="azure")
+        openai_info = litellm.get_model_info(model="gpt-image-1.5", custom_llm_provider="openai")
+
+        assert azure_info["output_cost_per_token"] == openai_info["output_cost_per_token"]
+
+
 class TestCompletionCostIntegration:
     """Test the full completion_cost integration for gpt-image-1"""
 
