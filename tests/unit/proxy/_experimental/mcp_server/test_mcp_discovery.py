@@ -106,6 +106,7 @@ class TestMCPRegistryFile:
             "registry_url": None,
             "transport": "http",
             "url": "https://mcp.nimbleway.com/mcp",
+            "auth_type": "bearer_token",
             "env_vars": [
                 {
                     "name": "NIMBLE_API_KEY",
