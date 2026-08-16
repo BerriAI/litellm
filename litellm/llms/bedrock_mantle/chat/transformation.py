@@ -25,7 +25,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-from ..common_utils import mantle_base_segment
+from ..common_utils import mantle_base_segment, mantle_omits_max_tokens
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -103,6 +103,8 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
                     base_params.append("reasoning_effort")
         except Exception as e:
             verbose_logger.debug("BedrockMantleChatConfig: error checking reasoning support: %s", e)
+        if mantle_omits_max_tokens(model, litellm.model_cost):
+            return [param for param in base_params if param != "max_tokens"]
         return base_params
 
     def get_model_response_iterator(

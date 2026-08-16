@@ -126,6 +126,21 @@ def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     return entry.get("mode") == "responses"
 
 
+def mantle_omits_max_tokens(model: str | None, model_cost: dict) -> bool:
+    """Whether a Bedrock Mantle model rejects the OpenAI ``max_tokens`` param.
+
+    Data-driven from the model's price-map omit_max_tokens_param flag (overridable
+    via register_model / proxy model_info), matching mantle_base_segment. The
+    google gemma-4-* family carries that flag: Mantle answers max_tokens with
+    ``unsupported_parameter``, and its native-API name max_output_tokens is not a
+    substitute on this OpenAI-compatible route, so omitting it is the only thing
+    that succeeds. As above there is deliberately NO model-name match, so a new
+    model with the same quirk is a JSON change rather than a code change.
+    """
+    entry: Final = model_cost.get(f"bedrock_mantle/{model}", {})
+    return entry.get("omit_max_tokens_param") is True
+
+
 def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     """Return the base path segment for a Bedrock Mantle model's OpenAI surface.
 

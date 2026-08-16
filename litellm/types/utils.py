@@ -291,6 +291,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]
     supported_endpoints: list[str] | None
     use_openai_responses_path: bool | None
+    omit_max_tokens_param: bool | None
     tpm: int | None
     rpm: int | None
     provider_specific_entry: dict[str, float] | None
