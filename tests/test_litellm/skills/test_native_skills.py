@@ -210,14 +210,15 @@ async def test_router_model_configuration_overrides_request_provider() -> None:
         ("body", "model=query", "header", "body"),
         (None, "model=query", "header", "query"),
         (None, "", "header", "header"),
+        (None, "", None, None),
     ],
 )
 @pytest.mark.asyncio
 async def test_native_endpoint_model_priority(
     body_model: str | None,
     query: str,
-    header_model: str,
-    expected: str,
+    header_model: str | None,
+    expected: str | None,
 ) -> None:
     body = json.dumps({"model": body_model} if body_model else {}).encode()
 
@@ -229,7 +230,10 @@ async def test_native_endpoint_model_priority(
             "type": "http",
             "method": "POST",
             "path": "/v1/skills/skill_1",
-            "headers": [(b"content-type", b"application/json"), (b"x-litellm-model", header_model.encode())],
+            "headers": [
+                (b"content-type", b"application/json"),
+                *(([(b"x-litellm-model", header_model.encode())]) if header_model else []),
+            ],
             "query_string": query.encode(),
             "path_params": {"skill_id": "skill_1"},
         },
@@ -238,7 +242,10 @@ async def test_native_endpoint_model_priority(
 
     data = await _native_skill_data(request, "update")
 
-    assert data["model"] == expected
+    if expected is None:
+        assert "model" not in data
+    else:
+        assert data["model"] == expected
     assert data["skill_id"] == "skill_1"
     assert data["custom_llm_provider"] == "openai"
     assert data["_skill_operation"] == "update"
