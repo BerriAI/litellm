@@ -48020,6 +48020,7 @@
         "supports_tool_choice": true
     },
     "runinfra/Qwen/Qwen3.8-27B": {
+        "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "runinfra",
         "max_input_tokens": 262144,
@@ -48033,6 +48034,7 @@
         ],
         "supports_function_calling": true,
         "supports_native_streaming": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
