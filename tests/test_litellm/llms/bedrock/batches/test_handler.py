@@ -365,6 +365,35 @@ def test_cancel_batch_tolerates_already_terminal_job(patched_boto3):
     assert batch.status == "cancelled"
 
 
+def test_cancel_batch_tolerates_conflict_on_already_stopped_job(patched_boto3):
+    from botocore.exceptions import ClientError
+
+    fake_client, _ = patched_boto3
+    fake_client.stop_model_invocation_job.side_effect = ClientError(
+        {"Error": {"Code": "ConflictException", "Message": "Job cannot be stopped in its current state"}},
+        "StopModelInvocationJob",
+    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Stopped")
+
+    batch = BedrockBatchesHandler.cancel_batch(batch_id=JOB_ARN)
+
+    assert batch.status == "cancelled"
+
+
+def test_cancel_batch_reraises_conflict_when_job_not_terminal(patched_boto3):
+    from botocore.exceptions import ClientError
+
+    fake_client, _ = patched_boto3
+    fake_client.stop_model_invocation_job.side_effect = ClientError(
+        {"Error": {"Code": "ConflictException", "Message": "Operation conflicts with current job state"}},
+        "StopModelInvocationJob",
+    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="InProgress")
+
+    with pytest.raises(ClientError):
+        BedrockBatchesHandler.cancel_batch(batch_id=JOB_ARN)
+
+
 def test_cancel_batch_reraises_validation_error_when_job_not_terminal(patched_boto3):
     from botocore.exceptions import ClientError
 

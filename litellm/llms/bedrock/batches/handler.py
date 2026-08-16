@@ -153,7 +153,7 @@ class BedrockBatchesHandler:
         try:
             client.stop_model_invocation_job(jobIdentifier=batch_id)
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") != "ValidationException":
+            if e.response.get("Error", {}).get("Code") not in ("ValidationException", "ConflictException"):
                 raise
             current_batch: Final = job_status()
             if current_batch.status not in _CANCEL_IDEMPOTENT_STATUSES:
