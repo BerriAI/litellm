@@ -918,7 +918,8 @@ def test_gate_passthrough_when_supported_endpoints_opts_in(monkeypatch):
 
     assert result == "native-passthrough"
     assert isinstance(captured["config"], OpenAILikeAnthropicMessagesConfig)
-    assert translation_calls["count"] == 0
+    assert translation_calls["responses"] == 0
+    assert translation_calls["chat_completions"] == 0
 
 
 def test_gate_translates_when_supported_endpoints_absent(monkeypatch):
@@ -938,9 +939,9 @@ def test_gate_translates_when_supported_endpoints_absent(monkeypatch):
         api_base="https://host/v1",
     )
 
-    assert result == "chat-completions"
-    assert translation_calls["responses"] == 0
-    assert translation_calls["chat_completions"] == 1
+    assert result == "responses"
+    assert translation_calls["responses"] == 1
+    assert translation_calls["chat_completions"] == 0
     assert "config" not in captured
 
 
@@ -961,8 +962,9 @@ def test_gate_uses_chat_completions_when_requested(monkeypatch):
         use_chat_completions_api=True,
     )
 
-    assert result == "translated"
-    assert translation_calls["count"] == 1
+    assert result == "chat-completions"
+    assert translation_calls["responses"] == 0
+    assert translation_calls["chat_completions"] == 1
     assert "config" not in captured
 
 
@@ -984,6 +986,7 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
         model_info={"supported_endpoints": ["/v1/chat/completions"]},
     )
 
-    assert result == "translated"
-    assert translation_calls["count"] == 1
+    assert result == "chat-completions"
+    assert translation_calls["responses"] == 0
+    assert translation_calls["chat_completions"] == 1
     assert "config" not in captured
