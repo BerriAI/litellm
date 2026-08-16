@@ -2025,8 +2025,11 @@ async def openai_websocket_proxy_route(
         region_name=None,
     )
     if openai_api_key is None:
-        await websocket.close(code=1011)
-        raise ValueError("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
+        await websocket.close(
+            code=1011,
+            reason="Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.",
+        )
+        return
 
     raw_path: Final = httpx.URL(endpoint).path
     encoded_endpoint: Final = raw_path if raw_path.startswith("/") else f"/{raw_path}"

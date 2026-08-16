@@ -95,6 +95,32 @@ async def test_openai_websocket_accepts_first_client_subprotocol():
 
 
 @pytest.mark.asyncio
+async def test_openai_websocket_closes_cleanly_when_provider_credentials_missing():
+    websocket = _mock_websocket("/openai/v1/realtime", "model=gpt-4o-realtime-preview")
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.websocket_passthrough_request",
+            new_callable=AsyncMock,
+        ) as mock_ws,
+    ):
+        await openai_websocket_proxy_route(
+            websocket=websocket,
+            endpoint="v1/realtime",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    websocket.close.assert_awaited_once()
+    assert websocket.close.await_args.kwargs["code"] == 1011
+    websocket.accept.assert_not_awaited()
+    mock_ws.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user_api_key_dict",
     [
