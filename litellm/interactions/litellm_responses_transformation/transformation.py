@@ -8,7 +8,7 @@ This module handles transforming between:
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import BaseModel
 
@@ -23,7 +23,13 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 
+if TYPE_CHECKING:
+    from openai.types.responses.response_text_config_param import (
+        ResponseTextConfigParam as ResponseText,
+    )
+
 _STEP_TYPE_ROLES: Final = MappingProxyType({"user_input": "user", "model_output": "assistant"})
+_JSON_MIME_TYPE: Final = "application/json"
 
 
 class LiteLLMResponsesInteractionsConfig:
@@ -77,6 +83,13 @@ class LiteLLMResponsesInteractionsConfig:
                 if "max_output_tokens" in generation_config:
                     responses_request["max_output_tokens"] = generation_config["max_output_tokens"]
 
+        text_param: Final = LiteLLMResponsesInteractionsConfig._transform_response_format_to_text_param(
+            response_format=optional_params.get("response_format"),
+            response_mime_type=optional_params.get("response_mime_type"),
+        )
+        if text_param is not None:
+            responses_request["text"] = text_param
+
         # Pass through other optional params that match
         passthrough_params: Final = ["stream", "store", "metadata", "user"]
         for param in passthrough_params:
@@ -87,6 +100,63 @@ class LiteLLMResponsesInteractionsConfig:
         responses_request.update(kwargs)
 
         return responses_request
+
+    @staticmethod
+    def _transform_response_format_to_text_param(
+        response_format: object,
+        response_mime_type: str | None,
+    ) -> "ResponseText | None":
+        """
+        Transform an Interactions API JSON constraint to the Responses API `text` parameter.
+
+        The constraint arrives in one of two shapes:
+        - current schema: one or more polymorphic entries,
+          e.g. {"type": "text", "mime_type": "application/json", "schema": {...}}
+        - legacy schema: the bare JSON schema in `response_format`, with the mime type
+          in `response_mime_type`
+
+        The legacy check mirrors GoogleAIStudioInteractionsConfig.transform_interactions_request,
+        so both surfaces agree on which shape they are looking at.
+        """
+        is_legacy: Final = bool(
+            response_mime_type
+            and not isinstance(response_format, list)
+            and (not isinstance(response_format, Mapping) or "mime_type" not in response_format)
+        )
+        if is_legacy:
+            return LiteLLMResponsesInteractionsConfig._build_text_param(
+                mime_type=response_mime_type,
+                schema=response_format,
+            )
+
+        entries: Final = response_format if isinstance(response_format, list) else [response_format]
+        text_entry: Final = next(
+            (entry for entry in entries if isinstance(entry, Mapping) and entry.get("type") == "text"),
+            None,
+        )
+        if text_entry is None:
+            return None
+        return LiteLLMResponsesInteractionsConfig._build_text_param(
+            mime_type=text_entry.get("mime_type"),
+            schema=text_entry.get("schema"),
+        )
+
+    @staticmethod
+    def _build_text_param(mime_type: object, schema: object) -> "ResponseText | None":
+        if mime_type is not None and mime_type != _JSON_MIME_TYPE:
+            return None
+        if isinstance(schema, Mapping) and schema:
+            return {
+                "format": {
+                    "type": "json_schema",
+                    "name": "response_schema",
+                    "schema": dict(schema),
+                    "strict": False,
+                }
+            }
+        if mime_type == _JSON_MIME_TYPE:
+            return {"format": {"type": "json_object"}}
+        return None
 
     @staticmethod
     def _transform_interactions_input_to_responses_input(
