@@ -1770,7 +1770,7 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
 
-    def _transform_usage(
+    def transform_usage(
         self,
         usage: ConverseTokenUsageBlock,
         reasoning_content: str | None = None,
@@ -2191,7 +2191,7 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["tool_calls"] = filtered_tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        usage: Final = self._transform_usage(
+        usage: Final = self.transform_usage(
             completion_response["usage"],
             reasoning_content=chat_completion_message.get("reasoning_content"),
         )
