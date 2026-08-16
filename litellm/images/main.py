@@ -315,7 +315,12 @@ def image_generation(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            azure_ad_token: Final = optional_params.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
+            azure_ad_token_param: Final = optional_params.pop("azure_ad_token", None)
+            azure_ad_token: Final = (
+                azure_ad_token_param
+                if isinstance(azure_ad_token_param, str) and azure_ad_token_param
+                else get_secret_str("AZURE_AD_TOKEN")
+            )
 
             # Create azure_ad_token_provider from tenant_id, client_id, client_secret if not already provided
             if azure_ad_token_provider is None:

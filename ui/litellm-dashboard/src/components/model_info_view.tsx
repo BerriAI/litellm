@@ -17,7 +17,22 @@ import {
   Title,
   Button as TremorButton,
 } from "@tremor/react";
-import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
+import { Button, DatePicker, Form, Input, Modal, Select, Tooltip } from "antd";
+import { formatPtuUtcDisplay, utcIsoToPickerValue } from "../utils/ptuDatetime";
+import { applyPtuModelInfo } from "../utils/ptuModelInfo";
+import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
+import {
+  PTU_COUNT_FIELD,
+  PTU_RATE_FIELD,
+  ptuCountRules,
+  ptuNoUsageCostRule,
+  ptuPairRule,
+  ptuRateRules,
+  ptuStartRequiredRule,
+  ptuWindowOrderRule,
+  PTU_END_FIELD,
+  PTU_START_FIELD,
+} from "../utils/ptuValidation";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -66,6 +81,68 @@ interface ModelInfoViewProps {
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
+
+interface PtuEditField {
+  name: string;
+  label: string;
+  input: "number" | "datetime";
+  placeholder?: string;
+  isCount?: boolean;
+  isRate?: boolean;
+  isStart?: boolean;
+  pairedWith?: string;
+  windowPeer?: string;
+  bound?: "start" | "end";
+}
+
+const PTU_EDIT_FIELDS: PtuEditField[] = [
+  {
+    name: PTU_COUNT_FIELD,
+    label: "PTU Count",
+    input: "number",
+    placeholder: "e.g. 15",
+    isCount: true,
+    pairedWith: PTU_RATE_FIELD,
+  },
+  {
+    name: PTU_RATE_FIELD,
+    label: "Cost per PTU / Hour (USD)",
+    input: "number",
+    placeholder: "e.g. 2.00",
+    isRate: true,
+    pairedWith: PTU_COUNT_FIELD,
+  },
+  {
+    name: PTU_START_FIELD,
+    label: "PTU Effective From (UTC)",
+    input: "datetime",
+    isStart: true,
+    windowPeer: PTU_END_FIELD,
+    bound: "start",
+  },
+  {
+    name: PTU_END_FIELD,
+    label: "PTU Effective To (UTC)",
+    input: "datetime",
+    windowPeer: PTU_START_FIELD,
+    bound: "end",
+  },
+];
+
+/** Per-1M-token rate for the first rate that is set, so a deliberate 0 seeds the form as 0. */
+const perMillionTokens = (...rates: (number | null | undefined)[]): number | null => {
+  const rate = rates.find((candidate) => candidate != null);
+  return rate == null ? null : rate * 1_000_000;
+};
+
+const ptuFieldDependencies = ({ isStart, pairedWith, windowPeer }: PtuEditField): string[] | undefined => {
+  const deps = [
+    ...(isStart ? [PTU_COUNT_FIELD] : []),
+    ...(pairedWith ? [pairedWith] : []),
+    ...(windowPeer ? [windowPeer] : []),
+  ];
+  return deps.length ? deps : undefined;
+};
 
 interface ComplexityRouterTierConfig {
   tiers?: {
@@ -156,6 +233,9 @@ export default function ModelInfoView({
   const { data: modelCostMapData } = useModelCostMap();
   const { data: modelHubData } = useModelHub();
   const { data: teams } = useTeams();
+  const ptuCostAttributionEnabled = usePtuCostAttributionEnabled();
+  const ptuCostRule = (field: string) =>
+    ptuCostAttributionEnabled ? [ptuNoUsageCostRule(PTU_COUNT_FIELD, field)] : [];
 
   // Transform the model data
   const getProviderFromModel = (model: string) => {
@@ -427,6 +507,7 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in Model Info");
         return;
@@ -763,12 +844,18 @@ export default function ModelInfoView({
                     max_retries: localModelData.litellm_params.max_retries,
                     timeout: localModelData.litellm_params.timeout,
                     stream_timeout: localModelData.litellm_params.stream_timeout,
-                    input_cost: localModelData.litellm_params.input_cost_per_token
-                      ? localModelData.litellm_params.input_cost_per_token * 1_000_000
-                      : localModelData.model_info?.input_cost_per_token * 1_000_000 || null,
-                    output_cost: localModelData.litellm_params?.output_cost_per_token
-                      ? localModelData.litellm_params.output_cost_per_token * 1_000_000
-                      : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
+                    input_cost: perMillionTokens(
+                      localModelData.litellm_params.input_cost_per_token,
+                      localModelData.model_info?.input_cost_per_token,
+                    ),
+                    output_cost: perMillionTokens(
+                      localModelData.litellm_params?.output_cost_per_token,
+                      localModelData.model_info?.output_cost_per_token,
+                    ),
+                    ptu_count: localModelData.model_info?.ptu_count ?? null,
+                    cost_per_ptu_per_hour: localModelData.model_info?.cost_per_ptu_per_hour ?? null,
+                    ptu_effective_from: utcIsoToPickerValue(localModelData.model_info?.ptu_effective_from),
+                    ptu_effective_to: utcIsoToPickerValue(localModelData.model_info?.ptu_effective_to),
                     cache_read_cost:
                       localModelData.litellm_params?.cache_read_input_token_cost !== undefined &&
                       localModelData.litellm_params?.cache_read_input_token_cost !== null
@@ -841,14 +928,19 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Input Cost (per 1M tokens)</Text>
                         {isEditing ? (
-                          <Form.Item name="input_cost" className="mb-0">
+                          <Form.Item
+                            name="input_cost"
+                            className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("input_cost")}
+                          >
                             <NumericalInput placeholder="Enter input cost" />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
-                            {localModelData?.litellm_params?.input_cost_per_token
-                              ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.input_cost_per_token
+                            {localModelData?.litellm_params?.input_cost_per_token != null
+                              ? (localModelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.input_cost_per_token != null
                                 ? (localModelData.model_info.input_cost_per_token * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
@@ -858,19 +950,65 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Output Cost (per 1M tokens)</Text>
                         {isEditing ? (
-                          <Form.Item name="output_cost" className="mb-0">
+                          <Form.Item
+                            name="output_cost"
+                            className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("output_cost")}
+                          >
                             <NumericalInput placeholder="Enter output cost" />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
-                            {localModelData?.litellm_params?.output_cost_per_token
+                            {localModelData?.litellm_params?.output_cost_per_token != null
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.output_cost_per_token
+                              : localModelData?.model_info?.output_cost_per_token != null
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
                         )}
                       </div>
+
+                      {ptuCostAttributionEnabled &&
+                        PTU_EDIT_FIELDS.map((ptuField) => {
+                          const { name, label, input, placeholder, isCount, isRate, isStart, pairedWith } = ptuField;
+                          const { windowPeer, bound } = ptuField;
+                          return (
+                            <div key={name}>
+                              <Text className="font-medium">{label}</Text>
+                              {isEditing ? (
+                                <Form.Item
+                                  name={name}
+                                  className="mb-0"
+                                  dependencies={ptuFieldDependencies(ptuField)}
+                                  rules={[
+                                    ...(isCount ? ptuCountRules : []),
+                                    ...(isRate ? ptuRateRules : []),
+                                    ...(isStart ? [ptuStartRequiredRule(PTU_COUNT_FIELD)] : []),
+                                    ...(pairedWith ? [ptuPairRule(pairedWith)] : []),
+                                    ...(windowPeer && bound ? [ptuWindowOrderRule(windowPeer, bound)] : []),
+                                  ]}
+                                >
+                                  {input === "number" ? (
+                                    <NumericalInput
+                                      placeholder={placeholder}
+                                      step={isCount ? 1 : undefined}
+                                      min={isCount ? 1 : 0}
+                                    />
+                                  ) : (
+                                    <DatePicker showTime style={{ width: "100%" }} />
+                                  )}
+                                </Form.Item>
+                              ) : (
+                                <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                                  {(input === "datetime"
+                                    ? formatPtuUtcDisplay(localModelData?.model_info?.[name])
+                                    : localModelData?.model_info?.[name]) ?? "Not Set"}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
 
                       <div>
                         <Text className="font-medium">Cache Read Cost (per 1M tokens)</Text>
@@ -878,6 +1016,8 @@ export default function ModelInfoView({
                           <Form.Item
                             name="cache_read_cost"
                             className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("cache_read_cost")}
                             tooltip="If left blank on save, defaults to Input Cost."
                           >
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />
@@ -901,6 +1041,8 @@ export default function ModelInfoView({
                           <Form.Item
                             name="cache_write_cost"
                             className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("cache_write_cost")}
                             tooltip="If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token)."
                           >
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />

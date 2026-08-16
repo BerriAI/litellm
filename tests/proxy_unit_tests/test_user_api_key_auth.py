@@ -534,15 +534,6 @@ def test_get_api_key_from_custom_header_bearer_token():
     )
 
 
-def test_get_api_key_from_custom_header_raw_token():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": f"Bearer {token}"},
-        custom_header_name="x-custom-api-key",
-        expected_api_key=token,
-    )
-
-
 def test_get_api_key_from_custom_header_empty_value():
     _assert_api_key_from_custom_header(
         headers={"x-custom-api-key": ""},

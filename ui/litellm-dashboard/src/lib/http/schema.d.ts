@@ -807,6 +807,99 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/shadow_eval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Shadow Eval Jobs
+         * @description List shadow eval jobs, newest first. Counts and results ride the detail endpoint only.
+         */
+        get: operations["list_shadow_eval_jobs_auto_router_shadow_eval_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Shadow Eval
+         * @description Start a shadow eval: duplicate a sampled slice of a key's live traffic against a second
+         *     arm, judge the two responses blind, and stratify win rates by tier and by the model that
+         *     served the real arm.
+         *
+         *     A forward job answers whether the key should adopt router_name: it samples the requests
+         *     the router did not serve and duplicates them through it. A reverse job answers whether a
+         *     key already on the router still gains from it: it samples the requests the router did
+         *     serve and duplicates them against baseline_model. A key can hold one active job per
+         *     direction, so both questions can run at once.
+         *
+         *     Shadow responses are never served to users. The job samples until it has judged
+         *     max_turns turns, reaches the end of its window, or is stopped; sampling changes
+         *     propagate to pods within about 10 seconds. Shadow and judge calls bill to the
+         *     shadowed key but are excluded from request counts and auto-router adoption metrics.
+         */
+        post: operations["start_shadow_eval_auto_router_shadow_eval_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Shadow Eval Job
+         * @description One job with derived counts, judge spend, latest error, and stratified results.
+         */
+        get: operations["get_shadow_eval_job_auto_router_shadow_eval__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Shadow Eval Job
+         * @description Stop an active shadow eval job. Attempts are kept; sampling halts within ~10s.
+         */
+        post: operations["stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/test_routing": {
         parameters: {
             query?: never;
@@ -4333,7 +4426,7 @@ export interface paths {
         };
         /**
          * Get Default Team Settings
-         * @description Get all SSO settings from the litellm_settings configuration.
+         * @description Get the default team parameters (litellm_settings.default_team_params).
          *     Returns a structured object with values and descriptions for UI display.
          */
         get: operations["get_default_team_settings_get_default_team_settings_get"];
@@ -6781,11 +6874,14 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+         *     - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer. Falls back to the team setting, then to the built-in estimate.
+         *     - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above. Example - {"gpt-4": 4096, "gpt-3.5-turbo": 1024}. Takes precedence over the key-wide value.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
          *     - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
          *     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
@@ -7093,6 +7189,8 @@ export interface paths {
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
          *     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+         *     - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer. Falls back to the team setting, then to the built-in estimate.
+         *     - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above. Example - {"gpt-4": 4096, "gpt-3.5-turbo": 1024}. Takes precedence over the key-wide value.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
          *     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
@@ -7224,6 +7322,8 @@ export interface paths {
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
          *     - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
          *     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
+         *     - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer.
+         *     - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values
@@ -7234,6 +7334,7 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - blocked: Optional[bool] - Whether the key is blocked
          *     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -7519,6 +7620,64 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        get: operations["aggregate_mcp_route_mcp_get"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        put: operations["aggregate_mcp_route_mcp_put"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        post: operations["aggregate_mcp_route_mcp_post"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        delete: operations["aggregate_mcp_route_mcp_delete"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        options: operations["aggregate_mcp_route_mcp_options"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        head: operations["aggregate_mcp_route_mcp_head"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        patch: operations["aggregate_mcp_route_mcp_patch"];
         trace?: never;
     };
     "/mcp-rest/test/connection": {
@@ -14058,6 +14217,8 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team.
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
+         *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
+         *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
          *     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
@@ -14286,6 +14447,8 @@ export interface paths {
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+         *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
+         *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
          *     Example - update team TPM Limit
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
@@ -14711,8 +14874,9 @@ export interface paths {
         head?: never;
         /**
          * Update Default Team Settings
-         * @description Update the default team parameters for SSO users.
-         *     These settings will be applied to new teams created from SSO.
+         * @description Update the default team parameters (litellm_settings.default_team_params).
+         *     Applied to every new team for fields not explicitly provided in the create request;
+         *     `models` only applies to teams automatically created via SSO Groups.
          */
         patch: operations["update_default_team_settings_update_default_team_settings_patch"];
         trace?: never;
@@ -21393,7 +21557,7 @@ export interface components {
             spend: number;
             /**
              * Tier Turns
-             * @description Turns per tier, keyed by the tier name the routing decision recorded at request time (never re-derived at read time, since the tier-to-model mapping is mutable config). Tier names are scoped to this group's router_type and are not comparable across types: a complexity router reports 'simple'/'medium'/'complex'/'reasoning', a quality router reports its numeric quality tier, and an adaptive router records no tier at all. Turns no tier served (the classifier fell back to default_model) are absent rather than pooled under a sentinel key, so the values may sum to less than turns
+             * @description Turns per tier, keyed by the tier name the routing decision recorded at request time (never re-derived at read time, since the tier-to-model mapping is mutable config). Tier names are scoped to this group's router_type and are not comparable across types: a complexity router reports 'SIMPLE'/'MEDIUM'/'COMPLEX'/'REASONING', a quality router reports its numeric quality tier, and an adaptive router records no tier at all. Turns no tier served (the classifier fell back to default_model) are absent rather than pooled under a sentinel key, so the values may sum to less than turns
              */
             tier_turns?: {
                 [key: string]: number;
@@ -23042,7 +23206,7 @@ export interface components {
         /** ChatCompletionToolMessage */
         ChatCompletionToolMessage: {
             /** Content */
-            content: string | components["schemas"]["ChatCompletionTextObject"][];
+            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"])[];
             /**
              * Role
              * @constant
@@ -23141,10 +23305,18 @@ export interface components {
             enabled: boolean;
         };
         /**
+         * ClassificationRubric
+         * @description Which calibration examples the built-in classifier rubric carries.
+         * @enum {string}
+         */
+        ClassificationRubric: "legacy" | "agentic" | "chat";
+        /**
          * ClassifierLLMConfig
          * @description Configuration for the LLM-based complexity classifier.
          */
         ClassifierLLMConfig: {
+            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
+            classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
              * Model
              * @description Model name (from the router's model_list) to call for classification
@@ -23439,6 +23611,11 @@ export interface components {
              * @description proxy level default model for all chat completion calls
              */
             completion_model?: string | null;
+            /**
+             * Control Plane Url
+             * @description Global Control Plane: URL of the control plane whose admin UI manages this instance. Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate against it cross-origin, and restricts the SSO return_to origin to that URL. No state is shared with the control plane
+             */
+            control_plane_url?: string | null;
             /** @description standalone Redis for cross-pod coordination (tpm/rpm rate limits, spend tracking, pod lock manager, shared health checks), configured independently of the response-cache backend; takes precedence over borrowing the `cache_params` Redis and over the REDIS_* env fallback */
             coordination_redis?: components["schemas"]["CoordinationRedisParams"] | null;
             /**
@@ -23568,6 +23745,26 @@ export interface components {
              */
             maximum_autorouter_session_retention_period?: string | null;
             /**
+             * Maximum Spend Logs Cleanup Batch Size
+             * @description Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.
+             */
+            maximum_spend_logs_cleanup_batch_size?: number | null;
+            /**
+             * Maximum Spend Logs Cleanup Batch Timeout
+             * @description Postgres statement_timeout and lock_timeout applied to each spend log cleanup delete batch (e.g. '30s'), so cleanup cannot hold row locks or a connection indefinitely. Defaults to '30s'.
+             */
+            maximum_spend_logs_cleanup_batch_timeout?: string | null;
+            /**
+             * Maximum Spend Logs Cleanup Max Batches
+             * @description Maximum DELETE statements the spend log cleanup job issues per table per run. Defaults to 500.
+             */
+            maximum_spend_logs_cleanup_max_batches?: number | null;
+            /**
+             * Maximum Spend Logs Cleanup Run Budget
+             * @description Wall-clock budget for one spend log cleanup run (e.g. '5m'), shared across every table it prunes. A run that hits the budget stops and the next run resumes from where it left off. Defaults to '5m'.
+             */
+            maximum_spend_logs_cleanup_run_budget?: string | null;
+            /**
              * Maximum Spend Logs Retention Period
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
              */
@@ -23628,6 +23825,8 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
+            scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -23770,6 +23969,11 @@ export interface components {
             model_list?: components["schemas"]["ModelParams"][] | null;
             /** @description litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5 */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
+            /**
+             * Worker Registry
+             * @description Global Control Plane: the independent proxy instances this instance's admin UI manages. Setting it makes this a control plane, which serves the UI and does not route LLM requests. Enterprise-only
+             */
+            worker_registry?: components["schemas"]["WorkerRegistryEntry"][] | null;
         };
         /** ConfigurableClientsideParamsCustomAuth */
         "ConfigurableClientsideParamsCustomAuth-Input": {
@@ -24253,6 +24457,11 @@ export interface components {
              */
             total_failed_requests: number;
             /**
+             * Total Flat Cost
+             * @default 0
+             */
+            total_flat_cost: number;
+            /**
              * Total Pages
              * @default 1
              */
@@ -24317,22 +24526,23 @@ export interface components {
         };
         /**
          * DefaultTeamSSOParams
-         * @description Default parameters to apply when a new team is automatically created by LiteLLM via SSO Groups
+         * @description Default parameters applied to every /team/new call for fields not explicitly provided in the request.
+         *     `models` is the exception: it only applies to teams automatically created by LiteLLM via SSO Groups.
          */
         DefaultTeamSSOParams: {
             /**
              * Budget Duration
-             * @description Default budget duration for new automatically created teams (e.g. 'daily', 'weekly', 'monthly')
+             * @description Default budget duration for new teams, when not explicitly provided (e.g. '24h', '7d', '30d')
              */
             budget_duration?: string | null;
             /**
              * Max Budget
-             * @description Default maximum budget (in USD) for new automatically created teams
+             * @description Default maximum budget (in USD) for new teams, when not explicitly provided
              */
             max_budget?: number | null;
             /**
              * Models
-             * @description Default list of models that new automatically created teams can access
+             * @description Default list of models for teams automatically created via SSO Groups
              * @default []
              */
             models: string[];
@@ -24343,7 +24553,7 @@ export interface components {
             organization_id?: string | null;
             /**
              * Rpm Limit
-             * @description Default rpm limit for new automatically created teams
+             * @description Default rpm limit for new teams, when not explicitly provided
              */
             rpm_limit?: number | null;
             /**
@@ -24353,7 +24563,7 @@ export interface components {
             team_member_permissions?: components["schemas"]["KeyManagementRoutes"][] | null;
             /**
              * Tpm Limit
-             * @description Default tpm limit for new automatically created teams
+             * @description Default tpm limit for new teams, when not explicitly provided
              */
             tpm_limit?: number | null;
         };
@@ -24962,10 +25172,18 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */
@@ -25116,10 +25334,18 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -26253,6 +26479,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
             /**
              * Soft Budget Cooldown
              * @default false
@@ -26731,6 +26959,11 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /**
+             * Allow Client Keepalive Override
+             * @default false
+             */
+            allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
@@ -26757,12 +26990,28 @@ export interface components {
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
+            /** Aws External Id */
+            aws_external_id?: string | null;
+            /** Aws Profile Name */
+            aws_profile_name?: string | null;
             /** Aws Region Name */
             aws_region_name?: string | null;
+            /** Aws Role Name */
+            aws_role_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Aws Session Name */
+            aws_session_name?: string | null;
+            /** Aws Session Token */
+            aws_session_token?: string | null;
+            /** Aws Sts Endpoint */
+            aws_sts_endpoint?: string | null;
+            /** Aws Web Identity Token */
+            aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Bedrock Tags */
+            bedrock_tags?: unknown[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -26879,6 +27128,8 @@ export interface components {
             input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -26986,6 +27237,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
             /** Search Context Cost Per Query */
@@ -27671,6 +27924,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
             /**
              * Soft Budget Cooldown
              * @default false
@@ -29271,6 +29526,12 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Disable Global Guardrails */
@@ -29552,10 +29813,18 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -30023,6 +30292,12 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Disable Global Guardrails */
@@ -31385,10 +31660,18 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Grace Period */
@@ -32359,6 +32642,37 @@ export interface components {
             };
         };
         /**
+         * ScheduledJobStaggerSettings
+         * @description Spreads the proxy's scheduled background jobs across a window instead of firing them
+         *     all on one instant, on every replica, forever.
+         */
+        ScheduledJobStaggerSettings: {
+            /**
+             * Enabled
+             * @description apply deterministic phase offsets to scheduled background jobs
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Identity
+             * @description replaces the POD_NAME/HOSTNAME-derived component of the offset hash. Set this when replicas share a hostname and would otherwise land on the same offset
+             */
+            identity?: string | null;
+            /**
+             * Offsets
+             * @description explicit offset in seconds per scheduler job id, overriding the derived value. 0 pins a job to its unshifted schedule
+             */
+            offsets?: {
+                [key: string]: number;
+            };
+            /**
+             * Window Seconds
+             * @description width of the window jobs are spread over. An interval job is never offset by more than one of its own periods, so it is not delayed past the wait it already has
+             * @default 300
+             */
+            window_seconds: number;
+        };
+        /**
          * SearchTool
          * @description Search tool configuration.
          *
@@ -32429,6 +32743,121 @@ export interface components {
             search_provider: string;
             /** Timeout */
             timeout?: number | null;
+        };
+        /**
+         * ShadowEvalJobResponse
+         * @description A shadow-eval job. Validates directly from the prisma record (job_id reads the
+         *     row's id); status is derived from stopped_at and ends_at, never stored, so no writer
+         *     anywhere can produce an inconsistent one. Aggregate fields are populated by the
+         *     detail endpoint only and stay None on list responses.
+         */
+        ShadowEvalJobResponse: {
+            /**
+             * Api Key Id
+             * @description The hashed virtual key whose traffic this job evaluates, and only that key's
+             */
+            api_key_id: string;
+            /** Baseline Model */
+            baseline_model?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Direction
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Ends At
+             * Format: date-time
+             */
+            ends_at: string;
+            /**
+             * Error Count
+             * @description Sampled attempts that errored; detail endpoint only
+             */
+            error_count?: number | null;
+            /** Job Id */
+            job_id: string;
+            /** Judge Model */
+            judge_model: string;
+            /**
+             * Judge Spend
+             * @description Judge cost so far; detail endpoint only
+             */
+            judge_spend?: number | null;
+            /**
+             * Judged Count
+             * @description Verdicts recorded; detail endpoint only
+             */
+            judged_count?: number | null;
+            /**
+             * Last Error
+             * @description Most recent attempt error; detail endpoint only
+             */
+            last_error?: string | null;
+            /** Max Turns */
+            max_turns: number;
+            /** @description Stratified verdicts; detail endpoint only */
+            results?: components["schemas"]["ShadowEvalResult"] | null;
+            /** Router Name */
+            router_name: string;
+            /** Shadow Percentage */
+            shadow_percentage: number;
+            /**
+             * Status
+             * @description A job whose window has passed reads completed even if a later sweep stamped
+             *     stopped_at; stopped means sampling ended before the window did.
+             * @enum {string}
+             */
+            readonly status: "running" | "completed" | "stopped";
+            /** Stopped At */
+            stopped_at?: string | null;
+        };
+        /**
+         * ShadowEvalResult
+         * @description Stratified results of a shadow-eval job's verdicts so far.
+         */
+        ShadowEvalResult: {
+            /**
+             * By Current Model
+             * @description Sliced by the model that served the real arm: the key's incumbent models in forward mode, and in reverse the models the router itself picked
+             */
+            by_current_model: components["schemas"]["ShadowEvalSlice"][];
+            /** By Tier */
+            by_tier: components["schemas"]["ShadowEvalSlice"][];
+            /** Overall Shadow Win Rate Pct */
+            overall_shadow_win_rate_pct: number;
+            /** Overall Tie Rate Pct */
+            overall_tie_rate_pct: number;
+        };
+        /**
+         * ShadowEvalSlice
+         * @description Judge outcomes for one slice of a job's verdicts (a router tier, or one of the
+         *     models that served the real arm).
+         */
+        ShadowEvalSlice: {
+            /** Avg Judge Confidence */
+            avg_judge_confidence: number;
+            /** Group */
+            group: string;
+            /**
+             * Real Win Rate Pct
+             * @description Share of judged turns the real arm won, meaning the response the caller actually received: the key's own model in forward mode, the router's pick in reverse
+             */
+            real_win_rate_pct: number;
+            /**
+             * Shadow Win Rate Pct
+             * @description Share of judged turns the shadow arm won, meaning the duplicated response nobody was served: the router's pick in forward mode, baseline_model in reverse
+             */
+            shadow_win_rate_pct: number;
+            /** Tie Rate Pct */
+            tie_rate_pct: number;
+            /** Turn Count */
+            turn_count: number;
         };
         /**
          * Skill
@@ -32512,6 +32941,11 @@ export interface components {
              * @default 0
              */
             failed_requests: number;
+            /**
+             * Flat Cost
+             * @default 0
+             */
+            flat_cost: number;
             /**
              * Prompt Caching Savings Spend
              * @default 0
@@ -32597,6 +33031,57 @@ export interface components {
             medium_complex: number;
             /** Simple Medium */
             simple_medium: number;
+        };
+        /**
+         * StartShadowEvalRequest
+         * @description Start duplicating a key's traffic for blind comparison against an auto-router.
+         */
+        StartShadowEvalRequest: {
+            /**
+             * Api Key Id
+             * @description The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this key's traffic; requests made with any other key are not sampled.
+             */
+            api_key_id: string;
+            /**
+             * Baseline Model
+             * @description Required when direction is reverse and rejected otherwise: the fixed model the router's own responses are judged against. Must be a plain model rather than another auto-router
+             */
+            baseline_model?: string | null;
+            /**
+             * Direction
+             * @description forward answers 'should this key adopt router_name': it samples the requests the key did NOT route through the router and duplicates them through it. reverse answers 'is the router still worth it for a key already on it': it samples the requests the router did serve and duplicates them against baseline_model. The response the caller received is always the real arm
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Duration Days
+             * @description How many days the job samples traffic before completing on its own
+             * @default 7
+             */
+            duration_days: number;
+            /**
+             * Judge Model
+             * @description Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes.
+             * @default anthropic/claude-sonnet-5
+             */
+            judge_model: string;
+            /**
+             * Max Turns
+             * @description Sample budget: the job judges at most this many turns, then completes. This is also the spend bound; expected judge cost is roughly max_turns times one judge call
+             * @default 200
+             */
+            max_turns: number;
+            /**
+             * Router Name
+             * @description The auto-router under evaluation, in either direction
+             */
+            router_name: string;
+            /**
+             * Shadow Percentage
+             * @description Percentage of the key's requests to duplicate through the router
+             */
+            shadow_percentage: number;
         };
         /**
          * SuccessfulKeyUpdate
@@ -33769,10 +34254,18 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
             duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */
@@ -34135,6 +34628,8 @@ export interface components {
             routing_strategy_args?: {
                 [key: string]: unknown;
             } | null;
+            /** Tag Routing Prefix */
+            tag_routing_prefix?: string | null;
             /** Timeout */
             timeout?: number | null;
         };
@@ -34182,6 +34677,12 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Disable Global Guardrails */
@@ -34798,6 +35299,8 @@ export interface components {
             rpm_limit_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
             /** Soft Budget */
             soft_budget?: number | null;
             /**
@@ -35296,6 +35799,8 @@ export interface components {
         };
         /** ModelInfo */
         litellm__types__router__ModelInfo: {
+            /** Allow Fail Open */
+            allow_fail_open?: boolean | null;
             /** Base Model */
             base_model?: string | null;
             /** Blocked */
@@ -35304,6 +35809,8 @@ export interface components {
             cache_creation_input_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /** Cost Per Ptu Per Hour */
+            cost_per_ptu_per_hour?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -35313,6 +35820,8 @@ export interface components {
              * @default false
              */
             db_model: boolean;
+            /** Enable Tag Filtering */
+            enable_tag_filtering?: boolean | null;
             /** Id */
             id: string | null;
             /** Input Cost Per Character */
@@ -35323,12 +35832,22 @@ export interface components {
             output_cost_per_character?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Ptu Count */
+            ptu_count?: number | null;
+            /** Ptu Effective From */
+            ptu_effective_from?: string | null;
+            /** Ptu Effective To */
+            ptu_effective_to?: string | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
             team_public_model_name?: string | null;
             /** Tier */
             tier?: ("free" | "paid") | null;
+            /** Tiered Pricing */
+            tiered_pricing?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Updated At */
             updated_at?: string | null;
             /** Updated By */
@@ -35353,6 +35872,11 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /**
+             * Allow Client Keepalive Override
+             * @default false
+             */
+            allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
@@ -35379,12 +35903,28 @@ export interface components {
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
+            /** Aws External Id */
+            aws_external_id?: string | null;
+            /** Aws Profile Name */
+            aws_profile_name?: string | null;
             /** Aws Region Name */
             aws_region_name?: string | null;
+            /** Aws Role Name */
+            aws_role_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Aws Session Name */
+            aws_session_name?: string | null;
+            /** Aws Session Token */
+            aws_session_token?: string | null;
+            /** Aws Sts Endpoint */
+            aws_sts_endpoint?: string | null;
+            /** Aws Web Identity Token */
+            aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Bedrock Tags */
+            bedrock_tags?: unknown[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -35501,6 +36041,8 @@ export interface components {
             input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -35608,6 +36150,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
             /** Search Context Cost Per Query */
@@ -36795,6 +37339,7 @@ export interface operations {
             query?: {
                 context_window_size?: number;
                 tier_labels?: string | null;
+                classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             };
             header?: never;
             path?: never;
@@ -36809,6 +37354,135 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_shadow_eval_jobs_auto_router_shadow_eval_get: {
+        parameters: {
+            query?: {
+                /** @description Filter to jobs shadowing this key */
+                api_key_id?: string | null;
+                /** @description Newest jobs to return */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalJobResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_shadow_eval_auto_router_shadow_eval_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartShadowEvalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_shadow_eval_job_auto_router_shadow_eval__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -45221,6 +45895,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

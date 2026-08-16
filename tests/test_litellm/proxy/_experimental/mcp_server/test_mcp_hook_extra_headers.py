@@ -1196,3 +1196,45 @@ class TestOpenApiResolvedUpstreamAuth:
             )
         assert resolved is None
         lookup.assert_not_awaited()
+
+
+class TestPreCallToolCheckExposesClientHeaders:
+    """The pre_mcp_call guardrail payload must carry the caller's sanitized HTTP headers."""
+
+    @pytest.mark.asyncio
+    async def test_sanitized_client_headers_reach_the_guardrail_payload(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-id",
+            name="test_server",
+            server_name="test_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+
+        captured: Dict[str, Any] = {}
+
+        def capture(request_obj, kwargs):
+            captured.update(kwargs)
+            return {"model": "fake"}
+
+        proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(side_effect=capture)
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        with patch.object(manager, "check_allowed_or_banned_tools", return_value=True):
+            with patch.object(manager, "check_tool_permission_for_key_team", new_callable=AsyncMock):
+                with patch.object(manager, "validate_allowed_params"):
+                    await manager.pre_call_tool_check(
+                        name="test_tool",
+                        arguments={"key": "val"},
+                        server_name="test_server",
+                        user_api_key_auth=None,
+                        proxy_logging_obj=proxy_logging,
+                        server=server,
+                        raw_headers={"x-nuid": "nuid-1", "x-litellm-api-key": "sk-proxy"},
+                    )
+
+        assert captured["headers"] == {"x-nuid": "nuid-1"}
