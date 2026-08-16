@@ -107,6 +107,7 @@ from litellm.types.utils import (
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
+    ModelInfo,
     ModelResponse,
     ModelResponseStream,
     RawRequestTypedDict,
@@ -577,6 +578,20 @@ class Logging(LiteLLMLoggingBaseClass):
             if model_id is not None:
                 return model_id
         return None
+
+    def get_router_deployment_model_info(self) -> ModelInfo | None:
+        """Pricing the router registered under this deployment's model_info.id.
+
+        Returns None when the deployment declares no pricing of its own, so the
+        caller falls back to the global cost map.
+        """
+        model_id: Final = self.get_router_model_id()
+        if model_id is None:
+            return None
+        try:
+            return litellm.get_model_info(model=model_id)
+        except Exception:  # noqa: BLE001  # get_model_info raises for any id with no registered pricing
+            return None
 
     def update_environment_variables(
         self,
@@ -2592,7 +2607,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 ) = await _handle_completed_batch(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
+                    model_name=self.model,
                     litellm_params=self.litellm_params,
+                    model_info=self.get_router_deployment_model_info(),
                 )
 
                 result._hidden_params["response_cost"] = response_cost
