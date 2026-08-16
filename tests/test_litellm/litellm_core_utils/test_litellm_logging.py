@@ -367,6 +367,24 @@ class TestGetRouterDeploymentModelInfo:
         logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": "deploy-never-registered"}}}
         assert logging_obj.get_router_deployment_model_info() is None
 
+    def test_returns_none_when_deployment_registered_without_pricing(self, logging_obj):
+        """The router registers an entry for EVERY deployment, priced or not.
+
+        get_model_info fills absent costs with 0, so consulting it directly would
+        hand back free pricing for an ordinary deployment and bill its batches $0.
+        """
+        deployment_id = "deploy-no-pricing-1"
+        litellm.register_model(
+            model_cost={deployment_id: {"id": deployment_id, "access_groups": ["x"]}},
+            persist_across_reloads=False,
+        )
+        logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}}
+        try:
+            assert litellm.get_model_info(model=deployment_id)["input_cost_per_token"] == 0
+            assert logging_obj.get_router_deployment_model_info() is None
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
     def test_returns_none_without_a_deployment_id(self, logging_obj):
         logging_obj.litellm_params = {"api_base": ""}
         assert logging_obj.get_router_deployment_model_info() is None

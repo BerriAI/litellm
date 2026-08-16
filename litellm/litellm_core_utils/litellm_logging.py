@@ -584,14 +584,26 @@ class Logging(LiteLLMLoggingBaseClass):
         """Pricing the router registered under this deployment's model_info.id.
 
         Returns None when the deployment declares no pricing of its own, so the
-        caller falls back to the global cost map.
+        caller falls back to the global cost map. The raw registration is what
+        decides that: the router registers an entry for every deployment, and
+        get_model_info fills absent costs with 0, so asking it directly cannot
+        tell "configured as free" apart from "no pricing configured".
         """
+        pricing_keys: Final = (
+            "input_cost_per_token",
+            "output_cost_per_token",
+            "input_cost_per_token_batches",
+            "output_cost_per_token_batches",
+        )
         model_id: Final = self.get_router_model_id()
         if model_id is None:
             return None
+        registered: Final = litellm.model_cost.get(model_id)
+        if not isinstance(registered, dict) or not any(registered.get(key) is not None for key in pricing_keys):
+            return None
         try:
             return litellm.get_model_info(model=model_id)
-        except Exception:  # noqa: BLE001  # get_model_info raises for any id with no registered pricing
+        except Exception:  # noqa: BLE001  # get_model_info raises for ids it cannot resolve a provider for
             return None
 
     def update_environment_variables(
