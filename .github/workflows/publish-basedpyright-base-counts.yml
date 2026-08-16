@@ -43,22 +43,15 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Install dependencies
-        run: |
-          uv sync --frozen --group proxy-dev --group e2e-dev
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
 
-      # Mirrors test-linting.yml's lint job: basedpyright resolves Prisma's
-      # generated client only after `prisma generate`, and the published counts
-      # must match what that job would measure for the same tree.
-      - name: Generate Prisma client
-        env:
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
-        run: |
-          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
-
+      # The gate provisions its own measurement env (.venv-typecheck: a frozen
+      # uv sync of its canonical dependency groups plus a generated Prisma
+      # client), so no install step here can drift from what local runs measure.
       - name: Emit basedpyright counts for HEAD
         run: |
-          uv run --no-sync python scripts/type_check_gate.py --emit-counts-dir "$RUNNER_TEMP/basedpyright-counts"
+          python scripts/type_check_gate.py --emit-counts-dir "$RUNNER_TEMP/basedpyright-counts"
           counts_file=$(ls "$RUNNER_TEMP"/basedpyright-counts/basedpyright-counts-*.json)
           echo "COUNTS_ARTIFACT_NAME=$(basename "$counts_file" .json)" >> "$GITHUB_ENV"
 

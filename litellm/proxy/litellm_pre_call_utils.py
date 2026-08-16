@@ -5,6 +5,7 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request
@@ -15,9 +16,11 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -64,6 +67,32 @@ _EXPLICIT_SESSION_HEADERS: Final = frozenset({"x-litellm-trace-id", "x-litellm-s
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+
+# W3C Trace Context traceparent header: https://www.w3.org/TR/trace-context/
+# e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+_TRACEPARENT_RE: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
+
+
+def _trace_id_from_traceparent(traceparent: str) -> str | None:
+    """Extract the trace-id from a W3C Trace Context traceparent header, e.g.
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" -> the 32-hex
+    trace-id in the middle. An all-zero trace-id is invalid per spec and is
+    rejected, matching how the OpenTelemetry SDK itself treats it."""
+    match: Final = _TRACEPARENT_RE.match(traceparent.strip())
+    if not match:
+        return None
+    trace_id: Final = match.group(1).lower()
+    return trace_id if trace_id != "0" * 32 else None
+
+
+def _session_id_from_baggage(baggage: str) -> str | None:
+    """Extract a session.id entry from a W3C Baggage header
+    (https://www.w3.org/TR/baggage/), e.g. "session.id=abc-123,user.id=42"."""
+    for pair in baggage.split(","):
+        key, _, value = pair.strip().partition("=")
+        if key.strip() == "session.id" and value.strip():
+            return value.strip()
+    return None
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -151,6 +180,20 @@ LITELLM_METADATA_ROUTES: Final = (
     "files",
 )
 
+LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
+    {
+        "mask_input",
+        "mask_output",
+        "session_id",
+        "trace_id",
+        "trace_metadata",
+        "trace_name",
+        "trace_release",
+        "trace_user_id",
+        "trace_version",
+    }
+)
+
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "proxy_server_request",
     "standard_logging_object",
@@ -159,10 +202,12 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "mock_tool_calls",
     "disable_global_guardrails",
     "disable_global_guardrail",
+    "enable_prompt_caching",
     "opted_out_global_guardrails",
     "applied_guardrails",
     "applied_policies",
     "policy_sources",
+    "guardrail_scan_ids",
     "routing_decision",
     "pillar_response_headers",
     "_guardrail_pipelines",
@@ -195,6 +240,11 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
     "max_agentic_loops",
+    # Recomputed below from the actual caller-controlled timeout sources (headers and
+    # body fields); a client-forged value here would let a request either dodge cooldown
+    # protection on a real deployment failure or force a false "not caller-controlled"
+    # reading that lets its own bad timeout cool down deployments other tenants rely on.
+    "client_side_timeout",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
@@ -211,7 +261,10 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "applied_guardrails",
     "applied_policies",
     "policy_sources",
+    "guardrail_scan_ids",
     "routing_decision",
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
@@ -223,7 +276,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 
-_UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
+UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
     {
         "litellm-disable-message-redaction",
     }
@@ -304,7 +357,7 @@ def _strip_untrusted_request_header_controls(
         return
 
     for header_name in list(headers.keys()):
-        if isinstance(header_name, str) and header_name.lower() in _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
+        if isinstance(header_name, str) and header_name.lower() in UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
             if allow_client_message_redaction_opt_out:
                 continue
             headers.pop(header_name, None)
@@ -456,6 +509,18 @@ def _get_metadata_variable_name(request: Request) -> str:
         return "litellm_metadata"
 
     return "metadata"
+
+
+def _promoted_trace_control_fields(
+    requester_metadata: Mapping[str, Any],
+    litellm_metadata: Mapping[str, Any],
+) -> tuple[tuple[str, Any], ...]:
+    """Return the caller's trace-control fields that ``litellm_metadata`` does not already set."""
+    return tuple(
+        (key, value)
+        for key, value in requester_metadata.items()
+        if key in LITELLM_TRACE_CONTROL_METADATA_FIELDS and key not in litellm_metadata
+    )
 
 
 def _extract_generic_session_id_from_headers(
@@ -823,6 +888,19 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
+    def _get_keepalive_seconds_from_request(headers: Mapping[str, str]) -> float | None:
+        """
+        Get `keepalive_seconds` from the request headers, for clients (e.g. the
+        Vercel AI SDK) that can set custom headers more easily than extra body
+        fields. Subject to the same deployment-level allow_client_keepalive_override
+        gate as the request body field: see _resolve_keepalive_seconds.
+        """
+        keepalive_seconds_header: Final = headers.get("x-litellm-keepalive-seconds", None)
+        if keepalive_seconds_header is not None:
+            return float(keepalive_seconds_header)
+        return None
+
+    @staticmethod
     def _get_num_retries_from_request(headers: dict) -> int | None:
         """
         Workaround for client request from Vercel's AI SDK.
@@ -1007,6 +1085,7 @@ class LiteLLMProxyRequestSetup:
     def add_litellm_data_for_backend_llm_call(
         *,
         headers: dict,
+        request_data: Mapping[str, Any],
         user_api_key_dict: UserAPIKeyAuth,
         general_settings: dict[str, Any] | None = None,
     ) -> LitellmDataForBackendLLMCall:
@@ -1025,17 +1104,37 @@ class LiteLLMProxyRequestSetup:
         if _organization is not None:
             data["organization"] = _organization
 
-        timeout: Final = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
-        if timeout is not None:
-            data["timeout"] = timeout
+        header_timeout: Final = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+        if header_timeout is not None:
+            data["timeout"] = header_timeout
 
-        stream_timeout: Final = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
-        if stream_timeout is not None:
-            data["stream_timeout"] = stream_timeout
+        header_stream_timeout: Final = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
+        if header_stream_timeout is not None:
+            data["stream_timeout"] = header_stream_timeout
+
+        # Router._get_timeout resolves the effective per-attempt timeout from any of
+        # kwargs["timeout"], kwargs["request_timeout"], or kwargs["stream_timeout"], and a
+        # caller can supply any of those via the request body as well as the headers above.
+        # A deliberately tiny value can force a 408 on every deployment in a fallback chain,
+        # so this marker (never trusted verbatim from the client; stripped above) must cover
+        # every source cooldown_handlers._trigger_cooldown_for_failed_deployment needs to
+        # distinguish from a real deployment health signal.
+        if (
+            header_timeout is not None
+            or header_stream_timeout is not None
+            or request_data.get("timeout") is not None
+            or request_data.get("request_timeout") is not None
+            or request_data.get("stream_timeout") is not None
+        ):
+            data["client_side_timeout"] = True
 
         num_retries: Final = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
         if num_retries is not None:
             data["num_retries"] = num_retries
+
+        keepalive_seconds: Final = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(headers)
+        if keepalive_seconds is not None:
+            data["keepalive_seconds"] = keepalive_seconds
 
         return data
 
@@ -1084,6 +1183,33 @@ class LiteLLMProxyRequestSetup:
                 if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
                     body_metadata["user_id"] = session_id
                 verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
+
+        # Last-resort fallback: the W3C standards for trace/session propagation
+        # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
+        # Lower priority than everything above - only fires when neither the
+        # explicit litellm headers nor the Anthropic-metadata path found
+        # anything - but lets a caller's existing traceparent/baggage headers
+        # (from real OTel instrumentation) correlate with litellm's own logs
+        # instead of generating an unrelated trace_id.
+        normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
+        if "litellm_trace_id" not in data:
+            traceparent: Final = normalized_headers.get("traceparent")
+            if isinstance(traceparent, str):
+                trace_id_from_traceparent: Final = _trace_id_from_traceparent(traceparent)
+                if trace_id_from_traceparent:
+                    metadata_from_headers["trace_id"] = trace_id_from_traceparent
+                    data["litellm_trace_id"] = trace_id_from_traceparent  # rebind-ok: data is an out-param
+                    verbose_proxy_logger.debug(
+                        "Extracted trace_id from W3C traceparent header: %s", trace_id_from_traceparent
+                    )
+        if "litellm_session_id" not in data:
+            baggage: Final = normalized_headers.get("baggage")
+            if isinstance(baggage, str):
+                session_id_from_baggage: Final = _session_id_from_baggage(baggage)
+                if session_id_from_baggage:
+                    metadata_from_headers["session_id"] = session_id_from_baggage
+                    data["litellm_session_id"] = session_id_from_baggage  # rebind-ok: data is an out-param
+                    verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
@@ -1211,6 +1337,9 @@ class LiteLLMProxyRequestSetup:
         ## KEY-LEVEL DISABLE FALLBACKS
         if "disable_fallbacks" in key_metadata and isinstance(key_metadata["disable_fallbacks"], bool):
             data["disable_fallbacks"] = key_metadata["disable_fallbacks"]
+
+        if isinstance(key_metadata.get("enable_prompt_caching"), bool):
+            data["enable_prompt_caching"] = key_metadata["enable_prompt_caching"]  # rebind-ok: data is an out-param
 
         ## KEY-LEVEL METADATA
         data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
@@ -1517,6 +1646,7 @@ async def add_litellm_data_to_request(
     data.update(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
             headers=_headers,
+            request_data=data,
             user_api_key_dict=user_api_key_dict,
             general_settings=general_settings,
         )
@@ -1670,6 +1800,13 @@ async def add_litellm_data_to_request(
     # paths may read from it.
     if "metadata" in data and isinstance(data["metadata"], dict):
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(data["metadata"])
+        if _metadata_variable_name == "litellm_metadata":
+            data[_metadata_variable_name].update(
+                _promoted_trace_control_fields(
+                    requester_metadata=data[_metadata_variable_name]["requester_metadata"],
+                    litellm_metadata=data[_metadata_variable_name],
+                )
+            )
 
     # Merge litellm_metadata into the metadata variable (preserving existing
     # values). Runs after the user_api_key_* / _pipeline_managed_guardrails
@@ -1732,6 +1869,24 @@ async def add_litellm_data_to_request(
             request_tags=data[_metadata_variable_name].get("tags"),
             tags_to_add=project_metadata["tags"],
         )
+
+    # inherited_tags: every tag key/team/project policy contributed, read
+    # directly from those three sources rather than snapshotted off the shared
+    # "tags" list. A pre-auth pass (apply_client_tag_policy_pre_auth, run from
+    # user_api_key_auth for _tag_max_budget_check) may already have merged the
+    # caller's own header tags into that same list before this function ever
+    # runs, so a snapshot taken here -- at any point in this function -- would
+    # misattribute caller-supplied tags as policy-backed. tag_based_routing.py's
+    # allow_fail_open reads this (rather than subtracting caller_tags from the
+    # final merged set) so a caller can't strip an inherited "!"/"&"
+    # constraint's protection just by resubmitting its exact value alongside a
+    # conflicting one.
+    _key_tags: Final = (key_metadata or MappingProxyType({})).get("tags") or ()
+    _team_tags: Final = team_metadata.get("tags") or ()
+    _project_tags: Final = project_metadata.get("tags") or ()
+    data[_metadata_variable_name]["inherited_tags"] = tuple(  # rebind-ok: matches this file's data[...] mutation idiom
+        dict.fromkeys((*_key_tags, *_team_tags, *_project_tags))
+    )
 
     ## TEAM-LEVEL METADATA
     data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
@@ -1829,15 +1984,28 @@ async def add_litellm_data_to_request(
             tags_to_add=tags,
         )
 
-    if _metadata_variable_name != "metadata":
-        _user_metadata = data.get("metadata")
-        if isinstance(_user_metadata, dict):
-            _user_tags: Final = _user_metadata.get("tags")
-            if isinstance(_user_tags, list) and _user_tags:
-                data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=_user_tags,
-                )
+    _caller_body_metadata: Final = data.get("metadata") if _metadata_variable_name != "metadata" else None
+    _caller_body_tags: Final = (
+        _caller_body_metadata.get("tags")
+        if isinstance(_caller_body_metadata, dict) and isinstance(_caller_body_metadata.get("tags"), list)
+        else None
+    )
+    if _caller_body_tags:
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # rebind-ok: matches file idiom
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=_caller_body_tags,
+        )
+
+    # caller_tags: exactly what this request itself supplied (x-litellm-tags header,
+    # body "tags", or body "metadata.tags" on litellm_metadata routes), never
+    # anything from key/team/project metadata. Read directly from the header and
+    # body values here, the same way inherited_tags above is read directly from
+    # key/team/project metadata -- neither is derived by inspecting the shared
+    # "tags" list, which a pre-auth pass (apply_client_tag_policy_pre_auth) may
+    # have already merged caller header tags into before this function runs.
+    data[_metadata_variable_name]["caller_tags"] = tuple(  # rebind-ok: matches file idiom
+        dict.fromkeys((*(tags or ()), *(_caller_body_tags or ())))
+    )
 
     # Team Callbacks controls
     callback_settings_obj: Final = _get_dynamic_logging_metadata(

@@ -1171,3 +1171,77 @@ async def test_client_handed_out_by_async_cache_survives_eviction_and_collection
     assert not consumer_client.is_closed
 
     await consumer_client.aclose()
+
+
+_SET_COOKIE = "SESSION=upstream-a-secret; Path=/"
+
+
+def _cookie_recorder():
+    """A transport that hands out a Set-Cookie once, and records what comes back."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("cookie"))
+        if request.url.path == "/set":
+            return httpx.Response(200, headers={"set-cookie": _SET_COOKIE})
+        return httpx.Response(200)
+
+    return handler, seen
+
+
+@pytest.mark.asyncio
+async def test_async_client_never_replays_one_upstreams_cookie_to_another():
+    """LiteLLM's async clients are pooled and shared by every caller, so a cookie one
+    upstream sets would be attached to every later request on a matching domain, reaching
+    a different tenant's upstream. The client must persist no response cookie."""
+    handler, seen = _cookie_recorder()
+    http_handler = AsyncHTTPHandler()
+    client = http_handler.client
+    client._transport = httpx.MockTransport(handler)
+
+    await client.get("https://upstream-a.example.com/set")
+    await client.get("https://upstream-b.example.com/rpc")
+    await client.aclose()
+
+    assert dict(client.cookies) == {}, "the shared client stored an upstream's cookie"
+    assert seen == [None, None]
+
+
+def test_sync_client_never_replays_one_upstreams_cookie_to_another():
+    """Same invariant on the sync client, which is pooled the same way."""
+    handler, seen = _cookie_recorder()
+    http_handler = HTTPHandler()
+    client = http_handler.client
+    client._transport = httpx.MockTransport(handler)
+
+    client.get("https://upstream-a.example.com/set")
+    client.get("https://upstream-b.example.com/rpc")
+    client.close()
+
+    assert dict(client.cookies) == {}
+    assert seen == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_aiohttp_session_never_replays_one_upstreams_cookie_to_another():
+    """The httpx jar is not the only one. AiohttpTransport is litellm's default transport
+    and the aiohttp ClientSession keeps its own cookie jar, which httpx-level assertions
+    cannot see, so blocking only the httpx jar leaves the leak intact on the real path.
+
+    aiohttp's default jar refuses cookies for IP hosts, so this drives a hostname. An
+    IP-addressed check passes whether or not the session jar is blocked."""
+    from aiohttp import DummyCookieJar
+    from yarl import URL
+
+    http_handler = AsyncHTTPHandler(timeout=61.0)
+    transport = http_handler.client._transport
+    assert isinstance(transport, LiteLLMAiohttpTransport), "aiohttp is no longer the default transport"
+
+    session = transport.client() if callable(transport.client) else transport.client
+    jar = session.cookie_jar
+    assert isinstance(jar, DummyCookieJar)
+
+    jar.update_cookies({"SESSION": "upstream-a-secret"}, URL("https://upstream-a.example.com"))
+    assert len(jar) == 0
+    assert dict(jar.filter_cookies(URL("https://upstream-a.example.com"))) == {}
+    await session.close()

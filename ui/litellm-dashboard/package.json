@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test": "vitest",
     "test:dot": "vitest --reporter=dot",
+    "test:types": "vitest --run --typecheck.only",
     "test:watch": "vitest -w",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
@@ -90,7 +91,7 @@
   },
   "overrides": {
     "prismjs": "1.30.0",
-    "js-yaml": "4.3.0",
+    "js-yaml": "4.3.1",
     "brace-expansion": "5.0.9",
     "glob": "13.0.0",
     "minimatch": "10.2.4",

@@ -198,6 +198,7 @@ class CustomGuardrail(CustomLogger):
         violation_message: str,
         request_data: dict[str, Any],
         detection_info: dict[str, Any] | None = None,
+        original_response: object = None,
     ) -> None:
         """
         Raise a passthrough exception for guardrail violations.
@@ -213,6 +214,10 @@ class CustomGuardrail(CustomLogger):
             violation_message: The formatted violation message to return to the user
             request_data: The original request data dictionary
             detection_info: Optional dictionary with detection metadata (scores, rules, etc.)
+            original_response: The blocked LLM response when raising from a post-call
+                hook. It carries the real token usage the upstream call consumed, so
+                the synthetic block response reports it instead of zeros. Leave None
+                for pre-call/during-call blocks (the LLM was never invoked).
 
         Raises:
             ModifyResponseException: Always raises this exception to short-circuit
@@ -235,6 +240,7 @@ class CustomGuardrail(CustomLogger):
             request_data=request_data,
             guardrail_name=self.guardrail_name,
             detection_info=detection_info,
+            original_response=original_response,
         )
 
     def raise_sensitive_data_route_exception(
@@ -713,6 +719,29 @@ class CustomGuardrail(CustomLogger):
             return response
 
         return result
+
+    def supports_scan_only_tool_results(self) -> bool:
+        """Whether this guardrail can scan tool-result content.
+
+        Guardrails whose own role filtering only ever scans human-authored
+        messages override this to return False, so configuring them with
+        ``scan_only_tool_results`` is rejected at initialization instead of
+        silently scanning nothing on every request.
+        """
+        return True
+
+    def structured_messages_cover_full_request(self) -> bool:
+        """Whether returned ``structured_messages`` span the whole request.
+
+        Translation handlers hand guardrails only the in-scope subset of the
+        conversation and merge a returned ``structured_messages`` list back
+        into the full request. A guardrail that already rebuilds the complete
+        conversation itself (like CrowdStrike AIDR with its skip filters
+        active) overrides this to return True so the handler installs the
+        returned list as-is instead of merging it a second time, which would
+        duplicate the out-of-scope messages.
+        """
+        return False
 
     def should_run_guardrail(
         self,

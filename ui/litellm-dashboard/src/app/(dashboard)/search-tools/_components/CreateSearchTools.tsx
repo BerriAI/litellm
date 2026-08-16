@@ -12,6 +12,7 @@ import { AvailableSearchProvider, SearchTool } from "./types";
 import dataforseoLogo from "../../../../../public/assets/logos/dataforseo.png";
 import exaAiLogo from "../../../../../public/assets/logos/exa_ai.png";
 import googlePseLogo from "../../../../../public/assets/logos/google_pse.png";
+import nimbleLogo from "../../../../../public/assets/logos/nimble.png";
 import parallelAiLogo from "../../../../../public/assets/logos/parallel_ai.png";
 import perplexityLogo from "../../../../../public/assets/logos/perplexity.png";
 import tavilyLogo from "../../../../../public/assets/logos/tavily.png";
@@ -25,6 +26,7 @@ const searchProviderLogoMap: Record<string, string> = {
   exa_ai: exaAiLogo.src,
   google_pse: googlePseLogo.src,
   dataforseo: dataforseoLogo.src,
+  nimble: nimbleLogo.src,
 };
 
 interface SearchProviderLabelProps {

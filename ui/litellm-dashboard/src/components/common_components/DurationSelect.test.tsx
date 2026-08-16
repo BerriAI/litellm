@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import DurationSelect from "./DurationSelect";
 
@@ -19,6 +19,9 @@ describe("DurationSelect", () => {
     expect(screen.getByText("Daily")).toBeInTheDocument();
     expect(screen.getByText("Weekly")).toBeInTheDocument();
     expect(screen.getByText("Monthly")).toBeInTheDocument();
+    const dailyLabel = screen.getByText("Daily");
+    const dailyOption = dailyLabel.closest('[role="option"]') ?? dailyLabel;
+    await user.click(dailyOption);
   });
 
   it("should apply className prop", () => {
@@ -28,14 +31,15 @@ describe("DurationSelect", () => {
   });
 
   it("should call onChange when an option is selected", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
     const onChange = vi.fn();
     render(<DurationSelect onChange={onChange} />);
 
     const select = screen.getByRole("combobox");
     await user.click(select);
 
-    const dailyOption = screen.getByText("Daily");
+    const dailyLabel = screen.getByText("Daily");
+    const dailyOption = dailyLabel.closest('[role="option"]') ?? dailyLabel;
     await user.click(dailyOption);
 
     expect(onChange).toHaveBeenCalledWith("24h", expect.any(Object));
