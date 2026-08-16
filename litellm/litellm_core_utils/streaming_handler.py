@@ -1570,7 +1570,11 @@ class CustomStreamWrapper:
                 self.tool_call = True
 
             if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+                model_response.usage = (
+                    litellm.Usage(**chunk.usage.model_dump())
+                    if isinstance(chunk.usage, BaseModel)
+                    else chunk.usage
+                )
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(

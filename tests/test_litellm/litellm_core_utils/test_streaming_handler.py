@@ -661,6 +661,48 @@ def test_usage_only_openai_chunk_preserves_usage_details(
     assert response.usage.completion_tokens_details.reasoning_tokens == 0
 
 
+def test_openai_sdk_usage_is_preserved_in_stream_assembly():
+    from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+
+    stream = CustomStreamWrapper(
+        completion_stream=None,
+        model="z-ai/glm-5.2",
+        logging_obj=SimpleNamespace(
+            model_call_details={"litellm_params": {}},
+            messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+            stream_options={"include_usage": True},
+        ),
+        custom_llm_provider="openai",
+    )
+    chunk = ChatCompletionChunk.model_validate(
+        {
+            "id": "gen-test",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "z-ai/glm-5.2",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}],
+            "usage": {
+                "prompt_tokens": 17,
+                "completion_tokens": 4,
+                "total_tokens": 21,
+                "prompt_tokens_details": {"cached_tokens": 15},
+                "completion_tokens_details": {"reasoning_tokens": 4},
+            },
+        }
+    )
+
+    assembled = litellm.stream_chunk_builder(
+        chunks=[stream.chunk_creator(chunk)], messages=stream.messages
+    )
+
+    assert assembled is not None
+    assert assembled.usage.prompt_tokens == 17
+    assert assembled.usage.completion_tokens == 4
+    assert assembled.usage.total_tokens == 21
+    assert assembled.usage.prompt_tokens_details.cached_tokens == 15
+    assert assembled.usage.completion_tokens_details.reasoning_tokens == 4
+
+
 def test_finish_reason_chunk_preserves_non_openai_attributes(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
