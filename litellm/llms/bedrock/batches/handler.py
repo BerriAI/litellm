@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
@@ -20,8 +20,11 @@ _BEDROCK_MIJ_STATUS_TO_OPENAI = {
     "Expired": "expired",
 }
 
+_CANCEL_IDEMPOTENT_CODES = {"ValidationException", "ConflictException"}
+_CANCEL_IDEMPOTENT_TERMS = {"stop", "terminal", "completed", "already", "conflict"}
 
-def _extract_region_from_bedrock_arn(arn: str) -> Optional[str]:
+
+def _extract_region_from_bedrock_arn(arn: str) -> str | None:
     """ARN shape: ``arn:aws:bedrock:<region>:<account>:<type>/<id>``"""
     try:
         parts = arn.split(":")
@@ -32,16 +35,14 @@ def _extract_region_from_bedrock_arn(arn: str) -> Optional[str]:
     return None
 
 
-def _extract_job_id_from_arn(arn: str) -> Optional[str]:
+def _extract_job_id_from_arn(arn: str) -> str | None:
     """``arn:aws:bedrock:<region>:<acct>:model-invocation-job/<job-id>`` -> ``<job-id>``."""
     if ":model-invocation-job/" not in arn:
         return None
     return arn.rsplit("/", 1)[-1] or None
 
 
-def _predict_output_file_uri(
-    output_prefix: str, input_uri: str, job_id: Optional[str]
-) -> Optional[str]:
+def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: str | None) -> str | None:
     if not output_prefix or not input_uri or not job_id:
         return None
     if not output_prefix.endswith("/"):
@@ -52,7 +53,7 @@ def _predict_output_file_uri(
     return f"{output_prefix}{job_id}/{input_basename}.out"
 
 
-def _to_epoch(value: Any) -> Optional[int]:
+def _to_epoch(value: Any) -> int | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -68,7 +69,7 @@ class BedrockBatchesHandler:
     @staticmethod
     def cancel_batch(
         batch_id: str,
-        aws_region_name: Optional[str] = None,
+        aws_region_name: str | None = None,
         logging_obj=None,
         **kwargs,
     ) -> "LiteLLMBatch":
@@ -79,13 +80,9 @@ class BedrockBatchesHandler:
             import boto3
             from botocore.exceptions import ClientError
         except ImportError as exc:
-            raise ImportError(
-                "Missing boto3/botocore to call bedrock. Run 'pip install boto3'."
-            ) from exc
+            raise ImportError("Missing boto3/botocore to call bedrock. Run 'pip install boto3'.") from exc
 
-        region = (
-            aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
-        )
+        region = aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
 
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
@@ -115,9 +112,7 @@ class BedrockBatchesHandler:
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code")
             error_msg = e.response.get("Error", {}).get("Message", "").lower()
-            if error_code in ["ValidationException", "ConflictException"] and any(
-                term in error_msg for term in ["stop", "terminal", "completed", "already", "conflict"]
-            ):
+            if error_code in _CANCEL_IDEMPOTENT_CODES and any(term in error_msg for term in _CANCEL_IDEMPOTENT_TERMS):
                 pass
             else:
                 raise e
@@ -130,10 +125,9 @@ class BedrockBatchesHandler:
         )
 
     @staticmethod
-    def _handle_async_invoke_status(
-        batch_id: str, aws_region_name: str, logging_obj=None, **kwargs
-    ) -> "LiteLLMBatch":
+    def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
         import asyncio
+
         from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
 
         async def _async_get_status():
@@ -158,11 +152,7 @@ class BedrockBatchesHandler:
                 created_at=status_response["submitTime"],
                 in_progress_at=status_response["lastModifiedTime"],
                 completed_at=status_response.get("endTime"),
-                failed_at=(
-                    status_response.get("endTime")
-                    if status_response["status"] == "failed"
-                    else None
-                ),
+                failed_at=(status_response.get("endTime") if status_response["status"] == "failed" else None),
                 request_counts=BatchRequestCounts(
                     total=1,
                     completed=1 if status_response["status"] == "completed" else 0,
@@ -191,20 +181,16 @@ class BedrockBatchesHandler:
     @staticmethod
     def _handle_model_invocation_job_status(
         batch_id: str,
-        aws_region_name: Optional[str] = None,
+        aws_region_name: str | None = None,
         logging_obj=None,
         **kwargs,
     ) -> "LiteLLMBatch":
         try:
             import boto3
         except ImportError as exc:
-            raise ImportError(
-                "Missing boto3 to call bedrock. Run 'pip install boto3'."
-            ) from exc
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.") from exc
 
-        region = (
-            aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
-        )
+        region = aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
 
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
@@ -236,10 +222,7 @@ class BedrockBatchesHandler:
                 api_key="",
                 additional_args={
                     "complete_input_dict": {"jobIdentifier": batch_id},
-                    "api_base": (
-                        f"https://bedrock.{region}.amazonaws.com/"
-                        f"model-invocation-job/{url_path_id}"
-                    ),
+                    "api_base": (f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{url_path_id}"),
                 },
             )
 
@@ -259,16 +242,8 @@ class BedrockBatchesHandler:
             _BEDROCK_MIJ_STATUS_TO_OPENAI.get(bedrock_status, "in_progress"),
         )
 
-        input_uri = (
-            response.get("inputDataConfig", {})
-            .get("s3InputDataConfig", {})
-            .get("s3Uri", "")
-        )
-        output_prefix = (
-            response.get("outputDataConfig", {})
-            .get("s3OutputDataConfig", {})
-            .get("s3Uri", "")
-        )
+        input_uri = response.get("inputDataConfig", {}).get("s3InputDataConfig", {}).get("s3Uri", "")
+        output_prefix = response.get("outputDataConfig", {}).get("s3OutputDataConfig", {}).get("s3Uri", "")
 
         job_arn = response.get("jobArn", batch_id)
         job_id = _extract_job_id_from_arn(job_arn)
