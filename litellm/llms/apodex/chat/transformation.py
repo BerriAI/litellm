@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.types.llms.openai import AllMessageValues
 
 from ..common_utils import (
     APODEX_API_BASE_URL,
@@ -45,6 +46,8 @@ _CORE_PARAMS: Final = (
     "functions",
     "parallel_tool_calls",
 )
+
+_PIN_NON_STREAMING: Final = "_apodex_pin_non_streaming"
 
 
 class ApodexChatConfig(OpenAIGPTConfig):
@@ -116,5 +119,35 @@ class ApodexChatConfig(OpenAIGPTConfig):
         )
         return {  # mutable-ok: JSON request body
             **renamed,
-            "extra_body": {"stream": False, **extra_body},  # mutable-ok: JSON request body
+            _PIN_NON_STREAMING: True,
+            "extra_body": {**extra_body, "stream": False},  # mutable-ok: JSON request body
+        }
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,  # mutable-ok: matches the base-class signature
+        litellm_params: dict,  # mutable-ok: matches the base-class signature
+        headers: dict,  # mutable-ok: matches the base-class signature
+    ) -> dict:  # mutable-ok: JSON request body
+        """Apply the non-streaming pin after LiteLLM merges caller ``extra_body``."""
+        pin_non_streaming: Final = bool(optional_params.pop(_PIN_NON_STREAMING, False))
+        transformed: Final = super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        if not pin_non_streaming:
+            return transformed
+
+        requested_extra_body: Final = transformed.get("extra_body")
+        extra_body: Final = (
+            requested_extra_body if isinstance(requested_extra_body, Mapping) else {}  # mutable-ok: JSON request body
+        )
+        return {  # mutable-ok: JSON request body
+            **transformed,
+            "extra_body": {**extra_body, "stream": False},  # mutable-ok: JSON request body
         }

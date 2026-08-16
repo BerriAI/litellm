@@ -156,6 +156,17 @@ class TestStreamDefault:
         assert captured["body"]["stream"] is False
         assert captured["body"]["mcp_servers"] == mcp_servers
 
+    def test_extra_body_cannot_override_non_streaming_pin(self):
+        captured: dict = {}
+        litellm.completion(
+            model=DEEP_RESEARCH_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_body={"stream": True},
+            client=_client(captured),
+        )
+
+        assert captured["body"]["stream"] is False
+
 
 class TestSupportedParams:
     def test_core_models_support_tools(self):

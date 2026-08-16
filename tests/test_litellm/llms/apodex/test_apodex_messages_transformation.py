@@ -62,12 +62,37 @@ class TestNativePassthroughRouting:
         forwarding to a path Apodex does not serve for these tiers."""
         assert _messages_config(model) is None
 
-    def test_deep_research_translation_uses_responses_api(self):
-        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
-            _should_route_to_responses_api,
-        )
+    @pytest.mark.parametrize("stream", (False, True), ids=("non-streaming", "streaming"))
+    def test_deep_research_translation_uses_responses_api(self, monkeypatch: pytest.MonkeyPatch, stream: bool):
+        from litellm.llms.anthropic.experimental_pass_through.messages import handler
 
-        assert _should_route_to_responses_api("apodex") is True
+        captured: dict = {}
+
+        class ResponsesRouteSelected(Exception):
+            pass
+
+        def capture_responses_translation(**kwargs):
+            captured.update(kwargs)
+            raise ResponsesRouteSelected
+
+        def reject_chat_translation(**kwargs):
+            pytest.fail("Apodex Deep Research messages must not route through chat completions")
+
+        monkeypatch.setattr(litellm, "responses", capture_responses_translation)
+        monkeypatch.setattr(litellm, "completion", reject_chat_translation)
+
+        with pytest.raises(ResponsesRouteSelected):
+            handler.anthropic_messages_handler(
+                max_tokens=256,
+                messages=[{"role": "user", "content": "hi"}],
+                model="apodex/apodex-1-1-deep-research",
+                custom_llm_provider="apodex",
+                stream=stream,
+            )
+
+        assert captured["model"] == "apodex-1-1-deep-research"
+        assert captured["custom_llm_provider"] == "apodex"
+        assert captured.get("stream", False) is stream
 
 
 class TestNativePassthroughRequest:

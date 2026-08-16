@@ -82,6 +82,12 @@ class TestRegistration:
         assert litellm.ApodexChatConfig().custom_llm_provider == "apodex"
         assert litellm.ApodexResponsesConfig().custom_llm_provider == LlmProviders.APODEX
 
+    def test_packaged_endpoint_matrix_matches_the_source(self):
+        source = json.loads((REPO_ROOT / "provider_endpoints_support.json").read_text())
+        backup = json.loads((REPO_ROOT / "litellm" / "provider_endpoints_support_backup.json").read_text())
+
+        assert backup["providers"]["apodex"] == source["providers"]["apodex"]
+
 
 class TestModelMetadata:
     @pytest.fixture(scope="class")
