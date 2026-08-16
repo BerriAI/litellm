@@ -867,26 +867,30 @@ def _gate_stubs(monkeypatch):
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
 
     captured = {}
-    translation_calls = {"count": 0}
+    translation_calls = {"responses": 0, "chat_completions": 0}
 
     def fake_native(**kwargs):
         captured["config"] = kwargs.get("anthropic_messages_provider_config")
         return "native-passthrough"
 
-    def fake_translation(**kwargs):
-        translation_calls["count"] += 1
-        return "translated"
+    def fake_responses(**kwargs):
+        translation_calls["responses"] += 1
+        return "responses"
+
+    def fake_chat_completions(**kwargs):
+        translation_calls["chat_completions"] += 1
+        return "chat-completions"
 
     monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
     monkeypatch.setattr(
         handler.LiteLLMMessagesToResponsesAPIHandler,
         "anthropic_messages_handler",
-        staticmethod(fake_translation),
+        staticmethod(fake_responses),
     )
     monkeypatch.setattr(
         handler.LiteLLMMessagesToCompletionTransformationHandler,
         "anthropic_messages_handler",
-        staticmethod(fake_translation),
+        staticmethod(fake_chat_completions),
     )
     return captured, translation_calls
 
@@ -934,8 +938,9 @@ def test_gate_translates_when_supported_endpoints_absent(monkeypatch):
         api_base="https://host/v1",
     )
 
-    assert result == "translated"
-    assert translation_calls["count"] == 1
+    assert result == "chat-completions"
+    assert translation_calls["responses"] == 0
+    assert translation_calls["chat_completions"] == 1
     assert "config" not in captured
 
 
