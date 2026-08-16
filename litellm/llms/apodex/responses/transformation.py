@@ -29,6 +29,7 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -105,6 +106,48 @@ class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
         )
         return super().transform_cancel_response_api_response(
             raw_response=normalized_response,
+            logging_obj=logging_obj,
+        )
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,  # mutable-ok: matches the base-class signature
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        """Surface the Deep Research answer text as the OpenAI delta event callers expect.
+
+        Observed live, not documented: a Deep Research stream carries its text in
+        `response.swarm.llm_delta` and never emits `response.output_text.delta`, so
+        without this the answer arrives only in the final `response.completed`
+        snapshot. `channel` splits the agent's reasoning from its answer; everything
+        else falls through to the base class as a GenericEvent.
+        """
+        swarm: Final = parsed_chunk.get("swarm")
+        swarm_data: Final = swarm.get("data") if isinstance(swarm, dict) else None
+        if (
+            parsed_chunk.get("type") != "response.swarm.llm_delta"
+            or not isinstance(swarm_data, dict)
+            or swarm_data.get("channel") != "output_text"
+            or not isinstance(swarm_data.get("delta"), str)
+        ):
+            return super().transform_streaming_response(
+                model=model,
+                parsed_chunk=parsed_chunk,
+                logging_obj=logging_obj,
+            )
+
+        response_id: Final = str(parsed_chunk.get("response_id", ""))
+        return super().transform_streaming_response(
+            model=model,
+            parsed_chunk={  # mutable-ok: JSON event payload
+                "type": "response.output_text.delta",
+                "item_id": f"msg_{response_id}",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": swarm_data["delta"],
+                "sequence_number": parsed_chunk.get("sequence_number", 0),
+            },
             logging_obj=logging_obj,
         )
 

@@ -231,6 +231,71 @@ class TestDeepResearchKeepsState:
         assert response.status == "cancelled"
         assert response._hidden_params["headers"]["x-ratelimit-remaining-requests"] == "42"
 
+    def test_output_text_delta_is_normalized(self):
+        """A Deep Research stream never emits response.output_text.delta of its own.
+
+        Payload shape captured from a live stream; the extra swarm.data keys ride
+        along untouched and must not affect the mapping.
+        """
+        config = _responses_config("apodex-1-1-deep-research")
+        event = config.transform_streaming_response(
+            model="apodex-1-1-deep-research",
+            parsed_chunk={
+                "type": "response.swarm.llm_delta",
+                "created_at": 1786873219.3543231,
+                "response_id": "w_c4b77c96",
+                "sequence_number": 12,
+                "swarm": {
+                    "agent_id": "stateful_react",
+                    "data": {
+                        "channel": "output_text",
+                        "delta": "Hello there, friend!",
+                        "delta_index": 0,
+                        "call_id": "llm_fce8e965",
+                        "turn": 1,
+                    },
+                },
+            },
+            logging_obj=None,
+        )
+
+        assert event.type == "response.output_text.delta"
+        assert event.item_id == "msg_w_c4b77c96"
+        assert event.delta == "Hello there, friend!"
+        assert event.sequence_number == 12
+
+    @pytest.mark.parametrize(
+        "channel",
+        ("reasoning", None),
+        ids=("reasoning-channel", "no-channel"),
+    )
+    def test_non_answer_deltas_are_not_claimed_as_output_text(self, channel):
+        """Most of the stream is the agent thinking; only `output_text` is the answer."""
+        data = {"delta": "The"} if channel is None else {"channel": channel, "delta": "The"}
+        config = _responses_config("apodex-1-1-deep-research")
+        event = config.transform_streaming_response(
+            model="apodex-1-1-deep-research",
+            parsed_chunk={
+                "type": "response.swarm.llm_delta",
+                "response_id": "w_c4b77c96",
+                "sequence_number": 7,
+                "swarm": {"agent_id": "stateful_react", "data": data},
+            },
+            logging_obj=None,
+        )
+
+        assert event.type == "response.swarm.llm_delta"
+
+    def test_documented_events_pass_through_untouched(self):
+        config = _responses_config("apodex-1-1-deep-research")
+        event = config.transform_streaming_response(
+            model="apodex-1-1-deep-research",
+            parsed_chunk={"type": "response.in_progress", "sequence_number": 2},
+            logging_obj=None,
+        )
+
+        assert event.type == "response.in_progress"
+
     def test_non_json_cancel_body_raises_the_provider_error(self):
         """The gateway answers a timed-out cancel with an HTML 504, not the JSON envelope."""
         config = _responses_config("apodex-1-1-deep-research")
