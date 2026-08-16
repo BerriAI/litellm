@@ -167,8 +167,33 @@ class TestStreamDefault:
 
         assert captured["body"]["stream"] is False
 
+    def test_transform_does_not_mutate_optional_params(self):
+        config = _chat_config("apodex-1.1")
+        optional_params = config.map_openai_params(
+            non_default_params={}, optional_params={}, model="apodex-1.1", drop_params=False
+        )
+        original = optional_params.copy()
+
+        config.transform_request(
+            model="apodex-1.1",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=optional_params,
+            litellm_params={"custom_llm_provider": "apodex"},
+            headers={},
+        )
+
+        assert optional_params == original
+
 
 class TestSupportedParams:
+    def test_responses_only_model_rejects_chat_completions(self):
+        with pytest.raises(litellm.BadRequestError, match="only available through /v1/responses"):
+            litellm.completion(
+                model="apodex/apodex-1-1-deep-discover",
+                messages=[{"role": "user", "content": "hi"}],
+                client=_client({}),
+            )
+
     def test_core_models_support_tools(self):
         supported = _chat_config("apodex-1.1").get_supported_openai_params("apodex-1.1")
         assert "tools" in supported

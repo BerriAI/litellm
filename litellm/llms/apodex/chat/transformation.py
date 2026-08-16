@@ -14,6 +14,7 @@ Ref: https://platform.apodex.ai/docs/chat-completions
 from collections.abc import Mapping
 from typing import Final
 
+import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 
@@ -22,6 +23,7 @@ from ..common_utils import (
     get_apodex_api_base,
     get_apodex_api_key,
     is_deep_research_model,
+    is_responses_only_model,
 )
 
 _DEEP_RESEARCH_PARAMS: Final = (
@@ -87,6 +89,13 @@ class ApodexChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: matches the base-class signature
+        if is_responses_only_model(model):
+            raise litellm.BadRequestError(
+                message=f"apodex model {model} is only available through /v1/responses",
+                model=model,
+                llm_provider="apodex",
+            )
+
         mapped: Final = super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -94,7 +103,6 @@ class ApodexChatConfig(OpenAIGPTConfig):
             drop_params=drop_params,
         )
 
-        # Apodex documents max_tokens only.
         renamed: Final = (
             mapped
             if "max_completion_tokens" not in mapped
@@ -109,18 +117,9 @@ class ApodexChatConfig(OpenAIGPTConfig):
         if renamed.get("stream"):
             return renamed
 
-        # The OpenAI chat handler pops `stream` out of the params it forwards
-        # (litellm/llms/openai/openai.py), which would leave the Deep Research tiers
-        # on their streaming default. extra_body is merged into the request body
-        # further down, so it survives that pop.
-        requested_extra_body: Final = renamed.get("extra_body")
-        extra_body: Final = (
-            requested_extra_body if isinstance(requested_extra_body, Mapping) else {}  # mutable-ok: JSON request body
-        )
         return {  # mutable-ok: JSON request body
             **renamed,
             _PIN_NON_STREAMING: True,
-            "extra_body": {**extra_body, "stream": False},  # mutable-ok: JSON request body
         }
 
     def transform_request(
@@ -131,12 +130,12 @@ class ApodexChatConfig(OpenAIGPTConfig):
         litellm_params: dict,  # mutable-ok: matches the base-class signature
         headers: dict,  # mutable-ok: matches the base-class signature
     ) -> dict:  # mutable-ok: JSON request body
-        """Apply the non-streaming pin after LiteLLM merges caller ``extra_body``."""
-        pin_non_streaming: Final = bool(optional_params.pop(_PIN_NON_STREAMING, False))
+        pin_non_streaming: Final = bool(optional_params.get(_PIN_NON_STREAMING, False))
+        forwarded_params: Final = {key: value for key, value in optional_params.items() if key != _PIN_NON_STREAMING}
         transformed: Final = super().transform_request(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=forwarded_params,
             litellm_params=litellm_params,
             headers=headers,
         )

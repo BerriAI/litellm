@@ -17,6 +17,7 @@ from litellm.secret_managers.main import get_secret_str
 APODEX_API_BASE_URL: Final = "https://api.apodex.ai/v1"
 
 _DEEP_RESEARCH_MARKER: Final = "-deep-"
+_RESPONSES_ONLY_MODELS: Final = frozenset({"apodex-1-1-deep-discover"})
 
 
 def strip_provider_prefix(model: str) -> str:
@@ -26,6 +27,10 @@ def strip_provider_prefix(model: str) -> str:
 def is_deep_research_model(model: str) -> bool:
     """True for the Deep Research / Solve / Discover tiers, e.g. apodex-1-1-deep-solve."""
     return _DEEP_RESEARCH_MARKER in strip_provider_prefix(model)
+
+
+def is_responses_only_model(model: str) -> bool:
+    return strip_provider_prefix(model) in _RESPONSES_ONLY_MODELS
 
 
 def get_apodex_api_key(api_key: str | None = None) -> str | None:
