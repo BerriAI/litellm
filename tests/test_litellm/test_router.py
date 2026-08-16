@@ -7617,6 +7617,104 @@ class TestAutoRouterMaxInputCharsWiring:
         assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
+class TestTaggedAutoRouterOnSharedModelName:
+    """A tagged auto-router marker sharing its model_name with a plain deployment must not
+    capture requests whose tags don't match it when tag filtering is enabled (#36620)."""
+
+    class _FixedRouteLayer:
+        def __call__(self, text: str):
+            from semantic_router.schema import RouteChoice
+
+            return RouteChoice(name="gemini-flash")
+
+    @classmethod
+    def _router(cls, marker_tags, include_plain_sibling: bool, enable_tag_filtering: bool) -> "litellm.Router":
+        pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+        marker = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "auto_router/gpt4o-router",
+                "auto_router_config": json.dumps(
+                    {"routes": [{"name": "gemini-flash", "utterances": ["capital city questions"]}]}
+                ),
+                "auto_router_default_model": "gemini-flash",
+                "auto_router_embedding_model": "text-embedding-3-small",
+                **({"tags": marker_tags} if marker_tags else {}),
+            },
+        }
+        plain = {"model_name": "gpt4o", "litellm_params": {"model": "openai/gpt-4o"}}
+        tier = {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}}
+        router = litellm.Router(
+            model_list=[plain, marker, tier] if include_plain_sibling else [marker, tier],
+            enable_tag_filtering=enable_tag_filtering,
+        )
+        router.auto_routers["gpt4o"][0].strategy.routelayer = cls._FixedRouteLayer()
+        return router
+
+    @staticmethod
+    async def _hook_response(router: "litellm.Router", request_kwargs: dict):
+        return await router.async_pre_routing_hook(
+            model="gpt4o",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_untagged_request_bypasses_the_tagged_marker_when_a_plain_deployment_shares_the_name(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        assert await self._hook_response(router, {}) is None
+
+    @pytest.mark.asyncio
+    async def test_request_tagged_for_the_marker_is_still_semantically_routed(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {"metadata": {"tags": ["route"]}})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_marker_only_alias_still_captures_untagged_requests(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_untagged_marker_sharing_the_name_still_captures_untagged_requests(self):
+        router = self._router(marker_tags=None, include_plain_sibling=True, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_untagged_selection_never_lands_on_the_marker_deployment(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        for _ in range(20):
+            deployment = await router.async_get_available_deployment(
+                model="gpt4o",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
+            )
+            assert deployment["litellm_params"]["model"] == "openai/gpt-4o"
+
+    def test_deployment_without_litellm_params_mapping_is_not_a_marker(self):
+        assert litellm.Router._is_strategy_marker_deployment({"model_name": "gpt4o"}) is False
+
+    def test_model_name_has_plain_deployments_reflects_the_pool(self):
+        mixed = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+        marker_only = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
+
+        assert mixed._model_name_has_plain_deployments("gpt4o") is True
+        assert marker_only._model_name_has_plain_deployments("gpt4o") is False
+
+
 class TestGetAllowedFailsFromPolicy:
     def _make_router(self, **policy_kwargs) -> litellm.Router:
         from litellm.types.router import AllowedFailsPolicy
@@ -7856,3 +7954,45 @@ def test_ensure_deployment_affinity_callback_is_idempotent():
     finally:
         for cb in router.optional_callbacks or []:
             litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+
+def test_get_router_model_info_does_not_wipe_cached_pricing():
+    """A Deployment's model_info declares the mirrored pricing fields with None defaults;
+    merging it must not write those Nones into the lru_cache'd dict get_model_info() owns,
+    or /model/info loses built-in prices for every model a worker serves."""
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    expected = copy.deepcopy(litellm.get_model_info(model="anthropic/claude-sonnet-4-5"))
+
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1"),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5") == expected
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        assert merged[field] == expected[field]
+
+
+def test_get_router_model_info_keeps_explicit_pricing_overrides():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1", input_cost_per_token=1e-08),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert merged["input_cost_per_token"] == 1e-08
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08

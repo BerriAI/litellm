@@ -26,11 +26,11 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _generic_cost_per_character,
     _get_regional_uplift_multiplier,
     _get_service_tier_cost_key,
-    _parse_prompt_tokens_details,
     calculate_cost_component,
     generic_cost_per_token,
     get_billable_input_tokens,
     get_token_type_cost_breakdown,
+    parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
 from litellm.llms.anthropic.cost_calculation import (
@@ -645,7 +645,11 @@ def cost_per_token(
     else:
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
-        if (model_info.get("input_cost_per_token") or 0.0) > 0 or (model_info.get("output_cost_per_token") or 0.0) > 0:
+        if (
+            (model_info.get("input_cost_per_token") or 0.0) > 0
+            or (model_info.get("output_cost_per_token") or 0.0) > 0
+            or model_info.get("tiered_pricing") is not None
+        ):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
@@ -2159,7 +2163,7 @@ def batch_cost_calculator(
     if input_cost_per_token_batches:
         total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
     elif input_cost_per_token:
-        details: Final = _parse_prompt_tokens_details(usage)
+        details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
         cache_creation_tokens: Final = details["cache_creation_tokens"]
 
