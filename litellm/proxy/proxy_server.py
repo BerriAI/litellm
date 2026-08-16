@@ -8467,6 +8467,13 @@ class ProxyStartupEvent:
             prisma_client=prisma_client,
         )
 
+        await cls._initialize_cost_savings_report_jobs(
+            scheduler=scheduler,
+            general_settings=general_settings,
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+        )
+
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
@@ -8810,6 +8817,62 @@ class ProxyStartupEvent:
                     replace_existing=True,
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
+
+    @classmethod
+    async def _initialize_cost_savings_report_jobs(
+        cls,
+        scheduler: AsyncIOScheduler,
+        general_settings: Mapping[str, object],
+        proxy_logging_obj: ProxyLogging,
+        prisma_client: PrismaClient,
+    ) -> None:
+        """Initialize scheduled weekly/monthly cost savings report emails."""
+        if prisma_client is None:
+            return
+
+        recipient_emails: Final = general_settings.get("cost_savings_report_recipients")
+        if not recipient_emails:
+            return
+
+        from litellm.proxy.spend_tracking.cost_savings_report import (
+            send_monthly_cost_savings_report,
+            send_weekly_cost_savings_report,
+        )
+
+        print("Alerting: Initializing Weekly/Monthly Cost Savings Reports")  # noqa: T201
+        cost_savings_report_frequency: Final[str] = general_settings.get("cost_savings_report_frequency", "7d") or "7d"
+
+        days: Final = int(cost_savings_report_frequency[:-1])
+        if cost_savings_report_frequency[-1].lower() != "d":
+            raise ValueError("cost_savings_report_frequency must be specified in days, e.g., '1d', '7d'")
+
+        weekly_delay: Final = timedelta(seconds=10 + random.randint(0, 300))
+        weekly_now: Final = datetime.now()  # noqa: DTZ005  # naive local time, matches spend report job
+        weekly_next_run_time: Final = weekly_now + weekly_delay
+        scheduler.add_job(
+            send_weekly_cost_savings_report,
+            "interval",
+            days=days,
+            next_run_time=weekly_next_run_time,
+            args=[
+                prisma_client,
+                proxy_logging_obj.internal_usage_cache.dual_cache,
+                recipient_emails,
+                cost_savings_report_frequency,
+            ],
+            id="weekly_cost_savings_report_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
+        scheduler.add_job(
+            send_monthly_cost_savings_report,
+            "cron",
+            day=1,
+            args=[prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache, recipient_emails],
+            id="monthly_cost_savings_report_job",
+            replace_existing=True,
+        )
 
     @classmethod
     async def _setup_prisma_client(

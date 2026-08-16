@@ -951,6 +951,69 @@ class TestSendEmailStartTls:
         assert context.check_hostname is True
 
 
+class TestSendEmailAttachments:
+    @pytest.mark.asyncio
+    async def test_attachment_is_included_with_filename_and_content(self, monkeypatch):
+        from litellm.proxy.utils import EmailAttachment, send_email
+
+        monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+        monkeypatch.setenv("SMTP_PORT", "587")
+        monkeypatch.setenv("SMTP_SENDER_EMAIL", "sender@example.com")
+        monkeypatch.delenv("SMTP_TLS", raising=False)
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+
+        mock_server = MagicMock(spec=smtplib.SMTP)
+        with patch("litellm.proxy.utils._create_smtp_connection") as mock_create_connection:
+            mock_create_connection.return_value.__enter__.return_value = mock_server
+            await send_email(
+                receiver_email="receiver@example.com",
+                subject="test",
+                html="<p>test</p>",
+                attachments=[
+                    EmailAttachment(
+                        filename="report.pdf",
+                        content=b"%PDF-1.4 fake pdf bytes",
+                        mime_type="application/pdf",
+                    )
+                ],
+            )
+
+        _, kwargs = mock_server.send_message.call_args
+        sent_message = kwargs["msg"]
+        pdf_parts = [
+            part for part in sent_message.walk() if part.get_content_type() == "application/pdf"
+        ]
+        assert len(pdf_parts) == 1
+        assert pdf_parts[0].get_filename() == "report.pdf"
+        assert pdf_parts[0].get_payload(decode=True) == b"%PDF-1.4 fake pdf bytes"
+
+    @pytest.mark.asyncio
+    async def test_no_attachment_part_when_none_given(self, monkeypatch):
+        from litellm.proxy.utils import send_email
+
+        monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+        monkeypatch.setenv("SMTP_PORT", "587")
+        monkeypatch.setenv("SMTP_SENDER_EMAIL", "sender@example.com")
+        monkeypatch.delenv("SMTP_TLS", raising=False)
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+
+        mock_server = MagicMock(spec=smtplib.SMTP)
+        with patch("litellm.proxy.utils._create_smtp_connection") as mock_create_connection:
+            mock_create_connection.return_value.__enter__.return_value = mock_server
+            await send_email(
+                receiver_email="receiver@example.com",
+                subject="test",
+                html="<p>test</p>",
+            )
+
+        _, kwargs = mock_server.send_message.call_args
+        sent_message = kwargs["msg"]
+        assert [part.get_content_type() for part in sent_message.walk()] == [
+            "multipart/mixed",
+            "text/html",
+        ]
+
+
 class _RecordingMCPGuardrail(CustomGuardrail):
     """Unified guardrail that masks every text it is handed."""
 

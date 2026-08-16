@@ -13,6 +13,7 @@ import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Union, cast, overload
@@ -5302,11 +5303,19 @@ def _create_smtp_connection(smtp_host: str, smtp_port: int) -> smtplib.SMTP:
     return smtplib.SMTP(host=smtp_host, port=smtp_port)
 
 
+@dataclass(frozen=True, slots=True)
+class EmailAttachment:
+    filename: str
+    content: bytes
+    mime_type: str = "application/octet-stream"
+
+
 async def send_email(
     receiver_email: str | None = None,
     subject: str | None = None,
     html: str | None = None,
-):
+    attachments: Sequence[EmailAttachment] = (),
+) -> None:
     """
     smtp_host,
     smtp_port,
@@ -5343,6 +5352,12 @@ async def send_email(
 
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
+
+    for attachment in attachments:
+        _, _, mime_subtype = attachment.mime_type.partition("/")
+        part = MIMEApplication(attachment.content, _subtype=mime_subtype or "octet-stream")
+        part.add_header("Content-Disposition", "attachment", filename=attachment.filename)
+        email_message.attach(part)
 
     try:
         using_ssl: Final = _should_use_smtp_ssl(smtp_port=smtp_port)

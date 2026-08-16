@@ -31,6 +31,7 @@ class httpxSpecialProvider(str, Enum):
     UI = "ui"
     Sandbox = "sandbox"
     ModelCostMap = "model_cost_map"
+    EmailReporting = "email_reporting"
 
 
 VerifyTypes = str | bool | ssl.SSLContext

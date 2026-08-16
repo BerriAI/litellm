@@ -757,6 +757,47 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cost_savings_report_jobs_not_scheduled_without_recipients():
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_scheduler = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+
+    await ProxyStartupEvent._initialize_cost_savings_report_jobs(
+        scheduler=mock_scheduler,
+        general_settings={},
+        proxy_logging_obj=mock_proxy_logging,
+        prisma_client=MagicMock(),
+    )
+
+    mock_scheduler.add_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cost_savings_report_jobs_scheduled_with_recipients():
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_scheduler = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.internal_usage_cache = MagicMock()
+
+    await ProxyStartupEvent._initialize_cost_savings_report_jobs(
+        scheduler=mock_scheduler,
+        general_settings={"cost_savings_report_recipients": ["admin@example.com"]},
+        proxy_logging_obj=mock_proxy_logging,
+        prisma_client=MagicMock(),
+    )
+
+    scheduled_job_ids = [call.kwargs["id"] for call in mock_scheduler.add_job.mock_calls]
+    assert scheduled_job_ids == [
+        "weekly_cost_savings_report_job",
+        "monthly_cost_savings_report_job",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypatch):
     """
     Regression (LIT-4882): reload schedules configured from the Admin UI live in the DB and
