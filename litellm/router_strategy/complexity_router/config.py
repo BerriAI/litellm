@@ -859,6 +859,8 @@ class ComplexityRouterConfig(BaseModel):
                     for entry in entries
                 )
                 for tier, (_, entries) in normalized_entries.items()
+                if any(entry.litellm_params for entry in entries)
+                or (isinstance(existing_configs, dict) and tier in existing_configs)
             }
         )
         return {  # mutable-ok: Pydantic before-validator requires a concrete mapping

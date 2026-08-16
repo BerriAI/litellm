@@ -504,7 +504,7 @@ class TestModelSelection:
                 "default_model": "mid",
             },
         )
-        with pytest.raises(ValueError, match="tier pool for SIMPLE must not be empty"):
+        with pytest.raises(ValueError, match="Empty model pool for tier SIMPLE"):
             router.get_model_for_tier(ComplexityTier.SIMPLE)
 
 
