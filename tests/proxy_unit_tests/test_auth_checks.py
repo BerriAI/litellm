@@ -836,7 +836,10 @@ async def test_can_user_call_model_with_no_default_models():
 
 @pytest.mark.asyncio
 async def test_get_fuzzy_user_object():
-    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
+    from litellm.proxy.auth.auth_checks import (
+        EmailLinkingRefusedError,
+        _get_fuzzy_user_object,
+    )
     from litellm.proxy.utils import PrismaClient
     from unittest.mock import AsyncMock, MagicMock
 
@@ -845,46 +848,71 @@ async def test_get_fuzzy_user_object():
     mock_prisma.db = MagicMock()
     mock_prisma.db.litellm_usertable = MagicMock()
 
-    # Mock user data
-    test_user = LiteLLM_UserTable(
+    # A row already bound to a different SSO subject than the one presented below.
+    bound_user = LiteLLM_UserTable(
         user_id="test_123",
         sso_user_id="sso_123",
         user_email="test@example.com",
         organization_memberships=[],
         max_budget=None,
     )
+    # An invited/unlinked row: email set by an admin, never logged in via SSO yet.
+    unlinked_user = LiteLLM_UserTable(
+        user_id="test_456",
+        sso_user_id=None,
+        user_email="unlinked@example.com",
+        organization_memberships=[],
+        max_budget=None,
+    )
 
     # Test 1: Find user by SSO ID
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=bound_user)
     result = await _get_fuzzy_user_object(
         prisma_client=mock_prisma, sso_user_id="sso_123", user_email="test@example.com"
     )
-    assert result == test_user
+    assert result == bound_user
     mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
         where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
     )
 
-    # Test 2: SSO ID not found, find by email
+    # Test 2: SSO ID not found, email matches an unlinked/invited row with a verified
+    # email -> safe to link. The rebind is awaited directly (no more fire-and-forget).
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=unlinked_user)
     mock_prisma.db.litellm_usertable.update = AsyncMock()
 
     result = await _get_fuzzy_user_object(
         prisma_client=mock_prisma,
         sso_user_id="new_sso_456",
-        user_email="test@example.com",
+        user_email="unlinked@example.com",
+        email_verified=True,
+        general_settings={},
     )
-    assert result == test_user
+    assert result == unlinked_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
+        where={"user_email": {"equals": "unlinked@example.com", "mode": "insensitive"}},
         include={"organization_memberships": True},
     )
-
-    # Test 3: Verify background SSO update task when user found by email
-    await asyncio.sleep(0.1)  # Allow time for background task
     mock_prisma.db.litellm_usertable.update.assert_called_with(
-        where={"user_id": "test_123"}, data={"sso_user_id": "new_sso_456"}
+        where={"user_id": "test_456"}, data={"sso_user_id": "new_sso_456"}
     )
+
+    # Test 3: SSO ID not found, email matches a row already bound to a DIFFERENT
+    # subject -> refused under the default strict policy, never rebound. This is
+    # the regression test for the account-rebinding vulnerability.
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=bound_user)
+    mock_prisma.db.litellm_usertable.update = AsyncMock()
+
+    with pytest.raises(EmailLinkingRefusedError):
+        await _get_fuzzy_user_object(
+            prisma_client=mock_prisma,
+            sso_user_id="new_sso_456",
+            user_email="test@example.com",
+            email_verified=True,
+            general_settings={},
+        )
+    mock_prisma.db.litellm_usertable.update.assert_not_called()
 
     # Test 4: User not found by either method
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
@@ -897,26 +925,217 @@ async def test_get_fuzzy_user_object():
     )
     assert result is None
 
-    # Test 5: Only email provided (no SSO ID)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
+    # Test 5: Only email provided (no SSO ID) -> read-only match, no rebind write
+    # is possible regardless of policy, but the email must still be verified.
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=bound_user)
     result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, user_email="test@example.com"
+        prisma_client=mock_prisma, user_email="test@example.com", email_verified=True
     )
-    assert result == test_user
+    assert result == bound_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
         where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
         include={"organization_memberships": True},
     )
 
     # Test 6: Only SSO ID provided (no email)
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=bound_user)
     result = await _get_fuzzy_user_object(
         prisma_client=mock_prisma, sso_user_id="sso_123"
     )
-    assert result == test_user
+    assert result == bound_user
     mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
         where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
     )
+
+
+@pytest.mark.asyncio
+async def test_get_fuzzy_user_object_email_not_verified():
+    """Unverified email must never be used to link an account, regardless of policy."""
+    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id="test_456",
+            sso_user_id=None,
+            user_email="unlinked@example.com",
+            organization_memberships=[],
+            max_budget=None,
+        )
+    )
+    mock_prisma.db.litellm_usertable.update = AsyncMock()
+
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma,
+        sso_user_id="new_sso_456",
+        user_email="unlinked@example.com",
+        email_verified=False,
+        general_settings={},
+    )
+    assert result is None
+    mock_prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_fuzzy_user_object_admin_row_never_linked():
+    """A proxy_admin row must never be linked/inherited via email match, under either policy."""
+    from litellm.proxy.auth.auth_checks import EmailLinkingRefusedError, _get_fuzzy_user_object
+    from litellm.proxy._types import LitellmUserRoles
+    from unittest.mock import AsyncMock, MagicMock
+
+    admin_user = LiteLLM_UserTable(
+        user_id="admin_123",
+        sso_user_id=None,
+        user_email="admin@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        organization_memberships=[],
+        max_budget=None,
+    )
+
+    def _make_mock_prisma() -> MagicMock:
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_usertable = MagicMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=admin_user)
+        mock_prisma.db.litellm_usertable.update = AsyncMock()
+        return mock_prisma
+
+    # strict policy -> refused (403 upstream)
+    strict_prisma = _make_mock_prisma()
+    with pytest.raises(EmailLinkingRefusedError):
+        await _get_fuzzy_user_object(
+            prisma_client=strict_prisma,
+            sso_user_id="attacker_sub",
+            user_email="admin@example.com",
+            email_verified=True,
+            general_settings={"sso_email_linking_policy": "strict"},
+        )
+    strict_prisma.db.litellm_usertable.update.assert_not_called()
+
+    # create_new policy -> silently ignored, never linked/rebound
+    create_new_prisma = _make_mock_prisma()
+    result = await _get_fuzzy_user_object(
+        prisma_client=create_new_prisma,
+        sso_user_id="attacker_sub",
+        user_email="admin@example.com",
+        email_verified=True,
+        general_settings={"sso_email_linking_policy": "create_new"},
+    )
+    assert result is None
+    create_new_prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_fuzzy_user_object_create_new_policy_on_conflict():
+    """create_new policy on a bound-to-other-subject row: ignore, don't link, don't refuse."""
+    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
+    from unittest.mock import AsyncMock, MagicMock
+
+    bound_user = LiteLLM_UserTable(
+        user_id="test_123",
+        sso_user_id="sso_123",
+        user_email="test@example.com",
+        organization_memberships=[],
+        max_budget=None,
+    )
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=bound_user)
+    mock_prisma.db.litellm_usertable.update = AsyncMock()
+
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma,
+        sso_user_id="new_sso_456",
+        user_email="test@example.com",
+        email_verified=True,
+        general_settings={"sso_email_linking_policy": "create_new"},
+    )
+    assert result is None
+    mock_prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "matched_row_kwargs, presented_sso_user_id, email_verified, policy, expected",
+    [
+        # (a) mismatched subject on a bound row -> refuse under strict
+        (
+            {"sso_user_id": "sso_123"},
+            "new_sso_456",
+            True,
+            "strict",
+            "refuse",
+        ),
+        # (b) unverified email -> ignore, regardless of anything else
+        (
+            {"sso_user_id": None},
+            "new_sso_456",
+            False,
+            "strict",
+            "ignore",
+        ),
+        # (c) admin row -> never link, strict refuses
+        (
+            {"sso_user_id": None, "user_role": "proxy_admin"},
+            "new_sso_456",
+            True,
+            "strict",
+            "refuse",
+        ),
+        # (c) admin row -> never link, create_new silently ignores
+        (
+            {"sso_user_id": None, "user_role": "proxy_admin"},
+            "new_sso_456",
+            True,
+            "create_new",
+            "ignore",
+        ),
+        # (d) unlinked/invited row with verified email -> link
+        (
+            {"sso_user_id": None},
+            "new_sso_456",
+            True,
+            "strict",
+            "link",
+        ),
+        # (e) create_new policy on a conflict -> ignore, never link/refuse
+        (
+            {"sso_user_id": "sso_123"},
+            "new_sso_456",
+            True,
+            "create_new",
+            "ignore",
+        ),
+    ],
+)
+def test_decide_email_fuzzy_match(
+    matched_row_kwargs, presented_sso_user_id, email_verified, policy, expected
+):
+    from litellm.proxy.auth.auth_checks import (
+        SSOEmailLinkingPolicy,
+        _decide_email_fuzzy_match,
+    )
+
+    matched_row = LiteLLM_UserTable(
+        user_id="test_123",
+        user_email="test@example.com",
+        organization_memberships=[],
+        max_budget=None,
+        **matched_row_kwargs,
+    )
+    decision = _decide_email_fuzzy_match(
+        matched_row=matched_row,
+        presented_sso_user_id=presented_sso_user_id,
+        email_verified=email_verified,
+        policy=SSOEmailLinkingPolicy(policy),
+    )
+    assert decision.value == expected
 
 
 @pytest.mark.parametrize(

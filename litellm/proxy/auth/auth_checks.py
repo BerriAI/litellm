@@ -10,6 +10,7 @@ Run checks for:
 """
 
 import asyncio
+import enum
 import math
 import re
 import time
@@ -146,6 +147,8 @@ class _PrismaVectorStoreRow(Protocol):
 
 class _PrismaUserRow(Protocol):
     user_id: str
+    sso_user_id: str | None
+    user_role: str | None
     organization_memberships: Sequence[LiteLLM_OrganizationMembershipTable | None] | None
 
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
@@ -1748,10 +1751,67 @@ def get_role_based_routes(
     )
 
 
+class SSOEmailLinkingPolicy(str, enum.Enum):
+    STRICT = "strict"
+    CREATE_NEW = "create_new"
+
+
+class _FuzzyEmailMatchDecision(str, enum.Enum):
+    LINK = "link"
+    REFUSE = "refuse"
+    IGNORE = "ignore"
+
+
+class EmailLinkingRefusedError(Exception):
+    """Raised when an SSO/JWT email-fuzzy-match hits a bound or admin row under the strict linking policy."""
+
+
+def _get_sso_email_linking_policy(general_settings: Mapping[str, object]) -> SSOEmailLinkingPolicy:
+    raw_policy: Final = general_settings.get("sso_email_linking_policy", SSOEmailLinkingPolicy.STRICT.value)
+    try:
+        return SSOEmailLinkingPolicy(raw_policy)
+    except ValueError:
+        return SSOEmailLinkingPolicy.STRICT
+
+
+def _decide_email_fuzzy_match(
+    matched_row: "_PrismaUserRow",
+    presented_sso_user_id: str | None,
+    email_verified: bool,
+    policy: SSOEmailLinkingPolicy,
+) -> _FuzzyEmailMatchDecision:
+    """
+    Pure decision for whether an email-matched row may be linked to a newly presented SSO/JWT subject.
+
+    - Unverified email: never link.
+    - proxy_admin rows, or rows already bound to a different subject: never link;
+      refused (403) under the strict policy when a subject was actually presented,
+      otherwise silently ignored (treated as no match).
+    - Unlinked/invited rows with a verified email: safe to link.
+    """
+    if not email_verified:
+        return _FuzzyEmailMatchDecision.IGNORE
+
+    is_admin: Final = matched_row.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    is_bound_to_other: Final = (
+        presented_sso_user_id is not None
+        and matched_row.sso_user_id is not None
+        and matched_row.sso_user_id != presented_sso_user_id
+    )
+    if is_admin or is_bound_to_other:
+        if presented_sso_user_id is not None and policy is SSOEmailLinkingPolicy.STRICT:
+            return _FuzzyEmailMatchDecision.REFUSE
+        return _FuzzyEmailMatchDecision.IGNORE
+
+    return _FuzzyEmailMatchDecision.LINK
+
+
 async def _get_fuzzy_user_object(
     prisma_client: PrismaClient,
     sso_user_id: str | None = None,
     user_email: str | None = None,
+    email_verified: bool = False,
+    general_settings: Mapping[str, object] | None = None,
 ) -> "_PrismaUserRow | None":
     """
     Checks if sso user is in db.
@@ -1760,7 +1820,9 @@ async def _get_fuzzy_user_object(
 
     - Check if sso_user_id is user_id in db
     - Check if sso_user_id is sso_user_id in db
-    - Check if user_email is user_email in db
+    - Check if user_email is user_email in db, and only link it to the presented
+      subject if the email is verified and the row isn't an admin or already bound
+      to a different subject (see `_decide_email_fuzzy_match`)
     - If not, create new user with user_email and sso_user_id and user_id = sso_user_id
     """
 
@@ -1779,13 +1841,30 @@ async def _get_fuzzy_user_object(
             include={"organization_memberships": True},
         )
 
-        if response is not None and sso_user_id is not None:  # update sso_user_id
-            asyncio.create_task(  # background task to update user with sso id
-                _user_table(UserRepository(prisma_client)).update(
+        if response is not None:
+            if general_settings is None:
+                from litellm.proxy.proxy_server import general_settings as _proxy_general_settings
+
+                general_settings = _proxy_general_settings
+
+            decision: Final = _decide_email_fuzzy_match(
+                matched_row=response,
+                presented_sso_user_id=sso_user_id,
+                email_verified=email_verified,
+                policy=_get_sso_email_linking_policy(general_settings),
+            )
+            if decision is _FuzzyEmailMatchDecision.REFUSE:
+                raise EmailLinkingRefusedError(
+                    f"Refusing to link user_email={user_email!r} to sso_user_id={sso_user_id!r}: "
+                    "matched row is a proxy_admin or already bound to a different subject."
+                )
+            if decision is _FuzzyEmailMatchDecision.IGNORE:
+                return None
+            if sso_user_id is not None:  # update sso_user_id
+                await _user_table(UserRepository(prisma_client)).update(
                     where={"user_id": response.user_id},
                     data={"sso_user_id": sso_user_id},
                 )
-            )
 
     return response
 
@@ -1829,6 +1908,7 @@ async def get_user_object(
     sso_user_id: str | None = None,
     user_email: str | None = None,
     check_db_only: bool | None = None,
+    email_verified: bool = False,
 ) -> LiteLLM_UserTable | None:
     """
     - Check if user id in proxy User Table
@@ -1873,6 +1953,7 @@ async def get_user_object(
                     prisma_client=prisma_client,
                     sso_user_id=sso_user_id,
                     user_email=user_email,
+                    email_verified=email_verified,
                 )
 
         else:
@@ -1959,6 +2040,8 @@ async def get_user_object(
         )
 
         return _response
+    except EmailLinkingRefusedError:
+        raise
     except Exception as e:  # if user not in db
         _log_budget_lookup_failure("user", e)
         raise ValueError(

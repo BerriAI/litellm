@@ -301,7 +301,7 @@ async def test_auth_builder_proxy_admin_user_role():
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=("test_user_1", "test@example.com", True),
+            return_value=("test_user_1", "test@example.com", True, True),
         ) as mock_get_user_info,
         patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
         patch.object(
@@ -396,7 +396,7 @@ async def test_auth_builder_non_proxy_admin_user_role():
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=("test_user_1", "test@example.com", True),
+            return_value=("test_user_1", "test@example.com", True, True),
         ) as mock_get_user_info,
         patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
         patch.object(
@@ -494,7 +494,7 @@ async def test_auth_builder_result_includes_user_email(row_email, expected_email
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=("test_user_1", "claim@example.com", True),
+            return_value=("test_user_1", "claim@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -1372,7 +1372,7 @@ async def test_auth_builder_returns_team_membership_object():
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(_user_id, "test@example.com", True),
+            return_value=(_user_id, "test@example.com", True, True),
         ) as mock_get_user_info,
         patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
         patch.object(
@@ -1517,7 +1517,7 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=("test_user_1", "test@example.com", True),
+            return_value=("test_user_1", "test@example.com", True, True),
         ) as mock_get_user_info,
         patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
         patch.object(
@@ -1641,7 +1641,7 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=("test_user_1", None, None),
+            return_value=("test_user_1", None, None, True),
         ) as mock_get_user_info,
         patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
         patch.object(
@@ -1761,7 +1761,7 @@ async def test_auth_builder_oidc_enabled_falls_back_to_jwt_auth_for_jwt_tokens()
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=("test_user_1", None, None),
+            return_value=("test_user_1", None, None, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -3086,7 +3086,7 @@ async def test_auth_builder_single_team_db_fallback_when_jwt_has_no_team(
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(user_id, "u@example.com", True),
+            return_value=(user_id, "u@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -3204,7 +3204,7 @@ async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(user_id, "u@example.com", True),
+            return_value=(user_id, "u@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -4044,6 +4044,46 @@ async def test_get_objects_team_membership_uses_rebound_user_id():
 
 
 @pytest.mark.asyncio
+async def test_get_objects_refuses_email_linking_mismatch():
+    """
+    A JWT subject that only matches an existing user via the email-fuzzy-match
+    fallback (e.g. because it collides with a proxy_admin row's email) must not
+    silently resolve to a user_object/is_proxy_admin - get_objects should
+    surface the refusal as a 403, not let it leak through.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.auth.auth_checks import EmailLinkingRefusedError
+
+    async def fake_get_user_object(*args, **kwargs):
+        raise EmailLinkingRefusedError("matched row is a proxy_admin or bound to a different subject")
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(user_id_jwt_field="email")
+
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_user_object",
+        side_effect=fake_get_user_object,
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await JWTAuthManager.get_objects(
+                user_id="attacker@example.com",
+                user_email="attacker@example.com",
+                org_id=None,
+                end_user_id=None,
+                team_id=None,
+                valid_user_email=None,
+                jwt_handler=jwt_handler,
+                prisma_client=MagicMock(),
+                user_api_key_cache=DualCache(),
+                parent_otel_span=None,
+                proxy_logging_obj=MagicMock(),
+                route="/chat/completions",
+            )
+
+    assert exc_info.value.code == str(403)
+
+
+@pytest.mark.asyncio
 async def test_multi_issuer_jwt_validates_selected_issuer_and_maps_claims(
     monkeypatch,
 ):
@@ -4762,7 +4802,7 @@ async def test_auth_builder_db_team_fallback_when_jwt_has_no_team(
                 JWTAuthManager,
                 "get_user_info",
                 new_callable=AsyncMock,
-                return_value=(user_id, "u@example.com", True),
+                return_value=(user_id, "u@example.com", True, True),
             ),
             patch.object(jwt_handler, "get_org_id", return_value=None),
             patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -5054,7 +5094,7 @@ async def _run_auth_builder_with_header_team(
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(user_object.user_id, "u@example.com", True),
+            return_value=(user_object.user_id, "u@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -5318,7 +5358,7 @@ async def test_auth_builder_db_fallback_does_not_validate_rbac_team_against_db_m
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(user_id, "u@example.com", True),
+            return_value=(user_id, "u@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -5473,7 +5513,7 @@ async def test_auth_builder_db_fallback_runs_when_only_team_id_default_set():
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(user_id, "u@example.com", True),
+            return_value=(user_id, "u@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -5557,7 +5597,7 @@ async def test_auth_builder_alias_only_token_resolves_alias_not_db_fallback():
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(user_id, "u@example.com", True),
+            return_value=(user_id, "u@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -5741,7 +5781,7 @@ async def test_auth_builder_db_fallback_enforces_passthrough_route_access():
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(user_id, "u@example.com", True),
+            return_value=(user_id, "u@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -5882,7 +5922,7 @@ async def test_auth_builder_provisional_header_team_is_not_upserted():
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(user_id, "u@example.com", True),
+            return_value=(user_id, "u@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -5959,7 +5999,7 @@ async def test_auth_builder_header_cannot_override_rbac_team_under_db_fallback()
             JWTAuthManager,
             "get_user_info",
             new_callable=AsyncMock,
-            return_value=(user_id, "u@example.com", True),
+            return_value=(user_id, "u@example.com", True, True),
         ),
         patch.object(jwt_handler, "get_org_id", return_value=None),
         patch.object(jwt_handler, "get_end_user_id", return_value=None),
@@ -6041,7 +6081,7 @@ async def test_auth_builder_header_team_enforces_team_allowed_routes_under_db_fa
                 JWTAuthManager,
                 "get_user_info",
                 new_callable=AsyncMock,
-                return_value=(user_id, "u@example.com", True),
+                return_value=(user_id, "u@example.com", True, True),
             ),
             patch.object(jwt_handler, "get_org_id", return_value=None),
             patch.object(jwt_handler, "get_end_user_id", return_value=None),

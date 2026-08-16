@@ -1410,6 +1410,105 @@ async def test_get_user_info_from_db_user_exists_updates_user():
         assert user_info == updated_user
 
 
+def test_email_verified_from_sso_result():
+    """
+    `_email_verified_from_sso_result` gates email-based fuzzy user linking.
+
+    - Google returns a bare fastapi_sso OpenID (no email_verified field) because
+      its library already rejects unverified emails before returning a result,
+      so that case is implicitly verified.
+    - Microsoft/Generic build a CustomOpenID carrying an explicit flag.
+    """
+    from fastapi_sso.sso.base import OpenID
+
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _email_verified_from_sso_result,
+    )
+
+    google_result = OpenID(id="g-1", email="user@example.com", provider="google")
+    assert _email_verified_from_sso_result(google_result) is True
+
+    verified_custom = CustomOpenID(
+        id="m-1", email="user@example.com", provider="microsoft", team_ids=[], email_verified=True
+    )
+    assert _email_verified_from_sso_result(verified_custom) is True
+
+    unverified_custom = CustomOpenID(
+        id="o-1", email="user@example.com", provider="generic", team_ids=[], email_verified=False
+    )
+    assert _email_verified_from_sso_result(unverified_custom) is False
+
+    assert _email_verified_from_sso_result({"email_verified": True}) is True
+    assert _email_verified_from_sso_result({}) is False
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_refuses_admin_email_match():
+    """
+    An IdP asserting a new subject/email that matches an existing proxy_admin
+    row (and no direct user_id/sso_user_id match) must not silently resolve to
+    that admin row - the refusal must propagate out of get_user_info_from_db,
+    not be swallowed as "user not found" (which would fall through to creating
+    a brand new user and hide the conflict).
+    """
+    from litellm.proxy.auth.auth_checks import EmailLinkingRefusedError
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    sso_result = CustomOpenID(
+        id="attacker-sub",
+        email="admin@example.com",
+        provider="generic",
+        team_ids=[],
+        email_verified=True,
+    )
+    args = {
+        "result": sso_result,
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": MagicMock(),
+        "proxy_logging_obj": MagicMock(),
+        "user_email": "admin@example.com",
+        "user_defined_values": None,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_user_object",
+        side_effect=EmailLinkingRefusedError("matched row is a proxy_admin"),
+    ):
+        with pytest.raises(EmailLinkingRefusedError):
+            await get_user_info_from_db(**args)
+
+
+@pytest.mark.asyncio
+async def test_get_existing_user_info_from_db_links_unverified_invited_row():
+    """
+    Sanity check for the legitimate invited-user flow: an unlinked row found via
+    email with a verified email is passed straight through to get_user_object
+    with email_verified=True, so the real linking decision (see
+    auth_checks._decide_email_fuzzy_match) can allow it.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import get_existing_user_info_from_db
+
+    invited_user = LiteLLM_UserTable(
+        user_id="invited-1", sso_user_id=None, user_email="invited@example.com"
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_user_object",
+        return_value=invited_user,
+    ) as mock_get_user_object:
+        result = await get_existing_user_info_from_db(
+            user_id="new-sub-123",
+            user_email="invited@example.com",
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            email_verified=True,
+        )
+
+    assert result == invited_user
+    assert mock_get_user_object.call_args.kwargs["email_verified"] is True
+
+
 @pytest.mark.asyncio
 async def test_check_and_update_if_proxy_admin_id():
     """
