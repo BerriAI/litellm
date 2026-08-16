@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import TYPE_CHECKING, Final, Required
+from urllib.parse import urlencode
 
 from pydantic import TypeAdapter
 from starlette.websockets import WebSocket
@@ -57,7 +58,8 @@ def build_elevenlabs_ws_url(
     ws_base: Final = raw_base.replace("https://", "wss://").replace("http://", "ws://")
     encoded_voice: Final = encode_url_path_segment(voice_id, field_name="voice_id")
     path: Final = _WS_PATH.format(voice_id=encoded_voice)
-    return f"{ws_base}{path}?model_id={model}&output_format={output_format}"
+    query: Final = urlencode({"model_id": model, "output_format": output_format})
+    return f"{ws_base}{path}?{query}"
 
 
 async def _relay_client_to_upstream(
@@ -66,9 +68,9 @@ async def _relay_client_to_upstream(
 ) -> tuple[int, ...]:
     chunk_lengths: list[int] = []  # mutable-ok: local accumulator, converted to immutable tuple on return
     async for raw in client_ws.iter_text():
-        msg = _CLIENT_MSG_ADAPTER.validate_json(raw)
+        msg = _CLIENT_MSG_ADAPTER.validate_json(raw)  # rebind-ok: loop-body, rebound each iteration
         await upstream.send(json.dumps(dict(msg)))
-        text = msg.get("text", "")
+        text = msg.get("text", "")  # rebind-ok: loop-body, rebound each iteration
         chunk_lengths.append(len(text))
         if not text:
             break
@@ -80,9 +82,9 @@ async def _relay_upstream_to_client(
     client_ws: WebSocket,
 ) -> None:
     async for raw in upstream:
-        payload = raw if isinstance(raw, str) else raw.decode()
+        payload = raw if isinstance(raw, str) else raw.decode()  # rebind-ok: loop-body, rebound each iteration
         await client_ws.send_text(payload)
-        msg = _SERVER_MSG_ADAPTER.validate_json(payload)
+        msg = _SERVER_MSG_ADAPTER.validate_json(payload)  # rebind-ok: loop-body, rebound each iteration
         if msg.get("isFinal"):
             break
 
@@ -124,10 +126,18 @@ async def stream_input_tts(
 
     async with websockets.connect(url, additional_headers={"xi-api-key": key}) as upstream:
         await upstream.send(json.dumps(bos))
-        results: Final = await asyncio.gather(
-            _relay_client_to_upstream(client_ws, upstream),
-            _relay_upstream_to_client(upstream, client_ws),
-        )
 
-    chunk_lengths: Final = results[0]
+        task_c2u: Final = asyncio.create_task(_relay_client_to_upstream(client_ws, upstream))
+        task_u2c: Final = asyncio.create_task(_relay_upstream_to_client(upstream, client_ws))
+
+        # Wait for whichever relay finishes first, then cancel the other.
+        # This prevents the client-to-upstream relay from hanging if ElevenLabs
+        # sends isFinal before the client sends EOS, or if either side disconnects.
+        await asyncio.wait({task_c2u, task_u2c}, return_when=asyncio.FIRST_COMPLETED)
+        task_c2u.cancel()
+        task_u2c.cancel()
+        results: Final = await asyncio.gather(task_c2u, task_u2c, return_exceptions=True)
+
+    c2u_result: Final = results[0]
+    chunk_lengths: Final = c2u_result if isinstance(c2u_result, tuple) else ()
     return sum(chunk_lengths)

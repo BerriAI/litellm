@@ -10934,8 +10934,6 @@ async def elevenlabs_tts_stream_input_endpoint(
         await websocket.close(code=1008, reason=e.message[:120])
         return
 
-    await websocket.accept()
-
     elevenlabs_config: Final = ElevenLabsTextToSpeechConfig()
     voice_id: Final = elevenlabs_config._extract_voice_id(voice)
 
@@ -10951,6 +10949,21 @@ async def elevenlabs_tts_stream_input_endpoint(
     }
     voice_settings: Final[VoiceSettings | None] = cast(VoiceSettings, raw_voice_settings) if raw_voice_settings else None  # cast-ok: dict built from typed float query params; structural match is guaranteed
 
+    # Run guardrails and rate-limit checks before opening the upstream connection.
+    # This mirrors what the batch TTS endpoint does via proxy_logging_obj.pre_call_hook().
+    _initial_hook_data: Final[dict[str, object]] = {"model": litellm_model, "user": user_api_key_dict.user_id}
+    try:
+        pre_call_data: Final = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=_initial_hook_data,
+            call_type="aspeech",
+        )
+    except Exception as pre_call_err:  # noqa: BLE001  # guardrail block or rate-limit; close before accepting
+        await websocket.close(code=1008, reason=str(pre_call_err)[:120])
+        return
+
+    await websocket.accept()
+
     start_time: Final = datetime.now(tz=timezone.utc)
     litellm_call_id: Final = str(uuid4())
 
@@ -10962,6 +10975,21 @@ async def elevenlabs_tts_stream_input_endpoint(
         start_time=start_time,
         litellm_call_id=litellm_call_id,
         function_id="elevenlabs_tts_stream_input",
+    )
+    # Attribute cost to the authenticated key/team so budget enforcement works.
+    logging_obj.update_environment_variables(
+        model=litellm_model,
+        user=user_api_key_dict.user_id,
+        optional_params={},
+        litellm_params={
+            "metadata": {
+                "user_api_key": user_api_key_dict.api_key,
+                "user_api_key_alias": user_api_key_dict.key_alias,
+                "user_api_key_user_id": user_api_key_dict.user_id,
+                "user_api_key_team_id": user_api_key_dict.team_id,
+            }
+        },
+        custom_llm_provider="elevenlabs",
     )
 
     try:
@@ -10998,8 +11026,13 @@ async def elevenlabs_tts_stream_input_endpoint(
             end_time=end_time,
             cache_hit=False,
         )
-    except Exception:  # noqa: BLE001  # intentional: catch all session errors to ensure WS cleanup
+    except Exception as session_err:  # noqa: BLE001  # intentional: catch all session errors to ensure WS cleanup
         verbose_proxy_logger.exception("ElevenLabs TTS stream-input error")
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=session_err,
+            request_data=pre_call_data,
+        )
         try:
             await websocket.close(code=1011, reason="Internal server error")
         except Exception:  # noqa: BLE001  # WS may already be closed; log and discard
