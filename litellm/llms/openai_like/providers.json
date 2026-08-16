@@ -175,6 +175,18 @@
     "base_class": "openai_gpt",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "apodex": {
+    "base_url": "https://api.apodex.ai/v1",
+    "api_key_env": "APODEX_API_KEY",
+    "api_base_env": "APODEX_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
+    "special_handling": {
+      "send_explicit_stream_false": true
+    }
+  },
   "pinstripes": {
     "base_url": "https://pinstripes.io/v1",
     "api_key_env": "PINSTRIPES_API_KEY",

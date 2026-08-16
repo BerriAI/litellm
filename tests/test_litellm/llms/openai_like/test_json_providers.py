@@ -245,6 +245,63 @@ class TestPinstripes:
         assert result["temperature"] == 0.7
 
 
+class TestTemperatureConstraints:
+    """`constraints` in providers.json clamp temperature before the request is sent."""
+
+    @staticmethod
+    def _config(constraints: dict):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import SimpleProviderConfig
+
+        provider = SimpleProviderConfig(
+            "constrained",
+            {
+                "base_url": "https://api.constrained.test/v1",
+                "api_key_env": "CONSTRAINED_API_KEY",
+                "constraints": constraints,
+            },
+        )
+        return create_config_class(provider)()
+
+    def test_temperature_clamped_to_max(self):
+        config = self._config({"temperature_max": 1.0})
+        result = config.map_openai_params({"temperature": 1.8}, {}, "some-model", False)
+        assert result["temperature"] == 1.0
+
+    def test_temperature_clamped_to_min(self):
+        config = self._config({"temperature_min": 0.1})
+        result = config.map_openai_params({"temperature": 0.0}, {}, "some-model", False)
+        assert result["temperature"] == 0.1
+
+    def test_temperature_within_range_is_untouched(self):
+        config = self._config({"temperature_min": 0.1, "temperature_max": 1.0})
+        result = config.map_openai_params({"temperature": 0.7}, {}, "some-model", False)
+        assert result["temperature"] == 0.7
+
+    def test_temperature_floor_applies_only_when_n_gt_1(self):
+        config = self._config({"temperature_min_with_n_gt_1": 0.3})
+
+        single = config.map_openai_params({"temperature": 0.0, "n": 1}, {}, "some-model", False)
+        assert single["temperature"] == 0.0
+
+        multiple = config.map_openai_params({"temperature": 0.0, "n": 2}, {}, "some-model", False)
+        assert multiple["temperature"] == 0.3
+
+    def test_no_constraints_leaves_temperature_alone(self):
+        config = self._config({})
+        result = config.map_openai_params({"temperature": 1.9}, {}, "some-model", False)
+        assert result["temperature"] == 1.9
+
+    def test_caller_optional_params_are_not_mutated(self):
+        config = self._config({"temperature_max": 1.0})
+        optional_params = {"temperature": 1.8}
+        result = config.map_openai_params({"max_tokens": 10}, optional_params, "some-model", False)
+
+        assert result["temperature"] == 1.0
+        assert result["max_tokens"] == 10
+        assert optional_params == {"temperature": 1.8}
+
+
 class TestDarkbloom:
     def test_darkbloom_json_config_exists(self):
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry

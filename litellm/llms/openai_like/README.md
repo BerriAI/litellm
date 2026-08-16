@@ -59,7 +59,15 @@ That's it! The provider will be automatically loaded and available.
     
     // Optional: Special handling flags
     "special_handling": {
-      "convert_content_list_to_string": true
+      "convert_content_list_to_string": true,
+
+      // Send "stream": false explicitly instead of omitting it. Needed by
+      // providers whose /v1/chat/completions and /v1/responses default to
+      // streaming, where omitting the field returns SSE to a non-streaming call
+      "send_explicit_stream_false": true,
+
+      // Always send "store": false on /v1/responses
+      "force_store_false": true
     }
   }
 }
