@@ -348,6 +348,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tiers: complexityRouterConfig.tiers,
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
+    tierModelParams: complexityRouterConfig.tier_model_params,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,

@@ -15,6 +15,7 @@ import {
   effectiveTierLabel,
   heuristicScoringRoleFor,
 } from "./ComplexityRouterConfig";
+import { serializeTierConfig, type TierModelParamsByTier } from "./complexity_router_tiers";
 
 /**
  * Drop an empty system_prompt so the payload carries an override only when there is one. The
@@ -75,6 +76,7 @@ export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
   defaultModel: string | undefined;
   planModeMinTier: string | undefined;
+  tierModelParams?: TierModelParamsByTier;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
@@ -102,7 +104,7 @@ export interface BuildComplexityRouterConfigParams {
 }
 
 export interface ComplexityRouterConfigPayload {
-  tiers: ComplexityTiers;
+  tiers: Record<string, unknown>;
   default_model?: string;
   plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
@@ -212,6 +214,7 @@ export const buildComplexityRouterConfig = ({
   tiers,
   defaultModel,
   planModeMinTier,
+  tierModelParams,
   tierLabels,
   classifierType,
   classifierLlmConfig,
@@ -251,7 +254,7 @@ export const buildComplexityRouterConfig = ({
   const scorerKnobs = scorerKnobPayload(scorerInputs);
 
   return {
-    tiers,
+    tiers: serializeTierConfig(tiers, tierModelParams),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),

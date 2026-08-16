@@ -17,6 +17,7 @@ import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+import { TierModelParamsByTier } from "./complexity_router_tiers";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
@@ -26,6 +27,8 @@ export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
 export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
 export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
+
+const REASONING_EFFORT_UNSET = "__model_default__";
 
 export interface ComplexityTiers {
   SIMPLE: string[];
@@ -116,6 +119,7 @@ export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>
 
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
+  tier_model_params?: TierModelParamsByTier;
   tier_labels?: ComplexityTierLabels;
   /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
   default_model?: string;
@@ -238,9 +242,41 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     }));
 
   const handleTierChange = (tier: keyof ComplexityTiers, models: string[]) => {
+    const selectedModels = new Set(models);
+    const existingParams = value.tier_model_params?.[tier];
+    const tierModelParams = existingParams
+      ? Object.fromEntries(Object.entries(existingParams).filter(([model]) => selectedModels.has(model)))
+      : undefined;
     onChange({
       ...value,
       tiers: { ...value.tiers, [tier]: models },
+      tier_model_params:
+        tierModelParams && Object.keys(tierModelParams).length > 0
+          ? { ...value.tier_model_params, [tier]: tierModelParams }
+          : Object.fromEntries(Object.entries(value.tier_model_params ?? {}).filter(([key]) => key !== tier)),
+    });
+  };
+
+  const handleReasoningEffortChange = (
+    tier: keyof ComplexityTiers,
+    model: string,
+    reasoningEffort: string | undefined,
+  ) => {
+    const tierModelParams = { ...(value.tier_model_params?.[tier] ?? {}) };
+    const existingParams = tierModelParams[model] ?? {};
+    const updatedParams = reasoningEffort
+      ? { ...existingParams, reasoning_effort: reasoningEffort }
+      : Object.fromEntries(Object.entries(existingParams).filter(([key]) => key !== "reasoning_effort"));
+    const updatedTierModelParams =
+      updatedParams && Object.keys(updatedParams).length > 0
+        ? { ...tierModelParams, [model]: updatedParams }
+        : Object.fromEntries(Object.entries(tierModelParams).filter(([key]) => key !== model));
+    onChange({
+      ...value,
+      tier_model_params:
+        Object.keys(updatedTierModelParams).length > 0
+          ? { ...value.tier_model_params, [tier]: updatedTierModelParams }
+          : Object.fromEntries(Object.entries(value.tier_model_params ?? {}).filter(([key]) => key !== tier)),
     });
   };
 
@@ -325,6 +361,46 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     emptyText="No models found"
                     className={tierMissing ? "w-full border-destructive" : "w-full"}
                   />
+                  {value.tiers[tier].map((model) => {
+                    const modelDetails = modelInfo.find((candidate) => candidate.model_group === model);
+                    if (!modelDetails?.supports_reasoning) return null;
+                    const currentEffort = value.tier_model_params?.[tier]?.[model]?.reasoning_effort;
+                    const effortOptions = [
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      ...(modelDetails.supports_xhigh_reasoning_effort ? ["xhigh"] : []),
+                    ];
+                    return (
+                      <div key={`${tier}-${model}`} className="mt-2">
+                        <span className="block mb-1 text-xs text-muted-foreground">Reasoning effort for {model}</span>
+                        <Select
+                          items={effortOptions.map((effort) => ({ value: effort, label: effort }))}
+                          value={typeof currentEffort === "string" ? currentEffort : REASONING_EFFORT_UNSET}
+                          onValueChange={(effort: string | null) =>
+                            handleReasoningEffortChange(
+                              tier,
+                              model,
+                              !effort || effort === REASONING_EFFORT_UNSET ? undefined : effort,
+                            )
+                          }
+                        >
+                          <SelectTrigger aria-label={`Reasoning effort for ${model}`} className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={REASONING_EFFORT_UNSET}>Model default</SelectItem>
+                            {effortOptions.map((effort) => (
+                              <SelectItem key={effort} value={effort}>
+                                {effort}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    );
+                  })}
                   {value.tiers[tier].length > 1 && (
                     <span className="text-xs text-muted-foreground">
                       Multiple models selected — the router randomly picks among them per request (or Thompson-samples

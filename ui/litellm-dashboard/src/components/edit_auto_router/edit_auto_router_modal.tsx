@@ -14,7 +14,12 @@ import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceC
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import { normalizeTierModels, resolveComplexityDefaultModel } from "../add_model/complexity_router_tiers";
+import {
+  extractTierModelParams,
+  normalizeTierModels,
+  resolveComplexityDefaultModel,
+  serializeTierConfig,
+} from "../add_model/complexity_router_tiers";
 import { isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   getKeywordTierRulesError,
@@ -151,7 +156,7 @@ export const buildUpdatedComplexityRouterConfig = (
 
   return {
     ...preservedConfig,
-    tiers: value.tiers,
+    tiers: serializeTierConfig(value.tiers, value.tier_model_params),
     ...(value.default_model?.trim() && { default_model: value.default_model }),
     ...(value.plan_mode_min_tier?.trim() && { plan_mode_min_tier: value.plan_mode_min_tier }),
     ...(serializedTierLabels && { tier_labels: serializedTierLabels }),
@@ -342,6 +347,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
         const hydratedComplexityRouterConfig: ComplexityRouterConfigValue = {
           tiers: hydratedTiers,
+          tier_model_params: Object.fromEntries(
+            ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"].map((tier) => [
+              tier,
+              extractTierModelParams(parsedConfig.tiers?.[tier]),
+            ]),
+          ),
           default_model: hydratePinnedDefaultModel(
             parsedConfig.default_model,
             modelData.litellm_params?.complexity_router_default_model,

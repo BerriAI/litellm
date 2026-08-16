@@ -60,6 +60,48 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText(/Think step by step/)).toBeInTheDocument();
   });
 
+  it("shows reasoning controls only for capable models and gates xhigh", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        modelInfo={[
+          {
+            model_group: "reasoning-model",
+            mode: "chat",
+            supports_reasoning: true,
+            supports_xhigh_reasoning_effort: true,
+          },
+          {
+            model_group: "reasoning-basic",
+            mode: "chat",
+            supports_reasoning: true,
+            supports_xhigh_reasoning_effort: false,
+          },
+          { model_group: "chat-model", mode: "chat", supports_reasoning: false },
+        ]}
+        value={{
+          ...defaultValue,
+          tiers: {
+            ...defaultValue.tiers,
+            REASONING: ["reasoning-model", "reasoning-basic", "chat-model"],
+          },
+        }}
+      />,
+    );
+
+    const xhighControl = screen.getByRole("combobox", { name: "Reasoning effort for reasoning-model" });
+    const basicControl = screen.getByRole("combobox", { name: "Reasoning effort for reasoning-basic" });
+    expect(xhighControl).toBeInTheDocument();
+    expect(basicControl).toBeInTheDocument();
+    expect(screen.queryByLabelText("Reasoning effort for chat-model")).not.toBeInTheDocument();
+    await user.click(xhighControl);
+    expect(screen.getByText("xhigh")).toBeInTheDocument();
+    await user.click(screen.getByText("xhigh"));
+    await user.click(basicControl);
+    expect(screen.queryByRole("option", { name: "xhigh" })).not.toBeInTheDocument();
+  });
+
   it("should display the how classification works section", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
