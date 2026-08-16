@@ -96,8 +96,8 @@ class SecretRedactionFilter(logging.Filter):
         if isinstance(color_message, str) and original_args:
             try:
                 record.color_message = color_message % original_args
-            except Exception:
-                pass
+            except TypeError:
+                record.color_message = color_message
 
         try:
             record.msg = _redact_string(record.getMessage())
