@@ -1138,7 +1138,11 @@ async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
     # DISPATCH - router fired, direct litellm did not.
     assert retrieve_harness.router_aretrieve.call_count == 1
     retrieve_harness.litellm_aretrieve.assert_not_called()
-    retrieve_harness.creds_resolver.assert_not_called()
+
+    # Credentials are resolved for the deployment behind the unified id so the batch's
+    # output file can be read for cost accounting. This id resolves to nothing here, and
+    # the retrieve must still serve the batch rather than fail on the lookup.
+    retrieve_harness.creds_resolver.assert_called_once_with(model_id="gpt-4o-mini")
 
     # router receives the (still-encoded) batch id verbatim - this layer does
     # not decode it for the unified path.
@@ -2406,3 +2410,34 @@ async def test_cancel__unified_batch_id_allowed_when_managed_files_required(canc
         await call_cancel(cancel_harness, _unified_batch_id())
 
     assert cancel_harness.router_acancel.call_count == 1
+
+
+
+
+@pytest.mark.asyncio
+async def test_retrieve__managed_batch_defers_cost_to_the_poller_when_it_is_running(retrieve_harness):
+    with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
+        await call_retrieve(retrieve_harness, _unified_batch_id())
+
+    assert retrieve_harness.router.aretrieve_batch.await_count == 1
+    metadata = retrieve_harness.router.aretrieve_batch.await_args.kwargs.get("litellm_metadata") or {}
+    assert metadata.get("batch_ignore_default_logging") is True
+
+
+@pytest.mark.asyncio
+async def test_retrieve__managed_batch_still_accounts_inline_without_a_poller(retrieve_harness):
+    with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=False)):
+        await call_retrieve(retrieve_harness, _unified_batch_id())
+
+    assert retrieve_harness.router.aretrieve_batch.await_count == 1
+    metadata = retrieve_harness.router.aretrieve_batch.await_args.kwargs.get("litellm_metadata") or {}
+    assert metadata.get("batch_ignore_default_logging") is None
+
+
+@pytest.mark.asyncio
+async def test_retrieve__raw_batch_id_is_untouched_by_the_poller_handoff(retrieve_harness):
+    with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
+        await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    metadata = retrieve_harness.litellm_aretrieve.await_args.kwargs.get("litellm_metadata") or {}
+    assert metadata.get("batch_ignore_default_logging") is None

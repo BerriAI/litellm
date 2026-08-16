@@ -409,6 +409,12 @@ class RateLimitStatus(TypedDict):
     limit_remaining: int
     rate_limit_type: Literal["requests", "tokens", "max_parallel_requests"]
     descriptor_key: str
+    # Only populated by the atomic_check_and_increment_by_n path. A caller
+    # matching a status back to its descriptor must key on (descriptor_key,
+    # descriptor_value) when this is present, not descriptor_key alone --
+    # e.g. a batch charging several models' project ITPM/OTPM in one call
+    # produces multiple statuses sharing the same descriptor_key.
+    descriptor_value: NotRequired[ReadOnly[str]]
 
 
 class RateLimitResponse(TypedDict):
@@ -441,6 +447,7 @@ class WindowKeyMetadata(TypedDict):
 
 class AtomicCounterMeta(TypedDict):
     descriptor_key: str
+    descriptor_value: ReadOnly[str]
     current_limit: int
     rate_limit_type: Literal["requests", "tokens"]
     window_key: str
@@ -1732,6 +1739,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             meta.append(
                 {
                     "descriptor_key": descriptor_key,
+                    "descriptor_value": descriptor_value,
                     "current_limit": int(limit_value),
                     "rate_limit_type": rlt,
                     "window_key": window_key,
@@ -1865,6 +1873,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         limit_remaining=max(0, limit - current_counter),
                         rate_limit_type=meta["rate_limit_type"],
                         descriptor_key=meta["descriptor_key"],
+                        descriptor_value=meta["descriptor_value"],
                     )
                 ],
             )
@@ -1879,6 +1888,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     limit_remaining=max(0, meta["current_limit"] - int(new_counter)),
                     rate_limit_type=meta["rate_limit_type"],
                     descriptor_key=meta["descriptor_key"],
+                    descriptor_value=meta["descriptor_value"],
                 )
             )
         return RateLimitResponse(
@@ -1945,6 +1955,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             limit_remaining=max(0, meta["current_limit"] - current_counter),
                             rate_limit_type=meta["rate_limit_type"],
                             descriptor_key=meta["descriptor_key"],
+                            descriptor_value=meta["descriptor_value"],
                         )
                     ],
                 )
@@ -1982,6 +1993,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     limit_remaining=max(0, meta["current_limit"] - new_counter),
                     rate_limit_type=meta["rate_limit_type"],
                     descriptor_key=meta["descriptor_key"],
+                    descriptor_value=meta["descriptor_value"],
                 )
             )
         return RateLimitResponse(

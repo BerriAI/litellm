@@ -1719,6 +1719,7 @@ async def test_atomic_lua_response_carries_redis_window_identity(rate_limiter):
     meta = [
         {
             "descriptor_key": PROJECT_ITPM_DESCRIPTOR_KEY,
+            "descriptor_value": "project:model",
             "current_limit": 100,
             "rate_limit_type": "tokens",
             "counter_key": counter_key,

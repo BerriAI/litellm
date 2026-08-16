@@ -568,7 +568,10 @@ class LangFuseLogger:
             # This allows continuing an existing trace while still returning the correct trace_id
             if existing_trace_id is not None:
                 trace_id = existing_trace_id
-            update_trace_keys: Final = _as_steering_key_sequence(clean_metadata.pop("update_trace_keys", ()))
+            requested_trace_keys: Final = _as_steering_key_sequence(clean_metadata.pop("update_trace_keys", ()))
+            update_trace_keys: Final = (
+                requested_trace_keys if _as_steering_flag(litellm.langfuse_enable_update_trace_keys) else ()
+            )
             debug: Final = clean_metadata.pop("debug_langfuse", None)
             mask_input: Final = _as_steering_flag(clean_metadata.pop("mask_input", False))
             mask_output: Final = _as_steering_flag(clean_metadata.pop("mask_output", False))

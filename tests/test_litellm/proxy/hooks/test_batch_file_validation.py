@@ -1498,6 +1498,200 @@ async def test_pre_call_enforces_project_itpm_limit_for_batch():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_enforces_project_otpm_limit_for_non_routing_row_model():
+    """VERIA regression: project ITPM/OTPM descriptors were built only for the
+    file-bound/top-level routing model, so a caller could bind the batch file
+    to an unlimited model while a JSONL row's own `body.model` named a
+    different, quota-limited model. That row's tokens must still be charged
+    against its own model's project OTPM quota."""
+    from litellm import DualCache
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    parallel_request_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        parallel_request_limiter=parallel_request_limiter,
+    )
+
+    # The routing model ("unlimited-model") has no configured quota; only
+    # "quota-limited-model" -- named inside the JSONL row, not the routing
+    # model -- has a project OTPM limit.
+    user = UserAPIKeyAuth(
+        api_key="sk-project-batch-cross-model",
+        models=["*"],
+        project_id="proj-mantle-batch",
+        project_metadata={"model_otpm_limit": {"quota-limited-model": 50}},
+    )
+
+    mock_content = MagicMock()
+    mock_content.content = (
+        b'{"body": {"model": "quota-limited-model", "max_tokens": 80, '
+        b'"messages": [{"role": "user", "content": "hi"}]}}\n'
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={"custom_llm_provider": "openai"},
+        ),
+        patch("litellm.afile_content", new=AsyncMock(return_value=mock_content)),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "unlimited-model"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_project_otpm" in str(exc.value.detail)
+    assert "quota-limited-model" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_charges_each_row_model_against_its_own_project_quota():
+    """A batch whose rows target two different project-quota-limited models
+    must charge each row's tokens only against its own model's quota, never
+    the other model's or the whole batch's combined total. The under-limit
+    model's request must succeed even though the over-limit model's row
+    would fail on its own."""
+    from litellm import DualCache
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        PROJECT_OTPM_DESCRIPTOR_KEY,
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    parallel_request_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        parallel_request_limiter=parallel_request_limiter,
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-project-batch-two-models",
+        models=["*"],
+        project_id="proj-mantle-batch",
+        project_metadata={
+            "model_otpm_limit": {"model-a": 1000, "model-b": 10},
+        },
+    )
+
+    # model-a stays comfortably under its 1000 OTPM limit; model-b's single
+    # row alone exceeds its 10 OTPM limit. If the two were combined into one
+    # counter (the pre-fix behavior for the routing model), model-a's ample
+    # headroom would mask model-b's overage.
+    mock_content = MagicMock()
+    mock_content.content = (
+        b'{"body": {"model": "model-a", "max_tokens": 5, '
+        b'"messages": [{"role": "user", "content": "hi"}]}}\n'
+        b'{"body": {"model": "model-b", "max_tokens": 40, '
+        b'"messages": [{"role": "user", "content": "hi"}]}}\n'
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={"custom_llm_provider": "openai"},
+        ),
+        patch("litellm.afile_content", new=AsyncMock(return_value=mock_content)),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "model-a"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model-b" in str(exc.value.detail)
+
+    # model-a's own counter was not touched by model-b's rejection: a
+    # follow-up model-a-only batch well within its own limit must still pass.
+    model_a_status = await parallel_request_limiter.should_rate_limit(
+        descriptors=[
+            {
+                "key": PROJECT_OTPM_DESCRIPTOR_KEY,
+                "value": "proj-mantle-batch:model-a",
+                "rate_limit": {
+                    "requests_per_unit": None,
+                    "tokens_per_unit": 1000,
+                    "window_size": parallel_request_limiter.window_size,
+                },
+            }
+        ],
+        read_only=True,
+    )
+    assert model_a_status["overall_code"] == "OK"
+
+
+def test_should_not_skip_when_project_has_io_limit_for_non_routing_model():
+    """The no-limits skip must not fire just because the file-bound/top-level
+    routing model itself has no configured quota: a JSONL row can name a
+    different model that the project *does* quota, and that isn't knowable
+    without downloading and parsing the file."""
+    rate_limiter = _make_rate_limiter()
+    # No key/team/model-level limits at all -- only a project OTPM limit for a
+    # model unrelated to the routing model below.
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {}}
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk",
+        models=["*"],
+        project_id="proj-mantle-batch",
+        project_metadata={"model_otpm_limit": {"some-other-model": 50}},
+    )
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+            data={"model": "unlimited-model", "input_file_id": "file-abc"},
+            user_api_key_dict=user,
+        )
+    assert should_skip is False
+    assert descriptors is not None
+
+
+def test_should_skip_when_project_has_no_io_limits_and_no_other_limits():
+    """Sanity check for the new project-limits carve-out: a project caller
+    with no ITPM/OTPM configuration anywhere must still get the fast-path
+    skip when no other rate limits apply, exactly as before this fix."""
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {}}
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk",
+        models=["*"],
+        project_id="proj-mantle-batch",
+        project_metadata={},
+    )
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+            data={"model": "unlimited-model", "input_file_id": "file-abc"},
+            user_api_key_dict=user,
+        )
+    assert should_skip is True
+    assert descriptors is None
+
+
+@pytest.mark.asyncio
 async def test_count_input_file_usage_raises_on_non_bytes_content():
     from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
 
