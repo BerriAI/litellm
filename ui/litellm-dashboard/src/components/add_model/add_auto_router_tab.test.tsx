@@ -353,7 +353,7 @@ describe("AddAutoRouterTab", () => {
       (option) => option.querySelector(".font-medium")?.textContent,
     );
 
-    expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
+    expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
   });
 
   describe("routing test", () => {
@@ -673,7 +673,7 @@ describe("AddAutoRouterTab", () => {
       const labels = Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).map(
         (option) => option.querySelector(".font-medium")?.textContent,
       );
-      expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
+      expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
     });
 
     it.each([
