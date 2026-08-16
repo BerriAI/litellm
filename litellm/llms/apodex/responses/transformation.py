@@ -8,7 +8,8 @@ provider-wide:
 - core models are a stateless subset: `store` is forced to false, and
   `previous_response_id` or `background` come back as HTTP 400
 - the Deep Research tiers keep server-side state, so they take all three
-- both default `stream` to true, so a non-streaming call has to say so
+- the Deep Research tiers default `stream` to true, so a non-streaming call has
+  to say so; pinning it for the core models too keeps one code path
 
 Ref: https://platform.apodex.ai/docs/responses-api
      https://platform.apodex.ai/docs/models
@@ -21,14 +22,13 @@ from time import time
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
-    ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 # to resume and requests are always executed inline.
 _STATEFUL_PARAMS: Final = ("previous_response_id", "background")
 _CANCEL_RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
+_BODY_FRAMING_HEADERS: Final = frozenset({"content-encoding", "content-length"})
 
 
 class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
@@ -80,10 +81,22 @@ class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIResponse:
-        payload: Final = _CANCEL_RESPONSE_ADAPTER.validate_json(raw_response.content)
+        """Backfill the fields Apodex omits from a cancel payload but ResponsesAPIResponse requires."""
+        try:
+            payload: Final = _CANCEL_RESPONSE_ADAPTER.validate_json(raw_response.content)
+        except ValidationError:
+            return super().transform_cancel_response_api_response(
+                raw_response=raw_response,
+                logging_obj=logging_obj,
+            )
+
         normalized_response: Final = httpx.Response(
             status_code=raw_response.status_code,
-            headers=raw_response.headers,
+            # Content-Encoding and Content-Length describe the body being replaced here;
+            # carrying them over makes httpx try to decompress plain JSON on read.
+            headers={
+                name: value for name, value in raw_response.headers.items() if name.lower() not in _BODY_FRAMING_HEADERS
+            },
             json={
                 **payload,
                 "created_at": payload.get("created_at", int(time())),
@@ -92,40 +105,6 @@ class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
         )
         return super().transform_cancel_response_api_response(
             raw_response=normalized_response,
-            logging_obj=logging_obj,
-        )
-
-    def transform_streaming_response(
-        self,
-        model: str,
-        parsed_chunk: dict,  # mutable-ok: matches the base-class signature
-        logging_obj: LiteLLMLoggingObj,
-    ) -> ResponsesAPIStreamingResponse:
-        swarm: Final = parsed_chunk.get("swarm")
-        swarm_data: Final = swarm.get("data") if isinstance(swarm, dict) else None
-        if (
-            parsed_chunk.get("type") != "response.swarm.llm_delta"
-            or not isinstance(swarm_data, dict)
-            or swarm_data.get("channel") != "output_text"
-            or not isinstance(swarm_data.get("delta"), str)
-        ):
-            return super().transform_streaming_response(
-                model=model,
-                parsed_chunk=parsed_chunk,
-                logging_obj=logging_obj,
-            )
-
-        response_id: Final = str(parsed_chunk.get("response_id", ""))
-        return super().transform_streaming_response(
-            model=model,
-            parsed_chunk={
-                "type": "response.output_text.delta",
-                "item_id": f"msg_{response_id}",
-                "output_index": 0,
-                "content_index": 0,
-                "delta": swarm_data["delta"],
-                "sequence_number": parsed_chunk.get("sequence_number", 0),
-            },
             logging_obj=logging_obj,
         )
 

@@ -351,7 +351,6 @@ def get_llm_provider(
                         dynamic_api_key = get_secret_str("META_API_KEY")
                     elif endpoint == litellm.ApodexChatConfig.API_BASE_URL:
                         custom_llm_provider = "apodex"  # rebind-ok: dispatch chain resolves in place
-                        # rebind-ok: dispatch chain resolves in place
                         dynamic_api_key = litellm.ApodexChatConfig.get_api_key()
 
                     if api_base is not None and not isinstance(api_base, str):

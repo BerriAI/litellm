@@ -99,6 +99,9 @@ class TestModelMetadata:
         assert info["litellm_provider"] == "apodex"
         assert info["mode"] == "chat"
         assert info["max_input_tokens"] == 262144
+        # GET /v1/models reports max_completion_tokens 65536, well under the context window
+        assert info["max_output_tokens"] == 65536
+        assert info["max_tokens"] == info["max_output_tokens"]
         assert info["input_cost_per_token"] == 3e-07
         assert info["cache_read_input_token_cost"] == 3e-08
         assert info["output_cost_per_token"] == 3e-06
@@ -125,6 +128,17 @@ class TestModelMetadata:
     def test_deep_research_models_are_not_on_the_native_messages_path(self, model_cost: dict, model: str):
         """Apodex serves /v1/messages for the core models only."""
         assert "/v1/messages" not in model_cost[f"apodex/{model}"]["supported_endpoints"]
+
+    def test_discover_is_responses_only(self, model_cost: dict):
+        """The Discover tiers answer 400 unsupported_api on /v1/chat/completions."""
+        assert model_cost["apodex/apodex-1-1-deep-discover"]["supported_endpoints"] == ["/v1/responses"]
+
+    @pytest.mark.parametrize("model", ("apodex-1-1-deep-research", "apodex-1-1-deep-solve"))
+    def test_the_other_deep_tiers_keep_chat_completions(self, model_cost: dict, model: str):
+        assert model_cost[f"apodex/{model}"]["supported_endpoints"] == [
+            "/v1/chat/completions",
+            "/v1/responses",
+        ]
 
     def test_backup_cost_map_in_sync(self, model_cost: dict):
         with open(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json") as f:

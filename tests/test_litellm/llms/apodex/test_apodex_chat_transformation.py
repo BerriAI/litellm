@@ -99,10 +99,11 @@ class TestProviderResolution:
 
 
 class TestStreamDefault:
-    """Apodex defaults `stream` to true, so a non-streaming call has to pin it to false.
+    """The Deep Research tiers default `stream` to true, so a non-streaming call must pin it false.
 
-    Regression guard: the OpenAI SDK drops `stream` from the body when it is false,
-    which would leave Apodex streaming SSE at a call that cannot parse it.
+    Regression guard: the OpenAI chat handler pops `stream` out of the params it
+    forwards, which would leave those tiers streaming SSE at a call that cannot
+    parse it. The core models default to false but are pinned the same way.
     """
 
     def test_non_streaming_call_pins_stream_false(self):

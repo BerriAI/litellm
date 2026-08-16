@@ -6,6 +6,8 @@ Research tiers keep server-side state, so the parameter contract is keyed off
 the model rather than applied provider-wide.
 """
 
+import gzip
+
 import httpx
 import pytest
 
@@ -113,9 +115,7 @@ class TestStreamDefault:
                 raise RuntimeError("captured")
 
         with pytest.raises(Exception, match="captured"):
-            await litellm.aresponses(
-                model=DEEP_RESEARCH_MODEL, input="hi", stream=True, client=CapturingHandler()
-            )
+            await litellm.aresponses(model=DEEP_RESEARCH_MODEL, input="hi", stream=True, client=CapturingHandler())
 
         assert captured["body"]["stream"] is True
 
@@ -203,21 +203,39 @@ class TestDeepResearchKeepsState:
         assert response.output == []
         assert response.created_at > 0
 
-    def test_deep_research_output_delta_is_normalized(self):
-        config = _responses_config("apodex-1-1-deep-research")
-        event = config.transform_streaming_response(
-            model="apodex-1-1-deep-research",
-            parsed_chunk={
-                "type": "response.swarm.llm_delta",
-                "response_id": "w_123",
-                "sequence_number": 12,
-                "swarm": {
-                    "agent_id": "reporter",
-                    "data": {"channel": "output_text", "delta": "final answer"},
-                },
+    def test_cancel_response_survives_a_compressed_upstream_response(self):
+        """The body is rebuilt, so the original framing headers must not follow it.
+
+        httpx decodes on read, so carrying Content-Encoding over from the compressed
+        upstream response makes it try to gunzip the plain JSON replacement.
+        """
+        body = b'{"id": "resp_1", "object": "response", "status": "cancelled"}'
+        # As it arrives off the wire: httpx decodes the body but leaves the header in place
+        upstream = httpx.Response(
+            200,
+            headers={
+                "content-encoding": "gzip",
+                "x-ratelimit-remaining-requests": "42",
             },
+            content=gzip.compress(body),
+        )
+        assert upstream.content == body
+
+        config = _responses_config("apodex-1-1-deep-research")
+        response = config.transform_cancel_response_api_response(
+            raw_response=upstream,
             logging_obj=None,
         )
-        assert event.type == "response.output_text.delta"
-        assert event.item_id == "msg_w_123"
-        assert event.delta == "final answer"
+
+        assert response.id == "resp_1"
+        assert response.status == "cancelled"
+        assert response._hidden_params["headers"]["x-ratelimit-remaining-requests"] == "42"
+
+    def test_non_json_cancel_body_raises_the_provider_error(self):
+        """The gateway answers a timed-out cancel with an HTML 504, not the JSON envelope."""
+        config = _responses_config("apodex-1-1-deep-research")
+        with pytest.raises(Exception, match="gateway timeout"):
+            config.transform_cancel_response_api_response(
+                raw_response=httpx.Response(504, content=b"<html>gateway timeout</html>"),
+                logging_obj=None,
+            )

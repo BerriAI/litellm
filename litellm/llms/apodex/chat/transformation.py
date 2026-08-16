@@ -1,12 +1,14 @@
 """
 Apodex chat completions — OpenAI-compatible, with two provider quirks:
 
-- `stream` defaults to true upstream, so a non-streaming call has to say so
-  explicitly or Apodex answers with SSE that a plain call cannot parse
+- the Deep Research tiers default `stream` to true, so a non-streaming call has
+  to say so explicitly or Apodex answers with SSE that a plain call cannot
+  parse. The core models follow OpenAI and default it to false
 - the Deep Research tiers ignore sampling parameters and reject OpenAI-style
   tools; only the core models take them
 
 Ref: https://platform.apodex.ai/docs/chat-completions
+     https://platform.apodex.ai/docs/models
 """
 
 from collections.abc import Mapping
@@ -104,9 +106,10 @@ class ApodexChatConfig(OpenAIGPTConfig):
         if renamed.get("stream"):
             return renamed
 
-        # The OpenAI SDK drops `stream` from the body when it is false, which would
-        # leave Apodex on its streaming default. extra_body is merged into the
-        # request body by the SDK, so it survives that drop.
+        # The OpenAI chat handler pops `stream` out of the params it forwards
+        # (litellm/llms/openai/openai.py), which would leave the Deep Research tiers
+        # on their streaming default. extra_body is merged into the request body
+        # further down, so it survives that pop.
         requested_extra_body: Final = renamed.get("extra_body")
         extra_body: Final = (
             requested_extra_body if isinstance(requested_extra_body, Mapping) else {}  # mutable-ok: JSON request body

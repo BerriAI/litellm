@@ -529,7 +529,8 @@ def anthropic_messages_handler(
 
         anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig()
     if anthropic_messages_provider_config is None:
-        # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
+        # Route to a Responses API for the providers that serve one, chat/completions
+        # for everything else.
         _shared_kwargs: Final = dict(
             max_tokens=max_tokens,
             messages=messages,
