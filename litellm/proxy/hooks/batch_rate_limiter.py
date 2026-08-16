@@ -395,18 +395,40 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         Batch completion never reconciles actual usage back into the rate
         limiter, so this pre-call estimate is the only OTPM enforcement a
         batch gets. Mirrors the real-time no-``max_tokens`` floor so a row
-        that omits ``max_tokens`` can't be used to bypass OTPM the way an
+        that omits an output cap can't be used to bypass OTPM the way an
         unbounded streaming request could.
+
+        Embeddings rows are identified by the row's own ``url`` (the OpenAI
+        batch schema puts the target route there, e.g. ``/v1/embeddings``),
+        never by body shape: a `/v1/responses` row also carries `body.input`
+        with no `messages`/`prompt`, so guessing from body shape alone would
+        misclassify a token-generating Responses row as a zero-output
+        embeddings row and let it skip the OTPM reservation entirely.
         """
+        url: Final = entry.get("url")
+        if isinstance(url, str) and "embeddings" in url:
+            return 0  # embeddings: no output tokens
         raw_body: Final = entry.get("body")
         body: Final[Mapping[str, object]] = (
             MappingProxyType(_BATCH_BODY_ADAPTER.validate_python(raw_body))
             if isinstance(raw_body, Mapping)
             else MappingProxyType({})  # mutable-ok: immediately frozen empty fallback
         )
-        if body.get("input") is not None and body.get("messages") is None and body.get("prompt") is None:
-            return 0  # embeddings: no output tokens
-        explicit_cap: Final = body.get("max_tokens", body.get("max_completion_tokens"))
+        # `max_tokens`/`max_completion_tokens` cap chat completions; `/v1/responses`
+        # rows cap output with `max_output_tokens` instead -- omitting it here
+        # would fall through to the floor estimate for every capped Responses row.
+        explicit_cap: Final = next(
+            (
+                v
+                for v in (
+                    body.get("max_tokens"),
+                    body.get("max_completion_tokens"),
+                    body.get("max_output_tokens"),
+                )
+                if v is not None
+            ),
+            None,
+        )
         if explicit_cap is not None:
             try:
                 return max(0, int(explicit_cap))

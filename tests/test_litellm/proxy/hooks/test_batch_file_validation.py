@@ -1980,3 +1980,83 @@ async def test_count_input_file_usage_collects_models_after_malformed_line():
             )
 
     assert exc.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# VERIA-Low regression: Responses batch rows must not bypass project OTPM
+# ---------------------------------------------------------------------------
+
+
+def _output_estimator():
+    """A `_PROXY_BatchRateLimiter` whose output-token floor is observable:
+    the no-`max_tokens` floor mock returns a distinctive sentinel so tests can
+    tell "floor was used" apart from "an explicit cap was read"."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    limiter = MagicMock()
+    limiter.no_max_tokens_output_floor.return_value = 999
+    return _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=limiter,
+    )
+
+
+def test_estimate_entry_output_tokens_zero_for_embeddings_url():
+    """A real `/v1/embeddings` row reserves zero output tokens."""
+    rate_limiter = _output_estimator()
+    entry = {
+        "url": "/v1/embeddings",
+        "body": {"model": "text-embedding-3-small", "input": "hello world"},
+    }
+
+    assert rate_limiter._estimate_entry_output_tokens(entry, None) == 0
+
+
+def test_estimate_entry_output_tokens_does_not_zero_responses_row_with_input():
+    """Pre-fix: a `/v1/responses` row carries `body.input` with no `messages`/
+    `prompt`, so the old body-shape heuristic misclassified it as embeddings
+    and reserved zero output tokens -- a project caller could submit large
+    Responses generations against a quota-limited model without consuming
+    OTPM. The row's own `url` (not body shape) must decide this."""
+    rate_limiter = _output_estimator()
+    entry = {
+        "url": "/v1/responses",
+        "body": {"model": "gpt-4o", "input": "write me an essay"},
+    }
+
+    # No explicit cap on the row, so it must fall back to the no-max-tokens
+    # floor -- never straight to zero.
+    assert rate_limiter._estimate_entry_output_tokens(entry, None) == 999
+    rate_limiter.parallel_request_limiter.no_max_tokens_output_floor.assert_called_once_with(None)
+
+
+def test_estimate_entry_output_tokens_uses_max_output_tokens_for_responses():
+    """`/v1/responses` caps output with `max_output_tokens`, not `max_tokens`/
+    `max_completion_tokens`. Pre-fix this field was never inspected, so a
+    capped Responses row still fell through to the (possibly larger) floor
+    estimate instead of the caller's own declared cap."""
+    rate_limiter = _output_estimator()
+    entry = {
+        "url": "/v1/responses",
+        "body": {"model": "gpt-4o", "input": "hi", "max_output_tokens": 123},
+    }
+
+    assert rate_limiter._estimate_entry_output_tokens(entry, None) == 123
+    rate_limiter.parallel_request_limiter.no_max_tokens_output_floor.assert_not_called()
+
+
+def test_estimate_entry_output_tokens_prefers_max_tokens_over_max_output_tokens():
+    """When a row somehow carries both fields, the chat-style cap wins first --
+    `max_output_tokens` is only consulted once the chat-style caps are absent."""
+    rate_limiter = _output_estimator()
+    entry = {
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gpt-4o",
+            "messages": [],
+            "max_tokens": 50,
+            "max_output_tokens": 500,
+        },
+    }
+
+    assert rate_limiter._estimate_entry_output_tokens(entry, None) == 50
