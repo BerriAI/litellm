@@ -252,7 +252,15 @@ class ChunkProcessor:
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
 
         first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), chunk)
-        role: Final = first_chunk_with_choices["choices"][0]["delta"]["role"]
+        if (
+            first_chunk_with_choices.get("choices")
+            and len(first_chunk_with_choices["choices"]) > 0
+            and first_chunk_with_choices["choices"][0].get("delta")
+            and "role" in first_chunk_with_choices["choices"][0]["delta"]
+        ):
+            role: Final = first_chunk_with_choices["choices"][0]["delta"]["role"]
+        else:
+            role = "assistant"
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
