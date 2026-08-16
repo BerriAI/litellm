@@ -10893,7 +10893,7 @@ async def elevenlabs_tts_stream_input_endpoint(
     similarity_boost: float | None = fastapi.Query(None, description="Voice similarity boost (0-1)."),
     style: float | None = fastapi.Query(None, description="Voice style (0-1, v2+ models only)."),
     speed: float | None = fastapi.Query(None, description="Speaking speed (0.7-1.2)."),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),  # noqa: B008  # FastAPI Depends() is required in WebSocket endpoint signatures
 ):
     """
     ElevenLabs WebSocket streaming-input TTS endpoint.
@@ -10905,7 +10905,7 @@ async def elevenlabs_tts_stream_input_endpoint(
     Query parameters map directly to ElevenLabs voice/model options; no
     per-message auth is needed because the proxy injects xi-api-key upstream.
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
     from uuid import uuid4
 
     import httpx
@@ -10949,9 +10949,9 @@ async def elevenlabs_tts_stream_input_endpoint(
         }.items()
         if v is not None
     }
-    voice_settings: Final[VoiceSettings | None] = cast(VoiceSettings, raw_voice_settings) if raw_voice_settings else None
+    voice_settings: Final[VoiceSettings | None] = cast(VoiceSettings, raw_voice_settings) if raw_voice_settings else None  # cast-ok: dict built from typed float query params; structural match is guaranteed
 
-    start_time: Final = datetime.now()
+    start_time: Final = datetime.now(tz=timezone.utc)
     litellm_call_id: Final = str(uuid4())
 
     logging_obj: Final = Logging(
@@ -10973,14 +10973,14 @@ async def elevenlabs_tts_stream_input_endpoint(
             voice_settings=voice_settings,
         )
 
-        end_time: Final = datetime.now()
+        end_time: Final = datetime.now(tz=timezone.utc)
 
         try:
             model_info: Final = litellm.get_model_info(
                 model=litellm_model, custom_llm_provider="elevenlabs"
             )
             cost_per_char: Final = model_info.get("input_cost_per_character") or 0.0
-        except Exception:
+        except Exception:  # noqa: BLE001  # litellm.get_model_info raises multiple undocumented error types
             cost_per_char = 0.0
 
         response_cost: Final = total_chars * cost_per_char
@@ -10998,12 +10998,12 @@ async def elevenlabs_tts_stream_input_endpoint(
             end_time=end_time,
             cache_hit=False,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001  # intentional: catch all session errors to ensure WS cleanup
         verbose_proxy_logger.exception("ElevenLabs TTS stream-input error")
         try:
             await websocket.close(code=1011, reason="Internal server error")
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001  # WS may already be closed; log and discard
+            verbose_proxy_logger.debug("WebSocket already closed during error cleanup")
 
 
 ######################################################################
