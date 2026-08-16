@@ -1934,6 +1934,20 @@ async def openai_proxy_route(
     )
 
 
+_OPENAI_WS_ALL_MODEL_ACCESS: Final = frozenset(
+    {
+        SpecialModelNames.all_proxy_models.value,
+        SpecialModelNames.all_team_models.value,
+        "*",
+    }
+)
+
+
+def _key_has_model_restrictions(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    scoped_models: Final = (*user_api_key_dict.models, *user_api_key_dict.team_models)
+    return any(str(model) not in _OPENAI_WS_ALL_MODEL_ACCESS for model in scoped_models)
+
+
 @router.websocket("/openai_passthrough/{endpoint:path}")
 @router.websocket("/openai/{endpoint:path}")
 async def openai_websocket_proxy_route(
@@ -1942,6 +1956,13 @@ async def openai_websocket_proxy_route(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
 ) -> None:
     """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
+    if _key_has_model_restrictions(user_api_key_dict):
+        await websocket.close(
+            code=1008,
+            reason="Keys with model restrictions cannot use OpenAI websocket passthrough",
+        )
+        return
+
     base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
     openai_api_key: Final = passthrough_endpoint_router.get_credentials(
         custom_llm_provider=litellm.LlmProviders.OPENAI.value,
@@ -1978,7 +1999,7 @@ async def openai_websocket_proxy_route(
         custom_headers=custom_headers,
         user_api_key_dict=user_api_key_dict,
         forward_headers=False,
-        endpoint=f"/openai/{endpoint}",
+        endpoint=websocket.url.path,
         accept_websocket=True,
     )
 
