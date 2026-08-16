@@ -58,9 +58,16 @@ class TestNativePassthroughRouting:
 
     @pytest.mark.parametrize("model", DEEP_RESEARCH_MODELS)
     def test_deep_research_models_fall_back_to_translation(self, model: str):
-        """No native config means LiteLLM translates to chat completions, which works,
-        instead of forwarding to a path Apodex does not serve for these tiers."""
+        """No native config means LiteLLM uses a protocol translation instead of
+        forwarding to a path Apodex does not serve for these tiers."""
         assert _messages_config(model) is None
+
+    def test_deep_research_translation_uses_responses_api(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _should_route_to_responses_api,
+        )
+
+        assert _should_route_to_responses_api("apodex") is True
 
 
 class TestNativePassthroughRequest:

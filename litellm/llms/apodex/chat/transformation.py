@@ -109,9 +109,7 @@ class ApodexChatConfig(OpenAIGPTConfig):
         # request body by the SDK, so it survives that drop.
         requested_extra_body: Final = renamed.get("extra_body")
         extra_body: Final = (
-            requested_extra_body
-            if isinstance(requested_extra_body, Mapping)
-            else {}  # mutable-ok: JSON request body
+            requested_extra_body if isinstance(requested_extra_body, Mapping) else {}  # mutable-ok: JSON request body
         )
         return {  # mutable-ok: JSON request body
             **renamed,

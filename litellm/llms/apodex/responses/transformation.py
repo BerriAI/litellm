@@ -14,20 +14,34 @@ Ref: https://platform.apodex.ai/docs/responses-api
      https://platform.apodex.ai/docs/models
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping
-from typing import Final
+from time import time
+from typing import TYPE_CHECKING, Final
+
+import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import (
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import get_apodex_api_key, is_deep_research_model
+from ..common_utils import get_apodex_api_base, get_apodex_api_key, is_deep_research_model
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # Rejected by the core models with HTTP 400: there is no server-side conversation
 # to resume and requests are always executed inline.
 _STATEFUL_PARAMS: Final = ("previous_response_id", "background")
+_CANCEL_RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
@@ -52,6 +66,68 @@ class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        litellm_params: dict,  # mutable-ok: matches the base-class signature
+    ) -> str:
+        resolved_base: Final = get_apodex_api_base(api_base).rstrip("/")
+        return f"{resolved_base}/responses"
+
+    def transform_cancel_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        payload: Final = _CANCEL_RESPONSE_ADAPTER.validate_json(raw_response.content)
+        normalized_response: Final = httpx.Response(
+            status_code=raw_response.status_code,
+            headers=raw_response.headers,
+            json={
+                **payload,
+                "created_at": payload.get("created_at", int(time())),
+                "output": payload.get("output", []),
+            },
+        )
+        return super().transform_cancel_response_api_response(
+            raw_response=normalized_response,
+            logging_obj=logging_obj,
+        )
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,  # mutable-ok: matches the base-class signature
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        swarm: Final = parsed_chunk.get("swarm")
+        swarm_data: Final = swarm.get("data") if isinstance(swarm, dict) else None
+        if (
+            parsed_chunk.get("type") != "response.swarm.llm_delta"
+            or not isinstance(swarm_data, dict)
+            or swarm_data.get("channel") != "output_text"
+            or not isinstance(swarm_data.get("delta"), str)
+        ):
+            return super().transform_streaming_response(
+                model=model,
+                parsed_chunk=parsed_chunk,
+                logging_obj=logging_obj,
+            )
+
+        response_id: Final = str(parsed_chunk.get("response_id", ""))
+        return super().transform_streaming_response(
+            model=model,
+            parsed_chunk={
+                "type": "response.output_text.delta",
+                "item_id": f"msg_{response_id}",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": swarm_data["delta"],
+                "sequence_number": parsed_chunk.get("sequence_number", 0),
+            },
+            logging_obj=logging_obj,
+        )
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: matches the base-class signature
         inherited: Final = super().get_supported_openai_params(model)

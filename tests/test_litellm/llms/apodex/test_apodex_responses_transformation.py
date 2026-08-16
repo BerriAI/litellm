@@ -6,6 +6,7 @@ Research tiers keep server-side state, so the parameter contract is keyed off
 the model rather than applied provider-wide.
 """
 
+import httpx
 import pytest
 
 import litellm
@@ -79,6 +80,17 @@ class TestConfigSelection:
 
     def test_request_targets_the_apodex_responses_url(self):
         assert _capture(model=CORE_MODEL, input="hi")["url"] == "https://api.apodex.ai/v1/responses"
+
+    def test_polling_without_model_resolution_targets_apodex(self):
+        config = _responses_config("apodex-1-1-deep-research")
+        assert config.get_complete_url(api_base=None, litellm_params={}) == "https://api.apodex.ai/v1/responses"
+
+    def test_polling_honours_an_explicit_api_base(self):
+        config = _responses_config("apodex-1-1-deep-research")
+        assert (
+            config.get_complete_url(api_base="https://gateway.apodex.test/v1/", litellm_params={})
+            == "https://gateway.apodex.test/v1/responses"
+        )
 
     def test_request_honours_an_api_base_override(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("APODEX_API_BASE", "https://env.apodex.test/v1")
@@ -175,3 +187,37 @@ class TestDeepResearchKeepsState:
         )
         assert "background" in supported
         assert "previous_response_id" in supported
+
+    def test_minimal_cancel_response_is_normalized(self):
+        config = _responses_config("apodex-1-1-deep-research")
+        response = config.transform_cancel_response_api_response(
+            raw_response=httpx.Response(
+                200,
+                json={"id": "resp_1", "object": "response", "status": "cancelled"},
+            ),
+            logging_obj=None,
+        )
+
+        assert response.id == "resp_1"
+        assert response.status == "cancelled"
+        assert response.output == []
+        assert response.created_at > 0
+
+    def test_deep_research_output_delta_is_normalized(self):
+        config = _responses_config("apodex-1-1-deep-research")
+        event = config.transform_streaming_response(
+            model="apodex-1-1-deep-research",
+            parsed_chunk={
+                "type": "response.swarm.llm_delta",
+                "response_id": "w_123",
+                "sequence_number": 12,
+                "swarm": {
+                    "agent_id": "reporter",
+                    "data": {"channel": "output_text", "delta": "final answer"},
+                },
+            },
+            logging_obj=None,
+        )
+        assert event.type == "response.output_text.delta"
+        assert event.item_id == "msg_w_123"
+        assert event.delta == "final answer"

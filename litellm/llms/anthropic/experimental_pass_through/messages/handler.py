@@ -37,9 +37,9 @@ from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
 
-# Providers that are routed directly to the OpenAI Responses API instead of
+# Providers that are routed directly to a Responses API instead of
 # going through chat/completions.
-_RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+_RESPONSES_API_PROVIDERS: Final = frozenset({"apodex", "openai"})
 
 
 def _should_route_to_responses_api(custom_llm_provider: str | None) -> bool:
