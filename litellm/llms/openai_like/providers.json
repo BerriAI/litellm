@@ -183,5 +183,13 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "runinfra": {
+    "base_url": "https://api.runinfra.ai/v1",
+    "api_key_env": "RUNINFRA_API_KEY",
+    "api_base_env": "RUNINFRA_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }

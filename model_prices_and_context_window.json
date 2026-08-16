@@ -48000,6 +48000,81 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "runinfra",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://runinfra.ai/inference-api/qwen3-8-2-4t-a95b",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "runinfra/Qwen/Qwen3.8-27B": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "runinfra",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://runinfra.ai/inference-api/qwen3-8-27b",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "runinfra/deepseek-ai/DeepSeek-V4-Flash-0731": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 1.3e-07,
+        "litellm_provider": "runinfra",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.7e-07,
+        "source": "https://runinfra.ai/inference-api/deepseek-v4-flash",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "runinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "runinfra",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-07,
+        "source": "https://runinfra.ai/inference-api/nemotron-3-5-lightning-30b",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "xai/grok-4.20-0309-non-reasoning": {
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
