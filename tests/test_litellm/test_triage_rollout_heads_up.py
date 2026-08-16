@@ -175,7 +175,7 @@ class TestHeadsUpCommentBody:
         assert "09:00 UTC" in body  # deadline is timezone-explicit
         assert "we'll close it" in body  # hard deadline, not a passive notice
         assert (
-            f"{heads_up_module.GRACE_PERIOD_LABEL} lifetime" in body
+            f"{heads_up_module.GRACE_PERIOD_LABEL} to fix it" in body
         )  # post-rollout steady state
         assert "Greptile" in body and "3/5" in body  # specific shortfall
         assert "QA proof" in body  # missing piece surfaced

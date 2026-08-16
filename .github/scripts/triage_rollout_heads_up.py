@@ -224,7 +224,7 @@ def format_heads_up_comment(
         f"- If this {noun} still fails the rubric at **{cutoff_str}**, "
         "we'll close it.\n"
         f"- From then on the bot runs daily, and every {noun} that fails "
-        f"the rubric gets a **{GRACE_PERIOD_LABEL} lifetime**: one warning "
+        f"the rubric gets **{GRACE_PERIOD_LABEL} to fix it**: one warning "
         f"comment, then auto-close {GRACE_PERIOD_LABEL} later.\n"
         "\n"
         f"{_recovery_section(kind)}\n"

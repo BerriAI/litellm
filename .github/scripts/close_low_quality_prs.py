@@ -271,7 +271,7 @@ def format_close_comment(score: int, threshold: int) -> str:
     """
     score_sentence = (
         f"Greptile's most recent review scored this PR **{score}/5**, below "
-        f"our merge bar of **{threshold}/5**, and the {GRACE_PERIOD_LABEL} grace period since "
+        f"our merge bar of **{threshold}/5**, and the grace period ({GRACE_PERIOD_LABEL}) since "
         "the warning has elapsed.\n\n"
     )
     return (
