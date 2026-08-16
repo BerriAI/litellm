@@ -2,6 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
+    GenericGuardrailAPI,
+)
 from litellm.proxy.guardrails.guardrail_hooks.levo import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.levo.levo import (
     LEVO_GUARDRAIL_PATH,
@@ -134,6 +137,18 @@ def test_apply_guardrail_defined_on_the_class_not_inherited():
     A subclass that relies on inheritance is constructed, registered and even
     consulted via ``should_run_guardrail`` — but never invoked, so every
     request passes unscanned while the guardrail reports healthy. Guard the
-    override so that failure mode cannot return silently.
+    binding so that failure mode cannot return silently.
     """
     assert "apply_guardrail" in LevoGuardrail.__dict__
+
+
+def test_apply_guardrail_is_the_base_method_not_a_second_wrapper():
+    """Regression: the binding above must alias the base method rather than
+    wrap it in another ``@log_guardrail_information`` layer.
+
+    Two decorated layers log the call twice — the inner wrapper's ``finally``
+    resets the "already recorded" ContextVar to the value the outer wrapper
+    set, so the outer sees an unrecorded call and emits its own span, Datadog
+    record and spend-log entry on top of the inner one.
+    """
+    assert LevoGuardrail.apply_guardrail is GenericGuardrailAPI.apply_guardrail

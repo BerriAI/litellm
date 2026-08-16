@@ -23,10 +23,8 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guar
     GenericGuardrailAPI,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 #: Path the gateway serves; appended to the configured api_base.
@@ -66,29 +64,21 @@ class LevoGuardrail(GenericGuardrailAPI):
             # implies end-of-stream evaluation.
             self.streaming_end_of_stream_only = True
 
-    async def apply_guardrail(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        request_data: dict[str, object],
-        input_type: Literal["request", "response"],
-        logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> GenericGuardrailAPIInputs:
-        """Scan a request or response via the Levo AI Gateway.
-
-        Delegates to the base implementation — the wire contract is identical.
-        This override must exist **in this class body**: the proxy selects the
-        unified guardrail path with
-        ``"apply_guardrail" in type(callback).__dict__``, which inspects the
-        class's own attributes and does not see inherited methods. Without it
-        the guardrail is constructed and consulted, but never invoked, so every
-        request passes unscanned.
-        """
-        return await super().apply_guardrail(
-            inputs=inputs,
-            request_data=request_data,
-            input_type=input_type,
-            logging_obj=logging_obj,
-        )
+    #: Scanning is the base implementation — the wire contract is identical, so
+    #: there is nothing to override. The binding itself is load-bearing: the
+    #: proxy selects the unified guardrail path with
+    #: ``"apply_guardrail" in type(callback).__dict__``, which inspects the
+    #: class's own attributes and does not see inherited methods. Without this
+    #: the guardrail is constructed and consulted, but never invoked, so every
+    #: request passes unscanned.
+    #:
+    #: Aliasing rather than wrapping in an ``async def`` that awaits ``super()``
+    #: keeps the single ``@log_guardrail_information`` layer the base method
+    #: already carries. A second decorated layer would log the call twice: the
+    #: inner wrapper's ``finally`` resets the "already recorded" ContextVar to
+    #: the value the outer wrapper had set, so the outer sees an unrecorded
+    #: call and emits its own span, Datadog record and spend-log entry.
+    apply_guardrail = GenericGuardrailAPI.apply_guardrail
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
