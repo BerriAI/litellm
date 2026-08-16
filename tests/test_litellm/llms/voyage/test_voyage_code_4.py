@@ -1,35 +1,51 @@
 import json
 import os
 
+import pytest
+
 import litellm
 
-REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+ROOT_MAP = os.path.join(
+    os.path.dirname(os.path.dirname(litellm.__file__)),
+    "model_prices_and_context_window.json",
 )
 BACKUP_MAP = os.path.join(
-    REPO_ROOT, "litellm", "model_prices_and_context_window_backup.json"
+    os.path.dirname(litellm.__file__),
+    "model_prices_and_context_window_backup.json",
 )
 
 
-def test_voyage_code_4_in_backup_map():
-    """voyage/voyage-code-4 must be present in the local model cost map."""
-    with open(BACKUP_MAP) as f:
-        model_cost = json.load(f)
-
-    assert "voyage/voyage-code-4" in model_cost
-    entry = model_cost["voyage/voyage-code-4"]
-    assert entry["litellm_provider"] == "voyage"
-    assert entry["mode"] == "embedding"
-    assert entry["max_input_tokens"] == 32000
-    assert entry["max_tokens"] == 32000
-    assert entry["input_cost_per_token"] == 1.8e-07
-
-
-def test_voyage_code_4_get_model_info(monkeypatch):
-    """litellm.get_model_info should resolve voyage/voyage-code-4 from the local map."""
+@pytest.fixture(autouse=True)
+def _use_local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
 
+
+def _load(path: str) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_voyage_code_4_maps_are_in_sync():
+    """voyage/voyage-code-4 must exist and match across both cost maps."""
+    root_entry = _load(ROOT_MAP)["voyage/voyage-code-4"]
+    backup_entry = _load(BACKUP_MAP)["voyage/voyage-code-4"]
+
+    assert root_entry == backup_entry
+    assert root_entry["litellm_provider"] == "voyage"
+    assert root_entry["mode"] == "embedding"
+    assert root_entry["max_input_tokens"] == 32000
+    assert root_entry["max_tokens"] == 32000
+    assert root_entry["input_cost_per_token"] == 1.8e-07
+
+
+def test_voyage_code_4_get_model_info():
+    """litellm.get_model_info should resolve voyage/voyage-code-4 from the local map."""
     model_info = litellm.get_model_info(model="voyage/voyage-code-4")
     assert model_info["litellm_provider"] == "voyage"
     assert model_info["mode"] == "embedding"
