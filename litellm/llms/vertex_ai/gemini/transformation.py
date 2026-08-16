@@ -1182,6 +1182,12 @@ def _transform_request_body(
     optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
 
     try:
+        # Native Gemini REST uses camelCase ``systemInstruction``;
+        # Vertex rejects camelCase alongside cachedContent, so keep snake_case
+        # only for the Vertex path.
+        system_instruction_key: Final = (
+            "systemInstruction" if custom_llm_provider == "gemini" else "system_instruction"
+        )
         if custom_llm_provider == "gemini":
             content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
@@ -1216,12 +1222,14 @@ def _transform_request_body(
                     generation_config["mediaResolution"] = media_resolution_value["level"]
 
         data: Final = RequestBody(contents=content)
-        # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
+        # Vertex rejects system_instruction alongside cachedContent, so we keep
+        # snake_case for Vertex. Native Gemini (custom api_base) requires the
+        # canonical camelCase ``systemInstruction`` key.
         # Treat dropping these fields as a request mutation guarded by modify_params.
         can_send_cache_incompatible_fields: Final = cached_content is None or litellm.modify_params is False
         if can_send_cache_incompatible_fields:
             if system_instructions is not None:
-                data["system_instruction"] = system_instructions
+                data[system_instruction_key] = system_instructions
             if tools is not None:
                 data["tools"] = tools
             if tool_choice is not None:
