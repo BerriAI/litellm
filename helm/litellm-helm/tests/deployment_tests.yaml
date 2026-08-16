@@ -84,6 +84,7 @@ tests:
     template: deployment.yaml
     set:
       db:
+        deployStandalone: false
         useExisting: true
         secret:
           name: postgres
@@ -108,10 +109,10 @@ tests:
       # $(VAR) interpolation only resolves vars defined EARLIER in the env
       # array, so the reader host must precede the composed URL
       - equal:
-          path: spec.template.spec.containers[0].env[6].name
+          path: spec.template.spec.containers[0].env[7].name
           value: DATABASE_READER_HOST
       - equal:
-          path: spec.template.spec.containers[0].env[7].name
+          path: spec.template.spec.containers[0].env[8].name
           value: DATABASE_URL_READ_REPLICA
   - it: should prefer readReplicaUrlKey over readReplicaEndpointKey composition
     template: deployment.yaml
