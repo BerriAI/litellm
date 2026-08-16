@@ -731,3 +731,24 @@ async def test_post_call_stream_keeps_own_iterator_when_opted_out(monkeypatch):
 
     assert own_iterator_ran == ["claude-sonnet-5"]
     assert delivered == chunks
+
+
+@pytest.mark.asyncio
+async def test_parallel_post_call_guardrails_keep_native_hook_when_opted_out(monkeypatch):
+    """The run_in_parallel post-call path has its own dispatch check, so the opt-out has
+    to be honored there too."""
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    opted_out = _KeepsNativeHooks(event_hook=GuardrailEventHooks.post_call, default_on=True, run_in_parallel=True)
+    routed = _AppliesGuardrail(event_hook=GuardrailEventHooks.post_call, default_on=True, run_in_parallel=True)
+    monkeypatch.setattr(litellm, "callbacks", [opted_out, routed])
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))])
+
+    await ProxyLogging(user_api_key_cache=DualCache()).post_call_success_hook(
+        data={"messages": [{"role": "user", "content": "hi"}]},
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+    )
+
+    assert opted_out.native_hooks_ran == ["post_call"]
+    assert routed.native_hooks_ran == []
