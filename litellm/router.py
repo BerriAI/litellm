@@ -11056,7 +11056,7 @@ class Router:
         # affinity so a stale pin cannot send the retry back to an earlier order.
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         if _target_order is not None:
-            healthy_deployments = litellm.utils._get_order_filtered_deployments(  # pyright: ignore[reportPrivateUsage]
+            healthy_deployments = litellm.utils._get_order_filtered_deployments(  # pyright: ignore[reportPrivateUsage]  # Router's internal order helper
                 healthy_deployments, target_order=_target_order
             )
 
