@@ -7,6 +7,7 @@ Exa AI API Reference: https://docs.exa.ai/reference/search
 from typing import Final, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -44,6 +45,42 @@ class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
     context: bool | dict  # Optional - format results for LLMs
     moderation: bool  # Optional - enable content moderation, default false
     contents: dict  # Optional - content retrieval options
+
+
+class ExaAISearchResult(TypedDict, total=False):
+    """
+    A single entry of Exa AI's search response `results` array.
+    Based on: https://docs.exa.ai/reference/search
+    """
+
+    title: ReadOnly[str]
+    url: ReadOnly[str]
+    text: ReadOnly[str]
+    highlights: ReadOnly[list[str]]
+    summary: ReadOnly[str]
+    publishedDate: ReadOnly[str]
+
+
+_HIGHLIGHT_SEPARATOR: Final[str] = "\n\n"
+
+
+def _exa_snippet(result: ExaAISearchResult) -> str:
+    """
+    Exa returns each requested content mode in its own field, and omits `text`
+    entirely when only `highlights` or `summary` were asked for.
+    """
+    return (
+        result.get("text") or _HIGHLIGHT_SEPARATOR.join(result.get("highlights") or ()) or result.get("summary") or ""
+    )
+
+
+def _exa_content_fields(result: ExaAISearchResult) -> dict[str, list[str] | str]:
+    highlights: Final = result.get("highlights")
+    summary: Final = result.get("summary")
+    return {
+        **({"highlights": highlights} if highlights is not None else {}),
+        **({"summary": summary} if summary is not None else {}),
+    }
 
 
 class ExaAISearchConfig(BaseSearchConfig):
@@ -164,7 +201,8 @@ class ExaAISearchConfig(BaseSearchConfig):
         Exa AI → LiteLLM mappings:
         - results[].title → SearchResult.title
         - results[].url → SearchResult.url
-        - results[].text → SearchResult.snippet
+        - results[].text, else results[].highlights, else results[].summary → SearchResult.snippet
+        - results[].highlights, results[].summary → passed through when present
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
 
@@ -177,17 +215,17 @@ class ExaAISearchConfig(BaseSearchConfig):
         """
         response_json: Final = raw_response.json()
 
-        # Transform results to SearchResult objects
-        results: Final = []
-        for result in response_json.get("results", []):
-            search_result = SearchResult(
+        results: Final = [
+            SearchResult(
                 title=result.get("title", ""),
                 url=result.get("url", ""),
-                snippet=result.get("text", ""),  # Exa AI uses "text" for content
+                snippet=_exa_snippet(result),
                 date=result.get("publishedDate"),  # ISO 8601 datetime string
                 last_updated=None,  # Exa AI doesn't provide last_updated in response
+                **_exa_content_fields(result),
             )
-            results.append(search_result)
+            for result in response_json.get("results", [])
+        ]
 
         return SearchResponse(
             results=results,
