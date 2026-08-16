@@ -22,6 +22,109 @@ from base_test import BaseLoggingCallbackTest
 from litellm.types.utils import ModelResponse
 
 
+class TestOpentelemetryRedaction:
+    """Regression tests for user_api_key_info redaction in OTEL spans (#36758)."""
+
+    @pytest.mark.asyncio
+    async def test_otel_redacts_user_api_key_metadata_when_flag_enabled(self):
+        """When redact_user_api_key_info is True, metadata.user_api_key_* span
+        attributes must not be emitted."""
+        litellm.logging_callback_manager._reset_all_callbacks()
+        litellm.redact_user_api_key_info = True
+        litellm.callbacks = ["otel"]
+
+        try:
+            await litellm.acompletion(
+                model="gpt-5-mini",
+                messages=[{"role": "user", "content": "test"}],
+                mock_response="ok",
+                metadata={
+                    "user_api_key_hash": "hashed-secret",
+                    "user_api_key_user_id": "uid-123",
+                    "user_api_key_user_email": "user@example.com",
+                    "user_api_key_team_id": "team-456",
+                    "generation_name": "test-gen",
+                },
+            )
+            await asyncio.sleep(1)
+
+            from litellm.integrations.opentelemetry import OpenTelemetry
+
+            otel_logger = None
+            for cb in litellm.logging_callback_manager.callbacks:
+                if isinstance(cb, OpenTelemetry):
+                    otel_logger = cb
+                    break
+
+            assert otel_logger is not None, "OpenTelemetry logger not found"
+
+            from litellm.litellm_core_utils.redact_messages import (
+                redact_user_api_key_info,
+            )
+
+            test_metadata = {
+                "user_api_key_hash": "hashed-secret",
+                "user_api_key_user_id": "uid-123",
+                "user_api_key_user_email": "user@example.com",
+                "user_api_key_team_id": "team-456",
+                "generation_name": "test-gen",
+            }
+            redacted = redact_user_api_key_info(metadata=test_metadata)
+            assert "user_api_key_hash" not in redacted
+            assert "user_api_key_user_id" not in redacted
+            assert "user_api_key_user_email" not in redacted
+            assert "user_api_key_team_id" not in redacted
+            assert "generation_name" in redacted
+        finally:
+            litellm.redact_user_api_key_info = False
+
+    def test_redact_user_api_key_info_filters_correctly(self):
+        """Direct unit test for the redaction function used by the OTEL path."""
+        from litellm.litellm_core_utils.redact_messages import (
+            redact_user_api_key_info,
+        )
+
+        original_flag = litellm.redact_user_api_key_info
+        litellm.redact_user_api_key_info = True
+        try:
+            metadata = {
+                "user_api_key_hash": "secret-hash",
+                "user_api_key_user_id": "uid",
+                "user_api_key_user_email": "email@test.com",
+                "user_api_key_team_id": "team",
+                "user_api_key_org_id": "org",
+                "user_api_key_alias": "my-key",
+                "model": "gpt-5",
+                "generation_name": "test",
+            }
+            result = redact_user_api_key_info(metadata=metadata)
+            for key in list(metadata.keys()):
+                if key.startswith("user_api_key"):
+                    assert key not in result, f"{key} should be redacted"
+                else:
+                    assert key in result, f"{key} should be preserved"
+        finally:
+            litellm.redact_user_api_key_info = original_flag
+
+    def test_redact_user_api_key_info_noop_when_disabled(self):
+        """When the flag is off, metadata passes through unchanged."""
+        from litellm.litellm_core_utils.redact_messages import (
+            redact_user_api_key_info,
+        )
+
+        original_flag = litellm.redact_user_api_key_info
+        litellm.redact_user_api_key_info = False
+        try:
+            metadata = {
+                "user_api_key_hash": "secret-hash",
+                "model": "gpt-5",
+            }
+            result = redact_user_api_key_info(metadata=metadata)
+            assert result == metadata
+        finally:
+            litellm.redact_user_api_key_info = original_flag
+
+
 class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
     def test_parallel_tool_calls(self, mock_response_obj: ModelResponse):
         tool_calls = mock_response_obj.choices[0].message.tool_calls

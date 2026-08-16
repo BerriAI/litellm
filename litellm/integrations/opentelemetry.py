@@ -18,6 +18,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     parse_semconv_opt_in,
 )
 from litellm.integrations.otel.model.semconv import Metric
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -2204,7 +2205,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ############ LLM CALL METADATA ##############
             #############################################
-            metadata: Final = standard_logging_payload["metadata"]
+            metadata: Final = redact_user_api_key_info(
+                metadata=dict(standard_logging_payload["metadata"])
+            )
             for key, value in metadata.items():
                 self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
 
