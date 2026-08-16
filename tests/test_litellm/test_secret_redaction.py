@@ -147,6 +147,49 @@ def test_filter_redacts_extra_fields():
     assert record.region == "us-east-1"
 
 
+def test_filter_preserves_uvicorn_color_message_args():
+    """Regression test: uvicorn's startup banner logs a plain message plus a
+    colorized `extra={"color_message": ...}` copy of the same "%s://%s:%d" template,
+    both meant to be filled in from record.args. uvicorn's own ColourizedFormatter
+    re-substitutes color_message against record.args when writing to a TTY, instead
+    of using the already-formatted record.msg.
+
+    Before this fix, the filter cleared record.args after substituting only
+    record.msg, so color_message was rendered with args=None and the raw
+    "%s://%s:%d" placeholders were printed instead of the real host/port.
+    """
+    from uvicorn.logging import DefaultFormatter
+
+    addr_format = "%s://%s:%d"
+    plain_message = f"Uvicorn running on {addr_format} (Press CTRL+C to quit)"
+    color_message = f"Uvicorn running on {addr_format} (Press CTRL+C to quit)"
+
+    logger = logging.getLogger("uvicorn.error")
+    saved_handlers, saved_level = logger.handlers[:], logger.level
+    buf = StringIO()
+    handler = logging.StreamHandler(buf)
+    formatter = DefaultFormatter("%(levelprefix)s %(message)s")
+    formatter.use_colors = True
+    handler.setFormatter(formatter)
+    logger.handlers = [handler]
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info(
+            plain_message,
+            "http",
+            "0.0.0.0",
+            4000,
+            extra={"color_message": color_message},
+        )
+        output = buf.getvalue()
+    finally:
+        logger.handlers = saved_handlers
+        logger.setLevel(saved_level)
+
+    assert "%s" not in output and "%d" not in output, f"unsubstituted placeholders leaked: {output!r}"
+    assert "http://0.0.0.0:4000" in output
+
+
 def test_disable_redaction_passes_secrets_through():
     """When LITELLM_DISABLE_REDACT_SECRETS=true, secrets pass through."""
     with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):

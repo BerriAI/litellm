@@ -85,6 +85,20 @@ class SecretRedactionFilter(logging.Filter):
         if not _ENABLE_SECRET_REDACTION:
             return True
 
+        original_args = record.args
+
+        # uvicorn's colorized formatter re-renders `color_message` against
+        # record.args at emit time (see uvicorn.logging.ColourizedFormatter),
+        # instead of using the already-formatted record.msg. Substitute it here
+        # too, before args are cleared below, or it's later formatted with no
+        # args and prints the raw "%s://%s:%d" placeholders instead of the URL.
+        color_message = record.__dict__.get("color_message")
+        if isinstance(color_message, str) and original_args:
+            try:
+                record.color_message = color_message % original_args
+            except Exception:
+                pass
+
         try:
             record.msg = _redact_string(record.getMessage())
             record.args = None
