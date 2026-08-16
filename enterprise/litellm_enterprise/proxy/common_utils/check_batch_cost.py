@@ -3,6 +3,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 """
 
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Dict, Final, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
@@ -51,6 +52,33 @@ class CheckBatchCost:
         # Cached after the first poll cycle. Once we know the column is absent we skip
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
+        self.batch_processed_support_confirmed: bool = False
+
+    @staticmethod
+    def _is_missing_batch_processed_column_error(err: Exception) -> bool:
+        message: Final = str(err).lower()
+        return "batch_processed" in message or "unknown column" in message or "does not exist" in message
+
+    async def confirm_batch_processed_support(self) -> None:
+        """
+        Probe the batch_processed column before the proxy serves traffic, so the retrieve
+        path never sees an unconfirmed poller on a schema that has the column and accounts
+        inline for a batch the first poll cycle then accounts again.
+        """
+        try:
+            await self.prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"file_purpose": "batch", "batch_processed": False}
+            )
+        except Exception as probe_err:
+            if not self._is_missing_batch_processed_column_error(probe_err):
+                verbose_proxy_logger.debug(
+                    f"CheckBatchCost: batch_processed probe failed, the poll cycle will confirm support: {probe_err}"
+                )
+                return
+            self._has_batch_processed_column = False
+            verbose_proxy_logger.warning("CheckBatchCost: batch_processed column not found, querying without it")
+            return
+        self.batch_processed_support_confirmed = True
 
     async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> Dict[str, Any]:
         """
@@ -537,6 +565,7 @@ class CheckBatchCost:
         credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
         _file_content = await afile_content(
             file_id=raw_output_file_id,
+            _litellm_internal_model_credentials=MappingProxyType(dict(credentials)),
             **credentials,
         )
 
@@ -722,8 +751,9 @@ class CheckBatchCost:
                     take=MAX_OBJECTS_PER_POLL_CYCLE,
                     order={"created_at": "asc"},
                 )
+                self.batch_processed_support_confirmed = True
             except Exception as query_err:
-                if "batch_processed" not in str(query_err).lower() and "unknown column" not in str(query_err).lower() and "does not exist" not in str(query_err).lower():
+                if not self._is_missing_batch_processed_column_error(query_err):
                     raise
                 # Permanent schema gap — cache the result so future cycles skip straight to fallback
                 self._has_batch_processed_column = False
@@ -766,7 +796,7 @@ class CheckBatchCost:
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if (
-                response.status == "completed"
+                response.status in ("completed", "complete", "expired")
                 and response.output_file_id is not None
             ):
                 try:
@@ -793,7 +823,7 @@ class CheckBatchCost:
                 # mark the job as complete
                 try:
                     update_data: dict = {
-                        "status": "complete",
+                        "status": response.status if response.status != "completed" else "complete",
                         "file_object": response.model_dump_json(),
                     }
                     if self._has_batch_processed_column:
@@ -807,7 +837,13 @@ class CheckBatchCost:
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
 
-            elif response.status in ("failed", "expired", "cancelled"):
+            elif response.status in (
+                "completed",
+                "complete",
+                "failed",
+                "expired",
+                "cancelled",
+            ):
                 try:
                     from litellm.proxy.openai_files_endpoints.common_utils import (
                         _is_base64_encoded_unified_file_id,

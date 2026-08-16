@@ -1,4 +1,5 @@
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -418,6 +419,46 @@ def test_staged_files_matching_no_check_print_an_explicit_noop_note_and_nonempty
     log = (repo / ".git" / "pre_commit_lint.log").read_text()
     assert "check: summary" in log
     assert "skipped: Python lint (make lint) (no litellm/ Python files in scope)" in log
+
+
+def test_run_queues_through_the_machine_wide_gate_slot_lock(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    lock_dir = tmp_path / "gate-locks"
+    proc = _run(repo, bin_dir, {"LITELLM_GATE_SLOT_DIR": str(lock_dir)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (lock_dir / "slot-0.lock").exists()
+
+
+def test_run_under_a_held_slot_skips_reacquiring_the_gate_lock(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    lock_dir = tmp_path / "gate-locks"
+    proc = _run(
+        repo,
+        bin_dir,
+        {"LITELLM_GATE_SLOT_DIR": str(lock_dir), "LITELLM_GATE_SLOT_HELD": "1"},
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not lock_dir.exists()
+
+
+def test_hook_symlink_install_still_resolves_the_slot_lock_helper(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    scripts_dir = repo / "scripts"
+    scripts_dir.mkdir()
+    shutil.copy(SCRIPT, scripts_dir / "pre_commit_lint.sh")
+    shutil.copy(SCRIPT.parent / "gate_slot_lock.py", scripts_dir / "gate_slot_lock.py")
+    (repo / ".git" / "hooks" / "pre-commit").symlink_to(Path("../../scripts/pre_commit_lint.sh"))
+    lock_dir = tmp_path / "gate-locks"
+    proc = subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "hooked"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=_env(repo, bin_dir, {"LITELLM_GATE_SLOT_DIR": str(lock_dir)}),
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (lock_dir / "slot-0.lock").exists()
 
 
 def test_failing_run_ends_with_a_fail_verdict(tmp_path: Path) -> None:

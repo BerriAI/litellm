@@ -13,6 +13,7 @@ import {
   ComboboxEmpty,
   ComboboxItem,
   ComboboxList,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -190,6 +191,7 @@ interface CustomCodeModalProps {
 }
 
 const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onSuccess, accessToken, editData }) => {
+  const anchor = useComboboxAnchor();
   const isEditMode = !!editData;
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
@@ -524,18 +526,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
               multiple
             >
-              <ComboboxChips className="w-full">
+              <ComboboxChips render={<div ref={anchor} />} className="w-full">
                 {selectedModeOptions.map((option) => (
                   <ComboboxChip key={option.value} aria-label={option.label}>
                     {option.label}
                   </ComboboxChip>
                 ))}
-                <ComboboxChipsInput
-                  className="border-0 bg-transparent"
-                  placeholder={mode.length === 0 ? "Select modes" : undefined}
-                />
+                <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
               </ComboboxChips>
-              <ComboboxContent>
+              <ComboboxContent anchor={anchor}>
                 <ComboboxEmpty>No matching modes</ComboboxEmpty>
                 <ComboboxList>
                   {(option: ModeOption) => (

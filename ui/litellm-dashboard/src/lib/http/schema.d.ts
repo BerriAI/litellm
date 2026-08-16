@@ -838,9 +838,15 @@ export interface paths {
         put?: never;
         /**
          * Start Shadow Eval
-         * @description Start a pre-adoption shadow eval: duplicate a sampled slice of a key's live traffic
-         *     through an auto-router, judge real vs. shadow responses blind, and stratify win rates
-         *     by the router's tier classification and by the incumbent model.
+         * @description Start a shadow eval: duplicate a sampled slice of a key's live traffic against a second
+         *     arm, judge the two responses blind, and stratify win rates by tier and by the model that
+         *     served the real arm.
+         *
+         *     A forward job answers whether the key should adopt router_name: it samples the requests
+         *     the router did not serve and duplicates them through it. A reverse job answers whether a
+         *     key already on the router still gains from it: it samples the requests the router did
+         *     serve and duplicates them against baseline_model. A key can hold one active job per
+         *     direction, so both questions can run at once.
          *
          *     Shadow responses are never served to users. The job samples until it has judged
          *     max_turns turns, reaches the end of its window, or is stopped; sampling changes
@@ -7614,6 +7620,64 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        get: operations["aggregate_mcp_route_mcp_get"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        put: operations["aggregate_mcp_route_mcp_put"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        post: operations["aggregate_mcp_route_mcp_post"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        delete: operations["aggregate_mcp_route_mcp_delete"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        options: operations["aggregate_mcp_route_mcp_options"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        head: operations["aggregate_mcp_route_mcp_head"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        patch: operations["aggregate_mcp_route_mcp_patch"];
         trace?: never;
     };
     "/mcp-rest/test/connection": {
@@ -23142,7 +23206,7 @@ export interface components {
         /** ChatCompletionToolMessage */
         ChatCompletionToolMessage: {
             /** Content */
-            content: string | components["schemas"]["ChatCompletionTextObject"][];
+            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"])[];
             /**
              * Role
              * @constant
@@ -23547,6 +23611,11 @@ export interface components {
              * @description proxy level default model for all chat completion calls
              */
             completion_model?: string | null;
+            /**
+             * Control Plane Url
+             * @description Global Control Plane: URL of the control plane whose admin UI manages this instance. Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate against it cross-origin, and restricts the SSO return_to origin to that URL. No state is shared with the control plane
+             */
+            control_plane_url?: string | null;
             /** @description standalone Redis for cross-pod coordination (tpm/rpm rate limits, spend tracking, pod lock manager, shared health checks), configured independently of the response-cache backend; takes precedence over borrowing the `cache_params` Redis and over the REDIS_* env fallback */
             coordination_redis?: components["schemas"]["CoordinationRedisParams"] | null;
             /**
@@ -23900,6 +23969,11 @@ export interface components {
             model_list?: components["schemas"]["ModelParams"][] | null;
             /** @description litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5 */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
+            /**
+             * Worker Registry
+             * @description Global Control Plane: the independent proxy instances this instance's admin UI manages. Setting it makes this a control plane, which serves the UI and does not route LLM requests. Enterprise-only
+             */
+            worker_registry?: components["schemas"]["WorkerRegistryEntry"][] | null;
         };
         /** ConfigurableClientsideParamsCustomAuth */
         "ConfigurableClientsideParamsCustomAuth-Input": {
@@ -26936,6 +27010,8 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Bedrock Tags */
+            bedrock_tags?: unknown[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -27161,6 +27237,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
             /** Search Context Cost Per Query */
@@ -32687,11 +32765,19 @@ export interface components {
              * @description The hashed virtual key whose traffic this job evaluates, and only that key's
              */
             api_key_id: string;
+            /** Baseline Model */
+            baseline_model?: string | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Direction
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
             /**
              * Ends At
              * Format: date-time
@@ -32744,7 +32830,10 @@ export interface components {
          * @description Stratified results of a shadow-eval job's verdicts so far.
          */
         ShadowEvalResult: {
-            /** By Current Model */
+            /**
+             * By Current Model
+             * @description Sliced by the model that served the real arm: the key's incumbent models in forward mode, and in reverse the models the router itself picked
+             */
             by_current_model: components["schemas"]["ShadowEvalSlice"][];
             /** By Tier */
             by_tier: components["schemas"]["ShadowEvalSlice"][];
@@ -32756,7 +32845,7 @@ export interface components {
         /**
          * ShadowEvalSlice
          * @description Judge outcomes for one slice of a job's verdicts (a router tier, or one of the
-         *     models the shadowed key currently uses).
+         *     models that served the real arm).
          */
         ShadowEvalSlice: {
             /** Avg Judge Confidence */
@@ -32765,12 +32854,12 @@ export interface components {
             group: string;
             /**
              * Real Win Rate Pct
-             * @description Share of judged turns where the real (control) model won
+             * @description Share of judged turns the real arm won, meaning the response the caller actually received: the key's own model in forward mode, the router's pick in reverse
              */
             real_win_rate_pct: number;
             /**
              * Shadow Win Rate Pct
-             * @description Share of judged turns where the shadowed router's pick won
+             * @description Share of judged turns the shadow arm won, meaning the duplicated response nobody was served: the router's pick in forward mode, baseline_model in reverse
              */
             shadow_win_rate_pct: number;
             /** Tie Rate Pct */
@@ -32953,7 +33042,7 @@ export interface components {
         };
         /**
          * StartShadowEvalRequest
-         * @description Start shadowing a key's traffic through an auto-router for blind comparison.
+         * @description Start duplicating a key's traffic for blind comparison against an auto-router.
          */
         StartShadowEvalRequest: {
             /**
@@ -32961,6 +33050,18 @@ export interface components {
              * @description The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this key's traffic; requests made with any other key are not sampled.
              */
             api_key_id: string;
+            /**
+             * Baseline Model
+             * @description Required when direction is reverse and rejected otherwise: the fixed model the router's own responses are judged against. Must be a plain model rather than another auto-router
+             */
+            baseline_model?: string | null;
+            /**
+             * Direction
+             * @description forward answers 'should this key adopt router_name': it samples the requests the key did NOT route through the router and duplicates them through it. reverse answers 'is the router still worth it for a key already on it': it samples the requests the router did serve and duplicates them against baseline_model. The response the caller received is always the real arm
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
             /**
              * Duration Days
              * @description How many days the job samples traffic before completing on its own
@@ -32981,7 +33082,7 @@ export interface components {
             max_turns: number;
             /**
              * Router Name
-             * @description The auto-router config to shadow requests through
+             * @description The auto-router under evaluation, in either direction
              */
             router_name: string;
             /**
@@ -35759,6 +35860,10 @@ export interface components {
             team_public_model_name?: string | null;
             /** Tier */
             tier?: ("free" | "paid") | null;
+            /** Tiered Pricing */
+            tiered_pricing?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Updated At */
             updated_at?: string | null;
             /** Updated By */
@@ -35834,6 +35939,8 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Bedrock Tags */
+            bedrock_tags?: unknown[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -36059,6 +36166,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
             /** Search Context Cost Per Query */
@@ -45802,6 +45911,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

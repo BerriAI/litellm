@@ -21,14 +21,6 @@ vi.mock("../Settings/RouterSettings/Fallbacks/FallbackSelectionForm", () => ({
   ),
 }));
 
-vi.mock("@tremor/react", () => ({
-  TabGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  TabList: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  Tab: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  TabPanels: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  TabPanel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-}));
-
 vi.mock("../router_settings/RouterSettingsForm", () => ({
   default: ({
     value,
