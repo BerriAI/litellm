@@ -509,9 +509,17 @@ class TestCanonicalTargetReAuth:
         assert allowed is False
 
     @pytest.mark.asyncio
-    async def test_no_auth_context_is_allowed(self, anthropic_router: Router):
-        """No key context (non-proxy Router use) leaves the rewrite unguarded by
-        key auth, matching the surrounding call path."""
+    async def test_absent_auth_context_fails_closed(self, anthropic_router: Router):
+        """Regression: absent key context must DECLINE the rewrite, not allow it.
+
+        Most route_request callers (image generation, rerank, moderation,
+        speech, transcription, realtime, Responses WebSocket) are authenticated
+        but don't currently forward user_api_key_dict. Returning True here
+        would run the rewrite with no target authorization at all on exactly
+        those paths -- a key whose allowlist holds only the stale requested
+        spelling could reach a target it was never granted. Declining costs
+        those endpoints only the convenience rewrite; the AND-on-target
+        guarantee stays unconditional."""
         from litellm.proxy.route_llm_request import _canonical_target_is_allowed
 
         assert (
@@ -520,7 +528,7 @@ class TestCanonicalTargetReAuth:
                 llm_router=anthropic_router,
                 user_api_key_dict=None,
             )
-            is True
+            is False
         )
 
 

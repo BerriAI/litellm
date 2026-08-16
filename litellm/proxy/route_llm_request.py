@@ -262,9 +262,21 @@ async def _canonical_target_is_allowed(
     A denial returns False rather than raising, so the request falls through to
     the same 400 an unresolvable model gets today and the response reveals
     nothing about the target's existence.
+
+    Absent key context fails CLOSED. Most ``route_request`` callers (image
+    generation, rerank, moderation, speech, transcription, realtime, Responses
+    WebSocket) are authenticated but do not currently forward
+    ``user_api_key_dict``, so treating "no key context" as "allowed" would run
+    the rewrite with no target authorization at all on exactly those paths.
+    Declining instead costs those endpoints only the convenience rewrite --
+    they behave as they do today, resolution simply never engages -- while
+    keeping the AND-on-target guarantee unconditional. Threading the key
+    through those call sites is the follow-up that re-enables resolution for
+    them; until then this must not be the hole through which the check is
+    skipped.
     """
     if user_api_key_dict is None:
-        return True
+        return False
     from litellm.proxy.auth.auth_checks import (
         can_key_call_resolved_model,  # pyright: ignore[reportUnknownVariableType] - auth_checks is partially typed
     )
