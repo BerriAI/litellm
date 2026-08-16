@@ -924,6 +924,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
 
         litellm_params["upload_url"] = api_base
+        # Store file size for response transformation (S3 PUT response
+        # doesn't include Content-Length, so we pass it through).
+        litellm_params["_file_content_size"] = len(file_content) if isinstance(file_content, (str, bytes)) else 0
 
         # Return a dict that tells the HTTP handler exactly what to do
         return {
@@ -1087,6 +1090,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         # S3 PUT object returns ETag and other metadata in headers
         content_length: Final[str] = response_headers.get("Content-Length", "0")
 
+        # S3 PUT responses may not include Content-Length, so fall back
+        # to the actual content size captured during request transformation.
+        file_size: int = int(content_length) if content_length.isdigit() else 0
+        if file_size == 0:
+            file_size = litellm_params.get("_file_content_size", 0)
+
         # Use the actual upload URL that was used for the S3 upload
         upload_url: Final = litellm_params.get("upload_url")
         file_id: str = ""
@@ -1101,7 +1110,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             filename=filename,
             created_at=int(time.time()),  # Current timestamp
             status="uploaded",
-            bytes=int(content_length) if content_length.isdigit() else 0,
+            bytes=file_size,
             object="file",
         )
 

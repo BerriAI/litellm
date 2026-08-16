@@ -2214,6 +2214,61 @@ class TestBedrockFilesS3SignatureEncoding:
             headers=signed["headers"],
         )
 
+    def test_transform_create_file_response_bytes_from_content_length(self):
+        """bytes should reflect actual file size when Content-Length is present."""
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        raw_response = httpx.Response(
+            status_code=200,
+            headers={"Content-Length": "4096"},
+            content=b"",
+            request=httpx.Request(
+                "PUT",
+                "https://s3.us-east-1.amazonaws.com/my-bucket/litellm-bedrock-files-anthropic.claude-3-5-sonnet-20240620-v1:0-abc123.jsonl",
+            ),
+        )
+
+        result = BedrockFilesConfig().transform_create_file_response(
+            model=None,
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+
+        assert result.bytes == 4096
+
+    def test_transform_create_file_response_bytes_falls_back_to_content_size(self):
+        """When S3 PUT response omits Content-Length, bytes should fall back
+        to the actual content size captured during request transformation.
+
+        Regression test for #36388.
+        """
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        raw_response = httpx.Response(
+            status_code=200,
+            # S3 PUT responses typically omit Content-Length
+            headers={},
+            content=b"",
+            request=httpx.Request(
+                "PUT",
+                "https://s3.us-east-1.amazonaws.com/my-bucket/litellm-bedrock-files-anthropic.claude-3-5-sonnet-20240620-v1:0-abc123.jsonl",
+            ),
+        )
+
+        result = BedrockFilesConfig().transform_create_file_response(
+            model=None,
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+            litellm_params={"_file_content_size": 2048},
+        )
+
+        assert result.bytes == 2048
+
     def test_file_content_signs_spaced_object_key_the_way_s3_does(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -4738,22 +4738,25 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def append_system_prompt_messages(kwargs: dict | None = None, messages: Any | None = None):
         """
-        Append system prompt messages to the messages
+        Append system prompt messages to the messages.
+
+        Handles both string and list-of-content-blocks forms of `system`.
         """
         if kwargs is not None:
-            if kwargs.get("system") is not None and isinstance(kwargs.get("system"), str):
+            system = kwargs.get("system")
+            if system is not None:
                 if messages is None:
-                    return [{"role": "system", "content": kwargs.get("system")}]
+                    return [{"role": "system", "content": system}]
                 elif isinstance(messages, list):
                     if len(messages) == 0:
-                        return [{"role": "system", "content": kwargs.get("system")}]
+                        return [{"role": "system", "content": system}]
                     # check for duplicates
-                    if messages[0].get("role") == "system" and messages[0].get("content") == kwargs.get("system"):
+                    if messages[0].get("role") == "system" and messages[0].get("content") == system:
                         return messages
-                    messages = [{"role": "system", "content": kwargs.get("system")}] + messages
+                    messages = [{"role": "system", "content": system}] + messages
                 elif isinstance(messages, str):
                     messages = [
-                        {"role": "system", "content": kwargs.get("system")},
+                        {"role": "system", "content": system},
                         {"role": "user", "content": messages},
                     ]
                 return messages

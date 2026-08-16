@@ -2240,6 +2240,17 @@ def test_append_system_prompt_messages():
     )
     assert result == messages
 
+    # Test case 7: system as list of content blocks (Anthropic format)
+    # Regression test for #36402: list form was silently dropped.
+    kwargs = {"system": [{"type": "text", "text": "You are helpful."}]}
+    messages = [{"role": "user", "content": "Hello"}]
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=messages
+    )
+    assert len(result) == 2
+    assert result[0] == {"role": "system", "content": [{"type": "text", "text": "You are helpful."}]}
+    assert result[1] == {"role": "user", "content": "Hello"}
+
 
 @pytest.mark.asyncio
 async def test_async_success_handler_sets_standard_logging_object_for_pass_through_endpoints():
