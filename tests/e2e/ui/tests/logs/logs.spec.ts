@@ -59,7 +59,7 @@ test.describe("Logs page", () => {
 
     // Expand: clicking the row opens the detail drawer for that request.
     await row.click();
-    const drawer = page.locator(".ant-drawer-content").first();
+    const drawer = page.getByRole("dialog").first();
     await expect(drawer).toBeVisible({ timeout: 20_000 });
     await expect(drawer.getByText("Request & Response")).toBeVisible({
       timeout: 20_000,
@@ -91,7 +91,7 @@ test.describe("Logs page", () => {
 
     const row = await openLogsForRequest(page, requestId);
     await row.click();
-    const drawer = page.locator(".ant-drawer-content").first();
+    const drawer = page.getByRole("dialog").first();
     await expect(drawer).toBeVisible({ timeout: 20_000 });
 
     // Copy request: the Input card's copy button puts the prompt on the clipboard.
@@ -120,7 +120,7 @@ test.describe("Logs page", () => {
     const row = await openLogsForRequest(page, requestId);
     await row.click();
 
-    const drawer = page.locator(".ant-drawer-content").first();
+    const drawer = page.getByRole("dialog").first();
     await expect(drawer.getByText("Request & Response")).toBeVisible({
       timeout: 20_000,
     });
@@ -159,14 +159,12 @@ test.describe("Logs page", () => {
     const row = await openLogsForRequest(page, requestId);
     await row.click();
 
-    const drawer = page.locator(".ant-drawer-content").first();
+    const drawer = page.getByRole("dialog").first();
     await expect(drawer.getByText("Request & Response")).toBeVisible({
       timeout: 20_000,
     });
 
-    // antd Radio.Button hides the <input> under its <label>, which intercepts
-    // the pointer event — click the label, not the radio.
-    await drawer.locator("label.ant-radio-button-wrapper").filter({ hasText: "JSON" }).click();
+    await drawer.getByRole("tab", { name: "JSON" }).click();
 
     const requestTab = drawer.getByRole("tab", { name: "Request" });
     await expect(requestTab).toBeVisible({ timeout: 10_000 });
