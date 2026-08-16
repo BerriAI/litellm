@@ -18,9 +18,6 @@ DEEP_RESEARCH_MODELS = (
     "apodex-1-1-deep-research",
     "apodex-1-1-deep-solve",
     "apodex-1-1-deep-discover",
-    "apodex-1-0-deep-research",
-    "apodex-1-0-deep-solve",
-    "apodex-1-0-deep-discover",
 )
 
 
