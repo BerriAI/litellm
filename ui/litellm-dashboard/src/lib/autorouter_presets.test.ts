@@ -60,8 +60,8 @@ describe("autorouter_presets", () => {
       timeout_ms: 3000,
       classification_rubric: "agentic",
     });
-    expect(config.classifier_context_window_size).toBe(3);
-    expect(config.classifier_context_per_turn_chars).toBe(200);
+    expect(config.classifier_context_window_size).toBe(0);
+    expect(config.classifier_context_per_turn_chars).toBeUndefined();
     expect(getRequiredModelsInPreset(lite)).toEqual(
       new Set(["deepseek-v4-flash", "muse-spark-1.2", "kimi-k3", "claude-opus-5"]),
     );

@@ -31,8 +31,7 @@
         "timeout_ms": 3000,
         "classification_rubric": "agentic"
       },
-      "classifier_context_window_size": 3,
-      "classifier_context_per_turn_chars": 200,
+      "classifier_context_window_size": 0,
       "escalation_keywords": ["LITELLM ESCALATE"],
       "session_affinity": false,
       "deployment_affinity": true
