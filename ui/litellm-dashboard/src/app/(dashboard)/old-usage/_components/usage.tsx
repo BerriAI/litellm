@@ -891,7 +891,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select tags" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select tags" />
                 </ComboboxChips>
                 <ComboboxContent anchor={anchor}>
                   <ComboboxEmpty>No tags found</ComboboxEmpty>

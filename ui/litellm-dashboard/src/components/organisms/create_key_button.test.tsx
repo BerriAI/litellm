@@ -251,9 +251,17 @@ vi.mock("../molecules/notifications_manager", () => ({
 vi.mock("../agent_management/AgentSelector", () => ({ default: () => null }));
 vi.mock("../common_components/budget_duration_dropdown", () => ({
   NEVER_RESETS_BUDGET_DURATION: "none",
-  default: ({ showNeverResets, onChange }: { showNeverResets?: boolean; onChange?: (value: string) => void }) => (
+  default: ({
+    showNeverResets,
+    placeholder,
+    onChange,
+  }: {
+    showNeverResets?: boolean;
+    placeholder?: string;
+    onChange?: (value: string) => void;
+  }) => (
     <select data-testid="budget-duration-dropdown" onChange={(event) => onChange?.(event.target.value)}>
-      <option value="">n/a</option>
+      <option value="">{placeholder ?? "n/a"}</option>
       {showNeverResets ? <option value="none">Never resets</option> : null}
       <option value="30d">monthly</option>
     </select>
@@ -869,6 +877,19 @@ describe("CreateKey", () => {
 
       expect("budget_duration" in formValues).toBe(true);
       expect(formValues.budget_duration).toBeNull();
+    });
+
+    it("should label the omit option distinctly from 'Never resets'", async () => {
+      await openModal();
+
+      const optionLabels = Array.from(
+        screen.getByTestId("budget-duration-dropdown").querySelectorAll("option"),
+        (option) => option.textContent,
+      );
+
+      expect(optionLabels).toContain("Never resets");
+      expect(new Set(optionLabels).size).toBe(optionLabels.length);
+      expect(screen.getByRole("option", { name: "Never resets" })).toHaveValue("none");
     });
 
     it("should omit budget_duration entirely when the reset dropdown is untouched", async () => {
