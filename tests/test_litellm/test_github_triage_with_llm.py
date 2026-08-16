@@ -1729,7 +1729,7 @@ class TestTriageOrchestration:
         assert result["action"] == "warned-grace"
         assert posted["n"] == 42
         # Pin the user-facing language pieces the user explicitly asked for.
-        assert "2 hours" in posted["body"]
+        assert triage_module.GRACE_PERIOD_LABEL in posted["body"]
         assert "@agent-shin reconsider" in posted["body"]
         assert "@greptileai" in posted["body"]
         assert "even after the PR is closed" in posted["body"]
@@ -1804,7 +1804,7 @@ class TestTriageOrchestration:
             judge=lambda p: json.dumps(verdict),
         )
         assert result["action"] == "would-warn-grace"
-        assert "2 hours" in result["comment"]
+        assert triage_module.GRACE_PERIOD_LABEL in result["comment"]
 
     def test_should_warn_grace_for_swiftwinds_not_close_instantly(
         self, triage_module, monkeypatch
@@ -1846,7 +1846,7 @@ class TestTriageOrchestration:
             judge=lambda p: json.dumps(verdict),
         )
         assert result["action"] == "warned-grace"
-        assert "2 hours" in posted["body"]
+        assert triage_module.GRACE_PERIOD_LABEL in posted["body"]
 
 
 class TestGraceWarningCommentText:
@@ -1858,7 +1858,7 @@ class TestGraceWarningCommentText:
             {"verdict": "fail", "missing": ["QA proof"], "explanation": "thin"}
         )
         # The user explicitly asked: "specify in the comment" the grace window.
-        assert "2 hours" in body
+        assert triage_module.GRACE_PERIOD_LABEL in body
 
     def test_pr_grace_warning_should_mention_reconsider_during_grace(
         self, triage_module
@@ -1892,7 +1892,7 @@ class TestGraceWarningCommentText:
             {"verdict": "fail", "missing": [], "explanation": ""}
         )
         assert triage_module.GRACE_COMMENT_MARKER in body
-        assert "2 hours" in body
+        assert triage_module.GRACE_PERIOD_LABEL in body
         # OSS authors can't reopen a bot-closed issue, so recovery is
         # `@agent-shin reconsider` (the bot reopens), like the PR path.
         assert "@agent-shin reconsider" in body

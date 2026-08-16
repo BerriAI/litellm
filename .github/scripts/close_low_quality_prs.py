@@ -52,6 +52,7 @@ from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
     AGENT_SHIN_CLOSE_MARKER,
     ALLOWLIST_LOGINS,
     GRACE_COMMENT_MARKER,
+    GRACE_PERIOD_LABEL,
     GRACE_PERIOD_SECONDS,
     GREPTILE_BOT_LOGINS,
     SCORE_PATTERN,
@@ -81,7 +82,7 @@ DEFAULT_OPTOUT_LABELS = ("do not close", "keep open", "wip")
 # `GRACE_COMMENT_MARKER` (HTML marker appended to grace-period warning
 # comments — used by either script to recognize that a warning was
 # already posted) and `GRACE_PERIOD_SECONDS` (length of the grace
-# period between the warning and the actual auto-close, 2 hours) are
+# period between the warning and the actual auto-close) are
 # imported from `agent_shin_shared` so the Agent Shin LLM judge and
 # this daily Greptile sweep agree on the same marker and duration.
 
@@ -190,11 +191,11 @@ def seconds_since_last_grace_warning(
 
 def format_grace_warning_comment(score: int, threshold: int) -> str:
     """Comment posted on the FIRST low-Greptile-score detection — gives
-    the contributor a 2-hour grace window before the auto-close fires on
-    the next daily cron run.
+    the contributor a `GRACE_PERIOD_SECONDS` window before the auto-close
+    fires on the next daily cron run.
 
     Mirrors `format_grace_warning_pr_comment` in
-    `triage_with_llm.py` in spirit (2-hour grace + escape hatches), but
+    `triage_with_llm.py` in spirit (same grace window + escape hatches), but
     framed around Greptile's confidence score instead of the LLM judge's
     rubric since the close trigger here is the Greptile signal.
     """
@@ -205,7 +206,8 @@ def format_grace_warning_comment(score: int, threshold: int) -> str:
         "Heads up: Greptile's most recent review scored this PR "
         f"**{score}/5**, below our merge bar of **{threshold}/5**.\n"
         "\n"
-        "If the score isn't lifted in the next **2 hours**, I'll auto-close this PR. That's "
+        f"If the score isn't lifted in the next **{GRACE_PERIOD_LABEL}**, I'll auto-close this "
+        "PR. That's "
         "**not** us saying the change isn't worthwhile. We want the open-PR list to mirror "
         "what a maintainer can act on *right now*, so contributors like you don't get lost in "
         "a backlog. Take your time; everything below still works after the close.\n"
@@ -215,7 +217,8 @@ def format_grace_warning_comment(score: int, threshold: int) -> str:
         f"the new score is **{threshold}/5 or higher**, the PR stays open and no further "
         "action is needed on your side.\n"
         "\n"
-        "**If the PR does get auto-closed in 2 hours, you still have an easy recovery path:**\n"
+        f"**If the PR does get auto-closed in {GRACE_PERIOD_LABEL}, you still have an easy "
+        "recovery path:**\n"
         "\n"
         "- Comment `@greptileai` to request a fresh review. **This still works even after "
         f"the PR is closed**, and a score of {threshold}/5 or higher is one of the signals "
@@ -234,7 +237,7 @@ def post_grace_warning(
     repo: str | None,
     dry_run: bool,
 ) -> None:
-    """Post the 2-hour grace-period warning comment on `pr`.
+    """Post the grace-period warning comment on `pr`.
 
     The warning carries `GRACE_COMMENT_MARKER` so subsequent runs can
     detect that the contributor has already been told about the
@@ -268,7 +271,7 @@ def format_close_comment(score: int, threshold: int) -> str:
     """
     score_sentence = (
         f"Greptile's most recent review scored this PR **{score}/5**, below "
-        f"our merge bar of **{threshold}/5**, and the 2-hour grace period since "
+        f"our merge bar of **{threshold}/5**, and the {GRACE_PERIOD_LABEL} grace period since "
         "the warning has elapsed.\n\n"
     )
     return (

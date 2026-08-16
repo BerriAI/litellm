@@ -7,7 +7,8 @@ agree on the same notions of:
   * What counts as a Greptile-authored review comment
     (``GREPTILE_BOT_LOGINS``) and how to extract a confidence score from
     its body (``SCORE_PATTERN`` / :func:`extract_greptile_score`).
-  * How long the 2-hour grace window is (``GRACE_PERIOD_SECONDS``) and
+  * How long the grace window is (``GRACE_PERIOD_SECONDS``, rendered for
+    contributor-facing comments as ``GRACE_PERIOD_LABEL``) and
     the HTML marker stamped into a grace-warning comment so the *other*
     script can see "Agent Shin already warned" and behave accordingly
     (``GRACE_COMMENT_MARKER``).
@@ -49,10 +50,12 @@ GRACE_COMMENT_MARKER = "<!-- agent-shin:grace-warning -->"
 # rejects the contributor.
 AGENT_SHIN_CLOSE_MARKER = "<!-- agent-shin:closed -->"
 
-# 2 hours between the grace warning and the auto-close. Short enough to
-# dogfood the "fix it before it closes" loop in one sitting; bump back up
-# (e.g. 86400 for a day) for the public rollout.
-GRACE_PERIOD_SECONDS = 7200
+GRACE_PERIOD_SECONDS = 86400
+
+# Every contributor-facing mention of the grace window renders this instead of
+# a hardcoded duration, so changing GRACE_PERIOD_SECONDS can't leave the warning
+# and close comments promising a window the code no longer honors.
+GRACE_PERIOD_LABEL = f"{GRACE_PERIOD_SECONDS // 3600} hours"
 
 AGENT_SHIN_DEFAULT_BOT_LOGIN = "github-actions[bot]"
 
