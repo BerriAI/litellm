@@ -14,6 +14,7 @@ import {
   PTU_RATE_FIELD,
   PTU_START_FIELD,
   ptuCountRules,
+  ptuNoUsageCostRule,
   ptuPairRule,
   ptuRateRules,
   ptuStartRequiredRule,
@@ -261,7 +262,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <Form.Item
                       label="Input Cost (per 1M tokens)"
                       name="input_cost_per_token"
-                      rules={[{ validator: validateNumber }]}
+                      dependencies={[PTU_COUNT_FIELD]}
+                      rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       className="mb-4"
                     >
                       <TextInput />
@@ -269,7 +271,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <Form.Item
                       label="Output Cost (per 1M tokens)"
                       name="output_cost_per_token"
-                      rules={[{ validator: validateNumber }]}
+                      dependencies={[PTU_COUNT_FIELD]}
+                      rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       className="mb-4"
                     >
                       <TextInput />
@@ -277,7 +280,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <Form.Item
                       label="Cache Read Cost (per 1M tokens)"
                       name="cache_read_input_token_cost"
-                      rules={[{ validator: validateNumber }]}
+                      dependencies={[PTU_COUNT_FIELD]}
+                      rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       tooltip="If left blank, defaults to Input Cost."
                       className="mb-4"
                     >
@@ -286,7 +290,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <Form.Item
                       label="Cache Write Cost (per 1M tokens)"
                       name="cache_creation_input_token_cost"
-                      rules={[{ validator: validateNumber }]}
+                      dependencies={[PTU_COUNT_FIELD]}
+                      rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       tooltip="If left blank, defaults to Input Cost (the backend falls back to input_cost_per_token when no cache-write rate is set)."
                       className="mb-4"
                     >
@@ -297,7 +302,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   <Form.Item
                     label="Cost Per Second"
                     name="input_cost_per_second"
-                    rules={[{ validator: validateNumber }]}
+                    dependencies={[PTU_COUNT_FIELD]}
+                    rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                     className="mb-4"
                   >
                     <TextInput />

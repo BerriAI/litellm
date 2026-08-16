@@ -172,6 +172,7 @@ callbacks: List[
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
+langfuse_enable_update_trace_keys: bool = False
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 prometheus_latency_buckets: Optional[List[float]] = None

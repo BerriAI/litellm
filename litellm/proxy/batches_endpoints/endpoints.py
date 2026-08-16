@@ -23,7 +23,9 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    add_internal_model_credentials,
     apply_team_provider_credentials,
+    batch_cost_poller_is_active,
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
@@ -496,6 +498,14 @@ async def retrieve_batch(
                 "Batch %s is in non-terminal state %s, syncing with provider", batch_id, response.status
             )
 
+        poller_owns_accounting: Final = bool(unified_batch_id) and batch_cost_poller_is_active()
+        if poller_owns_accounting:
+            litellm_metadata = data.get("litellm_metadata")
+            if not isinstance(litellm_metadata, dict):
+                litellm_metadata = {}  # mutable-ok: the suppression flag must live inside litellm_metadata for the success handler to read it, and this request carried no mapping to extend
+                data["litellm_metadata"] = litellm_metadata
+            litellm_metadata["batch_ignore_default_logging"] = True
+
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
@@ -537,6 +547,13 @@ async def retrieve_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
+            if unified_batch_id:
+                add_internal_model_credentials(
+                    data=data,
+                    llm_router=llm_router,
+                    model_id=get_model_id_from_unified_batch_id(unified_batch_id),
+                )
+
             response = await llm_router.aretrieve_batch(**data)
             response._hidden_params["unified_batch_id"] = unified_batch_id
             if unified_batch_id:
@@ -573,6 +590,7 @@ async def retrieve_batch(
             verbose_proxy_logger=verbose_proxy_logger,
             db_batch_object=db_batch_object,
             operation="retrieve",
+            poller_owns_accounting=poller_owns_accounting,
         )
 
         ### CALL HOOKS ### - modify outgoing data
@@ -715,7 +733,7 @@ async def list_batches(
                 operation_context="batch listing",
             )
 
-            data.update(credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials)
 
             response = await litellm.alist_batches(
                 custom_llm_provider=credentials["custom_llm_provider"],
@@ -948,9 +966,10 @@ async def cancel_batch(
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
+            body_custom_llm_provider = data.pop("custom_llm_provider", None)
             custom_llm_provider: Final = (
                 provider
-                or data.pop("custom_llm_provider", None)
+                or body_custom_llm_provider
                 or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"

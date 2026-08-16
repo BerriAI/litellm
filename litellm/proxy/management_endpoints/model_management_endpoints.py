@@ -68,6 +68,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
 from litellm.router_strategy.complexity_router import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+    ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
     classification_system_prompt,
@@ -88,6 +89,7 @@ from litellm.types.router import (
     ModelInfo,
     updateDeployment,
 )
+from litellm.types.utils import CustomPricingLiteLLMParams
 from litellm.utils import get_utc_datetime
 
 router: Final = APIRouter()
@@ -241,6 +243,7 @@ def _raise_on_strategy_router_write_violation(
 
 
 _PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
+_PTU_PRICED_PAIR: Final = frozenset({"ptu_count", "cost_per_ptu_per_hour"})
 
 
 def _explicitly_cleared_ptu_fields(model_info: ModelInfo | None) -> frozenset[str]:
@@ -264,9 +267,10 @@ def _merged_ptu_model_info(*, db_model: Deployment, patch_data: updateDeployment
     A PTU invariant holds over the deployment as it will exist, not over whichever subset
     of fields a caller happened to send.
     """
-    empty: Final[Mapping[str, object]] = MappingProxyType({})
-    stored: Final = db_model.model_info.model_dump(exclude_none=True) if db_model.model_info else empty
-    incoming: Final = patch_data.model_info.model_dump(exclude_none=True) if patch_data.model_info else empty
+    stored: Final = db_model.model_info.model_dump(exclude_none=True) if db_model.model_info else _EMPTY_MODEL_INFO
+    incoming: Final = (
+        patch_data.model_info.model_dump(exclude_none=True) if patch_data.model_info else _EMPTY_MODEL_INFO
+    )
     cleared: Final = _explicitly_cleared_ptu_fields(patch_data.model_info)
     return MappingProxyType({k: v for k, v in {**stored, **incoming}.items() if k not in cleared})
 
@@ -338,6 +342,179 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
         )
 
 
+# The mirrored per-token pricing fields plus the three remaining fields
+# Router._inherit_builtin_cache_pricing back-fills from the public cost map. An unset field is
+# what that back-fill targets, so a field left out here is one a PTU deployment still bills.
+# tiered_pricing is the one mirrored field that is a table of ranges, not a rate, so it is stored
+# empty (see _PTU_EMPTIED_PRICING_FIELDS): its tiers outrank the zeros written beside them, so
+# dropping it would leave the cost map's tiers billing the traffic the reserved capacity covers.
+_PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in SPECIAL_MODEL_INFO_PARAMS if f != "tiered_pricing") + (
+    "cache_creation_input_token_cost_above_1hr",
+    "cache_creation_input_token_cost_above_200k_tokens",
+    "cache_read_input_token_cost_above_200k_tokens",
+)
+_PTU_EMPTIED_PRICING_FIELDS: Final = frozenset({"tiered_pricing"})
+_PTU_ZEROED_PRICING: Final[Mapping[str, float | tuple[()]]] = MappingProxyType(
+    {
+        **dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0),
+        **dict.fromkeys(_PTU_EMPTIED_PRICING_FIELDS, ()),
+    }
+)
+_NO_PRICING_OVERRIDE: Final[Mapping[str, float | tuple[()]]] = MappingProxyType({})
+_EMPTY_MODEL_INFO: Final[Mapping[str, object]] = _NO_PRICING_OVERRIDE
+# Rate fields only. CustomPricingLiteLLMParams also carries settings that are not charges
+# (an embedding's output_vector_size, the regional uplift multipliers), and zeroing one of
+# those would destroy the deployment's configuration rather than stop a charge.
+_CUSTOM_PRICING_FIELDS: Final = frozenset(f for f in CustomPricingLiteLLMParams.model_fields if "cost" in f)
+# search_context_cost_per_query holds its rates in a table keyed by context size, and an absent
+# table means the provider's own default rate rather than free (litellm/llms/gemini/cost_calculator
+# falls back to $0.035), so it is zeroed in place rather than emptied like tiered_pricing, and
+# written on every PTU deployment rather than only where a table is already stored.
+_PTU_ZEROED_TABLE_FIELDS: Final = frozenset({"search_context_cost_per_query"})
+_SEARCH_CONTEXT_SIZES: Final = ("search_context_size_low", "search_context_size_medium", "search_context_size_high")
+
+
+def _is_nonzero_rate(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0
+
+
+def _is_nonzero_price(value: object) -> bool:
+    if isinstance(value, dict):  # an all-zero table is how a rate is expressed as free
+        return any(_is_nonzero_rate(rate) for rate in value.values())
+    return _is_nonzero_rate(value)
+
+
+def _is_zero_price(value: object) -> bool:
+    if isinstance(value, dict):
+        return bool(value) and not _is_nonzero_price(value)
+    if isinstance(value, (list, tuple)):
+        return not value
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+
+
+def _raise_if_ptu_deployment_is_priced(*, model_info: Mapping[str, object], supplied: Mapping[str, object]) -> None:
+    """Refuse a rate the caller supplies for a deployment that bills reserved capacity.
+
+    Separate from the zeroing so the team-model path can run it before it touches the team, whose
+    ACL write autocommits: a refusal raised after it would leave the team changed and the
+    deployment row never written.
+    """
+    if not is_ptu_cost_attribution_enabled():
+        return
+    if model_info.get("ptu_count") is None or model_info.get("cost_per_ptu_per_hour") is None:
+        return
+    priced: Final = tuple(
+        sorted(
+            tuple(field for field in _CUSTOM_PRICING_FIELDS if _is_nonzero_price(supplied.get(field)))
+            + tuple(field for field in _PTU_EMPTIED_PRICING_FIELDS if supplied.get(field))
+        )
+    )
+    if not priced:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"A PTU deployment bills by reserved capacity, so {', '.join(priced)} cannot be charged on "
+            "top of it. Send 0 or no value, or remove ptu_count and cost_per_ptu_per_hour to bill per token."
+        ),
+    )
+
+
+def _ptu_zeroed_pricing(
+    *,
+    model_info: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    supplied: Mapping[str, object],
+) -> Mapping[str, float | tuple[()] | Mapping[str, float]]:
+    """The pricing a PTU deployment must carry, empty unless one is being stored.
+
+    Reserved capacity is already billed by the flat cost the rollup writes, so charging the
+    traffic it serves bills the same tokens twice. Left unset the rate falls back to the public
+    cost map, which makes the double charge the default rather than an opt-in.
+
+    Only a price the caller supplies is refused. A non-zero price already on the row is zeroed
+    instead, so a deployment priced through a path this rule does not cover heals on its next
+    save rather than rejecting every later edit of a field that has nothing to do with pricing.
+
+    ``supplied`` is the caller's litellm_params alone, because that is the blob a price is
+    authored on. model_info's copy is written by the server, both by the mirror in
+    ``Deployment.__init__`` and by the cost-map defaults /model/info fills in, so a client that
+    round-trips a model_info blob sends back prices it never chose.
+    """
+    if not is_ptu_cost_attribution_enabled():
+        return _NO_PRICING_OVERRIDE
+    if model_info.get("ptu_count") is None or model_info.get("cost_per_ptu_per_hour") is None:
+        return _NO_PRICING_OVERRIDE
+    _raise_if_ptu_deployment_is_priced(model_info=model_info, supplied=supplied)
+    stored: Final = frozenset(
+        field
+        for field in _CUSTOM_PRICING_FIELDS
+        if _is_nonzero_price(model_info.get(field)) or _is_nonzero_price(litellm_params.get(field))
+    )
+    return MappingProxyType(
+        {
+            **_PTU_ZEROED_PRICING,
+            **dict.fromkeys(_PTU_ZEROED_TABLE_FIELDS, dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)),
+            **dict.fromkeys(stored - _PTU_ZEROED_TABLE_FIELDS, 0.0),
+        }
+    )
+
+
+def _ptu_pricing_delta(
+    *,
+    stored_model_info: Mapping[str, object],
+    model_info: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    patch: updateDeployment,
+) -> tuple[Mapping[str, float | tuple[()] | Mapping[str, float]], frozenset[str]]:
+    """The pricing a patch must write into both blobs, and the pricing it must drop from them.
+
+    A patch that takes the deployment off PTU takes the zeroed pricing with it, since the zeros
+    exist only to stop the double charge. Left behind they would serve the deployment for free.
+    Reading the stored row rather than the patch alone keeps that release off a deployment that
+    never carried PTU config, whose zero price is a rate its operator chose. A zero the patch
+    itself carries is released with the rest, because the dashboard echoes the whole stored
+    blob on every save, so a supplied zero cannot be told apart from the one this rule wrote.
+
+    The release spans every field the zeroing could have written, not just the mirrored ones, or
+    a rate zeroed on the way in (per-second, per-character tiers) would bill nothing forever.
+    """
+    supplied: Final = patch.litellm_params.model_dump(exclude_none=True) if patch.litellm_params else _EMPTY_MODEL_INFO
+    zeroed: Final = _ptu_zeroed_pricing(model_info=model_info, litellm_params=litellm_params, supplied=supplied)
+    if zeroed:
+        return zeroed, frozenset()
+    was_ptu: Final = any(stored_model_info.get(field) is not None for field in _PTU_PRICED_PAIR)
+    if not was_ptu or not _explicitly_cleared_ptu_fields(patch.model_info) & _PTU_PRICED_PAIR:
+        return _NO_PRICING_OVERRIDE, frozenset()
+    return _NO_PRICING_OVERRIDE, frozenset(
+        field
+        for field in _CUSTOM_PRICING_FIELDS.union(_PTU_ZEROED_PRICING_FIELDS, _PTU_EMPTIED_PRICING_FIELDS)
+        if _is_zero_price(model_info.get(field)) or _is_zero_price(litellm_params.get(field))
+    )
+
+
+def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
+    """``model_params`` with PTU pricing applied, or itself when it configures no PTU."""
+    model_info: Final = model_params.model_info.model_dump(exclude_none=True)
+    litellm_params: Final = model_params.litellm_params.model_dump(exclude_none=True)
+    override: Final = _ptu_zeroed_pricing(model_info=model_info, litellm_params=litellm_params, supplied=litellm_params)
+    if not override:
+        return model_params
+    # model_copy validates nothing, so the emptied tier table has to arrive as the list the field
+    # declares or Pydantic warns on every later dump of it
+    stored: Final = MappingProxyType(
+        {key: [] if isinstance(value, tuple) else value for key, value in override.items()}
+    )
+    return model_params.model_copy(
+        update=MappingProxyType(
+            {
+                "litellm_params": model_params.litellm_params.model_copy(update=stored),
+                "model_info": model_params.model_info.model_copy(update=stored),
+            }
+        )
+    )
+
+
 def _parse_ptu_datetime(value: object) -> datetime.datetime | None:
     """``value`` as a datetime, parsing an ISO string, else None."""
     if isinstance(value, datetime.datetime):
@@ -403,6 +580,19 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
             merged_model_info.pop(field, None)
 
     _validate_ptu_model_info(merged_model_info)
+    ptu_pricing, ptu_released = _ptu_pricing_delta(
+        stored_model_info=db_model.model_info.model_dump(exclude_none=True)
+        if db_model.model_info
+        else _EMPTY_MODEL_INFO,
+        model_info=merged_model_info,
+        litellm_params=merged_litellm_params,
+        patch=updated_patch,
+    )
+    merged_model_info.update(ptu_pricing)
+    merged_litellm_params.update(ptu_pricing)
+    for field in ptu_released:
+        merged_model_info.pop(field, None)
+        merged_litellm_params.pop(field, None)
 
     # convert to prisma compatible format
 
@@ -862,6 +1052,12 @@ async def _update_team_model_in_db(
     if patch_data.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(patch_data.model_info.model_dump(exclude_none=True))
         _validate_ptu_model_info(_merged_ptu_model_info(db_model=db_model, patch_data=patch_data))
+    _raise_if_ptu_deployment_is_priced(
+        model_info=_merged_ptu_model_info(db_model=db_model, patch_data=patch_data),
+        supplied=(
+            patch_data.litellm_params.model_dump(exclude_none=True) if patch_data.litellm_params else _EMPTY_MODEL_INFO
+        ),
+    )
 
     patch_team_id: Final = patch_data.model_info.team_id if patch_data.model_info else None
 
@@ -1588,6 +1784,7 @@ async def add_new_model(
         incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
         _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
         _validate_ptu_model_info(incoming_model_info)
+        priced_model_params: Final = _ptu_priced_deployment(model_params)
 
         if store_model_in_db is True:
             """
@@ -1601,13 +1798,13 @@ async def add_new_model(
                 _original_litellm_model_name: Final = model_params.model_name
                 if model_params.model_info.team_id is None:
                     model_response = await _add_model_to_db(
-                        model_params=model_params,
+                        model_params=priced_model_params,
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
                     )
                 else:
                     model_response = await _add_team_model_to_db(
-                        model_params=model_params,
+                        model_params=priced_model_params,
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
                     )
@@ -1619,9 +1816,9 @@ async def add_new_model(
                 if "slack" in _alerting:
                     # send notification - new model added
                     await proxy_logging_obj.slack_alerting_instance.model_added_alert(
-                        model_name=model_params.model_name,
+                        model_name=priced_model_params.model_name,
                         litellm_model_name=_original_litellm_model_name,
-                        passed_model_info=model_params.model_info,
+                        passed_model_info=priced_model_params.model_info,
                     )
             except Exception as e:
                 verbose_proxy_logger.exception("Exception in add_new_model: %s", e)
@@ -2025,19 +2222,23 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
 async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     tier_labels: str | None = None,
+    classification_rubric: ClassificationRubric | None = None,
 ) -> AutoRouterClassifierDefaultPromptResponse:
     """
     Get the default classifier system prompt, so the dashboard's prompt editor can prefill it.
 
     The prompt's closing line depends on whether prior conversation turns are quoted to the
-    classifier, and its tier bullets are named by the router's tier_labels, so the caller passes both
-    to get the text that router would actually send rather than a rubric it does not use.
+    classifier, its tier bullets are named by the router's tier_labels, and its calibration examples
+    come from the router's classification rubric, so the caller passes all three to get the text that router
+    would actually send rather than a rubric it does not use.
 
     Parameters:
     - context_window_size: int - The router's classifier_context_window_size. Defaults to the
       built-in default.
     - tier_labels: str | None - The router's tier_labels as a JSON object of canonical tier name to
       display name, e.g. `{"SIMPLE": "Cheap"}`. Omit or pass an empty object for the default names.
+    - classification_rubric: ClassificationRubric | None - The router's
+      classifier_llm_config.classification_rubric. Omit for the default.
     """
     if context_window_size < 0:
         raise ProxyException(
@@ -2050,9 +2251,11 @@ async def get_auto_router_classifier_default_prompt(
     labeled_tiers: Final = _labeled_tiers_from_query(tier_labels)
     return AutoRouterClassifierDefaultPromptResponse(
         system_prompt=(
-            classification_system_prompt(context_window_size)
+            classification_system_prompt(context_window_size, classification_rubric=classification_rubric)
             if labeled_tiers is None
-            else classification_system_prompt(context_window_size, labeled_tiers=labeled_tiers)
+            else classification_system_prompt(
+                context_window_size, labeled_tiers=labeled_tiers, classification_rubric=classification_rubric
+            )
         )
     )
 
