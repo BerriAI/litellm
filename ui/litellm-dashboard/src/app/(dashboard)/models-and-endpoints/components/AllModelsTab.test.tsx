@@ -192,7 +192,7 @@ describe("AllModelsTab", () => {
       expect(lastModelsInfoCall().sortOrder).toBe(firstDirection);
     });
 
-    it("maps the hidden Status column to the server field status", () => {
+    it("maps the hidden Source column to the server field status", () => {
       expect(toServerSortField(STATUS_COLUMN_ID)).toBe("status");
     });
 

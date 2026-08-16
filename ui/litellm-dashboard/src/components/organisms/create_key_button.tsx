@@ -1069,7 +1069,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     <BudgetDurationDropdown
                       showNeverResets
-                      placeholder="Never resets"
+                      placeholder="Not set"
                       onChange={(value) => form.setFieldValue("budget_duration", value)}
                     />
                   </Form.Item>
