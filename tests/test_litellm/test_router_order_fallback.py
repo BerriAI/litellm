@@ -221,7 +221,7 @@ async def test_order_fallback_overrides_session_affinity():
     session_id = "test-session"
     await callback.cache.async_set_cache(
         key=DeploymentAffinityCheck.get_session_affinity_cache_key(
-            "test-model", session_id
+            "test-model", session_id, None
         ),
         value={"model_id": "1"},
     )
