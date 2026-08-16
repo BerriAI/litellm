@@ -66,16 +66,12 @@ describe("OutputCard", () => {
   it("should copy message content when copy button is clicked", async () => {
     render(<OutputCard message={mockMessage} />);
 
-    const copyButtons = screen.getAllByRole("button");
-    const copyButton = copyButtons.find((button) => {
-      const icon = button.querySelector('[aria-label="copy"]');
-      return icon !== null;
-    });
+    const copyButton = screen.getByRole("button", { name: /copy/i });
 
     expect(copyButton).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(copyButton!);
+      fireEvent.click(copyButton);
     });
 
     await waitFor(() => {
@@ -88,14 +84,10 @@ describe("OutputCard", () => {
 
     render(<OutputCard message={null} />);
 
-    const copyButtons = screen.getAllByRole("button");
-    const copyButton = copyButtons.find((button) => {
-      const icon = button.querySelector('[aria-label="copy"]');
-      return icon !== null;
-    });
+    const copyButton = screen.getByRole("button", { name: /copy/i });
 
     expect(copyButton).toBeInTheDocument();
-    await user.click(copyButton!);
+    await user.click(copyButton);
 
     await waitFor(() => {
       expect(mockWriteText).not.toHaveBeenCalled();

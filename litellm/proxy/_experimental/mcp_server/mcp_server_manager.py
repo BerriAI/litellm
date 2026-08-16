@@ -118,6 +118,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     is_short_mcp_tool_prefix_enabled,
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
+    logging_safe_mcp_headers,
     match_known_server_prefix,
     match_known_tool_name,
     merge_mcp_headers,
@@ -1598,6 +1599,9 @@ class MCPServerManager:
                 manual_token_url,
             )
             use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type or obo_needs_discovery)
+            configured_authorization_url = manual_authorization_url
+            configured_token_url = manual_token_url
+            configured_registration_url = manual_registration_url
             manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
                 manual_issuer,
                 is_discovery_auth_type,
@@ -1724,6 +1728,9 @@ class MCPServerManager:
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
                 registration_url=resolved_registration_url,
+                configured_authorization_url=configured_authorization_url,
+                configured_token_url=configured_token_url,
+                configured_registration_url=configured_registration_url,
                 token_endpoint_auth_method=server_config.get("token_endpoint_auth_method", None),
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
@@ -2169,6 +2176,9 @@ class MCPServerManager:
             is_discovery_auth_type
             or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url),
         )
+        configured_authorization_url: Final = manual_authorization_url
+        configured_token_url: Final = manual_token_url
+        configured_registration_url: Final = manual_registration_url
         manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
             manual_issuer,
             is_discovery_auth_type,
@@ -2221,6 +2231,9 @@ class MCPServerManager:
             authorization_url=manual_authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
             token_url=manual_token_url or getattr(gated_oauth_metadata, "token_url", None),
             registration_url=manual_registration_url or getattr(gated_oauth_metadata, "registration_url", None),
+            configured_authorization_url=configured_authorization_url,
+            configured_token_url=configured_token_url,
+            configured_registration_url=configured_registration_url,
             token_endpoint_auth_method=(
                 credentials_dict.get("token_endpoint_auth_method") if credentials_dict else None
             ),
@@ -2478,6 +2491,18 @@ class MCPServerManager:
             open_ids.update(submitted_server_ids)
         return open_ids
 
+    @staticmethod
+    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> str | None:
+        """The single server an admitted session subject's bearer was scoped to at authorize
+        time (RFC 8707 resource), or None for every other principal shape and for unscoped
+        sessions. Read at every return path of :meth:`get_allowed_mcp_servers`, including
+        the exception fallback, and applied AFTER every union (grants, operator-open,
+        submitted) because the scope is a ceiling over the whole reachable set; a resolver
+        fault therefore never widens a scoped bearer to the allow-all set."""
+        if user_api_key_auth is None or not _is_mcp_admitted_user_subject(user_api_key_auth):
+            return None
+        return user_api_key_auth.mcp_session_resource_server_id
+
     async def get_allowed_mcp_servers(self, user_api_key_auth: UserAPIKeyAuth | None = None) -> list[str]:
         """
         Get the allowed MCP Servers for the user.
@@ -2587,13 +2612,19 @@ class MCPServerManager:
 
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
-            return list(combined_servers)
+            scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
+            return [server_id for server_id in combined_servers if scope is None or server_id == scope]
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
                 "grants may be dropped. Falling back to global and submitted servers."
             )
-            return list(dict.fromkeys(allow_all_server_ids + submitted_server_ids))
+            scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
+            return [
+                server_id
+                for server_id in dict.fromkeys(allow_all_server_ids + submitted_server_ids)
+                if scope is None or server_id == scope
+            ]
 
     async def resolve_toolset_tool_permissions(
         self,
@@ -4603,6 +4634,7 @@ class MCPServerManager:
             ),
             "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
             "incoming_bearer_token": incoming_bearer_token,
+            "headers": logging_safe_mcp_headers(raw_headers),
         }
 
         # Create MCP request object for processing
@@ -5856,9 +5888,9 @@ class MCPServerManager:
             args=getattr(server, "args", None) or [],
             env=getattr(server, "env", None) or {},
             issuer=server.issuer,
-            authorization_url=server.authorization_url,
-            token_url=server.token_url,
-            registration_url=server.registration_url,
+            authorization_url=server.configured_authorization_url or server.authorization_url,
+            token_url=server.configured_token_url or server.token_url,
+            registration_url=server.configured_registration_url or server.registration_url,
             oauth2_flow=server.oauth2_flow,
             dcr_bridge=server.dcr_bridge,
             token_exchange_endpoint=server.token_exchange_endpoint,
@@ -5966,9 +5998,9 @@ class MCPServerManager:
             args=getattr(server, "args", None) or [],
             env=getattr(server, "env", None) or {},
             issuer=server.issuer,
-            authorization_url=server.authorization_url,
-            token_url=server.token_url,
-            registration_url=server.registration_url,
+            authorization_url=server.configured_authorization_url or server.authorization_url,
+            token_url=server.configured_token_url or server.token_url,
+            registration_url=server.configured_registration_url or server.registration_url,
             oauth2_flow=server.oauth2_flow,
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,

@@ -4,6 +4,7 @@ import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer, MCPToolset, type MCPEvent } from "@/components/mcp_tools/types";
+import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 
 const completionAsSingleChunk = (completion: ChatCompletion): ChatCompletionChunk =>
   ({
@@ -226,6 +227,7 @@ export async function makeOpenAIChatCompletionRequest(
           completionTokens: chunkWithUsage.usage.completion_tokens,
           promptTokens: chunkWithUsage.usage.prompt_tokens,
           totalTokens: chunkWithUsage.usage.total_tokens,
+          ...extractPromptCacheTokens(chunkWithUsage.usage),
         };
 
         // Check for reasoning tokens

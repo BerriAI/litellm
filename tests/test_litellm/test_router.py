@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import logging
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,6 +15,7 @@ sys.path.insert(
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -4060,6 +4062,46 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
     assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123:role/batch-role"
 
 
+def test_get_deployment_credentials_with_provider_preserves_aws_auth_params():
+    """
+    Test that get_deployment_credentials_with_provider preserves every AWS auth
+    selector (session token, assume-role, web identity, profile) so bedrock
+    files/batches deployments using temporary or role-based credentials do not
+    silently fall back to the server's ambient identity (#36155).
+    """
+    aws_auth_params = {
+        "aws_access_key_id": "deployment-access-key",
+        "aws_secret_access_key": "deployment-secret",
+        "aws_session_token": "deployment-session-token",
+        "aws_region_name": "us-west-2",
+        "aws_session_name": "deployment-session",
+        "aws_profile_name": "deployment-profile",
+        "aws_role_name": "arn:aws:iam::123:role/deployment-role",
+        "aws_web_identity_token": "deployment-web-identity",
+        "aws_sts_endpoint": "https://sts.us-west-2.amazonaws.com",
+        "aws_external_id": "deployment-external-id",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    **aws_auth_params,
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="bedrock-batch-model"
+    )
+
+    assert credentials is not None
+    for key, value in aws_auth_params.items():
+        assert credentials.get(key) == value, key
+
+
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",
@@ -6711,6 +6753,113 @@ def test_get_configured_token_limits_coerces_numeric_strings():
 
 
 @pytest.mark.asyncio
+async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "owning-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-owning",
+                },
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_key": "sk-fallback",
+                    "api_base": "https://fallback.openai.azure.com",
+                    "api_version": "2024-08-01-preview",
+                },
+            },
+        ],
+        fallbacks=[{"owning-model": ["fallback-model"]}],
+        num_retries=0,
+    )
+    owning_provider_error = litellm.BadRequestError(
+        message="completion_window must be one of: 24h",
+        model="openai/gpt-4o-mini",
+        llm_provider="openai",
+    )
+    mock_create = AsyncMock(side_effect=owning_provider_error)
+
+    with patch.object(router, "_acreate_batch", mock_create):
+        with pytest.raises(litellm.BadRequestError, match="24h"):
+            await router.acreate_batch(
+                model="owning-model",
+                input_file_id="file-owned-by-openai",
+                endpoint="/v1/chat/completions",
+                completion_window="5m",
+                disable_fallbacks=True,
+            )
+
+    mock_create.assert_awaited_once()
+    assert mock_create.call_args.kwargs["model"] == "owning-model"
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_surfaces_owning_provider_error_without_disable_fallbacks():
+    """The router itself has to keep a batch inside the group that owns the input file:
+    the proxy only sets disable_fallbacks on the managed-files route, so the caller
+    otherwise gets the fallback provider's error for a file it never received."""
+    from litellm.types.utils import LiteLLMBatch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "owning-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-owning",
+                },
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_key": "sk-fallback",
+                    "api_base": "https://fallback.openai.azure.com",
+                    "api_version": "2024-08-01-preview",
+                },
+            },
+        ],
+        fallbacks=[{"owning-model": ["fallback-model"]}],
+        num_retries=0,
+    )
+    attempted_models = []
+
+    async def _acreate_batch(model, **kwargs):
+        attempted_models.append(model)
+        if model == "owning-model":
+            raise litellm.APIConnectionError(
+                message="Connection error - openai is unreachable",
+                model="openai/gpt-4o-mini",
+                llm_provider="openai",
+            )
+        return LiteLLMBatch(
+            id="batch-created-on-the-wrong-provider",
+            completion_window="24h",
+            created_at=0,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-owned-by-openai",
+            object="batch",
+            status="validating",
+        )
+
+    with patch.object(router, "_acreate_batch", _acreate_batch):
+        with pytest.raises(litellm.APIConnectionError, match="openai is unreachable"):
+            await router.acreate_batch(
+                model="owning-model",
+                input_file_id="file-owned-by-openai",
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+                metadata={"team": "batch-jobs"},
+            )
+
+    assert attempted_models == ["owning-model"]
+
+
+@pytest.mark.asyncio
 async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
     import httpx
 
@@ -7326,6 +7475,102 @@ def test_pre_call_checks_keeps_deployment_when_provider_is_unresolvable(monkeypa
     assert len(result) == 1
 
 
+class TestConsumedRequestTagsStamp:
+    """Issue #36621: when a request's tags select a tagged pre-routing strategy, those
+    tags are consumed by the selection; the hook must stamp the rewritten model group so
+    tag filtering skips request-body tags there, and must clear the stamp on every
+    re-entry (fallbacks reuse the same request_kwargs) so it cannot leak elsewhere."""
+
+    class _RewriteStrategy:
+        def __init__(self, rewrite_to: str):
+            self.rewrite_to = rewrite_to
+
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            return PreRoutingHookResponse(model=self.rewrite_to, messages=messages)
+
+    @classmethod
+    def _router(cls, marker_tags=("route",)) -> "litellm.Router":
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}},
+            ],
+            enable_tag_filtering=True,
+        )
+        router.auto_routers = {
+            "gpt4o": [TaggedPreRoutingStrategy(tags=marker_tags, strategy=cls._RewriteStrategy("gemini-flash"))]
+        }
+        return router
+
+    @pytest.mark.asyncio
+    async def test_stamps_the_rewritten_group_when_request_tags_selected_the_router(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+        from litellm.types.router import ConsumedRequestTagsStamp
+
+        router = self._router()
+        request_kwargs = {"metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert request_kwargs["metadata"][CONSUMED_REQUEST_TAGS_METADATA_KEY] == ConsumedRequestTagsStamp(
+            model_group="gemini-flash", tags=("route",)
+        )
+
+    @pytest.mark.asyncio
+    async def test_stamps_into_litellm_metadata_when_the_request_uses_that_bucket(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+        from litellm.types.router import ConsumedRequestTagsStamp
+
+        router = self._router()
+        request_kwargs = {"litellm_metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert request_kwargs["litellm_metadata"][CONSUMED_REQUEST_TAGS_METADATA_KEY] == ConsumedRequestTagsStamp(
+            model_group="gemini-flash", tags=("route",)
+        )
+
+    @pytest.mark.asyncio
+    async def test_fallback_reentry_with_a_plain_group_clears_the_stale_stamp(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+
+        router = self._router()
+        request_kwargs = {"metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_when_the_request_is_untagged(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+
+        router = self._router()
+        request_kwargs = {"metadata": {}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_when_the_selected_strategy_carries_no_tags(self):
+        from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+
+        router = self._router(marker_tags=())
+        request_kwargs = {"metadata": {"tags": ["route"]}}
+
+        await router.async_pre_routing_hook(model="gpt4o", request_kwargs=request_kwargs)
+
+        assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
+
+
 class TestAutoRouterMaxInputCharsWiring:
     """`auto_router_max_input_chars` on the deployment has to reach the AutoRouter that embeds prompts.
 
@@ -7370,3 +7615,384 @@ class TestAutoRouterMaxInputCharsWiring:
         router = self._router()
 
         assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+
+
+class TestTaggedAutoRouterOnSharedModelName:
+    """A tagged auto-router marker sharing its model_name with a plain deployment must not
+    capture requests whose tags don't match it when tag filtering is enabled (#36620)."""
+
+    class _FixedRouteLayer:
+        def __call__(self, text: str):
+            from semantic_router.schema import RouteChoice
+
+            return RouteChoice(name="gemini-flash")
+
+    @classmethod
+    def _router(cls, marker_tags, include_plain_sibling: bool, enable_tag_filtering: bool) -> "litellm.Router":
+        pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+        marker = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "auto_router/gpt4o-router",
+                "auto_router_config": json.dumps(
+                    {"routes": [{"name": "gemini-flash", "utterances": ["capital city questions"]}]}
+                ),
+                "auto_router_default_model": "gemini-flash",
+                "auto_router_embedding_model": "text-embedding-3-small",
+                **({"tags": marker_tags} if marker_tags else {}),
+            },
+        }
+        plain = {"model_name": "gpt4o", "litellm_params": {"model": "openai/gpt-4o"}}
+        tier = {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}}
+        router = litellm.Router(
+            model_list=[plain, marker, tier] if include_plain_sibling else [marker, tier],
+            enable_tag_filtering=enable_tag_filtering,
+        )
+        router.auto_routers["gpt4o"][0].strategy.routelayer = cls._FixedRouteLayer()
+        return router
+
+    @staticmethod
+    async def _hook_response(router: "litellm.Router", request_kwargs: dict):
+        return await router.async_pre_routing_hook(
+            model="gpt4o",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_untagged_request_bypasses_the_tagged_marker_when_a_plain_deployment_shares_the_name(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        assert await self._hook_response(router, {}) is None
+
+    @pytest.mark.asyncio
+    async def test_request_tagged_for_the_marker_is_still_semantically_routed(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {"metadata": {"tags": ["route"]}})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_marker_only_alias_still_captures_untagged_requests(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_untagged_marker_sharing_the_name_still_captures_untagged_requests(self):
+        router = self._router(marker_tags=None, include_plain_sibling=True, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_untagged_selection_never_lands_on_the_marker_deployment(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        for _ in range(20):
+            deployment = await router.async_get_available_deployment(
+                model="gpt4o",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
+            )
+            assert deployment["litellm_params"]["model"] == "openai/gpt-4o"
+
+    def test_deployment_without_litellm_params_mapping_is_not_a_marker(self):
+        assert litellm.Router._is_strategy_marker_deployment({"model_name": "gpt4o"}) is False
+
+    def test_model_name_has_plain_deployments_reflects_the_pool(self):
+        mixed = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+        marker_only = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
+
+        assert mixed._model_name_has_plain_deployments("gpt4o") is True
+        assert marker_only._model_name_has_plain_deployments("gpt4o") is False
+
+
+class TestGetAllowedFailsFromPolicy:
+    def _make_router(self, **policy_kwargs) -> litellm.Router:
+        from litellm.types.router import AllowedFailsPolicy
+
+        return litellm.Router(
+            model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "fake"}}],
+            allowed_fails_policy=AllowedFailsPolicy(**policy_kwargs),
+        )
+
+    def test_no_policy_returns_none(self):
+        router = litellm.Router(
+            model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "fake"}}],
+        )
+        assert router.get_allowed_fails_from_policy(litellm.RateLimitError("429", "openai", "gpt-4")) is None
+
+    def test_internal_server_error_allowed_fails(self):
+        router = self._make_router(InternalServerErrorAllowedFails=7)
+        exc = litellm.InternalServerError("500", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 7
+
+    def test_service_unavailable_error_allowed_fails(self):
+        router = self._make_router(ServiceUnavailableErrorAllowedFails=4)
+        exc = litellm.ServiceUnavailableError("503", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 4
+
+    def test_bad_gateway_error_allowed_fails(self):
+        router = self._make_router(BadGatewayErrorAllowedFails=2)
+        exc = litellm.BadGatewayError("502", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 2
+
+    def test_not_found_error_allowed_fails(self):
+        router = self._make_router(NotFoundErrorAllowedFails=1)
+        exc = litellm.NotFoundError("404", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 1
+
+    def test_unmatched_exception_returns_none(self):
+        router = self._make_router(InternalServerErrorAllowedFails=5)
+        exc = litellm.RateLimitError("429", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) is None
+
+
+class _LogCapture(logging.Handler):
+    def __init__(self, level):
+        super().__init__(level=level)
+        self._level = level
+        self.messages = []
+
+    def emit(self, record):
+        if record.levelno == self._level:
+            self.messages.append(record.getMessage())
+
+
+class _FallbackAttemptRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failed_targets = []
+
+    async def log_failure_fallback_event(self, original_model_group, kwargs, original_exception):
+        self.failed_targets.append(kwargs.get("model"))
+
+
+def _cyclic_fallback_router(num_retries=0):
+    groups = ["group-a", "group-b", "group-c", "group-d"]
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            }
+            for group in groups
+        ],
+        fallbacks=[
+            {"group-a": ["group-b", "group-c"]},
+            {"group-b": ["group-a", "group-c"]},
+            {"group-c": ["group-d"]},
+            {"group-d": ["group-b", "group-a"]},
+        ],
+        num_retries=num_retries,
+    )
+
+
+async def _drive_cyclic_fallback(router, capture, recorder=None, **request_kwargs):
+    router_logger = logging.getLogger("LiteLLM Router")
+    previous_level = router_logger.level
+    router_logger.setLevel(capture.level)
+    router_logger.addHandler(capture)
+    if recorder is not None:
+        litellm.callbacks.append(recorder)
+    try:
+        with pytest.raises(litellm.InternalServerError):
+            await router.acompletion(
+                model="group-a", messages=[{"role": "user", "content": "hi"}], **request_kwargs
+            )
+    finally:
+        router_logger.removeHandler(capture)
+        router_logger.setLevel(previous_level)
+        if recorder is not None:
+            litellm.callbacks.remove(recorder)
+
+
+@pytest.mark.asyncio
+async def test_cyclic_fallback_graph_does_not_amplify_one_request():
+    """A fallback graph whose entries loop back on each other is easy to build by accident,
+    and every group in the loop fails identically on a deterministic error, so the walk must
+    not revisit a group and must not re-emit a growing chained traceback at each level. Left
+    unbounded, one request blocks the event loop long enough for health probes to fail."""
+    recorder = _FallbackAttemptRecorder()
+    capture = _LogCapture(logging.ERROR)
+
+    await _drive_cyclic_fallback(_cyclic_fallback_router(), capture, recorder)
+
+    assert sorted(set(recorder.failed_targets)) == ["group-b", "group-c", "group-d"]
+    assert len(recorder.failed_targets) == len(set(recorder.failed_targets))
+    assert not any("Traceback (most recent call last)" in message for message in capture.messages)
+    assert sum(len(message) for message in capture.messages) < 5_000
+
+
+@pytest.mark.asyncio
+async def test_retry_breadcrumbs_do_not_carry_the_walk_state():
+    """log_retry copies every kwarg into previous_models, which reaches spend logs and
+    logging callbacks. The set of already-attempted groups is router-internal walk state
+    with no diagnostic value there, and it is the one entry that is not a plain scalar.
+    A retry has to be configured for the walk state to reach log_retry at all."""
+    router = _cyclic_fallback_router(num_retries=1)
+    capture = _LogCapture(logging.ERROR)
+
+    await _drive_cyclic_fallback(router, capture)
+
+    assert router.previous_models, "no retry breadcrumbs were recorded"
+    assert any(
+        "fallback_depth" in breadcrumb for breadcrumb in router.previous_models
+    ), "no breadcrumb carried router walk state, so this test cannot see the leak"
+    for breadcrumb in router.previous_models:
+        assert "attempted_targets" not in breadcrumb
+
+
+@pytest.mark.asyncio
+async def test_fallback_traceback_stays_available_at_debug_level():
+    """Dropping the stack from the ERROR line is only safe because the fallback path still
+    emits it once per level at DEBUG, which is what an operator needs to diagnose why every
+    fallback failed. This pins that remaining debug traceback."""
+    capture = _LogCapture(logging.DEBUG)
+
+    await _drive_cyclic_fallback(_cyclic_fallback_router(), capture)
+
+    assert any("Traceback (most recent call last)" in message for message in capture.messages)
+
+
+@pytest.mark.asyncio
+async def test_fallback_failure_detail_from_upstream_is_bounded():
+    """The detail each level records about the level below it is attacker-influenced, since
+    it carries whatever the upstream error said. It has to be bounded on its own, so a walk
+    over several groups cannot compound one large message into the log or into the message
+    handed back to the caller."""
+    huge_message = "z" * 50_000
+    capture = _LogCapture(logging.ERROR)
+
+    await _drive_cyclic_fallback(
+        _cyclic_fallback_router(),
+        capture,
+        mock_response=litellm.InternalServerError(
+            message=huge_message, llm_provider="openai", model="group-a"
+        ),
+    )
+
+    assert capture.messages, "the fallback failure path did not log at ERROR"
+    assert huge_message not in "".join(capture.messages)
+    assert max(len(message) for message in capture.messages) < 5_000
+
+
+def test_stamp_or_clear_metadata_key_writes_and_clears_both_buckets():
+    request_kwargs = {"metadata": {}}
+    litellm.Router._stamp_or_clear_metadata_key(request_kwargs=request_kwargs, key="probe", value=7)
+    assert request_kwargs["metadata"]["probe"] == 7
+
+    stale_kwargs = {"metadata": {"probe": 7}, "litellm_metadata": {"probe": 7}}
+    litellm.Router._stamp_or_clear_metadata_key(request_kwargs=stale_kwargs, key="probe", value=None)
+    assert "probe" not in stale_kwargs["metadata"]
+    assert "probe" not in stale_kwargs["litellm_metadata"]
+
+
+@pytest.mark.parametrize(
+    "complexity_router_config,expect_callback",
+    [
+        ({"tiers": {"SIMPLE": "gpt-4o"}}, True),
+        ({"tiers": {"SIMPLE": "gpt-4o"}, "deployment_affinity": False}, False),
+        ({"tiers": {"SIMPLE": "gpt-4o"}, "deployment_affinity": False, "session_affinity": True}, True),
+    ],
+)
+def test_complexity_router_registers_affinity_callback_for_deployment_pin(complexity_router_config, expect_callback):
+    """The marker the complexity router stamps is inert unless a DeploymentAffinityCheck is
+    registered to read it, so deployment_affinity has to pull the callback in, and its default-on
+    means a bare config registers one. Opting out must skip the callback entirely rather than
+    register a filter that can never fire, including when session_affinity is on, since the two
+    pins are independent."""
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+            {
+                "model_name": "my-complexity-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": complexity_router_config,
+                },
+            },
+        ]
+    )
+    try:
+        registered = any(isinstance(cb, DeploymentAffinityCheck) for cb in router.optional_callbacks or [])
+        assert registered is expect_callback
+    finally:
+        for cb in router.optional_callbacks or []:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+
+def test_ensure_deployment_affinity_callback_is_idempotent():
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+
+    router = litellm.Router(model_list=[])
+    try:
+        router._ensure_deployment_affinity_callback()
+        router._ensure_deployment_affinity_callback()
+        affinity_callbacks = [
+            cb for cb in router.optional_callbacks or [] if isinstance(cb, DeploymentAffinityCheck)
+        ]
+        assert len(affinity_callbacks) == 1
+    finally:
+        for cb in router.optional_callbacks or []:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+
+def test_get_router_model_info_does_not_wipe_cached_pricing():
+    """A Deployment's model_info declares the mirrored pricing fields with None defaults;
+    merging it must not write those Nones into the lru_cache'd dict get_model_info() owns,
+    or /model/info loses built-in prices for every model a worker serves."""
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    expected = copy.deepcopy(litellm.get_model_info(model="anthropic/claude-sonnet-4-5"))
+
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1"),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5") == expected
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        assert merged[field] == expected[field]
+
+
+def test_get_router_model_info_keeps_explicit_pricing_overrides():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1", input_cost_per_token=1e-08),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert merged["input_cost_per_token"] == 1e-08
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08
