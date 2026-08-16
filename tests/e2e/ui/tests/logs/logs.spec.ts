@@ -129,17 +129,17 @@ test.describe("Logs page", () => {
     // box, so the wrapper reads as hidden while the clipped text node inside it does not.
     const header = sectionHeader(drawer, "Input");
     const body = header.locator("xpath=following-sibling::div[1]");
-    await expect(header.locator(".anticon-up")).toBeVisible();
+    await expect(header.locator(".lucide-chevron-up")).toBeVisible();
     await expect(body).toBeVisible();
 
     await header.click();
-    await expect(header.locator(".anticon-down")).toBeVisible({
+    await expect(header.locator(".lucide-chevron-down")).toBeVisible({
       timeout: 10_000,
     });
     await expect(body).toBeHidden({ timeout: 10_000 });
 
     await header.click();
-    await expect(header.locator(".anticon-up")).toBeVisible({
+    await expect(header.locator(".lucide-chevron-up")).toBeVisible({
       timeout: 10_000,
     });
     await expect(body).toBeVisible({ timeout: 10_000 });
