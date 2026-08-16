@@ -92,9 +92,10 @@ class TestRelayClientToUpstream:
         upstream = AsyncMock()
         upstream.send = AsyncMock()
 
-        result = await _relay_client_to_upstream(client_ws, upstream)
+        char_totals: list[int] = []
+        await _relay_client_to_upstream(client_ws, upstream, char_totals)
 
-        assert result == (7, 7, 0)
+        assert char_totals == [7, 7, 0]
         assert upstream.send.call_count == 3
 
     @pytest.mark.asyncio
@@ -110,9 +111,10 @@ class TestRelayClientToUpstream:
         upstream = AsyncMock()
         upstream.send = AsyncMock()
 
-        result = await _relay_client_to_upstream(client_ws, upstream)
+        char_totals: list[int] = []
+        await _relay_client_to_upstream(client_ws, upstream, char_totals)
 
-        assert sum(result) == 6
+        assert sum(char_totals) == 6
         assert upstream.send.call_count == 2
 
     @pytest.mark.asyncio
@@ -130,7 +132,7 @@ class TestRelayClientToUpstream:
 
         upstream.send = capture_send
 
-        await _relay_client_to_upstream(client_ws, upstream)
+        await _relay_client_to_upstream(client_ws, upstream, [])
 
         assert sent_payloads[0]["flush"] is True
         assert sent_payloads[0]["try_trigger_generation"] is True

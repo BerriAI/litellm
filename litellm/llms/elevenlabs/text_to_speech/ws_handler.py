@@ -65,16 +65,21 @@ def build_elevenlabs_ws_url(
 async def _relay_client_to_upstream(
     client_ws: WebSocket,
     upstream: ClientConnection,
-) -> tuple[int, ...]:
-    chunk_lengths: list[int] = []  # mutable-ok: local accumulator, converted to immutable tuple on return
+    char_totals: list[int],
+) -> None:
+    """Forward client text chunks to the upstream ElevenLabs connection.
+
+    Characters are appended to `char_totals` *before* the upstream send so that
+    partial counts survive task cancellation (e.g. when ElevenLabs sends isFinal
+    before the client sends EOS).
+    """
     async for raw in client_ws.iter_text():
         msg = _CLIENT_MSG_ADAPTER.validate_json(raw)  # rebind-ok: loop-body, rebound each iteration
-        await upstream.send(json.dumps(dict(msg)))
         text = msg.get("text", "")  # rebind-ok: loop-body, rebound each iteration
-        chunk_lengths.append(len(text))
+        char_totals.append(len(text))
+        await upstream.send(json.dumps(dict(msg)))
         if not text:
             break
-    return tuple(chunk_lengths)
 
 
 async def _relay_upstream_to_client(
@@ -109,6 +114,8 @@ async def stream_input_tts(
     back to the client as-is.
 
     Returns the total number of text characters sent (used for per-character cost tracking).
+    Character counts are committed to an external accumulator before each upstream send,
+    so partial totals are preserved even if the relay is cancelled early.
     """
     import websockets
 
@@ -124,20 +131,24 @@ async def stream_input_tts(
     if generation_config is not None:
         bos["generation_config"] = generation_config
 
+    char_totals: list[int] = []  # mutable-ok: accumulator written before each send; survives task cancellation
+
     async with websockets.connect(url, additional_headers={"xi-api-key": key}) as upstream:
         await upstream.send(json.dumps(bos))
 
-        task_c2u: Final = asyncio.create_task(_relay_client_to_upstream(client_ws, upstream))
+        task_c2u: Final = asyncio.create_task(
+            _relay_client_to_upstream(client_ws, upstream, char_totals)
+        )
         task_u2c: Final = asyncio.create_task(_relay_upstream_to_client(upstream, client_ws))
 
         # Wait for whichever relay finishes first, then cancel the other.
-        # This prevents the client-to-upstream relay from hanging if ElevenLabs
-        # sends isFinal before the client sends EOS, or if either side disconnects.
+        # Prevents the client-to-upstream relay from hanging if ElevenLabs sends
+        # isFinal before the client sends EOS, or if either side disconnects.
+        # char_totals is written before each upstream.send(), so its contents
+        # reflect all text actually forwarded, even if task_c2u is cancelled mid-session.
         await asyncio.wait({task_c2u, task_u2c}, return_when=asyncio.FIRST_COMPLETED)
         task_c2u.cancel()
         task_u2c.cancel()
-        results: Final = await asyncio.gather(task_c2u, task_u2c, return_exceptions=True)
+        await asyncio.gather(task_c2u, task_u2c, return_exceptions=True)
 
-    c2u_result: Final = results[0]
-    chunk_lengths: Final = c2u_result if isinstance(c2u_result, tuple) else ()
-    return sum(chunk_lengths)
+    return sum(char_totals)

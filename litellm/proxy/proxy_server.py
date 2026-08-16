@@ -10910,6 +10910,7 @@ async def elevenlabs_tts_stream_input_endpoint(
 
     import httpx
 
+    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.elevenlabs.text_to_speech.transformation import (
         ElevenLabsTextToSpeechConfig,
     )
@@ -10917,7 +10918,6 @@ async def elevenlabs_tts_stream_input_endpoint(
         VoiceSettings,
         stream_input_tts,
     )
-    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     elevenlabs_model: Final = model.removeprefix("elevenlabs/")
