@@ -68,7 +68,39 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
       },
     };
 
-    expect(buildUpdatedComplexityRouterConfig(stored, value, undefined, hydratedState).tiers).toEqual(stored.tiers);
+    expect(buildUpdatedComplexityRouterConfig(stored, value, undefined, hydratedState).tiers).toEqual({
+      ...stored.tiers,
+      SIMPLE: [stored.tiers.SIMPLE],
+    });
+  });
+
+  it("keeps plain tier lists unchanged and widens a stored bare string tier", () => {
+    const stored = {
+      ...STORED,
+      tiers: {
+        SIMPLE: "gpt-4o-mini",
+        MEDIUM: ["gpt-4o"],
+        COMPLEX: ["claude-sonnet-4"],
+        REASONING: ["o1-preview"],
+      },
+    };
+
+    const formValue = {
+      ...FORM_VALUE,
+      tiers: {
+        SIMPLE: ["gpt-4o-mini"],
+        MEDIUM: ["gpt-4o"],
+        COMPLEX: ["claude-sonnet-4"],
+        REASONING: ["o1-preview"],
+      },
+    };
+
+    expect(buildUpdatedComplexityRouterConfig(stored, formValue, undefined, hydratedState).tiers).toEqual({
+      SIMPLE: ["gpt-4o-mini"],
+      MEDIUM: ["gpt-4o"],
+      COMPLEX: ["claude-sonnet-4"],
+      REASONING: ["o1-preview"],
+    });
   });
 
   it("persists an edited keyword rule", () => {

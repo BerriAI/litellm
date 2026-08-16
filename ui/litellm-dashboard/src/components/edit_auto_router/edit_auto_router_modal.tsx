@@ -348,10 +348,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         const hydratedComplexityRouterConfig: ComplexityRouterConfigValue = {
           tiers: hydratedTiers,
           tier_model_params: Object.fromEntries(
-            ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"].map((tier) => [
-              tier,
-              extractTierModelParams(parsedConfig.tiers?.[tier]),
-            ]),
+            ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"].flatMap((tier) => {
+              const params = extractTierModelParams(parsedConfig.tiers?.[tier]);
+              return Object.keys(params).length > 0 ? [[tier, params]] : [];
+            }),
           ),
           default_model: hydratePinnedDefaultModel(
             parsedConfig.default_model,

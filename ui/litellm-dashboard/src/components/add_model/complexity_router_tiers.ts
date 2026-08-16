@@ -51,7 +51,7 @@ export const tierOptions = (
 export type TierModelParams = Record<string, unknown>;
 export type SerializedTierModel = string | { model_name: string; litellm_params: TierModelParams };
 
-export type TierModelParamsByTier = Partial<Record<string, Record<string, TierModelParams>>>;
+export type TierModelParamsByTier = Partial<Record<keyof ComplexityTiers, Record<string, TierModelParams>>>;
 
 export const extractTierModelParams = (value: unknown): Record<string, TierModelParams> => {
   const entries = Array.isArray(value) ? value : [value];
@@ -75,19 +75,23 @@ export const extractTierModelParams = (value: unknown): Record<string, TierModel
 export const serializeTierModels = (
   models: string[],
   paramsByModel: Record<string, TierModelParams> | undefined,
-): SerializedTierModel | SerializedTierModel[] => {
+): SerializedTierModel[] => {
   const entries = models.map((model) => {
     const params = paramsByModel?.[model];
     return params && Object.keys(params).length > 0 ? { model_name: model, litellm_params: params } : model;
   });
-  if (entries.length === 1 && typeof entries[0] !== "string") return entries[0];
   return entries;
 };
+
+export type SerializedTierConfig = Partial<Record<keyof ComplexityTiers, SerializedTierModel[]>>;
 
 export const serializeTierConfig = (
   tiers: Partial<ComplexityTiers>,
   paramsByTier: TierModelParamsByTier | undefined,
-): Record<string, SerializedTierModel | SerializedTierModel[]> =>
+): SerializedTierConfig =>
   Object.fromEntries(
-    Object.entries(tiers).map(([tier, models]) => [tier, serializeTierModels(models ?? [], paramsByTier?.[tier])]),
-  );
+    Object.entries(tiers).map(([tier, models]) => [
+      tier,
+      serializeTierModels(models ?? [], paramsByTier?.[tier as keyof ComplexityTiers]),
+    ]),
+  ) as SerializedTierConfig;

@@ -74,7 +74,7 @@ describe("normalizeTierModels", () => {
     const tiers = { REASONING: normalizeTierModels(stored) };
     const params = { REASONING: extractTierModelParams(stored) };
 
-    expect(serializeTierConfig(tiers, params)).toEqual({ REASONING: stored });
+    expect(serializeTierConfig(tiers, params)).toEqual({ REASONING: [stored] });
   });
 });
 
