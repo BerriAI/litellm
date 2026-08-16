@@ -526,6 +526,53 @@ def test_img_url_token_counter(img_url, monkeypatch):
     assert height is not None
 
 
+def test_get_image_dimensions_bare_base64():
+    """
+    Bare base64 (no 'data:' URL prefix) is documented input for
+    get_image_dimensions and must not crash on the ','-split of a data URL.
+    """
+    import base64
+    import struct
+
+    from litellm.litellm_core_utils.token_counter import get_image_dimensions
+
+    # Minimal PNG header carrying 100x200 dimensions.
+    png = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + struct.pack(">LL", 100, 200) + b"\x00" * 16
+    )
+    assert get_image_dimensions(data=png.decode()) == (100, 200)
+
+
+def test_get_image_dimensions_unfetchable_url_returns_defaults(monkeypatch):
+    """A URL that cannot be fetched falls back to the default dimensions instead of raising."""
+
+    def _raise(client, url, **kwargs):
+        raise RuntimeError("connection failed")
+
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.token_counter.safe_get",
+        _raise,
+    )
+    from litellm.constants import DEFAULT_IMAGE_HEIGHT, DEFAULT_IMAGE_WIDTH
+    from litellm.litellm_core_utils.token_counter import get_image_dimensions
+
+    assert get_image_dimensions(data="https://invalid.invalid/x.png") == (
+        DEFAULT_IMAGE_WIDTH,
+        DEFAULT_IMAGE_HEIGHT,
+    )
+
+
+def test_get_image_dimensions_undecodable_data_returns_defaults():
+    """Data that is neither a fetchable URL nor decodable base64 uses the defaults."""
+    from litellm.constants import DEFAULT_IMAGE_HEIGHT, DEFAULT_IMAGE_WIDTH
+    from litellm.litellm_core_utils.token_counter import get_image_dimensions
+
+    assert get_image_dimensions(data="not-an-image!") == (
+        DEFAULT_IMAGE_WIDTH,
+        DEFAULT_IMAGE_HEIGHT,
+    )
+
+
 def test_token_encode_disallowed_special():
     encode(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
     token_counter(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")

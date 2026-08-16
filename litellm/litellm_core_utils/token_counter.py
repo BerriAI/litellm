@@ -213,12 +213,19 @@ def get_image_dimensions(
                     img_data = body
         except Exception:
             pass
-    if img_data is None:
-        # Not a URL or fetch failed — assume base64
-        _header, encoded = data.split(",", 1)
-        img_data = base64.b64decode(encoded)
+    if img_data is None and not data.startswith(("http://", "https://")):
+        # Not a URL — assume base64. Accept both data-URL form
+        # ('data:<mime>;base64,<payload>') and bare base64; on a decode
+        # error, leave img_data unset so the default dimensions are used.
+        encoded = data.partition(",")[2] if data.startswith("data:") else data
+        try:
+            img_data = base64.b64decode(encoded)
+        except ValueError:
+            verbose_logger.debug("Failed to decode base64 image data; using default dimensions")
 
-    img_type: Final = get_image_type(img_data)
+    # A URL that could not be fetched (or base64 that could not be decoded)
+    # leaves img_data unset — fall through to the default dimensions below.
+    img_type: Final = get_image_type(img_data) if img_data is not None else None
 
     if img_type == "png":
         w, h = struct.unpack(">LL", img_data[16:24])
