@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import time
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeGuard
+from typing import TYPE_CHECKING, Final, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -130,14 +130,6 @@ def _validate_api_base(url: str) -> str:
     return url
 
 
-def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
-    return isinstance(value, dict)
-
-
-def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
-    return isinstance(value, list)
-
-
 def _write_text_back(content: object, new_text: str) -> object:
     """Put ``new_text`` into a ``content`` value without changing its shape.
 
@@ -148,7 +140,7 @@ def _write_text_back(content: object, new_text: str) -> object:
     """
     if isinstance(content, str):
         return new_text
-    if _is_object_list(content) and is_all_text_parts(content):
+    if isinstance(content, list) and is_all_text_parts(content):
         return merge_rewritten_text_parts(content, new_text)
     return content
 
@@ -157,10 +149,10 @@ def _render_tool_intent(fn: dict[str, object]) -> str:
     """A tool call rendered as the query its output should be selected against."""
     name: Final = str(fn.get("name") or "").strip()
     raw_args: Final = fn.get("arguments")
-    args: Final = "" if raw_args is None else str(raw_args).strip()
-    if name and args:
-        return f"{name}: {args}"
-    return name or args
+    arg_text: Final = "" if raw_args is None else str(raw_args).strip()
+    if name and arg_text:
+        return f"{name}: {arg_text}"
+    return name or arg_text
 
 
 def _query_for_target(messages: list[dict[str, object]], target_idx: int, fallback: str) -> str:
@@ -182,18 +174,18 @@ def _query_for_target(messages: list[dict[str, object]], target_idx: int, fallba
         if previous.get("role") != "assistant":
             continue
         tool_calls = previous.get("tool_calls")
-        if _is_object_list(tool_calls):
+        if isinstance(tool_calls, list):
             for call in tool_calls:
-                if not _is_str_object_dict(call) or not tool_call_id or call.get("id") != tool_call_id:
+                if not isinstance(call, dict) or not tool_call_id or call.get("id") != tool_call_id:
                     continue
                 fn = call.get("function")
-                intent = _render_tool_intent(fn if _is_str_object_dict(fn) else {})
+                intent = _render_tool_intent(fn if isinstance(fn, dict) else {})
                 if intent:
                     return intent
         # Legacy function_call turns carry no id, so require a name match.
         # Without it an older, unrelated call would supply the wrong intent.
         legacy = previous.get("function_call")
-        if _is_str_object_dict(legacy) and fn_name and legacy.get("name") == fn_name:
+        if isinstance(legacy, dict) and fn_name and legacy.get("name") == fn_name:
             intent = _render_tool_intent(legacy)
             if intent:
                 return intent
@@ -214,13 +206,13 @@ def _title_for(messages: list[dict[str, object]], target_idx: int) -> str | None
         if previous.get("role") != "assistant":
             continue
         tool_calls = previous.get("tool_calls")
-        if not _is_object_list(tool_calls):
+        if not isinstance(tool_calls, list):
             continue
         for call in tool_calls:
-            if not _is_str_object_dict(call) or call.get("id") != tool_call_id:
+            if not isinstance(call, dict) or call.get("id") != tool_call_id:
                 continue
             fn = call.get("function")
-            if _is_str_object_dict(fn) and isinstance(fn.get("name"), str):
+            if isinstance(fn, dict) and isinstance(fn.get("name"), str):
                 return str(fn["name"])[:120]
     return None
 
@@ -281,7 +273,7 @@ class NeedlepathGuardrail(CustomGuardrail):
         guardrail_name: str | None = None,
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
-    ):
+    ) -> None:
         raw_api_base: Final = (api_base or get_secret_str("NEEDLEPATH_API_BASE") or DEFAULT_API_BASE).rstrip("/")
         self.needlepath_api_base = _validate_api_base(raw_api_base)
         self.needlepath_api_key = api_key or get_secret_str("NEEDLEPATH_API_KEY")
@@ -346,7 +338,7 @@ class NeedlepathGuardrail(CustomGuardrail):
             else:
                 continue
             content = msg.get("content")
-            if _is_object_list(content) and not is_all_text_parts(content):
+            if isinstance(content, list) and not is_all_text_parts(content):
                 continue
             if len(content_to_text(content)) < self.min_chars_to_select:
                 continue
@@ -438,12 +430,12 @@ class NeedlepathGuardrail(CustomGuardrail):
             # It is a decline like any other malformed answer, not a 500.
             self._decline("unreadable_body", {"body": _safe_response_text(response)})
             return None
-        if not _is_str_object_dict(body):
+        if not isinstance(body, dict):
             self._decline("unexpected_shape", {"body": _safe_response_text(response)})
             return None
 
         gate: Final = body.get("gate")
-        reason: Final = gate.get("reason") if _is_str_object_dict(gate) else None
+        reason: Final = gate.get("reason") if isinstance(gate, dict) else None
         if isinstance(reason, str) and reason.startswith(_STANDDOWN_PREFIX):
             self._decline("gate_standdown", {"reason": reason})
             return None
@@ -480,9 +472,9 @@ class NeedlepathGuardrail(CustomGuardrail):
             return inputs
 
         structured_messages: Final = inputs.get("structured_messages")
-        if not _is_object_list(structured_messages) or not structured_messages:
+        if not isinstance(structured_messages, list) or not structured_messages:
             return inputs
-        messages: Final = [m for m in structured_messages if _is_str_object_dict(m)]
+        messages: Final = [m for m in structured_messages if isinstance(m, dict)]
         if len(messages) != len(structured_messages):
             return inputs
 
@@ -570,7 +562,7 @@ class NeedlepathGuardrail(CustomGuardrail):
         return {**inputs, "structured_messages": selected_messages}  # pyright: ignore[reportReturnType]  # plain dicts satisfy AllMessageValues at runtime
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel[Any]] | None:
+    def get_config_model() -> type[GuardrailConfigModel[object]] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.needlepath import (
             NeedlepathGuardrailConfigModel,
         )
