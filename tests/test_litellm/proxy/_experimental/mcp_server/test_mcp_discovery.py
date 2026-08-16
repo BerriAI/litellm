@@ -94,6 +94,30 @@ class TestMCPRegistryFile:
         assert linear["url"] == "https://mcp.linear.app/mcp"
         assert "/sse" not in linear["url"]
 
+    def test_nimble_uses_streamable_http_with_api_key(self, registry_path):
+        """Nimble should expose its authenticated streamable HTTP endpoint."""
+        with open(registry_path, "r") as f:
+            data = json.load(f)
+
+        nimble = next(s for s in data["servers"] if s["name"] == "nimble")
+        assert nimble == {
+            "name": "nimble",
+            "title": "Nimble",
+            "description": "Web search, SERP, and site extraction data for AI agents",
+            "icon_url": "https://avatars.githubusercontent.com/u/94446617?v=4",
+            "category": "Search",
+            "registry_url": None,
+            "transport": "http",
+            "url": "https://mcp.nimbleway.com/mcp",
+            "env_vars": [
+                {
+                    "name": "NIMBLE_API_KEY",
+                    "description": "Nimble API Key",
+                    "secret": True,
+                }
+            ],
+        }
+
     def test_well_known_servers_present(self, registry_path):
         """Ensure key well-known MCPs are in the registry."""
         with open(registry_path, "r") as f:

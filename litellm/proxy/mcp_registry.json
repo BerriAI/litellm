@@ -259,6 +259,19 @@
       ]
     },
     {
+      "name": "nimble",
+      "title": "Nimble",
+      "description": "Web search, SERP, and site extraction data for AI agents",
+      "icon_url": "https://avatars.githubusercontent.com/u/94446617?v=4",
+      "category": "Search",
+      "registry_url": null,
+      "transport": "http",
+      "url": "https://mcp.nimbleway.com/mcp",
+      "env_vars": [
+        {"name": "NIMBLE_API_KEY", "description": "Nimble API Key", "secret": true}
+      ]
+    },
+    {
       "name": "tavily",
       "title": "Tavily",
       "description": "AI-optimized search engine for research and retrieval",
