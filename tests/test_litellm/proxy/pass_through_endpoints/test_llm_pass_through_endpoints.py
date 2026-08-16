@@ -19,6 +19,7 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    _join_url_paths,
     azure_proxy_route,
     bedrock_llm_proxy_route,
     create_pass_through_route,
@@ -74,7 +75,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test joining base URL with no path and a path
         base_url = httpx.URL("https://api.example.com")
         path = "/v1/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Base URL with no path: '{base_url}' + '{path}' → '{result}'")
@@ -83,7 +84,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test joining base URL with path and another path
         base_url = httpx.URL("https://api.example.com/v1")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Base URL with path: '{base_url}' + '{path}' → '{result}'")
@@ -92,7 +93,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test with path not starting with slash
         base_url = httpx.URL("https://api.example.com/v1")
         path = "chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Path without leading slash: '{base_url}' + '{path}' → '{result}'")
@@ -101,7 +102,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test with base URL having trailing slash
         base_url = httpx.URL("https://api.example.com/v1/")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Base URL with trailing slash: '{base_url}' + '{path}' → '{result}'")

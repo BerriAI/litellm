@@ -2086,7 +2086,7 @@ class BaseOpenAIPassThroughHandler:
 
         # Construct the full target URL by properly joining the base URL and endpoint path
         base_url: Final = httpx.URL(base_target_url)
-        updated_url: Final = BaseOpenAIPassThroughHandler._join_url_paths(
+        updated_url: Final = _join_url_paths(
             base_url=base_url,
             path=encoded_endpoint,
             custom_llm_provider=custom_llm_provider,
@@ -2144,10 +2144,6 @@ class BaseOpenAIPassThroughHandler:
             headers=base_headers,
             request=request,
         )
-
-    @staticmethod
-    def _join_url_paths(base_url: httpx.URL, path: str, custom_llm_provider: litellm.LlmProviders) -> str:
-        return _join_url_paths(base_url=base_url, path=path, custom_llm_provider=custom_llm_provider)
 
 
 @router.api_route(
