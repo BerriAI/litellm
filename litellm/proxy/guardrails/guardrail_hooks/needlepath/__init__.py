@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import (
@@ -15,12 +16,17 @@ if TYPE_CHECKING:
 
 
 def _coerce_event_hook(
-    mode: str | list[str] | Mode,
-) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode:
+    mode: str | Sequence[str] | Mode,
+) -> GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode:
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, list):
-        return [GuardrailEventHooks(item) for item in mode]
+        # A real `list` is required here, not just any Sequence: CustomGuardrail's
+        # dispatch (should_run_guardrail) does `isinstance(self.event_hook, list)`
+        # to decide whether this hook fires for a given event. A tuple would fail
+        # that check silently and the guardrail would never run for a multi-hook
+        # config.
+        return [GuardrailEventHooks(item) for item in mode]  # mutable-ok: see comment above
     return GuardrailEventHooks(mode)
 
 
@@ -62,10 +68,14 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
     return _callback
 
 
-guardrail_initializer_registry: Final = {
+# guardrail_registry.py's module discovery does `isinstance(registry, dict)` before
+# merging this into the central registry; a Mapping/MappingProxyType would fail that
+# check silently and this guardrail would never be discovered at proxy startup.
+guardrail_initializer_registry: Final = {  # mutable-ok: see comment above
     SupportedGuardrailIntegrations.NEEDLEPATH.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {
+# Same reason as guardrail_initializer_registry above: discovery's isinstance(dict) check.
+guardrail_class_registry: Final = {  # mutable-ok: see comment above
     SupportedGuardrailIntegrations.NEEDLEPATH.value: NeedlepathGuardrail,
 }

@@ -25,6 +25,8 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import time
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 from urllib.parse import urlparse
 
@@ -98,10 +100,10 @@ def _parse_ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Addres
     socket layer accepts (single-integer IPv4, IPv4-mapped IPv6), so a blocked
     address cannot be smuggled past a plain string comparison."""
     try:
-        addr = ipaddress.ip_address(host)
+        addr = ipaddress.ip_address(host)  # rebind-ok: reassigned in the except fallback below
     except ValueError:
         try:
-            addr = ipaddress.ip_address(int(host, 0))
+            addr = ipaddress.ip_address(int(host, 0))  # rebind-ok: fallback re-parse as an int literal
         except (TypeError, ValueError):
             return None
     if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
@@ -145,7 +147,7 @@ def _write_text_back(content: object, new_text: str) -> object:
     return content
 
 
-def _render_tool_intent(fn: dict[str, object]) -> str:
+def _render_tool_intent(fn: Mapping[str, object]) -> str:
     """A tool call rendered as the query its output should be selected against."""
     name: Final = str(fn.get("name") or "").strip()
     raw_args: Final = fn.get("arguments")
@@ -155,7 +157,7 @@ def _render_tool_intent(fn: dict[str, object]) -> str:
     return name or arg_text
 
 
-def _query_for_target(messages: list[dict[str, object]], target_idx: int, fallback: str) -> str:
+def _query_for_target(messages: Sequence[Mapping[str, object]], target_idx: int, fallback: str) -> str:
     """The query ``messages[target_idx]`` should be selected against.
 
     A tool or function result is selected against the intent of the call that
@@ -179,7 +181,7 @@ def _query_for_target(messages: list[dict[str, object]], target_idx: int, fallba
                 if not isinstance(call, dict) or not tool_call_id or call.get("id") != tool_call_id:
                     continue
                 fn = call.get("function")
-                intent = _render_tool_intent(fn if isinstance(fn, dict) else {})
+                intent = _render_tool_intent(fn if isinstance(fn, dict) else MappingProxyType({}))
                 if intent:
                     return intent
         # Legacy function_call turns carry no id, so require a name match.
@@ -192,7 +194,7 @@ def _query_for_target(messages: list[dict[str, object]], target_idx: int, fallba
     return fallback
 
 
-def _title_for(messages: list[dict[str, object]], target_idx: int) -> str | None:
+def _title_for(messages: Sequence[Mapping[str, object]], target_idx: int) -> str | None:
     """The tool name behind a message, used as the record title."""
     msg: Final = messages[target_idx]
     name: Final = msg.get("name")
@@ -271,7 +273,7 @@ class NeedlepathGuardrail(CustomGuardrail):
         max_context_tokens: int | None = None,
         operating_point: str | None = None,
         guardrail_name: str | None = None,
-        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
+        event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
     ) -> None:
         raw_api_base: Final = (api_base or get_secret_str("NEEDLEPATH_API_BASE") or DEFAULT_API_BASE).rstrip("/")
@@ -301,58 +303,64 @@ class NeedlepathGuardrail(CustomGuardrail):
             default_on=default_on,
         )
 
-    def _request_headers(self) -> dict[str, str]:
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.needlepath_api_key or ''}",
-        }
+    def _request_headers(self) -> Mapping[str, str]:
+        # httpx's `headers=` accepts any Mapping (it iterates .items()), so this can
+        # be a genuine read-only view rather than a dict a caller could mutate.
+        return MappingProxyType(
+            {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.needlepath_api_key or ''}",
+            }
+        )
 
-    def _decline(self, reason: str, detail: dict[str, object] | None = None) -> None:
+    def _decline(self, reason: str, detail: Mapping[str, object] | None = None) -> None:
         """Record a decline. The caller then forwards the original content.
 
         Declining is the normal outcome for a stand-down or a service problem,
         so it is logged at debug and never raised. Details can include upstream
         response bytes and stay in the proxy's own logs.
         """
-        verbose_proxy_logger.debug("Needlepath: declined (%s) detail=%s", reason, detail or {})
+        # The dict fallback below is never a value a caller could mutate: `or {}` only
+        # feeds the debug-log %s formatting, and swapping it for a frozen mapping would
+        # change the logged repr from `{}` to `mappingproxy({})`.
+        verbose_proxy_logger.debug("Needlepath: declined (%s) detail=%s", reason, detail or {})  # mutable-ok: see above
 
-    def _select_targets(self, messages: list[dict[str, object]], query_idx: int | None) -> list[int]:
+    def _select_targets(self, messages: Sequence[Mapping[str, object]], query_idx: int | None) -> tuple[int, ...]:
         """Indices of the messages whose text content is eligible for selection."""
-        targets: Final[list[int]] = []
-        for idx, msg in enumerate(messages):
+
+        def _eligible(idx: int, msg: Mapping[str, object]) -> bool:
             # The message carrying the query is never rewritten: selecting the
             # question against itself is meaningless and it is what the rest of
             # the selection is conditioned on.
             if idx == query_idx:
-                continue
-            role = msg.get("role")
+                return False
+            role: Final = msg.get("role")
             if role in ("tool", "function"):
                 if not self.select_tool_outputs:
-                    continue
+                    return False
             elif role == "system":
                 if not self.select_system:
-                    continue
+                    return False
             elif role == "user":
                 if not self.select_history:
-                    continue
+                    return False
             else:
-                continue
-            content = msg.get("content")
+                return False
+            content: Final = msg.get("content")
             if isinstance(content, list) and not is_all_text_parts(content):
-                continue
-            if len(content_to_text(content)) < self.min_chars_to_select:
-                continue
-            targets.append(idx)
-        return targets
+                return False
+            return len(content_to_text(content)) >= self.min_chars_to_select
+
+        return tuple(idx for idx, msg in enumerate(messages) if _eligible(idx, msg))
 
     @staticmethod
-    def _last_user_message(messages: list[dict[str, object]]) -> tuple[str, int | None]:
+    def _last_user_message(messages: Sequence[Mapping[str, object]]) -> tuple[str, int | None]:
         for idx in range(len(messages) - 1, -1, -1):
             if messages[idx].get("role") == "user":
                 return content_to_text(messages[idx].get("content")), idx
         return "", None
 
-    async def _post_select(self, payload: dict[str, object]) -> HttpxResponse | None:
+    async def _post_select(self, payload: Mapping[str, object]) -> HttpxResponse | None:
         """POST one selection request. Returns None on any transport failure."""
         try:
             return await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
@@ -371,14 +379,17 @@ class NeedlepathGuardrail(CustomGuardrail):
             response: Final = getattr(e, "response", None)
             self._decline(
                 "http_status",
-                {"status_code": getattr(response, "status_code", None), "body": _safe_response_text(response)},
+                {  # mutable-ok: log detail dict, consumed by _decline's debug log immediately
+                    "status_code": getattr(response, "status_code", None),
+                    "body": _safe_response_text(response),
+                },
             )
             return None
         except (httpx.RequestError, litellm.Timeout) as e:
             # Every request-side httpx failure, timeouts included, is a
             # RequestError. Catching the whole class is what keeps a network
             # problem from escaping as a 500.
-            self._decline("transport", {"detail": str(e)})
+            self._decline("transport", {"detail": str(e)})  # mutable-ok: log detail dict, consumed immediately
             return None
 
     async def _selected_text(self, text: str, query: str, title: str | None, source: object, kind: str) -> str | None:
@@ -397,15 +408,24 @@ class NeedlepathGuardrail(CustomGuardrail):
         * the returned block is not shorter than the text it would replace, so a
           rewrite could never grow a message.
         """
-        record: Final[dict[str, object]] = {"id": "m0", "kind": kind, "text": text}
+        # `record` and `payload` are both real, mutable dicts by necessity: `record`
+        # gains optional keys after construction (below), and both are handed straight
+        # to httpx's `json=`, which needs a genuine dict/list -- a MappingProxyType
+        # is not JSON-serializable (json.dumps raises TypeError on one), so the
+        # freezing wrappers used elsewhere in this file cannot be used here.
+        record: Final[dict[str, object]] = {  # mutable-ok: see comment above
+            "id": "m0",
+            "kind": kind,
+            "text": text,
+        }
         if title:
             record["title"] = title
         if isinstance(source, str) and source:
             record["source"] = source
-        payload: Final[dict[str, object]] = {
-            "records": [record],
-            "task": {"prompt": query},
-            "budget": {
+        payload: Final[dict[str, object]] = {  # mutable-ok: see comment above
+            "records": (record,),
+            "task": {"prompt": query},  # mutable-ok: nested JSON payload dict, see comment above
+            "budget": {  # mutable-ok: nested JSON payload dict, see comment above
                 "max_context_tokens": self.max_context_tokens,
                 "operating_point": self.operating_point,
             },
@@ -419,7 +439,10 @@ class NeedlepathGuardrail(CustomGuardrail):
         if not 200 <= response.status_code < 300:
             self._decline(
                 "http_status",
-                {"status_code": response.status_code, "body": _safe_response_text(response)},
+                {  # mutable-ok: log detail dict, consumed by _decline's debug log immediately
+                    "status_code": response.status_code,
+                    "body": _safe_response_text(response),
+                },
             )
             return None
 
@@ -428,16 +451,16 @@ class NeedlepathGuardrail(CustomGuardrail):
         except (ValueError, httpx.DecodingError, RecursionError):
             # RecursionError: a deeply nested body overflows the JSON parser.
             # It is a decline like any other malformed answer, not a 500.
-            self._decline("unreadable_body", {"body": _safe_response_text(response)})
+            self._decline("unreadable_body", {"body": _safe_response_text(response)})  # mutable-ok: log detail dict
             return None
         if not isinstance(body, dict):
-            self._decline("unexpected_shape", {"body": _safe_response_text(response)})
+            self._decline("unexpected_shape", {"body": _safe_response_text(response)})  # mutable-ok: log detail dict
             return None
 
         gate: Final = body.get("gate")
         reason: Final = gate.get("reason") if isinstance(gate, dict) else None
         if isinstance(reason, str) and reason.startswith(_STANDDOWN_PREFIX):
-            self._decline("gate_standdown", {"reason": reason})
+            self._decline("gate_standdown", {"reason": reason})  # mutable-ok: log detail dict
             return None
 
         records_selected: Final = _safe_int(body.get("records_selected"))
@@ -445,18 +468,21 @@ class NeedlepathGuardrail(CustomGuardrail):
         if records_selected == 0 or tokens_after == 0:
             self._decline(
                 "empty_selection",
-                {"records_selected": records_selected, "tokens_after": tokens_after},
+                {  # mutable-ok: log detail dict, consumed by _decline's debug log immediately
+                    "records_selected": records_selected,
+                    "tokens_after": tokens_after,
+                },
             )
             return None
 
         rendered: Final = body.get("rendered_context")
         if not isinstance(rendered, str) or not rendered.strip():
-            self._decline("empty_rendered_context", {})
+            self._decline("empty_rendered_context", MappingProxyType({}))
             return None
         if len(rendered) >= len(text):
             # A selection that is not smaller is not a selection worth making,
             # and applying it could only add tokens.
-            self._decline("no_reduction", {"before": len(text), "after": len(rendered)})
+            self._decline("no_reduction", {"before": len(text), "after": len(rendered)})  # mutable-ok: log detail
             return None
         return rendered
 
@@ -464,7 +490,7 @@ class NeedlepathGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -474,22 +500,20 @@ class NeedlepathGuardrail(CustomGuardrail):
         structured_messages: Final = inputs.get("structured_messages")
         if not isinstance(structured_messages, list) or not structured_messages:
             return inputs
-        messages: Final = [m for m in structured_messages if isinstance(m, dict)]
+        messages: Final = tuple(m for m in structured_messages if isinstance(m, dict))
         if len(messages) != len(structured_messages):
             return inputs
 
         fallback_query, query_idx = self._last_user_message(messages)
-        targets: Final[list[int]] = []
-        queries: Final[list[str]] = []
-        for idx in self._select_targets(messages, query_idx):
-            query = _query_for_target(messages, idx, fallback_query)
-            # Selection is conditioned on a query; without one there is nothing
-            # to select against, so the message is left exactly as it arrived.
-            if not query.strip():
-                continue
-            targets.append(idx)
-            queries.append(query)
-        if not targets:
+        # One (idx, query) pair per eligible message whose query is non-blank.
+        # Selection is conditioned on a query; without one there is nothing to
+        # select against, so that message is left exactly as it arrived.
+        selected_pairs: Final = tuple(
+            (idx, query)
+            for idx in self._select_targets(messages, query_idx)
+            if (query := _query_for_target(messages, idx, fallback_query)).strip()
+        )
+        if not selected_pairs:
             verbose_proxy_logger.debug("Needlepath: no messages eligible for selection")
             return inputs
 
@@ -506,16 +530,19 @@ class NeedlepathGuardrail(CustomGuardrail):
                     source=messages[idx].get("tool_call_id"),
                     kind=_record_kind(messages[idx].get("role")),
                 )
-                for idx, query in zip(targets, queries)
+                for idx, query in selected_pairs
             )
         )
         end_time: Final = time.monotonic()
 
-        selected_messages: Final = list(messages)
-        messages_selected = 0
-        chars_before = 0
-        chars_after = 0
-        for idx, selection in zip(targets, selections):
+        # Needs in-place index assignment below to build the edited copy without
+        # touching the frozen `messages` tuple; only replaced indices differ from
+        # the original list -- see the identity note below.
+        selected_messages: Final = list(messages)  # mutable-ok: see comment above
+        messages_selected: Final = 0
+        chars_before: Final = 0
+        chars_after: Final = 0
+        for (idx, _query), selection in zip(selected_pairs, selections):
             original = selected_messages[idx]
             original_text = content_to_text(original.get("content"))
             if selection is None:
@@ -523,7 +550,7 @@ class NeedlepathGuardrail(CustomGuardrail):
             messages_selected += 1
             chars_before += len(original_text)
             chars_after += len(selection)
-            selected_messages[idx] = {
+            selected_messages[idx] = {  # mutable-ok: plain AllMessageValues dict, see comment above return
                 **original,
                 "content": _write_text_back(original.get("content"), selection),
             }
@@ -536,9 +563,11 @@ class NeedlepathGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Needlepath: no selection applied; request unchanged")
             return inputs
 
-        stats: Final[dict[str, object]] = {
+        # Serialized as guardrail_json_response for standard logging (DataDog,
+        # Langfuse, ...); must stay a plain dict for json.dumps compatibility.
+        stats: Final[dict[str, object]] = {  # mutable-ok: see comment above
             "messages_selected": messages_selected,
-            "messages_considered": len(targets),
+            "messages_considered": len(selected_pairs),
             "chars_before": chars_before,
             "chars_after": chars_after,
             "operating_point": self.operating_point,
@@ -546,7 +575,7 @@ class NeedlepathGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(
             "Needlepath: selected %s of %s message(s), %s -> %s chars",
             messages_selected,
-            len(targets),
+            len(selected_pairs),
             chars_before,
             chars_after,
         )
@@ -559,7 +588,10 @@ class NeedlepathGuardrail(CustomGuardrail):
             end_time=end_time,
             duration=end_time - start_time,
         )
-        return {**inputs, "structured_messages": selected_messages}  # pyright: ignore[reportReturnType]  # plain dicts satisfy AllMessageValues at runtime
+        return {  # pyright: ignore[reportReturnType]  # plain dicts satisfy AllMessageValues at runtime  # mutable-ok: TypedDict, treated as plain dict downstream
+            **inputs,
+            "structured_messages": selected_messages,
+        }
 
     @staticmethod
     def get_config_model() -> type[GuardrailConfigModel[object]] | None:
