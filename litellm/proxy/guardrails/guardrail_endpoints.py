@@ -2076,12 +2076,18 @@ async def test_custom_code_guardrail(
 
     EXECUTION_TIMEOUT_SECONDS: Final = 5
 
+    class _MissingGuardrailError(Exception):
+        pass
+
     try:
         exec_globals: Final = build_sandbox_globals()
 
         try:
+            # Only compile here; module-level execution happens inside the
+            # timeout-protected scope below so a top-level infinite loop in
+            # otherwise-valid Python cannot hang the handler thread
+            # indefinitely (#28259).
             compiled: Final[CodeType] = compile_sandboxed(request.custom_code)
-            exec(compiled, exec_globals)  # noqa: S102
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2095,24 +2101,7 @@ async def test_custom_code_guardrail(
                 error_type="compilation",
             )
 
-        # Step 2: Verify apply_guardrail function exists
-        if "apply_guardrail" not in exec_globals:
-            return TestCustomCodeGuardrailResponse(
-                success=False,
-                error="Custom code must define an 'apply_guardrail' function. "
-                "Expected signature: apply_guardrail(inputs, request_data, input_type)",
-                error_type="compilation",
-            )
-
-        apply_fn: Final[object] = exec_globals["apply_guardrail"]
-        if not callable(apply_fn):
-            return TestCustomCodeGuardrailResponse(
-                success=False,
-                error="'apply_guardrail' must be a callable function",
-                error_type="compilation",
-            )
-
-        # Step 3: Prepare test inputs
+        # Step 2: Prepare test inputs
         test_inputs: Final = request.test_input
         if "texts" not in test_inputs:
             test_inputs["texts"] = []
@@ -2127,13 +2116,27 @@ async def test_custom_code_guardrail(
             "metadata": mock_request_data.get("metadata", {}),
         }
 
-        # Step 4: Execute the function with timeout protection
+        # Step 4: Execute the module and the function with timeout protection
+        # (module-level exec included: RestrictedPython blocks imports/eval
+        # but not infinite loops, so compile+exec must run under the same
+        # timeout as apply_fn)
 
         def execute_guardrail() -> object:
+            exec(compiled, exec_globals)  # noqa: S102
+            apply_fn: object = exec_globals.get("apply_guardrail")
+            if not callable(apply_fn):
+                raise _MissingGuardrailError(
+                    "Custom code must define an 'apply_guardrail' function. "
+                    "Expected signature: apply_guardrail(inputs, request_data, input_type)"
+                )
             return apply_fn(test_inputs, safe_request_data, request.input_type)
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            # No context manager: __exit__ calls shutdown(wait=True), which
+            # would block forever on a worker stuck in an infinite loop even
+            # after future.result() timed out (#28259).
+            executor: Final = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
                 future: Final = executor.submit(execute_guardrail)
                 try:
                     result: Final = future.result(timeout=EXECUTION_TIMEOUT_SECONDS)
@@ -2143,6 +2146,16 @@ async def test_custom_code_guardrail(
                         error=f"Execution timeout: code took longer than {EXECUTION_TIMEOUT_SECONDS} seconds",
                         error_type="execution",
                     )
+            finally:
+                # wait=False lets a runaway worker run out its life as a
+                # daemon thread instead of hanging the request thread.
+                executor.shutdown(wait=False, cancel_futures=True)
+        except _MissingGuardrailError as e:
+            return TestCustomCodeGuardrailResponse(
+                success=False,
+                error=str(e),
+                error_type="compilation",
+            )
         except Exception as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
