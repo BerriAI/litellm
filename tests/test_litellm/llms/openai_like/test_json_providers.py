@@ -425,7 +425,7 @@ class TestRuninfra:
                 None,
             ),
             "runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4": (2e-06, 6e-06, 2e-07),
-            "runinfra/Qwen/Qwen3.8-27B": (1e-07, 4e-07, None),
+            "runinfra/Qwen/Qwen3.8-27B": (1e-07, 4e-07, 1e-08),
         }
         for model, (input_cost, output_cost, cache_read_cost) in expected_models.items():
             assert model in model_cost
