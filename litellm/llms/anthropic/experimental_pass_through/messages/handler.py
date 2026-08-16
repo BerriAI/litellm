@@ -40,15 +40,20 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
 _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+_OPENAI_CHAT_COMPLETIONS_MODEL_PREFIX: Final = "openai/chat_completions/"
 
 
-def _should_route_to_responses_api(custom_llm_provider: str | None) -> bool:
+def _should_route_to_responses_api(
+    custom_llm_provider: str | None,
+    *,
+    use_chat_completions_api: bool,
+) -> bool:
     """Return True when the provider should use the Responses API path.
 
-    Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
-    opt out and route OpenAI/Azure requests through chat/completions instead.
+    OpenAI models can opt out through the global setting, deployment flag, or
+    ``openai/chat_completions/`` model prefix.
     """
-    if litellm.use_chat_completions_url_for_anthropic_messages:
+    if litellm.use_chat_completions_url_for_anthropic_messages or use_chat_completions_api:
         return False
     return custom_llm_provider in _RESPONSES_API_PROVIDERS
 
@@ -442,16 +447,25 @@ def anthropic_messages_handler(
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
     )
+    model_uses_chat_completions_prefix: Final = model.startswith(_OPENAI_CHAT_COMPLETIONS_MODEL_PREFIX)
+    provider_model: Final = (
+        f"openai/{model.removeprefix(_OPENAI_CHAT_COMPLETIONS_MODEL_PREFIX)}"
+        if model_uses_chat_completions_prefix
+        else model
+    )
     (
         model,
         custom_llm_provider,
-        dynamic_api_key,
-        dynamic_api_base,
+        _dynamic_api_key,
+        _dynamic_api_base,
     ) = litellm.get_llm_provider(
-        model=model,
+        model=provider_model,
         custom_llm_provider=custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+    )
+    force_chat_completions: Final = (
+        litellm_params.use_chat_completions_api is True or model_uses_chat_completions_prefix
     )
 
     # Store agentic loop params in logging object for agentic hooks
@@ -491,6 +505,7 @@ def anthropic_messages_handler(
         )
 
         if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+            mcp_kwargs: Final = {**kwargs, "use_chat_completions_api": True} if force_chat_completions else kwargs
             return anthropic_messages_with_mcp(
                 max_tokens=max_tokens,
                 messages=messages,
@@ -510,7 +525,7 @@ def anthropic_messages_handler(
                 api_base=api_base,
                 client=client,
                 custom_llm_provider=custom_llm_provider,
-                **kwargs,
+                **mcp_kwargs,
             )
 
     anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None = None
@@ -551,7 +566,10 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider):
+        if _should_route_to_responses_api(
+            custom_llm_provider,
+            use_chat_completions_api=force_chat_completions,
+        ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
 
         # The in-gateway context_management polyfill runs inside

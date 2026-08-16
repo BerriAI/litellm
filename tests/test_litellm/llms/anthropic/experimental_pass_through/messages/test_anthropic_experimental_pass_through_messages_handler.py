@@ -101,6 +101,98 @@ async def test_openai_model_does_not_forward_stream_options_to_responses_api():
     assert "stream_options" not in request_body
 
 
+def _chat_completion_response(text: str, output_tokens: int) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-test",
+        model="custom-model",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }
+        ],
+        usage={
+            "prompt_tokens": 8,
+            "completion_tokens": output_tokens,
+            "total_tokens": 8 + output_tokens,
+        },
+    )
+
+
+def test_use_chat_completions_api_routes_directly_and_preserves_content():
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    completion_response = _chat_completion_response("EXPLICIT CHAT OK", 4)
+
+    with (
+        patch("litellm.completion", return_value=completion_response) as mock_completion,
+        patch("litellm.responses") as mock_responses,
+    ):
+        result = anthropic_messages_handler(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "Reply with exactly: EXPLICIT CHAT OK"}],
+            model="openai/gpt-5.5",
+            api_base="https://openai-compatible.example/v1",
+            api_key="test-api-key",
+            use_chat_completions_api=True,
+        )
+
+    mock_completion.assert_called_once()
+    mock_responses.assert_not_called()
+    assert result["content"] == [{"type": "text", "text": "EXPLICIT CHAT OK"}]
+    assert result["usage"]["output_tokens"] == 4
+
+
+def test_openai_chat_completions_model_prefix_is_not_forwarded_upstream():
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    completion_response = _chat_completion_response("PREFIX OK", 2)
+
+    with patch("litellm.completion", return_value=completion_response) as mock_completion:
+        result = anthropic_messages_handler(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "Reply with exactly: PREFIX OK"}],
+            model="openai/chat_completions/custom-model",
+            api_base="https://openai-compatible.example/v1",
+            api_key="test-api-key",
+        )
+
+    assert mock_completion.call_args.kwargs["model"] == "custom-model"
+    assert result["content"] == [{"type": "text", "text": "PREFIX OK"}]
+
+
+def test_chat_completions_prefix_survives_mcp_redispatch():
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with (
+        patch(
+            "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
+            return_value=True,
+        ),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler.anthropic_messages_with_mcp",
+            new_callable=MagicMock,
+        ) as mock_mcp,
+    ):
+        anthropic_messages_handler(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="openai/chat_completions/custom-model",
+            tools=[{"type": "mcp", "server_label": "test", "server_url": "litellm_proxy"}],
+            api_key="test-api-key",
+        )
+
+    assert mock_mcp.call_args.kwargs["model"] == "custom-model"
+    assert mock_mcp.call_args.kwargs["use_chat_completions_api"] is True
+
+
 def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_and_api_base_and_custom_values():
     """
     Test that api key, api base, and extra kwargs are forwarded to litellm.completion for Azure models.
