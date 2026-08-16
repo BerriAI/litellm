@@ -2335,6 +2335,38 @@ def test_completion_cost_extracts_service_tier_from_usage(_local_model_cost_map)
     ), f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
 
 
+@pytest.mark.parametrize(
+    ("requested_model", "served_model", "input_rate", "output_rate"),
+    (
+        ("gpt-4o", "gpt-4o-2024-08-06", 4.25e-6, 17e-6),
+        ("gpt-4o", "gpt-4o-2024-11-20", 4.25e-6, 17e-6),
+        ("gpt-4o-mini", "gpt-4o-mini-2024-07-18", 0.25e-6, 1e-6),
+        ("gpt-4.1", "gpt-4.1-2025-04-14", 3.5e-6, 14e-6),
+        ("gpt-4.1-mini", "gpt-4.1-mini-2025-04-14", 0.7e-6, 2.8e-6),
+    ),
+)
+def test_completion_cost_uses_priority_rates_for_served_openai_snapshot(
+    monkeypatch,
+    requested_model,
+    served_model,
+    input_rate,
+    output_rate,
+):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    response = ModelResponse(usage=usage, model=served_model)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=requested_model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "priority"},
+    )
+
+    assert cost == pytest.approx(100 * input_rate + 50 * output_rate)
+
+
 def test_completion_cost_service_tier_priority(_local_model_cost_map):
     """Test that service_tier extraction follows priority: optional_params > completion_response > usage."""
     from litellm import completion_cost
