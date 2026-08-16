@@ -400,6 +400,31 @@ class TestPerplexityCostCalculator:
         assert completion_cost == 0.008
         assert prompt_cost + completion_cost == 0.008
 
+    def test_uses_perplexity_provided_cost_when_normalized_to_float(self):
+        """
+        Regression: for Responses API / Agent API models, `ResponseAPIUsage.parse_cost`
+        (litellm/types/llms/openai.py) already flattens Perplexity's
+        `usage.cost.total_cost` dict down to a plain float before
+        `_transform_response_api_usage_to_chat_usage` (litellm/responses/utils.py) copies
+        it onto the chat `Usage` object. So `usage.cost` arrives here as a float, not a
+        dict, on that path.
+
+        Pre-fix, the `isinstance(cost_info, dict)` check was always False for a float,
+        so the pre-calculated cost branch was dead code for every Responses-mode
+        Perplexity model and it silently fell back to manual token-rate calculation,
+        recording $0 for any model missing static per-token rates (e.g.
+        perplexity/openai/gpt-5.2 before rates existed).
+        """
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        usage.cost = 0.008
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model="sonar-pro", usage=usage
+        )
+
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.008
+
     def test_falls_back_to_manual_calculation_when_no_cost_provided(self):
         """
         Test that manual cost calculation is used when Perplexity doesn't
