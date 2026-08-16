@@ -267,6 +267,7 @@
       "registry_url": null,
       "transport": "http",
       "url": "https://mcp.nimbleway.com/mcp",
+      "auth_type": "bearer_token",
       "env_vars": [
         {"name": "NIMBLE_API_KEY", "description": "Nimble API Key", "secret": true}
       ]

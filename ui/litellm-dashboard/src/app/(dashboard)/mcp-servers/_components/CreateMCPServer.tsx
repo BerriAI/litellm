@@ -361,6 +361,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       alias: sanitizedName,
       description: prefillData.description || "",
       transport: transport,
+      auth_type: prefillData.auth_type || undefined,
     };
 
     if (transport === "stdio") {
