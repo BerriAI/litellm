@@ -306,6 +306,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  levo: {
+    provider: "Levo AI Gateway",
+    guardrailNameSuggestion: "Levo Guardrail",
+    mode: "pre_call",
+    defaultOn: false,
+  },
   straiker: {
     provider: "Straiker",
     guardrailNameSuggestion: "Straiker Guardrail",

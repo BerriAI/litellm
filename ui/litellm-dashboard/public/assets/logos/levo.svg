@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Levo AI">
+  <title>Levo AI</title>
+  <rect width="64" height="64" rx="14" fill="#0B1220"/>
+  <path d="M20 16h6v24h14v6H20V16z" fill="#4F8CFF"/>
+  <circle cx="44" cy="22" r="5" fill="#7FE3B0"/>
+</svg>
