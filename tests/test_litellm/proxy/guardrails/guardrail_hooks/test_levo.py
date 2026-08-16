@@ -17,7 +17,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.levo import (
 )
 
 
-def _params(**overrides):
+def _params(**overrides: object) -> SimpleNamespace:
     """LitellmParams-shaped stub, as the proxy passes to the initializer."""
     base = dict(
         guardrail="levo",
@@ -31,7 +31,7 @@ def _params(**overrides):
     return SimpleNamespace(**base)
 
 
-def _guardrail(name="levo"):
+def _guardrail(name: str = "levo") -> dict[str, str]:
     return {"guardrail_name": name}
 
 
