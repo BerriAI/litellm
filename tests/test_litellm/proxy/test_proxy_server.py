@@ -9128,7 +9128,7 @@ def test_realtime_websocket_route_aliases_registered():
     websocket_paths = {route.path for route in app.routes if isinstance(route, WebSocketRoute)}
     openai_routes = LiteLLMRoutes.openai_routes.value
 
-    for expected in ("/openai/v1/realtime", "/v1/realtime", "/realtime"):
+    for expected in ("/openai/v1/realtime", "/v1/realtime", "/realtime", "/v1/live"):
         assert expected in websocket_paths, (
             f"{expected!r} missing from registered WebSocket routes; the "
             f"realtime endpoint will 405 for clients hitting this path."

@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
@@ -103,3 +104,48 @@ def test_client_secret_forwards_nested_transcription_model_untouched(monkeypatch
     session = captured["request_data"]["session"]
     assert session["model"] == "gpt-4o-realtime-preview"
     assert session["input_audio_transcription"]["model"] == "whisper-1"
+
+
+@pytest.mark.asyncio
+async def test_live_path_uses_resolved_openai_credentials(monkeypatch):
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(
+        realtime_main,
+        "openai_realtime",
+        MagicMock(async_realtime=mock_async_realtime),
+    )
+
+    def fake_get_llm_provider(model, api_base=None, api_key=None):
+        return ("gpt-live-1-boulder-alpha", "openai", "provider-key", "https://api.openai.com/")
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+
+    await realtime_main._arealtime.__wrapped__(
+        model="openai/gpt-live-1-boulder-alpha",
+        websocket=MagicMock(),
+        api_key="virtual-key",
+        realtime_api_path="/v1/live",
+        litellm_logging_obj=MagicMock(),
+    )
+
+    called_kwargs = mock_async_realtime.call_args.kwargs
+    assert called_kwargs["model"] == "gpt-live-1-boulder-alpha"
+    assert called_kwargs["api_key"] == "provider-key"
+    assert called_kwargs["realtime_api_path"] == "/v1/live"
+
+
+@pytest.mark.asyncio
+async def test_live_path_rejects_non_openai_provider(monkeypatch):
+    def fake_get_llm_provider(model, api_base=None, api_key=None):
+        return ("gpt-realtime", "azure", "provider-key", "https://example.openai.azure.com/")
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+
+    with pytest.raises(ValueError, match="only supported by the OpenAI realtime provider"):
+        await realtime_main._arealtime.__wrapped__(
+            model="azure/gpt-realtime",
+            websocket=MagicMock(),
+            api_key="virtual-key",
+            realtime_api_path="/v1/live",
+            litellm_logging_obj=MagicMock(),
+        )

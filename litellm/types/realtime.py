@@ -10,6 +10,7 @@ from .llms.openai import (
 )
 
 ALL_DELTA_TYPES = Literal["text", "audio"]
+RealtimeAPIPath = Literal["/v1/realtime", "/v1/live"]
 
 
 class RealtimeResponseTransformInput(TypedDict):

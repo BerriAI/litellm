@@ -48,6 +48,19 @@ def test_openai_realtime_handler_url_with_extra_params():
     assert "intent=chat" in url
 
 
+def test_openai_live_handler_url_construction():
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+
+    handler = OpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://api.openai.com/v1",
+        query_params={"model": "gpt-live-1-boulder-alpha"},
+        realtime_api_path="/v1/live",
+    )
+
+    assert url == "wss://api.openai.com/v1/live?model=gpt-live-1-boulder-alpha"
+
+
 def test_openai_realtime_handler_model_parameter_inclusion():
     """
     Test that the model parameter is properly included in the WebSocket URL

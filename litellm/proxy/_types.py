@@ -393,9 +393,11 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime",
         "/v1/realtime",
         "/openai/v1/realtime",
+        "/v1/live",
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
+        "/v1/live?{model}",
         # realtime (GA WebRTC HTTP routes)
         "/realtime/client_secrets",
         "/v1/realtime/client_secrets",
