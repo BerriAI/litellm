@@ -152,9 +152,16 @@ class ProxyModelNotFoundError(HTTPException):
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
-REQUIRED_BODY_PARAM_BY_ROUTE: Final[Mapping[str, str]] = {
-    "acompletion": "messages",
-    "aembedding": "input",
+REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
+    "acompletion": ("messages",),
+    "aembedding": ("input",),
+    "amoderation": ("input",),
+    "aimage_generation": ("prompt",),
+    "aocr": ("document",),
+    "aresponses": ("input",),
+    "anthropic_messages": ("messages", "max_tokens"),
+    "avector_store_search": ("query",),
+    "aspeech": ("model", "input", "voice"),
 }
 
 
@@ -167,13 +174,15 @@ class ProxyMissingRequiredParamError(HTTPException):
 
 
 def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    required_param: Final = REQUIRED_BODY_PARAM_BY_ROUTE.get(route_type)
-    if required_param is None or data.get(required_param) is not None:
+    required_params: Final = REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type)
+    if required_params is None:
         return
-    raise ProxyMissingRequiredParamError(
-        route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
-        param=required_param,
-    )
+    for required_param in required_params:
+        if data.get(required_param) is None:
+            raise ProxyMissingRequiredParamError(
+                route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
+                param=required_param,
+            )
 
 
 class MockTestingParamsDisabledError(HTTPException):
