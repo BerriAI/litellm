@@ -40207,7 +40207,9 @@
         "max_tokens": 262000,
         "mode": "chat",
         "output_cost_per_token": 3.4e-07,
-        "source": "https://wandb.ai/site/pricing/tokens/"
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_reasoning": true,
+        "supports_vision": true
     },
     "wandb/ibm-granite/granite-4.1-8b": {
         "input_cost_per_token": 5e-08,
@@ -40291,7 +40293,8 @@
         "max_tokens": 262000,
         "mode": "chat",
         "output_cost_per_token": 9.6e-07,
-        "source": "https://wandb.ai/site/pricing/tokens/"
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_vision": true
     },
     "wandb/microsoft/Phi-4-mini-instruct": {
         "input_cost_per_token": 8e-08,
@@ -40336,7 +40339,9 @@
         "max_tokens": 262000,
         "mode": "chat",
         "output_cost_per_token": 3.41e-06,
-        "source": "https://wandb.ai/site/pricing/tokens/"
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_reasoning": true,
+        "supports_vision": true
     },
     "wandb/moonshotai/Kimi-K2.7-Code": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -40347,7 +40352,8 @@
         "max_tokens": 262000,
         "mode": "chat",
         "output_cost_per_token": 3.5e-06,
-        "source": "https://wandb.ai/site/pricing/tokens/"
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_vision": true
     },
     "wandb/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8": {
         "input_cost_per_token": 2e-07,

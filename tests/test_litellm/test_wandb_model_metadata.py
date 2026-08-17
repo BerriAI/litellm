@@ -49,6 +49,14 @@ CURRENT_PRICES_PER_MILLION_TOKENS: Final = MappingProxyType(
         "wandb/zai-org/GLM-5.2": (0.76, 2.42, 0.14),
     }
 )
+CONFIRMED_CAPABILITIES: Final = MappingProxyType(
+    {
+        "wandb/google/gemma-4-31B-it": ("supports_reasoning", "supports_vision"),
+        "wandb/MiniMaxAI/MiniMax-M3": ("supports_vision",),
+        "wandb/moonshotai/Kimi-K2.6": ("supports_reasoning", "supports_vision"),
+        "wandb/moonshotai/Kimi-K2.7-Code": ("supports_vision",),
+    }
+)
 
 
 @pytest.mark.parametrize("price_file", PRICE_FILES)
@@ -63,3 +71,12 @@ def test_current_wandb_pricing(price_file: Path) -> None:
             pytest.approx(cache_price / 1_000_000) if cache_price is not None else None
         )
         assert metadata["source"] == SOURCE
+
+
+@pytest.mark.parametrize("price_file", PRICE_FILES)
+def test_confirmed_wandb_model_capabilities(price_file: Path) -> None:
+    prices: Final = json.loads(price_file.read_text())
+
+    for model, capabilities in CONFIRMED_CAPABILITIES.items():
+        for capability in capabilities:
+            assert prices[model][capability] is True
