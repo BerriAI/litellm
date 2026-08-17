@@ -499,14 +499,14 @@ def rerank(
                 litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.XINFERENCE:
-            api_key: Final = (
+            api_key = (
                 dynamic_api_key
                 or optional_params.api_key
                 or litellm.api_key
                 or get_secret_str("XINFERENCE_API_KEY")
                 or "stub-xinference-key"
             )
-            api_base: Final = (
+            api_base = (
                 dynamic_api_base
                 or optional_params.api_base
                 or litellm.api_base
