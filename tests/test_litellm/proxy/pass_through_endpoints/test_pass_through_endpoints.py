@@ -33,7 +33,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     websocket_passthrough_request,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
@@ -364,6 +364,39 @@ async def test_pass_through_request_failure_handler():
                     call_args["original_exception"], TypeError
                 )  # Now expecting TypeError
                 assert "traceback_str" in call_args
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_preserves_proxy_exception_status():
+    original = ProxyException(
+        message="Invalid 'limit': integer above maximum value. Expected a value <= 100, but got 101 instead.",
+        type="invalid_request_error",
+        param="limit",
+        code=400,
+        openai_code="integer_above_max_value",
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=original)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.body = AsyncMock(return_value=b"")
+        mock_request.headers = Headers({})
+        mock_request.query_params = QueryParams({"limit": "101"})
+
+        with pytest.raises(ProxyException) as exc:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com/v1/batches",
+                custom_headers={},
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert exc.value is original
+        assert exc.value.code == "400"
+        assert exc.value.param == "limit"
 
 
 def test_is_langfuse_route():

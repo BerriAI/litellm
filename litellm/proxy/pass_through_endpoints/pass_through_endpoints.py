@@ -1538,6 +1538,8 @@ async def pass_through_request(
 
         #########################################################
 
+        if isinstance(e, ProxyException):
+            raise
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(getattr(e, "detail", str(e)))),

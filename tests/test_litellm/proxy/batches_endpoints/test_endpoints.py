@@ -1643,6 +1643,59 @@ async def test_list__managed_files_beats_model_param(list_harness):
     list_harness.creds_resolver.assert_not_called()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit, expected_message, expected_openai_code",
+    [
+        (
+            -1,
+            "Invalid 'limit': integer below minimum value. Expected a value >= 0, but got -1 instead.",
+            "integer_below_min_value",
+        ),
+        (
+            101,
+            "Invalid 'limit': integer above maximum value. Expected a value <= 100, but got 101 instead.",
+            "integer_above_max_value",
+        ),
+        (
+            1000,
+            "Invalid 'limit': integer above maximum value. Expected a value <= 100, but got 1000 instead.",
+            "integer_above_max_value",
+        ),
+    ],
+)
+async def test_list__out_of_range_limit_rejected_with_400(list_harness, limit, expected_message, expected_openai_code):
+    """OpenAI parity: GET /v1/batches rejects limit < 0 and limit > 100 with an
+    OpenAI-shaped 400 before any listing branch runs (issue #37149)."""
+    list_user_batches = list_harness.set_managed_files(FakeListPage([]))
+
+    with pytest.raises(ProxyException) as exc:
+        await call_list(list_harness, limit=limit)
+
+    assert exc.value.code == "400"
+    assert exc.value.param == "limit"
+    assert exc.value.type == "invalid_request_error"
+    assert exc.value.openai_code == expected_openai_code
+    assert exc.value.message == expected_message
+    list_user_batches.assert_not_called()
+    list_harness.litellm_alist.assert_not_called()
+    list_harness.router_alist.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [None, 0, 1, 100])
+async def test_list__in_range_limit_dispatches(list_harness, limit):
+    """OpenAI parity: live OpenAI accepts limit=0 (empty page) and 1..100, so
+    those values must keep flowing through to the listing branch untouched."""
+    page = FakeListPage([])
+    list_user_batches = list_harness.set_managed_files(page)
+
+    resp = await call_list(list_harness, limit=limit)
+
+    assert resp is page
+    assert list_user_batches.call_args.kwargs["limit"] == limit
+
+
 # --------------------------------------------------------------------------- #
 # Branch 2 - model from body/query/header. The endpoint resolves credentials
 # for the body model, forwards custom_llm_provider once (it pops it from data
