@@ -473,7 +473,7 @@ class _PendingConcurrencyKeys:
     __slots__ = ("keys",)
 
     def __init__(self) -> None:
-        self.keys: list[tuple[str, "_PartitionKey"]] = []  # mutable-ok: shared across forks by design; see docstring
+        self.keys: list[tuple[str, _PartitionKey]] = []  # mutable-ok: shared across forks by design; see docstring
 
 
 _pending_concurrency_keys: Final[contextvars.ContextVar[_PendingConcurrencyKeys | None]] = contextvars.ContextVar(
