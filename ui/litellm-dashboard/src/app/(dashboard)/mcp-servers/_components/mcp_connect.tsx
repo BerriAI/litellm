@@ -6,6 +6,7 @@ import { TabPanel, TabPanels, TabGroup, TabList, Tab, Title as TremorTitle, Text
 import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { resolveMCPConnectBaseUrl, type MCPConnectProxySettings } from "./mcpConnectBaseUrl";
 
 const { Title, Text } = Typography;
 
@@ -111,10 +112,11 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
 
 interface MCPConnectProps {
   currentServerAccessGroups?: string[];
+  proxySettings?: MCPConnectProxySettings;
 }
 
-const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
-  const proxyBaseUrl = getProxyBaseUrl();
+const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [], proxySettings }) => {
+  const proxyBaseUrl = resolveMCPConnectBaseUrl(proxySettings, getProxyBaseUrl());
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
 
