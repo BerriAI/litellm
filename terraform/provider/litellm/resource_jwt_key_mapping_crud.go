@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -83,7 +82,16 @@ func resourceLiteLLMJWTKeyMappingRead(d *schema.ResourceData, m interface{}) err
 func resourceLiteLLMJWTKeyMappingUpdate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 
+	oldKey, _ := d.GetChange("key")
+
 	if err := updateJWTKeyMapping(d, client); err != nil {
+		// The update is a single atomic API call: on failure nothing changed
+		// server-side. Revert key explicitly since the proxy never returns it,
+		// so Read can't resync it the way it resyncs description/is_active below.
+		d.Set("key", oldKey)
+		if readErr := resourceLiteLLMJWTKeyMappingRead(d, m); readErr != nil {
+			return fmt.Errorf("failed to update JWT key mapping: %w (and failed to refresh state afterward: %v)", err, readErr)
+		}
 		return fmt.Errorf("failed to update JWT key mapping: %w", err)
 	}
 
@@ -132,7 +140,7 @@ func handleJWTKeyMappingAPIResponse(resp *http.Response, result interface{}, cli
 		return fmt.Errorf("failed to read response body: %v", err)
 	}
 
-	if resp.StatusCode == http.StatusNotFound || isJWTKeyMappingNotFoundBody(bodyBytes) {
+	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf(jwtKeyMappingNotFound)
 	}
 
@@ -150,15 +158,4 @@ func handleJWTKeyMappingAPIResponse(resp *http.Response, result interface{}, cli
 	}
 
 	return nil
-}
-
-func isJWTKeyMappingNotFoundBody(bodyBytes []byte) bool {
-	var errResp struct {
-		Detail interface{} `json:"detail"`
-	}
-	if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
-		return false
-	}
-	detail, ok := errResp.Detail.(string)
-	return ok && strings.Contains(strings.ToLower(detail), "mapping not found")
 }

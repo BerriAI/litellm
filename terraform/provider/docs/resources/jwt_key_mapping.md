@@ -16,7 +16,7 @@ See [JWT to virtual key mapping](https://docs.litellm.ai/docs/proxy/jwt_key_mapp
 
 ## Example Usage
 
-The mapped virtual key has to exist already and its value has to be known to Terraform, so it comes from a variable or a secret manager rather than from a `litellm_key` resource, whose generated `key` is write-only and therefore null when referenced:
+The mapped virtual key has to exist already and its value has to be known to Terraform, so it comes from a variable or a secret manager rather than from a `litellm_key` resource. `litellm_key` deliberately made its generated `key` write-only, to avoid storing raw API keys in state, so referencing it here does not merely read back null: Terraform's write-only enforcement turns `key = litellm_key.foo.key` into a static `Missing required argument` error at `terraform plan`, before any API call, in every apply ordering, including a first apply where both resources are created together:
 
 ```hcl
 variable "alice_key" {

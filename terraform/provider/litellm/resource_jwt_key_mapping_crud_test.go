@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,7 +9,30 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
+
+// resourceDataWithChange builds a ResourceData carrying a real diff between
+// prior state and new config, so d.GetChange reflects true old/new values.
+// schema.TestResourceDataRaw diffs against a nil prior state, which collapses
+// GetChange's old side to the zero value and can't exercise this.
+func resourceDataWithChange(t *testing.T, oldAttrs map[string]string, newRaw map[string]interface{}) *schema.ResourceData {
+	t.Helper()
+
+	sm := schema.InternalMap(resourceLiteLLMJWTKeyMapping().Schema)
+	state := &terraform.InstanceState{ID: oldAttrs["id"], Attributes: oldAttrs}
+	config := terraform.NewResourceConfigRaw(newRaw)
+
+	diff, err := sm.Diff(context.Background(), state, config, nil, nil, true)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	d, err := sm.Data(state, diff)
+	if err != nil {
+		t.Fatalf("data: %v", err)
+	}
+	return d
+}
 
 type jwtKeyMappingCall struct {
 	Method string
@@ -259,6 +283,87 @@ func TestJWTKeyMappingUpdateClearsDescriptionAndSendsKey(t *testing.T) {
 	}
 	if d.Get("description").(string) != "" {
 		t.Fatalf("description should be cleared in state, got %q", d.Get("description").(string))
+	}
+}
+
+func TestJWTKeyMappingUpdateRevertsKeyOnFailureAndResyncsRest(t *testing.T) {
+	// Regression test for a live-verified bug: Terraform's classic SDKv2 CRUD
+	// model persists ResourceData's diff-applied (attempted) values to state
+	// even when the callback returns an error, unless the provider reverts
+	// them explicitly. Confirmed live: a rejected key rotation left the new,
+	// never-applied key in `terraform state pull` while the proxy kept the
+	// old one, so the next plan falsely reported convergence.
+	calls := make([]jwtKeyMappingCall, 0)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := map[string]interface{}{}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		calls = append(calls, jwtKeyMappingCall{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: body})
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/jwt/key/mapping/update":
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"detail": "The provided key does not match an existing virtual key.",
+			})
+		case "/jwt/key/mapping/info":
+			// Server truth: unchanged, since the rejected update above never applied.
+			_ = json.NewEncoder(w).Encode(jwtKeyMappingFixture())
+		default:
+			t.Fatalf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+
+	d := resourceDataWithChange(t,
+		map[string]string{
+			"id":              "map-abc-123",
+			"jwt_claim_name":  "client_id",
+			"jwt_claim_value": "dev-alice",
+			"key":             "sk-old-key-0000000000",
+			"description":     "dev-alice",
+			"is_active":       "true",
+		},
+		map[string]interface{}{
+			"jwt_claim_name":  "client_id",
+			"jwt_claim_value": "dev-alice",
+			"key":             "sk-rejected-new-key-00",
+			"description":     "attempted new description",
+			"is_active":       false,
+		},
+	)
+	d.SetId("map-abc-123")
+
+	err := resourceLiteLLMJWTKeyMappingUpdate(d, client)
+	if err == nil {
+		t.Fatal("expected the rejected key to fail the update")
+	}
+	if !strings.Contains(err.Error(), "does not match an existing virtual key") {
+		t.Fatalf("expected the proxy's rejection reason in the error, got %v", err)
+	}
+
+	if d.Get("key").(string) != "sk-old-key-0000000000" {
+		t.Fatalf("a failed update must not persist the rejected key into state, got %q", d.Get("key").(string))
+	}
+	if d.Get("description").(string) != "dev-alice" {
+		t.Fatalf("a failed update must resync description from the server, got %q", d.Get("description").(string))
+	}
+	if d.Get("is_active").(bool) != true {
+		t.Fatalf("a failed update must resync is_active from the server, got %v", d.Get("is_active").(bool))
+	}
+
+	readCalls := 0
+	for _, c := range calls {
+		if c.Path == "/jwt/key/mapping/info" {
+			readCalls++
+		}
+	}
+	if readCalls != 1 {
+		t.Fatalf("expected exactly one read to resync state after the failed update, got %d", readCalls)
 	}
 }
 
