@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from openai import AsyncAzureOpenAI
+from openai import AsyncAzureOpenAI, AzureOpenAI
 
 from litellm.llms.azure.assistants import AzureAssistantsAPI
 from litellm.types.llms.openai import OpenAIMessage, Thread
@@ -52,6 +52,18 @@ def _client(payload: dict) -> AsyncAzureOpenAI:
     )
 
 
+def _sync_client(payload: dict) -> AzureOpenAI:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    return AzureOpenAI(
+        api_key="test-key",
+        api_version="2024-05-01-preview",
+        azure_endpoint="https://test.openai.azure.com",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+
 @pytest.mark.asyncio
 async def test_a_add_message_preserves_upstream_message_fields():
     """The returned message is rebuilt from the upstream one, so every field the
@@ -90,6 +102,17 @@ async def test_a_add_message_defaults_missing_status_to_completed():
     assert result.metadata == {"origin": "unit-test"}
 
 
+def _assert_thread(thread: object) -> None:
+    assert isinstance(thread, Thread)
+    assert thread.id == "thread_123"
+    assert thread.created_at == 1700000000
+    assert thread.object == "thread"
+    assert thread.metadata == {"origin": "unit-test"}
+    # LiteLLM's Thread declares its own fields, so anything the provider adds on top
+    # is dropped rather than carried through.
+    assert "unexpected_upstream_field" not in thread.model_dump()
+
+
 @pytest.mark.asyncio
 async def test_thread_responses_preserve_declared_fields():
     api = AzureAssistantsAPI()
@@ -106,12 +129,51 @@ async def test_thread_responses_preserve_declared_fields():
         **_COMMON_ARGS,
     )
 
-    for thread in (created, retrieved):
-        assert isinstance(thread, Thread)
-        assert thread.id == "thread_123"
-        assert thread.created_at == 1700000000
-        assert thread.object == "thread"
-        assert thread.metadata == {"origin": "unit-test"}
-        # LiteLLM's Thread declares its own fields, so anything the provider adds on
-        # top is dropped rather than carried through.
-        assert "unexpected_upstream_field" not in thread.model_dump()
+    _assert_thread(created)
+    _assert_thread(retrieved)
+
+
+def test_sync_thread_responses_preserve_declared_fields():
+    api = AzureAssistantsAPI()
+
+    created = api.create_thread(
+        metadata={"origin": "unit-test"},
+        messages=None,
+        client=_sync_client(_THREAD_PAYLOAD),
+        **_COMMON_ARGS,
+    )
+    retrieved = api.get_thread(
+        thread_id="thread_123",
+        client=_sync_client(_THREAD_PAYLOAD),
+        **_COMMON_ARGS,
+    )
+
+    _assert_thread(created)
+    _assert_thread(retrieved)
+
+
+def test_sync_add_message_preserves_fields_and_defaults_status():
+    api = AzureAssistantsAPI()
+
+    result = api.add_message(
+        thread_id="thread_123",
+        message_data={"role": "user", "content": "hi"},
+        client=_sync_client(_MESSAGE_PAYLOAD),
+        **_COMMON_ARGS,
+    )
+
+    assert isinstance(result, OpenAIMessage)
+    assert result.id == "msg_123"
+    assert result.status == "in_progress"
+    assert result.metadata == {"origin": "unit-test"}
+    assert result.model_dump()["unexpected_upstream_field"] == "kept"
+
+    without_status = {k: v for k, v in _MESSAGE_PAYLOAD.items() if k != "status"}
+    defaulted = api.add_message(
+        thread_id="thread_123",
+        message_data={"role": "user", "content": "hi"},
+        client=_sync_client(without_status),
+        **_COMMON_ARGS,
+    )
+
+    assert defaulted.status == "completed"
