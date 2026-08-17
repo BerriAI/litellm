@@ -720,7 +720,10 @@ export interface paths {
          *     Returns a paginated response of audit logs matching the specified filters.
          *
          *     Note: object_team_id and object_key_hash use Prisma JSON path filtering,
-         *     which requires PostgreSQL.
+         *     which requires PostgreSQL. object_team filters on the denormalized
+         *     object_team_id and object_team_alias columns instead. Rows written before
+         *     those columns existed return NULL aliases until an operator runs the
+         *     db_scripts/backfill_audit_log_aliases.sql runbook.
          */
         get: operations["get_audit_logs_audit_get"];
         put?: never;
@@ -21533,10 +21536,20 @@ export interface components {
             changed_by: string;
             /** Changed By Api Key */
             changed_by_api_key: string;
+            /** Changed By Key Alias */
+            changed_by_key_alias?: string | null;
+            /** Changed By User Email */
+            changed_by_user_email?: string | null;
             /** Id */
             id: string;
+            /** Object Alias */
+            object_alias?: string | null;
             /** Object Id */
             object_id: string;
+            /** Object Team Alias */
+            object_team_alias?: string | null;
+            /** Object Team Id */
+            object_team_id?: string | null;
             /** Table Name */
             table_name: string;
             /**
@@ -37262,6 +37275,8 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by team_id present in before_value or updated_values JSON (PostgreSQL only) */
                 object_team_id?: string | null;
+                /** @description Filter by team: matches the row's object_team_id exactly or rows whose object_team_alias contains this value */
+                object_team?: string | null;
                 /** @description Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only) */
                 object_key_hash?: string | null;
                 /** @description Column to sort by (e.g. 'updated_at', 'action', 'table_name') */

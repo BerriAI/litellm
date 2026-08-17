@@ -72,9 +72,7 @@ class TestKeyManagementEventHooksIndependentOperations:
                 return_value=True,
             ),
             patch("litellm.store_audit_logs", False),
-            patch(
-                "litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"
-            ),
+            patch("litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"),
         ):
             # Should not raise even though email fails
             await KeyManagementEventHooks.async_key_generated_hook(
@@ -140,9 +138,7 @@ class TestKeyManagementEventHooksIndependentOperations:
                 return_value=True,
             ),
             patch("litellm.store_audit_logs", False),
-            patch(
-                "litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"
-            ),
+            patch("litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"),
         ):
             # Should not raise even though secret manager fails
             await KeyManagementEventHooks.async_key_generated_hook(
@@ -170,9 +166,7 @@ class TestRotateVirtualKeyInSecretManager:
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
-        mock_secret_manager.async_rotate_secret = AsyncMock(
-            return_value={"status": "success"}
-        )
+        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
 
         litellm.secret_manager_client = mock_secret_manager
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -246,9 +240,7 @@ class TestRotateVirtualKeyInSecretManager:
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
-        mock_secret_manager.async_rotate_secret = AsyncMock(
-            return_value={"status": "success"}
-        )
+        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
 
         litellm.secret_manager_client = mock_secret_manager
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -314,9 +306,7 @@ class TestRotateVirtualKeyInSecretManager:
 
         # Setup
         mock_secret_manager = MagicMock()
-        mock_secret_manager.async_rotate_secret = AsyncMock(
-            return_value={"status": "success"}
-        )
+        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
 
         litellm.secret_manager_client = mock_secret_manager
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -504,3 +494,92 @@ class TestKeyUpdatedAuditLogObjectId:
         audit_row = await self._run_updated_hook_and_capture_audit_log(request_key=hashed_key)
 
         assert audit_row.object_id == hashed_key
+
+
+class TestKeyLifecycleAuditAliases:
+    """Delete and rotate rows carry object_alias from the in-memory row: the token row is gone or
+    rewritten before the writer's lookup could run, and blob key_alias is masked (LIT-4997)."""
+
+    @pytest.mark.asyncio
+    async def test_key_delete_audit_log_carries_object_alias(self):
+        import asyncio
+
+        from litellm.proxy._types import KeyRequest, LiteLLM_VerificationToken, UserAPIKeyAuth
+
+        captured = []
+
+        async def capture_audit_log(request_data):
+            captured.append(request_data)
+
+        doomed_key = LiteLLM_VerificationToken(token="hash-doomed", key_alias="doomed-key")
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture_audit_log,
+            ),
+            patch.object(
+                KeyManagementEventHooks,
+                "_delete_virtual_keys_from_secret_manager",
+                new=AsyncMock(),
+            ),
+        ):
+            await KeyManagementEventHooks.async_key_deleted_hook(
+                data=KeyRequest(keys=["hash-doomed"]),
+                keys_being_deleted=[doomed_key],
+                response={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="hash-admin", user_id="admin-user", key_alias="admin-key"),
+            )
+            for _ in range(100):
+                if captured:
+                    break
+                await asyncio.sleep(0.01)
+
+        assert len(captured) == 1
+        audit_row = captured[0]
+        assert audit_row.action == "deleted"
+        assert audit_row.object_alias == "doomed-key"
+        assert "object_alias" in audit_row.model_fields_set
+        assert audit_row.changed_by_key_alias == "admin-key"
+
+    @pytest.mark.asyncio
+    async def test_key_rotate_audit_log_carries_object_alias(self):
+        import asyncio
+
+        from litellm.proxy._types import (
+            GenerateKeyResponse,
+            LiteLLM_VerificationToken,
+            UserAPIKeyAuth,
+        )
+
+        captured = []
+
+        async def capture_audit_log(request_data):
+            captured.append(request_data)
+
+        rotated_key = LiteLLM_VerificationToken(token="hash-old", key_alias="rotated-key")
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture_audit_log,
+            ),
+        ):
+            await KeyManagementEventHooks.async_key_rotated_hook(
+                data=None,
+                existing_key_row=rotated_key,
+                response=GenerateKeyResponse(key="sk-new-secret"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hash-admin", user_id="admin-user", key_alias="admin-key"),
+            )
+            for _ in range(100):
+                if captured:
+                    break
+                await asyncio.sleep(0.01)
+
+        assert len(captured) == 1
+        audit_row = captured[0]
+        assert audit_row.action == "rotated"
+        assert audit_row.object_alias == "rotated-key"
+        assert "object_alias" in audit_row.model_fields_set

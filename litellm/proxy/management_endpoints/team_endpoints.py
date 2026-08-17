@@ -2860,6 +2860,7 @@ def _members_audit_value(members: Sequence[Member]) -> str:
 
 async def _create_team_member_add_audit_logs(
     team_id: str,
+    team_alias: str | None,
     updated_users: Sequence[LiteLLM_UserTable],
     existing_user_ids: frozenset[str],
     before_members: Sequence[Member],
@@ -2898,6 +2899,7 @@ async def _create_team_member_add_audit_logs(
         table_name=LitellmTableNames.TEAM_TABLE_NAME,
         before_value=_members_audit_value(before_members),
         after_value=_members_audit_value(after_members),
+        object_alias=team_alias,
     )
 
     await asyncio.gather(*created_user_entries, membership_entry)
@@ -3135,6 +3137,7 @@ async def team_member_add(
 
     await _create_team_member_add_audit_logs(
         team_id=data.team_id,
+        team_alias=complete_team_data.team_alias,
         updated_users=updated_users,
         existing_user_ids=pre_existing_user_ids,
         before_members=members_before_add,

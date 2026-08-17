@@ -120,6 +120,11 @@ async def test_azure_sentinel_queues_audit_log_event():
         object_id="team-1",
         before_value=None,
         updated_values='{"team_alias": "sentinel-demo"}',
+        object_alias="sentinel-demo",
+        object_team_id="team-1",
+        object_team_alias="sentinel-demo",
+        changed_by_user_email="user-1@example.com",
+        changed_by_key_alias="sentinel-key",
     )
 
     await logger.async_log_audit_log_event(audit_log)
@@ -155,6 +160,11 @@ async def test_azure_sentinel_sends_audit_log_payload_to_ingestion_api():
         object_id="team-1",
         before_value=None,
         updated_values='{"team_alias": "sentinel-demo"}',
+        object_alias="sentinel-demo",
+        object_team_id="team-1",
+        object_team_alias="sentinel-demo",
+        changed_by_user_email="user-1@example.com",
+        changed_by_key_alias="sentinel-key",
     )
     await logger.async_log_audit_log_event(audit_log)
 
@@ -221,6 +231,11 @@ async def test_azure_sentinel_flushes_standard_and_audit_logs_separately():
         object_id="team-1",
         before_value=None,
         updated_values='{"team_alias": "sentinel-demo"}',
+        object_alias="sentinel-demo",
+        object_team_id="team-1",
+        object_team_alias="sentinel-demo",
+        changed_by_user_email="user-1@example.com",
+        changed_by_key_alias="sentinel-key",
     )
 
     logger.log_queue.append(standard_payload)
@@ -250,17 +265,13 @@ async def test_azure_sentinel_flushes_standard_and_audit_logs_separately():
     await logger.flush_queue()
 
     ingestion_calls = [
-        call
-        for call in logger.async_httpx_client.post.call_args_list
-        if "dataCollectionRules" in call.kwargs["url"]
+        call for call in logger.async_httpx_client.post.call_args_list if "dataCollectionRules" in call.kwargs["url"]
     ]
     assert len(ingestion_calls) == 2
 
     standard_call, audit_call = ingestion_calls
     assert "Custom-LiteLLM-Standard" in standard_call.kwargs["url"]
-    assert json.loads(standard_call.kwargs["data"].decode("utf-8")) == [
-        standard_payload
-    ]
+    assert json.loads(standard_call.kwargs["data"].decode("utf-8")) == [standard_payload]
     assert "Custom-LiteLLM-Audit" in audit_call.kwargs["url"]
     assert json.loads(audit_call.kwargs["data"].decode("utf-8")) == [audit_log]
 
