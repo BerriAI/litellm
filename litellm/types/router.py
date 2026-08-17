@@ -190,6 +190,11 @@ class TagRateLimitEntry(BaseModel):
     def _validate_key_ttl_seconds(self) -> "TagRateLimitEntry":
         if self.key_ttl_seconds is not None and self.key_ttl_seconds <= 0:
             raise ValueError("key_ttl_seconds must be a positive integer when set")
+        if self.key_ttl_seconds is not None and self.key_ttl_seconds < self.period_seconds:
+            raise ValueError(
+                "key_ttl_seconds must be at least period_seconds when set -- a shorter TTL expires the "
+                "counter before its window rolls over, letting tagged traffic reset to zero and exceed the limit"
+            )
         return self
 
     @model_validator(mode="after")

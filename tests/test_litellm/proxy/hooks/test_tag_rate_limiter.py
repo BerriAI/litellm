@@ -2461,7 +2461,7 @@ def test_ttl_for_concurrency_never_drops_below_the_safety_floor_even_with_a_lowe
     """
     below_floor: Final = 10
     assert (
-        _PROXY_TagRateLimiter._ttl_for(_concurrency_limit(period_seconds=60, key_ttl_seconds=below_floor))
+        _PROXY_TagRateLimiter._ttl_for(_concurrency_limit(period_seconds=5, key_ttl_seconds=below_floor))
         == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS
     )
 
@@ -2469,6 +2469,17 @@ def test_ttl_for_concurrency_never_drops_below_the_safety_floor_even_with_a_lowe
 def test_tag_rate_limit_entry_rejects_non_positive_key_ttl_seconds():
     with pytest.raises(ValueError):
         TagRateLimitEntry(name="per_minute", limit=1, period_seconds=60, key_ttl_seconds=0)
+
+
+def test_tag_rate_limit_entry_rejects_key_ttl_seconds_shorter_than_period_seconds():
+    """
+    Regression test for a real bug: a key_ttl_seconds shorter than
+    period_seconds expires the bucket key before its window rolls over,
+    resetting the counter to zero mid-window and letting tagged traffic
+    exceed the configured limit.
+    """
+    with pytest.raises(ValueError):
+        TagRateLimitEntry(name="per_minute", limit=1, period_seconds=60, key_ttl_seconds=59)
 
 
 # ---------------------------------------------------------------------------
