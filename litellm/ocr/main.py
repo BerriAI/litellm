@@ -25,6 +25,7 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCR_REQUEST_FORMAT_PARAM,
     BaseOCRConfig,
     OCRResponse,
+    parse_ocr_request_format,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
@@ -128,11 +129,23 @@ def _prepare_ocr_request(
     litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
     supported_params: Final = ocr_provider_config.get_supported_ocr_params(model=model)
-    if OCR_REQUEST_FORMAT_PARAM not in supported_params and kwargs.get(OCR_REQUEST_FORMAT_PARAM) == "native":
-        raise ValueError(
-            f"`{OCR_REQUEST_FORMAT_PARAM}='native'` is not supported for provider: {custom_llm_provider}, "
-            f"model: {model}"
-        )
+    requested_format: Final = kwargs.get(OCR_REQUEST_FORMAT_PARAM)
+    if requested_format is not None:
+        try:
+            parsed_format: Final = parse_ocr_request_format(requested_format)
+        except ValueError as e:
+            raise litellm.exceptions.UnsupportedParamsError(
+                message=f"{e}", model=model, llm_provider=custom_llm_provider
+            ) from e
+        if OCR_REQUEST_FORMAT_PARAM not in supported_params and parsed_format == "native":
+            raise litellm.exceptions.UnsupportedParamsError(
+                message=(
+                    f"`{OCR_REQUEST_FORMAT_PARAM}='native'` is not supported for provider: {custom_llm_provider}, "
+                    f"model: {model}"
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
     non_default_params: Final = {}
     for param in supported_params:
