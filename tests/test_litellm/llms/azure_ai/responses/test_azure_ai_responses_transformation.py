@@ -1,20 +1,41 @@
+import json
 import os
 import sys
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
+import litellm
 from litellm.llms.azure_ai.common_utils import (
     is_agents_v2_model,
     parse_agent_reference,
 )
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 PROJECT_API_BASE = "https://example.services.ai.azure.com/api/projects/my-project"
+
+AGENT_RESPONSE = {
+    "id": "resp_agent123",
+    "object": "response",
+    "created_at": 1234567890,
+    "status": "completed",
+    "model": "my-agent",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_agent123",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hi there", "annotations": []}],
+        }
+    ],
+}
 
 
 class TestAgentsV2Helpers:
@@ -198,6 +219,57 @@ class TestProviderConfigManagerAzureAIResponses:
             model="azure_ai/gpt-4o",
         )
         assert config is None
+
+
+class TestOutboundRequest:
+    def _call_responses(self, **overrides):
+        requests: list[httpx.Request] = []
+
+        def capture(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=AGENT_RESPONSE)
+
+        client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(capture)))
+        litellm.responses(
+            model="azure_ai/agents/my-agent:1",
+            input="Hello",
+            api_base=PROJECT_API_BASE,
+            api_key="test-azure-ad-token",
+            client=client,
+            **overrides,
+        )
+        return requests[0]
+
+    def test_request_targets_project_responses_route_with_agent_reference(self):
+        request = self._call_responses()
+        body = json.loads(request.content)
+
+        assert str(request.url) == (
+            "https://example.services.ai.azure.com/api/projects/my-project"
+            "/openai/responses?api-version=2025-05-01"
+        )
+        assert request.headers["authorization"] == "Bearer test-azure-ad-token"
+        assert body["agent_reference"] == {
+            "name": "my-agent",
+            "version": "1",
+            "type": "agent_reference",
+        }
+        assert "model" not in body
+
+    def test_hostile_extra_body_cannot_switch_agent(self):
+        request = self._call_responses(
+            extra_body={
+                "agent_reference": {
+                    "name": "someone-elses-agent",
+                    "version": "9",
+                    "type": "agent_reference",
+                }
+            }
+        )
+        body = json.loads(request.content)
+
+        assert body["agent_reference"]["name"] == "my-agent"
+        assert body["agent_reference"]["version"] == "1"
 
 
 class TestV1AgentsCompletionRoutingUnchanged:
