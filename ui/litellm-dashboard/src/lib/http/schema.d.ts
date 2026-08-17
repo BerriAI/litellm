@@ -721,7 +721,9 @@ export interface paths {
          *
          *     Note: object_team_id and object_key_hash use Prisma JSON path filtering,
          *     which requires PostgreSQL. object_team filters on the denormalized
-         *     object_team_id and object_team_alias columns instead.
+         *     object_team_id and object_team_alias columns instead. Rows written before
+         *     those columns existed return NULL aliases until an operator runs the
+         *     db_scripts/backfill_audit_log_aliases.sql runbook.
          */
         get: operations["get_audit_logs_audit_get"];
         put?: never;

@@ -10,6 +10,13 @@
 -- Every statement only touches rows where the target column is NULL, so the
 -- script is idempotent and safe to re-run (including after a partial run).
 --
+-- On a large audit table, run this in batches instead of one shot: the first
+-- object_alias statement and the object_team_id statement rewrite every
+-- matching row, so wrap each UPDATE with an id-range or updated_at-range
+-- predicate and loop until no rows change. Run VACUUM (ANALYZE)
+-- "LiteLLM_AuditLog" afterward to reclaim the dead tuples the rewrites leave
+-- behind.
+--
 -- Sources, matching what the writer produces:
 -- - object_alias comes from the before/updated JSON blobs captured at change
 --   time (updated_values wins over before_value; users prefer user_alias then

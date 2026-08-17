@@ -1,9 +1,13 @@
 """
 Functions to create audit logs for LiteLLM Proxy
+
+New rows are stamped with denormalized alias columns (object_alias, object_team_id,
+object_team_alias, changed_by_user_email, changed_by_key_alias) at write time. Rows
+written before those columns existed keep NULLs until an operator runs the optional
+db_scripts/backfill_audit_log_aliases.sql runbook.
 """
 
 import asyncio
-import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, NamedTuple
 
@@ -252,10 +256,6 @@ async def _lookup_key_alias(prisma_client: "PrismaClient", token: str) -> str | 
     return actor_key.key_alias
 
 
-def _serialized_blob(value: object) -> object:
-    return json.dumps(value) if isinstance(value, dict) else value
-
-
 async def _with_denormalized_aliases(
     request_data: LiteLLM_AuditLogs, prisma_client: "PrismaClient | None"
 ) -> LiteLLM_AuditLogs:
@@ -300,24 +300,18 @@ async def _with_denormalized_aliases(
     need_actor_key: Final = (
         prisma_client is not None
         and bool(request_data.changed_by_api_key)
-        and ("changed_by_key_alias" not in fields_set or "changed_by_user_email" not in fields_set)
+        and (not request_data.changed_by_key_alias or not request_data.changed_by_user_email)
     )
     actor_key: Final = (
         await _lookup_actor_key(prisma_client, request_data.changed_by_api_key)
         if need_actor_key and prisma_client is not None and request_data.changed_by_api_key
         else _ActorKey(key_alias=None, user_id=None)
     )
-    changed_by_key_alias: Final = (
-        request_data.changed_by_key_alias if "changed_by_key_alias" in fields_set else actor_key.key_alias
-    )
-    changed_by_user_email: Final = (
-        request_data.changed_by_user_email
-        if "changed_by_user_email" in fields_set
-        else (
-            await _lookup_user_email(prisma_client, changed_by)
-            if prisma_client is not None and changed_by is not None and actor_key.user_id == changed_by
-            else None
-        )
+    changed_by_key_alias: Final = request_data.changed_by_key_alias or actor_key.key_alias
+    changed_by_user_email: Final = request_data.changed_by_user_email or (
+        await _lookup_user_email(prisma_client, changed_by)
+        if prisma_client is not None and changed_by is not None and actor_key.user_id == changed_by
+        else None
     )
     return request_data.model_copy(
         update={
@@ -326,8 +320,6 @@ async def _with_denormalized_aliases(
             "object_team_alias": object_team_alias,
             "changed_by_user_email": changed_by_user_email,
             "changed_by_key_alias": changed_by_key_alias,
-            "updated_values": _serialized_blob(request_data.updated_values),
-            "before_value": _serialized_blob(request_data.before_value),
         }
     )
 

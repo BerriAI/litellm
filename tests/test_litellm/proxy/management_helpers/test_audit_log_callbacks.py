@@ -584,12 +584,13 @@ class TestAuditLogAliasDenormalization:
         assert db.litellm_teamtable.where_calls == [{"team_id": "team-9"}]
 
     @pytest.mark.asyncio
-    async def test_service_account_without_aliases_triggers_no_lookups(self):
-        """Explicitly supplied None actor fields (service keys with no alias or email) skip the
-        guaranteed-miss lookups instead of querying on every audit row."""
+    async def test_none_actor_fields_fall_through_to_credential_confirmed_lookup(self):
+        """A None from the auth context still falls through to the lookup, but the email side only
+        resolves through the credential-confirmed gate: a service key with no owning user gets one
+        key lookup and never a user lookup."""
         db = _FakeDb(
             user_row=SimpleNamespace(user_email="someone@example.com"),
-            key_row=SimpleNamespace(key_alias="some-key", user_id="someone"),
+            key_row=SimpleNamespace(key_alias=None, user_id=None),
         )
         p1, p2, p3 = _gates(_FakePrismaClient(db))
         with p1, p2, p3:
@@ -611,8 +612,8 @@ class TestAuditLogAliasDenormalization:
         data = db.litellm_auditlog.created[0]
         assert "changed_by_user_email" not in data
         assert "changed_by_key_alias" not in data
+        assert db.litellm_verificationtoken.where_calls == [{"token": "hash-service"}]
         assert db.litellm_usertable.where_calls == []
-        assert db.litellm_verificationtoken.where_calls == []
 
     @pytest.mark.asyncio
     async def test_spoofed_changed_by_is_not_resolved_to_an_email(self):

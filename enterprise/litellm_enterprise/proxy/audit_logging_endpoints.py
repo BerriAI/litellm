@@ -7,7 +7,7 @@ GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -22,7 +22,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 router = APIRouter()
 
 
-def _build_json_field_or_condition(json_key: str, value: str) -> Dict[str, Any]:
+def _build_json_field_or_condition(json_key: str, value: str) -> dict[str, Any]:
     """
     Build an OR condition that matches a value inside a JSON column at the
     given key, checking both before_value and updated_values.
@@ -43,7 +43,7 @@ def _build_json_field_or_condition(json_key: str, value: str) -> Dict[str, Any]:
     }
 
 
-def _build_object_team_condition(object_team: str) -> Dict[str, Any]:
+def _build_object_team_condition(object_team: str) -> dict[str, Any]:
     return {
         "OR": [
             {"object_team_id": object_team},
@@ -62,14 +62,14 @@ async def get_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     # Filter parameters
-    changed_by: Optional[str] = Query(None, description="Filter by user or system that performed the action"),
-    changed_by_api_key: Optional[str] = Query(None, description="Filter by API key hash that performed the action"),
-    action: Optional[str] = Query(None, description="Filter by action type (create, update, delete)"),
-    table_name: Optional[str] = Query(None, description="Filter by table name that was modified"),
-    object_id: Optional[str] = Query(None, description="Filter by ID of the object that was modified"),
-    start_date: Optional[str] = Query(None, description="Filter logs after this date"),
-    end_date: Optional[str] = Query(None, description="Filter logs before this date"),
-    object_team_id: Optional[str] = Query(
+    changed_by: str | None = Query(None, description="Filter by user or system that performed the action"),
+    changed_by_api_key: str | None = Query(None, description="Filter by API key hash that performed the action"),
+    action: str | None = Query(None, description="Filter by action type (create, update, delete)"),
+    table_name: str | None = Query(None, description="Filter by table name that was modified"),
+    object_id: str | None = Query(None, description="Filter by ID of the object that was modified"),
+    start_date: str | None = Query(None, description="Filter logs after this date"),
+    end_date: str | None = Query(None, description="Filter logs before this date"),
+    object_team_id: str | None = Query(
         None,
         description="Filter by team_id present in before_value or updated_values JSON (PostgreSQL only)",
     ),
@@ -80,12 +80,12 @@ async def get_audit_logs(
             "or rows whose object_team_alias contains this value"
         ),
     ),
-    object_key_hash: Optional[str] = Query(
+    object_key_hash: str | None = Query(
         None,
         description="Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only)",
     ),
     # Sorting parameters
-    sort_by: Optional[str] = Query(
+    sort_by: str | None = Query(
         None,
         description="Column to sort by (e.g. 'updated_at', 'action', 'table_name')",
     ),
@@ -98,7 +98,9 @@ async def get_audit_logs(
 
     Note: object_team_id and object_key_hash use Prisma JSON path filtering,
     which requires PostgreSQL. object_team filters on the denormalized
-    object_team_id and object_team_alias columns instead.
+    object_team_id and object_team_alias columns instead. Rows written before
+    those columns existed return NULL aliases until an operator runs the
+    db_scripts/backfill_audit_log_aliases.sql runbook.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -109,7 +111,7 @@ async def get_audit_logs(
         )
 
     # Build filter conditions
-    where_conditions: Dict[str, Any] = {}
+    where_conditions: dict[str, Any] = {}
     if changed_by:
         where_conditions["changed_by"] = changed_by
     if changed_by_api_key:
@@ -121,7 +123,7 @@ async def get_audit_logs(
     if object_id:
         where_conditions["object_id"] = object_id
     if start_date or end_date:
-        date_filter: Dict[str, Any] = {}
+        date_filter: dict[str, Any] = {}
         if start_date:
             date_filter["gte"] = start_date
         if end_date:
@@ -142,7 +144,7 @@ async def get_audit_logs(
         where_conditions["AND"] = where_conditions.get("AND", []) + [_build_object_team_condition(object_team)]
 
     # Build sort conditions
-    order_by: Dict[str, Any] = {}
+    order_by: dict[str, Any] = {}
     if sort_by and isinstance(sort_by, str):
         order_by[sort_by] = sort_order
     else:
