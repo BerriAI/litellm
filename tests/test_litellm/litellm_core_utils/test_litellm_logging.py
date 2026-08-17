@@ -437,6 +437,19 @@ class TestGetRouterDeploymentModelInfo:
         finally:
             litellm.model_cost.pop(deployment_id, None)
 
+    def test_returns_none_when_the_deployment_id_resolves_no_provider(self, logging_obj) -> None:
+        """A registration whose id get_model_info cannot resolve yields no pricing."""
+        deployment_id = "deploy-unresolvable-provider-1"
+        litellm.model_cost[deployment_id] = {"id": deployment_id, "input_cost_per_token": 4e-06}
+        logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}}
+        logging_obj.model_call_details["model"] = None
+        logging_obj.model = None
+        try:
+            with patch.object(litellm, "get_model_info", side_effect=Exception("unresolvable")):
+                assert logging_obj.get_router_deployment_model_info() is None
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
     def test_falls_back_to_declared_rates_when_the_model_has_no_published_entry(self, logging_obj) -> None:
         """With no published entry to layer under, the declared rates still apply."""
         deployment_id = "deploy-unpublished-model-1"
