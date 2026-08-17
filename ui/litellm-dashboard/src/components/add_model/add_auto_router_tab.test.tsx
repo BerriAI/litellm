@@ -615,7 +615,12 @@ describe("AddAutoRouterTab", () => {
 
       // Applying a preset collapses Detailed Configuration, so the default model row is behind it.
       expandDetailedConfiguration();
-      await user.click(screen.getByRole("combobox", { name: "Default model" }));
+      const defaultModel = screen.getByRole("combobox", { name: "Default model" });
+      await user.click(defaultModel);
+      // antd virtualizes the option list and jsdom gives every row zero height, so options past
+      // the first window never render. Typing filters the list down to the pin instead of relying
+      // on its index, which adding a preset to the bundled JSON shifts.
+      await user.type(defaultModel, PINNED_MODEL);
       await user.click((await screen.findAllByTitle(PINNED_MODEL)).slice(-1)[0]);
     };
 
