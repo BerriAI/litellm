@@ -181,6 +181,15 @@ def test_video_content__plain_id_defaults_to_openai(seams):
     assert seams.kwargs_of("video_content_handler")["custom_llm_provider"] == "openai"
 
 
+def test_video_content__plain_id_with_grok_model_uses_xai(seams):
+    videos_main.video_content(
+        video_id="9b444cea-aaaa-bbbb-cccc-dddddddddddd",
+        model="grok-imagine-video-1.5",
+    )
+
+    assert seams.kwargs_of("video_content_handler")["custom_llm_provider"] == "xai"
+
+
 def test_video_remix__dispatch_and_provider_from_id(seams):
     result = videos_main.video_remix(video_id=AZURE_VIDEO_ID, prompt="new colors")
 
@@ -378,6 +387,21 @@ async def test_avideo_content__pre_decodes_provider_before_delegating():
     assert result is sentinel
     assert sync.call_args.kwargs["async_call"] is True
     assert sync.call_args.kwargs["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_avideo_content__plain_id_with_grok_model_uses_xai():
+    sentinel = b"mp4-bytes"
+    with patch.object(
+        videos_main, "video_content", MagicMock(return_value=sentinel)
+    ) as sync:
+        result = await videos_main.avideo_content(
+            video_id="9b444cea-aaaa-bbbb-cccc-dddddddddddd",
+            model="grok-imagine-video-1.5",
+        )
+
+    assert result is sentinel
+    assert sync.call_args.kwargs["custom_llm_provider"] == "xai"
 
 
 # =========================================================================== #

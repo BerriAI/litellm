@@ -20,6 +20,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    resolve_video_request_model,
 )
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
@@ -261,12 +262,13 @@ async def video_status(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    # Resolve model_name from model_id if available
-    # This allows the router to automatically inject litellm_params from the model config
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
-        if resolved_model:
-            data["model"] = resolved_model
+    resolved_model = resolve_video_request_model(
+        model_id_from_decoded=model_id_from_decoded,
+        query_model=request.query_params.get("model"),
+        llm_router=llm_router,
+    )
+    if resolved_model:
+        data["model"] = resolved_model
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -359,12 +361,13 @@ async def video_content(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    # Resolve model_name from model_id if available
-    # This allows the router to automatically inject litellm_params from the model config
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
-        if resolved_model:
-            data["model"] = resolved_model
+    resolved_model = resolve_video_request_model(
+        model_id_from_decoded=model_id_from_decoded,
+        query_model=request.query_params.get("model"),
+        llm_router=llm_router,
+    )
+    if resolved_model:
+        data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:

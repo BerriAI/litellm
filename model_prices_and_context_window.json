@@ -46503,5 +46503,56 @@
                 }
             }
         ]
+    },
+    "xai/grok-imagine-video": {
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "source": "https://docs.x.ai/docs",
+        "supported_endpoints": [
+            "/v1/videos",
+            "/v1/videos/generations"
+        ],
+        "output_cost_per_second": 0.05,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5": {
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "source": "https://docs.x.ai/docs",
+        "supported_endpoints": [
+            "/v1/videos",
+            "/v1/videos/generations"
+        ],
+        "output_cost_per_second": 0.08,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5-preview": {
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "source": "https://docs.x.ai/docs",
+        "supported_endpoints": [
+            "/v1/videos",
+            "/v1/videos/generations"
+        ],
+        "output_cost_per_second": 0.08,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
