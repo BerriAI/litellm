@@ -172,3 +172,30 @@ def test_text_format_takes_precedence_over_response_format():
 def test_no_format_leaves_text_unset():
     """Absent every spelling, nothing is invented."""
     assert "text" not in _capture_request_params()
+
+
+@pytest.mark.parametrize(
+    "bad_format",
+    [
+        {},
+        {"json_schema": {"name": "Flags", "schema": FLAGS_SCHEMA}},  # `type` omitted
+    ],
+)
+def test_response_format_without_type_raises(bad_format):
+    """
+    A format with no readable `type` cannot be converted. It must raise rather than
+    return None: response_format is consumed before the request is built, so returning
+    None would send the request unconstrained -- reintroducing, for malformed input,
+    exactly the silent drop this conversion exists to remove.
+
+    The helper raises ValueError; responses() surfaces it through exception_type() as
+    BadRequestError, which is what a caller actually sees.
+    """
+    with pytest.raises(litellm.BadRequestError, match="Could not read a `type`"):
+        _capture_request_params(response_format=bad_format)
+
+
+def test_text_format_without_type_raises():
+    """Same guarantee for the text_format spelling, which previously raised KeyError."""
+    with pytest.raises(litellm.BadRequestError, match="Could not read a `type`"):
+        _capture_request_params(text_format={"json_schema": {"name": "Flags"}})

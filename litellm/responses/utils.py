@@ -919,7 +919,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _convert_response_format_to_text_param(
         response_format: type["BaseModel"] | dict | None,
-    ) -> Optional["ResponseText"]:
+    ) -> "ResponseText":
         """
         Convert a Chat-Completions style `response_format` (or a Pydantic model) into
         the Responses API `text` parameter.
@@ -933,19 +933,28 @@ class ResponsesAPIRequestUtils:
         The schema-less formats (`{"type": "json_object"}`, `{"type": "text"}`) carry no
         extra fields and map straight across.
 
-        Returns:
-            ResponseText object with the converted format, or None if conversion fails
+        Raises:
+            litellm.BadRequestError: if no `type` can be read from the supplied format.
+                Returning None here would drop the caller's format and send the request
+                unconstrained, which is the silent failure this conversion exists to
+                remove. A bare ValueError would surface through exception_type() as
+                APIConnectionError, reporting malformed input as a network fault.
         """
         from litellm.llms.base_llm.base_utils import type_to_response_format_param
 
         # Normalizes a Pydantic model into a response_format dict; passes a dict through.
-        converted: Final = type_to_response_format_param(response_format)
-        if converted is None:
-            return None
-
+        converted: Final = type_to_response_format_param(response_format) or {}
         format_type: Final = converted.get("type")
         if format_type is None:
-            return None
+            raise litellm.BadRequestError(
+                message=(
+                    f"Could not read a `type` from the supplied response format: {response_format!r}. "
+                    'Expected {"type": "json_schema", "json_schema": {...}}, {"type": "json_object"}, '
+                    '{"type": "text"}, or a Pydantic model.'
+                ),
+                model=None,
+                llm_provider=None,
+            )
         if format_type != "json_schema":
             return {"format": {"type": format_type}}
 
@@ -980,16 +989,16 @@ class ResponsesAPIRequestUtils:
                 neither text nor text_format was supplied)
 
         Returns:
-            ResponseText object with the converted format, or None if conversion fails
+            ResponseText object with the converted format, or None if none was supplied
+
+        Raises:
+            litellm.BadRequestError: if a format was supplied but no `type` could be read from it
         """
         if text is not None:
             return text
         for candidate in (text_format, response_format):
-            if candidate is None:
-                continue
-            converted = ResponsesAPIRequestUtils._convert_response_format_to_text_param(candidate)
-            if converted is not None:
-                return converted
+            if candidate is not None:
+                return ResponsesAPIRequestUtils._convert_response_format_to_text_param(candidate)
         return text
 
     @staticmethod
