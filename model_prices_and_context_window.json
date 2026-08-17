@@ -48017,6 +48017,7 @@
         "supports_native_streaming": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "runinfra/Qwen/Qwen3.8-27B": {

@@ -445,7 +445,7 @@ class TestRuninfra:
 
         assert model_cost["runinfra/deepseek-ai/DeepSeek-V4-Flash-0731"]["max_input_tokens"] == 1048576
         assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["max_input_tokens"] == 262144
-        assert "supports_response_schema" not in model_cost["runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4"]
+        assert model_cost["runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4"]["supports_response_schema"] is True
         assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["supports_response_schema"] is True
 
 
