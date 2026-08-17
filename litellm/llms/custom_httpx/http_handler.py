@@ -937,7 +937,7 @@ class AsyncHTTPHandler:
     # create_task() result may be garbage-collected before it runs, leaving
     # the underlying aiohttp session unclosed ("Unclosed client session").
     # Mirrors LiteLLMAiohttpTransport._background_close_tasks.
-    _finalizer_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()
+    _finalizer_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs for pending closes
 
     def _close_aiohttp_session_sync(self) -> None:
         """Dispose the wrapped aiohttp session when no event loop is available.
@@ -954,13 +954,13 @@ class AsyncHTTPHandler:
             LiteLLMAiohttpTransport,
         )
 
-        transport = getattr(self._client, "_transport", None)
+        transport: Final = getattr(self._client, "_transport", None)
         if not isinstance(transport, LiteLLMAiohttpTransport):
             return
         # A shared session (e.g. the proxy's) is never this handler's to close.
         if not getattr(transport, "_owns_session", False):
             return
-        session = transport.client
+        session: Final = transport.client
         if isinstance(session, ClientSession) and not session.closed:
             transport._mark_connector_closed(session)
 
@@ -969,7 +969,7 @@ class AsyncHTTPHandler:
             if not _handler_may_close_client(sys.getrefcount(self._client), self._owns_client):
                 return
             try:
-                loop = asyncio.get_running_loop()
+                loop: Final = asyncio.get_running_loop()
             except RuntimeError:
                 # No running loop at finalization time (worker threads after
                 # their loop closed, interpreter/worker shutdown, GC in a
@@ -977,8 +977,8 @@ class AsyncHTTPHandler:
                 # synchronously instead of leaking the session.
                 self._close_aiohttp_session_sync()
                 return
-            task = loop.create_task(self._client.aclose())
-            cls = type(self)
+            task: Final = loop.create_task(self._client.aclose())
+            cls: Final = type(self)
             cls._finalizer_close_tasks.add(task)
             task.add_done_callback(cls._finalizer_close_tasks.discard)
         except Exception:
