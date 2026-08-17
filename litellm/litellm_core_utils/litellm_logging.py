@@ -108,6 +108,7 @@ from litellm.types.utils import (
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
+    ModelInfo,
     ModelResponse,
     ModelResponseStream,
     RawRequestTypedDict,
@@ -305,6 +306,66 @@ def _get_cached_prometheus_logger():
 
         _PrometheusLogger = PrometheusLogger
     return _PrometheusLogger
+
+
+_DEPLOYMENT_PRICING_KEYS: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_token_batches",
+    "output_cost_per_token_batches",
+)
+
+
+def deployment_pricing_model_info(model_id: str | None, deployment_model: str | None) -> ModelInfo | None:
+    """Pricing the router registered under this deployment's model_info.id.
+
+    Returns None when the deployment declares no pricing of its own, so the
+    caller falls back to the global cost map. The raw registration is what
+    decides that: the router registers an entry for every deployment, and
+    get_model_info fills absent costs with 0, so asking it directly cannot
+    tell "configured as free" apart from "no pricing configured". A deployment
+    may declare only one side of its pricing, so the side it leaves out keeps
+    the model's published rates instead of billing as zero. Ownership is per
+    token direction: declaring either rate for a direction takes that whole
+    direction, so a published batch rate can never displace a standard rate
+    the deployment configured itself.
+    """
+    if model_id is None:
+        return None
+    registered: Final = litellm.model_cost.get(model_id)
+    if not isinstance(registered, dict) or not any(registered.get(key) is not None for key in _DEPLOYMENT_PRICING_KEYS):
+        return None
+    try:
+        merged: Final = litellm.get_model_info(model=model_id).copy()
+    except Exception:  # noqa: BLE001  # get_model_info raises for ids it cannot resolve a provider for
+        return None
+    published: Final = _published_pricing(deployment_model)
+    if published is None:
+        return merged
+    declares_input: Final = (
+        registered.get("input_cost_per_token") is not None or registered.get("input_cost_per_token_batches") is not None
+    )
+    declares_output: Final = (
+        registered.get("output_cost_per_token") is not None
+        or registered.get("output_cost_per_token_batches") is not None
+    )
+    if not declares_input:
+        merged["input_cost_per_token"] = published.get("input_cost_per_token")
+        merged["input_cost_per_token_batches"] = published.get("input_cost_per_token_batches")
+    if not declares_output:
+        merged["output_cost_per_token"] = published.get("output_cost_per_token")
+        merged["output_cost_per_token_batches"] = published.get("output_cost_per_token_batches")
+    return merged
+
+
+def _published_pricing(deployment_model: str | None) -> ModelInfo | None:
+    """The cost map's own entry for the deployment's model, when it resolves."""
+    if deployment_model is None:
+        return None
+    try:
+        return litellm.get_model_info(model=deployment_model)
+    except Exception:  # noqa: BLE001  # no published entry to layer the declared rates over
+        return None
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -578,6 +639,28 @@ class Logging(LiteLLMLoggingBaseClass):
             if model_id is not None:
                 return model_id
         return None
+
+    def get_deployment_model_for_cost(self) -> str | None:
+        """The provider-qualified model to price against.
+
+        On a batch retrieve both self.model and litellm_params["model"] can be
+        unset, and self.model can otherwise carry the router's model_group alias,
+        which no cost map resolves. model_call_details holds the deployment's own
+        provider-qualified model, so it is preferred.
+        """
+        candidates: Final = (
+            (self.model_call_details or {}).get("model") if hasattr(self, "model_call_details") else None,
+            self.litellm_params.get("model") if hasattr(self, "litellm_params") else None,
+            self.model,
+        )
+        return next((candidate for candidate in candidates if isinstance(candidate, str) and candidate), None)
+
+    def get_router_deployment_model_info(self) -> ModelInfo | None:
+        """See deployment_pricing_model_info; None means fall back to the global cost map."""
+        return deployment_pricing_model_info(
+            model_id=self.get_router_model_id(),
+            deployment_model=self.get_deployment_model_for_cost(),
+        )
 
     def update_environment_variables(
         self,
@@ -2600,7 +2683,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 ) = await _handle_completed_batch(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
+                    model_name=self.get_deployment_model_for_cost(),
                     litellm_params=self.litellm_params,
+                    model_info=self.get_router_deployment_model_info(),
                 )
 
                 result._hidden_params["response_cost"] = response_cost
