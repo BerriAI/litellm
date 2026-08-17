@@ -745,6 +745,8 @@ class RealTimeStreaming:
         for callback in litellm.callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue
+            if callback.use_native_lifecycle_hooks:
+                continue
             if id(callback) in _already_run:
                 continue
             if not any(callback.should_run_guardrail(data=_check_data, event_type=et) for et in _realtime_event_types):

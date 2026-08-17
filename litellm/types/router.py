@@ -123,6 +123,7 @@ class UpdateRouterConfig(BaseModel):
     context_window_fallbacks: list[dict] | None = None
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
+    tag_routing_prefix: str | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -169,6 +170,20 @@ class ModelInfo(MirroredPricingParams):
     cost_per_ptu_per_hour: float | None = None
     ptu_effective_from: datetime.datetime | None = None
     ptu_effective_to: datetime.datetime | None = None
+
+    # when tag-based routing's "!" or "&" constraints eliminate every deployment
+    # in this model group, fall back to the default-tagged pool instead of
+    # raising no_deployments_with_tag_routing. Defaults to False (raise), so
+    # existing "!" negation behavior is unchanged unless explicitly opted in.
+    allow_fail_open: bool | None = None
+
+    # per-model-group override for router_settings.enable_tag_filtering; unset
+    # defers to the router-wide default. Checked against any deployment in the
+    # group, so set it consistently across every deployment sharing this
+    # model_name. A request-level enable_tag_filtering=True (from key/team
+    # settings) still wins over this, exactly as it already does over the
+    # router-wide default.
+    enable_tag_filtering: bool | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
@@ -237,13 +252,22 @@ class CredentialLiteLLMParams(BaseModel):
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
     aws_region_name: str | None = None
+    aws_session_name: str | None = None
+    aws_profile_name: str | None = None
+    aws_role_name: str | None = None
+    aws_web_identity_token: str | None = None
+    aws_sts_endpoint: str | None = None
+    aws_external_id: str | None = None
     aws_bedrock_runtime_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
     s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
+    s3_output_bucket_name: str | None = None
+    bedrock_tags: list | None = None
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
 
@@ -878,6 +902,14 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
     tags: tuple[str, ...]
     strategy: _PreRoutingStrategyT_co
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumedRequestTagsStamp:
+    """The model group a tagged router rewrote to, plus the request tags spent selecting it."""
+
+    model_group: str
+    tags: tuple[str, ...]
 
 
 @runtime_checkable

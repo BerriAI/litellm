@@ -1,4 +1,11 @@
-import { Member, Team } from "@/components/networking";
+import { Member, Organization, Team } from "@/components/networking";
+
+const ORG_ADMIN_MEMBERSHIP_ROLE = "org_admin";
+
+interface OrganizationMembership {
+  user_id?: string | null;
+  user_role?: string | null;
+}
 
 // Define admin roles and permissions
 export const old_admin_roles = ["Admin", "Admin Viewer"];
@@ -39,6 +46,19 @@ export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | nul
   return teamMemberWithRoles.some((member) => member.user_id === userID && member.role === "admin");
 };
 
+export const isOrgAdminForAnyOrg = (
+  organizations: Organization[] | null | undefined,
+  userID: string | null | undefined,
+): boolean => {
+  if (organizations == null || !userID) {
+    return false;
+  }
+  return organizations.some((org) => {
+    const members: OrganizationMembership[] = org.members ?? [];
+    return members.some((member) => member.user_id === userID && member.user_role === ORG_ADMIN_MEMBERSHIP_ROLE);
+  });
+};
+
 export const formatUserRole = (userRole: string): string => {
   if (!userRole) {
     return "Undefined Role";
@@ -65,6 +85,9 @@ export const formatUserRole = (userRole: string): string => {
       return "Unknown Role";
   }
 };
+
+export const isOrgAdminSessionRole = (userRole?: string | null): boolean =>
+  userRole === ORG_ADMIN_MEMBERSHIP_ROLE || userRole === formatUserRole(ORG_ADMIN_MEMBERSHIP_ROLE);
 
 const viewOnlyRawRoles = ["proxy_admin_viewer", "internal_user_viewer", "internal_viewer"];
 

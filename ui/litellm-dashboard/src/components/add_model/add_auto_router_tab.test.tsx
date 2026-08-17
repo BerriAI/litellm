@@ -273,7 +273,7 @@ describe("AddAutoRouterTab", () => {
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
-    await user.click(screen.getByText("Advanced: Session Affinity"));
+    await user.click(screen.getByText("Advanced: Affinity"));
     expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
@@ -292,7 +292,7 @@ describe("AddAutoRouterTab", () => {
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
-    await user.click(screen.getByText("Advanced: Session Affinity"));
+    await user.click(screen.getByText("Advanced: Affinity"));
     await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
@@ -300,6 +300,46 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: true,
+    });
+  });
+
+  it("defaults a new router to deployment affinity on, matching the backend field default", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Affinity"));
+    expect(
+      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
+    ).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      deployment_affinity: true,
+    });
+  });
+
+  it("carries deployment affinity turned off through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      deployment_affinity: false,
     });
   });
 
@@ -313,7 +353,7 @@ describe("AddAutoRouterTab", () => {
       (option) => option.querySelector(".font-medium")?.textContent,
     );
 
-    expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
+    expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
   });
 
   describe("routing test", () => {
@@ -560,6 +600,71 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  describe("default model pin", () => {
+    const PINNED_MODEL = "pinned-default-model";
+
+    const waitForPresetEnabled = async (label: string) => {
+      openTemplateDropdown();
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel(label)!)).toBe(false);
+      });
+    };
+
+    const applyPresetAndPin = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitForPresetEnabled("Anthropic Family");
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+
+      // Applying a preset collapses Detailed Configuration, so the default model row is behind it.
+      expandDetailedConfiguration();
+      await user.click(screen.getByRole("combobox", { name: "Default model" }));
+      await user.click((await screen.findAllByTitle(PINNED_MODEL)).slice(-1)[0]);
+    };
+
+    beforeEach(() => {
+      mockFetchAvailableModels.mockResolvedValue([...ALL_FAMILY_MODELS, { model_group: PINNED_MODEL, mode: "chat" }]);
+    });
+
+    it("submits the pinned model in place of the one the tiers derive", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<Harness />);
+
+      await applyPresetAndPin(user);
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "pinned-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      const submitted = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0];
+      // The pin rides on litellm_params for the backend and is recorded in the config so the edit
+      // modal can read it back as a pin rather than guessing from the tiers.
+      expect(submitted).toMatchObject({
+        auto_router_default_model: PINNED_MODEL,
+        complexity_router_config: { tiers: ANTHROPIC_TIERS, default_model: PINNED_MODEL },
+      });
+      expect(PINNED_MODEL).not.toBe(ANTHROPIC_TIERS.MEDIUM[0]);
+    });
+
+    it("blocks a submit whose pinned model is no longer available", async () => {
+      const user = userEvent.setup();
+      const { container } = renderWithProviders(<Harness />);
+
+      await applyPresetAndPin(user);
+      fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "stale-pin-router" } });
+      expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled();
+
+      // Only the pinned model disappears - the tier models all survive, so nothing but the pin can
+      // be what blocks the submit.
+      testQueryClient.setQueryData(["availableModels", "autoRouter", "token"], ALL_FAMILY_MODELS);
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled());
+
+      fireEvent.submit(container.querySelector("form")!);
+
+      await waitFor(() =>
+        expect(NotificationManager.fromBackend).toHaveBeenCalledWith(expect.stringContaining(PINNED_MODEL)),
+      );
+      expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+    });
+  });
+
   describe("deployment-matched presets", () => {
     const renamedDeploymentsFor = (presetKey: string) =>
       [...getRequiredModelsInPreset(getPresetByKey(presetKey)!)].map((model, index) => ({
@@ -633,7 +738,7 @@ describe("AddAutoRouterTab", () => {
       const labels = Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).map(
         (option) => option.querySelector(".font-medium")?.textContent,
       );
-      expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
+      expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
     });
 
     it.each([

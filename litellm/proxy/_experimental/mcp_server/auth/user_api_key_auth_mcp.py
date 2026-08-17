@@ -83,7 +83,7 @@ class UnloadableEntitlementError(Exception):
 def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: list[str] | None = None) -> list[str] | None:
     """Resolve the single MCP server name a cold-start passthrough bypass may
     target. Delegates parsing to
-    :meth:`MCPRequestHandler._extract_target_server_names_from_path` so the
+    :meth:`MCPRequestHandler.extract_target_server_names_from_path` so the
     names used here always match the names downstream routing uses; returns
     ``None`` whenever the bypass must not activate (aggregate ``/mcp``,
     multi-server CSV paths, or any other unrecognized path).
@@ -94,7 +94,7 @@ def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: list[str] |
     header/path mismatch here is a sign of a confused or hostile caller —
     refuse the cold-start bypass rather than admit anonymously based on the
     path while the header advertises a stricter, non-passthrough target."""
-    servers: Final = MCPRequestHandler._extract_target_server_names_from_path(path)
+    servers: Final = MCPRequestHandler.extract_target_server_names_from_path(path)
     if len(servers) != 1:
         verbose_logger.debug(
             "MCP cold-start: path %r resolved to %r; passthrough 401 bypass "
@@ -215,7 +215,7 @@ def _is_gateway_dcr_challenge_scope(
         return False
     if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
         return False
-    if len(MCPRequestHandler._extract_target_server_names_from_path(route)) == 0:
+    if len(MCPRequestHandler.extract_target_server_names_from_path(route)) == 0:
         return True
     return _gateway_dcr_challenge_target(route, mcp_servers, client_ip) is not None
 
@@ -579,7 +579,7 @@ class MCPRequestHandler:
         return oauth2_headers, raw_headers, mcp_auth_header, mcp_server_auth_headers
 
     @staticmethod
-    def _extract_target_server_names_from_path(path: str) -> list[str]:
+    def extract_target_server_names_from_path(path: str) -> list[str]:
         """
         Extract the target MCP server name(s) from the standard MCP transport
         URL patterns: ``/mcp/{server_name_or_csv}[/...]`` and
@@ -836,6 +836,7 @@ class MCPRequestHandler:
             case SessionBearerAdmitted():
                 try:
                     admitted: Final = await MCPRequestHandler._reload_admitted_user(result.principal.user_id)
+                    admitted.mcp_session_resource_server_id = result.principal.resource_server_id
                     await MCPRequestHandler._enforce_admitted_live_policy(
                         admitted=admitted, request=request, route=route
                     )
@@ -1168,7 +1169,7 @@ class MCPRequestHandler:
         (header/path TOCTOU). For non-``/mcp/...`` paths (where the path
         does not encode targets), fall back to the header.
         """
-        path_targets: Final = MCPRequestHandler._extract_target_server_names_from_path(path)
+        path_targets: Final = MCPRequestHandler.extract_target_server_names_from_path(path)
         if path_targets:
             return path_targets
         # Path did not resolve to /mcp/... targets — trust the header
@@ -1190,7 +1191,7 @@ class MCPRequestHandler:
 
         DEPRECATED: This method is deprecated in favor of server-specific auth headers using the format x-mcp-{{server_alias}}-{{header_name}} instead.
         """
-        mcp_client_side_auth_header_name: Final[str] = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+        mcp_client_side_auth_header_name: Final[str] = MCPRequestHandler.get_mcp_client_side_auth_header_name()
         auth_header: Final = headers.get(mcp_client_side_auth_header_name)
         if auth_header:
             verbose_logger.warning(
@@ -1265,7 +1266,7 @@ class MCPRequestHandler:
         return oauth2_headers
 
     @staticmethod
-    def _get_mcp_client_side_auth_header_name() -> str:
+    def get_mcp_client_side_auth_header_name() -> str:
         """
         Get the header name used to pass the MCP auth header to the MCP server
 

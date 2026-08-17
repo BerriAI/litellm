@@ -85,6 +85,11 @@ class _WebSearchSettingsView(TypedDict):
     websearch_interception_params: WebSearchInterceptionConfig
 
 
+class _SearchToolConfig(TypedDict, total=False):
+    search_tool_name: str
+    litellm_params: Mapping[str, object] | None
+
+
 class WebSearchInterceptionLogger(CustomLogger):
     """
     CustomLogger that intercepts WebSearch tool calls for models that don't
@@ -1487,7 +1492,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         return None
 
-    def _select_search_tool_from_router(self, llm_router: object) -> dict[str, Any] | None:
+    def _select_search_tool_from_router(self, llm_router: object) -> "_SearchToolConfig | None":
         if llm_router is None or not hasattr(llm_router, "search_tools"):
             return None
         search_tools: Final = list(getattr(llm_router, "search_tools") or [])
@@ -1495,9 +1500,9 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     def _select_search_tool_from_list(
         self,
-        search_tools: list[dict[str, Any]],
+        search_tools: list[_SearchToolConfig],
         source: str,
-    ) -> dict[str, Any] | None:
+    ) -> "_SearchToolConfig | None":
         if self.search_tool_name:
             matching_tools = [tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name]
             if matching_tools:
@@ -1692,7 +1697,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     @staticmethod
     def initialize_from_proxy_config(
-        litellm_settings: dict[str, Any],
+        litellm_settings: Mapping[str, WebSearchInterceptionConfig],
         callback_specific_params: Mapping[str, object],
     ) -> "WebSearchInterceptionLogger":
         """
