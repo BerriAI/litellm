@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
 from fastapi import HTTPException
@@ -24,7 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.neuraltrust import DEFAULT_API_BASE
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -114,7 +114,9 @@ class NeuralTrustGuardrail(CustomGuardrail):
         collector_key: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         timeout: float | None = None,
-        **kwargs: Any,
+        guardrail_name: str | None = None,
+        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
+        default_on: bool = False,
     ) -> None:
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -129,8 +131,12 @@ class NeuralTrustGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
         resolved_timeout: Final = DEFAULT_TIMEOUT if timeout is None else float(timeout)
         self.timeout = resolved_timeout
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        super().__init__(**kwargs)
+        super().__init__(
+            guardrail_name=guardrail_name,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
+            event_hook=event_hook,
+            default_on=default_on,
+        )
 
     @log_guardrail_information
     async def apply_guardrail(
