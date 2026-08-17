@@ -46382,6 +46382,26 @@
             }
         ]
     },
+    "xai/grok-imagine-image": {
+        "litellm_provider": "xai",
+        "mode": "image_generation",
+        "source": "https://docs.x.ai/docs",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "output_cost_per_image": 0.02
+    },
+    "xai/grok-imagine-image-quality": {
+        "litellm_provider": "xai",
+        "mode": "image_generation",
+        "source": "https://docs.x.ai/docs",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "output_cost_per_image": 0.05
+    },
     "xai/grok-imagine-video": {
         "litellm_provider": "xai",
         "mode": "video_generation",

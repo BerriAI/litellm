@@ -8728,6 +8728,12 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_image_generation_config(model)
+        elif LlmProviders.XAI == provider:
+            from litellm.llms.xai.image_generation import (
+                get_xai_image_generation_config,
+            )
+
+            return get_xai_image_generation_config(model)
         elif LlmProviders.MODELSCOPE == provider:
             from litellm.llms.modelscope.image_generation import (
                 get_modelscope_image_generation_config,
@@ -8885,6 +8891,10 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_edit_config(model)
+        elif LlmProviders.XAI == provider:
+            from litellm.llms.xai.image_edit.transformation import XAIImageEditConfig
+
+            return XAIImageEditConfig()
         return None
 
     @staticmethod
