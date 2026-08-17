@@ -2,6 +2,7 @@
 
 import asyncio
 import contextvars
+import hashlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -522,6 +523,20 @@ def _scope_suffix(deployment_scope: tuple[str, ...] | None) -> str:
     return "chain" if deployment_scope is None else "dep:" + "+".join(deployment_scope)
 
 
+def _fixed_length_identity(tag_value: str) -> str:
+    """
+    `tag_value` is caller-controlled (whatever follows the tag_id prefix in
+    a caller-supplied tag) with no length or content bound. Embedding it
+    directly would let a caller inflate this hook's own in-memory dict keys
+    past what `max_in_memory_cache_size` bounds (that caps item *count*, not
+    key bytes) and grow unbounded Redis keys with no cap at all. Hashing to
+    a fixed-length digest bounds this hook's own contribution to key size
+    regardless of the caller's input, while still preserving distinctness
+    (two different tag values still resolve to two different buckets).
+    """
+    return hashlib.sha256(tag_value.encode()).hexdigest()
+
+
 def _hash_tag(model_group: str, configured: _ConfiguredLimit, tag_value: str, key_hash: str | None) -> str:
     # resolved_group overrides the caller-visible model_group when this
     # limit was found via resolve_any()'s per-deployment fallback (routing
@@ -539,7 +554,7 @@ def _hash_tag(model_group: str, configured: _ConfiguredLimit, tag_value: str, ke
     key_suffix: Final = f":key:{key_hash}" if key_hash is not None else ""
     return (
         f"tag_rl:{effective_model_group}:{configured.unit}:{configured.entry.name}:{configured.entry.tag_id}:"
-        f"{scope}{team_suffix}:{tag_value}{key_suffix}"
+        f"{scope}{team_suffix}:{_fixed_length_identity(tag_value)}{key_suffix}"
     )
 
 
