@@ -2275,6 +2275,74 @@ def test_is_gemini_3_or_newer():
     # Edge cases
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
 
+    # Rolling `-latest` aliases resolve to Gemini 3.x and carry no version in
+    # the name, so they must be detected explicitly.
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash-latest") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash-lite-latest") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro-latest") == True
+    assert (
+        VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-flash-latest") == True
+    )
+    assert (
+        VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-pro-latest") == True
+    )
+
+    # A versioned name that merely ends in `-latest` is not Gemini 3.
+    assert (
+        VertexGeminiConfig._is_gemini_3_or_newer(
+            "gemini-2.5-flash-native-audio-latest"
+        )
+        == False
+    )
+
+
+def test_thought_signature_fallback_for_rolling_latest_alias():
+    """
+    A tool call whose thought signature did not survive the round-trip must
+    still get the dummy signature Google documents, otherwise Gemini rejects
+    the follow-up turn with:
+
+      400 Function call is missing a thought_signature in functionCall parts.
+
+    Regression test: `gemini-flash-latest` serves Gemini 3.x but was not
+    detected as such, so the fallback was skipped and every multi-turn tool
+    call that lost its signature failed.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_abc123",  # no `__thought__` suffix -> signature lost
+                "type": "function",
+                "function": {
+                    "name": "search_website",
+                    "arguments": '{"query": "Iceland"}',
+                },
+            }
+        ],
+    }
+
+    for model in [
+        "gemini-3-flash",
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-pro-latest",
+        "gemini/gemini-flash-latest",
+    ]:
+        parts = convert_to_gemini_tool_call_invoke(message, model=model)
+        assert any(
+            "thoughtSignature" in part for part in parts
+        ), f"expected a thought signature for {model}"
+
+    # Pre-Gemini-3 models must not gain a signature they never needed.
+    parts = convert_to_gemini_tool_call_invoke(message, model="gemini-2.5-flash")
+    assert not any("thoughtSignature" in part for part in parts)
+
 
 def _tool_call_messages(tool_call_id: str):
     return [
