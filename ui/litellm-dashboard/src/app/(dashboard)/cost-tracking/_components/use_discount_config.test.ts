@@ -84,7 +84,9 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalled();
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
+        "Please select a provider and enter discount percentage",
+      );
     });
 
     it("should return false and notify when no discount is provided", async () => {
@@ -96,7 +98,9 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalled();
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
+        "Please select a provider and enter discount percentage",
+      );
     });
 
     it("should return false and notify when the discount exceeds 100", async () => {
@@ -152,7 +156,7 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(true);
-      expect(NotificationsManager.success).toHaveBeenCalled();
+      expect(NotificationsManager.success).toHaveBeenCalledWith("Discount configuration updated successfully");
     });
   });
 
