@@ -21,6 +21,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { hasCapability } from "@/utils/capabilities";
@@ -101,7 +102,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
-  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage");
+  const isOrgAdmin = useIsOrgAdmin();
+  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
 
   const [settledUserSearch, setSettledUserSearch] = useState("");
@@ -142,7 +144,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [usageView, setUsageView] = useState<UsageOption>("global");
+  const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
+  // Org-admin membership is read from the server, so unlike the other usage
+  // views this one can be revoked while the page is open. Derive the view in
+  // render rather than storing it, so the fallback lands on the same paint and
+  // the selector never holds a value it no longer offers.
+  const usageView: UsageOption =
+    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
@@ -492,6 +501,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               onChange={(value) => setUsageView(value)}
               userRole={userRole}
               canViewTagUsage={canViewTagUsage}
+              isOrgAdmin={isOrgAdmin}
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
@@ -942,6 +952,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               entityType="organization"
               userID={userID}
               userRole={userRole}
+              isOrgAdmin={isOrgAdmin}
               dateValue={dateValue}
               entityList={
                 organizations?.map((organization) => ({

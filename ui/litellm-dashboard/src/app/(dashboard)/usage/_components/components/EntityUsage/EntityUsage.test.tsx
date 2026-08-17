@@ -904,6 +904,26 @@ describe("EntityUsage", () => {
       expect(call()).not.toHaveBeenCalled();
     });
 
+    // An org admin's session role is "Internal User", so the row above cannot
+    // distinguish them. Gating the fetch on the session role alone left the
+    // Organization Usage panel rendered but permanently empty, because the
+    // request was never issued even though the proxy would have served it.
+    it.each([
+      ["organization", () => mockOrganizationDailyActivityCall, true],
+      ["agent", () => mockAgentDailyActivityCall, false],
+    ] as const)("fetches %s activity for an org admin: %s", async (entityType, call, expected) => {
+      render(<EntityUsage {...defaultProps} entityType={entityType} userRole="Internal User" isOrgAdmin={true} />);
+
+      if (expected) {
+        await waitFor(() => {
+          expect(call()).toHaveBeenCalled();
+        });
+      } else {
+        expect(await screen.findByText("Agent Spend Overview")).toBeInTheDocument();
+        expect(call()).not.toHaveBeenCalled();
+      }
+    });
+
     it("keeps the team breakdown but drops its agent sub-fetch for an internal user", async () => {
       render(<EntityUsage {...defaultProps} entityType="team" userRole="Internal User" />);
 

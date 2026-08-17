@@ -1,6 +1,7 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -134,6 +135,11 @@ vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   __esModule: true,
   default: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
+  __esModule: true,
+  default: vi.fn(() => false),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
@@ -612,6 +618,49 @@ describe("UsagePage", () => {
     await waitFor(() => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  // Org-admin membership comes from the server, so it can be revoked while the
+  // page is open. The Organization Usage option and its panel both disappear,
+  // and without a fallback the selector keeps a value it no longer offers,
+  // leaving the user on a blank trigger over a blank panel with nothing to
+  // click. An internal user is used because that is the session role an org
+  // admin actually carries.
+  it("should leave the organization view when org-admin membership is revoked mid-session", async () => {
+    const mockUseIsOrgAdmin = vi.mocked(useIsOrgAdmin);
+    mockUseIsOrgAdmin.mockReturnValue(true);
+    mockUseAuthorized.mockReturnValue({
+      isLoading: false,
+      isAuthorized: true,
+      token: "mock-token",
+      accessToken: "test-token",
+      userId: "user-123",
+      userEmail: "test@example.com",
+      userRole: "Internal User",
+      premiumUser: true,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    } as any);
+
+    const { rerender } = renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+
+    const usageSelect = screen.getByTestId("usage-view-select");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "organization" } });
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("Entity Usage").length).toBeGreaterThan(0);
+    });
+    expect((usageSelect as HTMLSelectElement).value).toBe("organization");
+
+    mockUseIsOrgAdmin.mockReturnValue(false);
+    act(() => {
+      rerender(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+    });
+
+    await waitFor(() => {
+      expect((screen.getByTestId("usage-view-select") as HTMLSelectElement).value).toBe("global");
     });
   });
 
