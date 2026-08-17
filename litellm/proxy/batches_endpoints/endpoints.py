@@ -642,6 +642,23 @@ async def retrieve_batch(
         raise handle_exception_on_proxy(e)
 
 
+def validate_batch_list_limit(limit: int | None) -> None:
+    if limit is None or 0 <= limit <= 100:
+        return
+    bound, expected, openai_code = (
+        ("below minimum", ">= 0", "integer_below_min_value")
+        if limit < 0
+        else ("above maximum", "<= 100", "integer_above_max_value")
+    )
+    raise ProxyException(
+        message=f"Invalid 'limit': integer {bound} value. Expected a value {expected}, but got {limit} instead.",
+        type="invalid_request_error",
+        param="limit",
+        code=400,
+        openai_code=openai_code,
+    )
+
+
 @router.get(
     "/{provider}/v1/batches",
     dependencies=[Depends(user_api_key_auth)],
@@ -679,6 +696,7 @@ async def list_batches(
 
     ```
     """
+    validate_batch_list_limit(limit)
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,

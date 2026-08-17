@@ -431,6 +431,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if target_model_names:
             raise Exception("Filtering by 'target_model_names' is not supported when using managed batches.")
 
+        if limit == 0:
+            return build_list_page([])
+
         owner_filter = build_owner_filter(user_api_key_dict)
         if owner_filter is None:
             return build_list_page([])
