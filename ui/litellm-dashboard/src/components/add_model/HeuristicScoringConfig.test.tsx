@@ -108,7 +108,7 @@ describe("HeuristicScoringConfig", () => {
     );
     await expandPanel();
 
-    expect(screen.getByText(/Boundaries are out of order/)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/every tier between them is unreachable/);
   });
 
   it("explains a weight total away from 1.00 instead of blocking it", async () => {

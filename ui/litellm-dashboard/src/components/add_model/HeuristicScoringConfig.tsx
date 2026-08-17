@@ -163,8 +163,9 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
               />
             ))}
             {boundariesOutOfOrder && (
-              <p className="text-xs text-amber-600">
-                Boundaries are out of order, so the tiers in between can never be selected.
+              <p className="text-xs font-medium text-destructive" role="alert">
+                These boundaries decrease, so every tier between them is unreachable and its traffic routes elsewhere.
+                Saving is still allowed, because a router configured this way in config.yaml has to stay editable here.
               </p>
             )}
           </section>
@@ -192,8 +193,8 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
               />
             ))}
             {thresholdsOutOfOrder && (
-              <p className="text-xs text-amber-600">
-                The short threshold is not below the long one, so no prompt length scores neutral.
+              <p className="text-xs font-medium text-destructive" role="alert">
+                The short threshold is not below the long one, so no prompt length scores neutral on length.
               </p>
             )}
           </section>
