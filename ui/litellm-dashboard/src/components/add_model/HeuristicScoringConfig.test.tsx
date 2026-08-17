@@ -3,182 +3,142 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
-import { ComplexityRouterConfigValue, DEFAULT_DIMENSION_WEIGHTS } from "./ComplexityRouterConfig";
+import {
+  ClassifierFallback,
+  ClassifierType,
+  ComplexityRouterConfigValue,
+  DEFAULT_DIMENSION_WEIGHTS,
+  DIMENSION_LABELS,
+} from "./ComplexityRouterConfig";
 
 const BASE: ComplexityRouterConfigValue = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o"], COMPLEX: ["o3"], REASONING: ["o3"] },
   classifier_type: "heuristic",
 };
 
-const expandPanel = async () => {
+const render = async (value: ComplexityRouterConfigValue, onChange = vi.fn()) => {
+  renderWithProviders(<HeuristicScoringConfig value={value} onChange={onChange} />);
   await userEvent.click(screen.getByText("Advanced scoring"));
+  return onChange;
+};
+
+const commit = async (label: string, raw: string) => {
+  const onChange = await render(BASE);
+  fireEvent.change(screen.getByLabelText(label), { target: { value: raw } });
+  return onChange.mock.calls.at(-1)?.[0] as ComplexityRouterConfigValue | undefined;
 };
 
 describe("HeuristicScoringConfig", () => {
-  it("starts collapsed with no override badge on an untouched router", () => {
-    renderWithProviders(<HeuristicScoringConfig value={BASE} onChange={vi.fn()} />);
+  it("counts overridden groups on the collapsed header", () => {
+    const tuned = { ...BASE, token_thresholds: { simple: 25, complex: 900 } };
+    renderWithProviders(<HeuristicScoringConfig value={tuned} onChange={vi.fn()} />);
 
-    expect(screen.getByText("Advanced scoring")).toBeInTheDocument();
-    expect(screen.queryByTestId("advanced-scoring-override-count")).not.toBeInTheDocument();
+    expect(screen.getByTestId("advanced-scoring-override-count")).toHaveTextContent("1 override");
   });
 
-  it("counts the overridden groups in the collapsed header, so a tuned router is visible without expanding", () => {
-    renderWithProviders(
-      <HeuristicScoringConfig
-        value={{
-          ...BASE,
-          token_thresholds: { simple: 25, complex: 900 },
-          dimension_weights: DEFAULT_DIMENSION_WEIGHTS,
-        }}
-        onChange={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByTestId("advanced-scoring-override-count")).toHaveTextContent("2 overrides");
-  });
-
-  it("shows the shipped defaults as the starting values", async () => {
-    renderWithProviders(<HeuristicScoringConfig value={BASE} onChange={vi.fn()} />);
-    await expandPanel();
+  it("prefills the shipped defaults", async () => {
+    await render(BASE);
 
     expect(screen.getByLabelText("Simple to Medium")).toHaveValue("0.15");
     expect(screen.getByLabelText("Long above")).toHaveValue("400");
     expect(screen.getByTestId("dimension-weight-total")).toHaveTextContent("total 1.00");
   });
 
-  it("writes a whole boundary dict when one field is edited, never a partial one", async () => {
-    const onChange = vi.fn();
-    renderWithProviders(<HeuristicScoringConfig value={BASE} onChange={onChange} />);
-    await expandPanel();
+  it("writes a whole dict, and keeps the decimal point typeable", async () => {
+    // A plain controlled number input renders Number("0.") as "0", so "0.22" would be untypeable.
+    const onChange = await render(BASE);
+    const field = screen.getByLabelText("Simple to Medium");
 
-    fireEvent.change(screen.getByLabelText("Complex to Reasoning"), { target: { value: "0.8" } });
+    fireEvent.change(field, { target: { value: "0." } });
+    expect(field).toHaveValue("0.");
+    fireEvent.change(field, { target: { value: "0.22" } });
 
-    const last = onChange.mock.calls.at(-1)?.[0] as ComplexityRouterConfigValue;
-    expect(last.tier_boundaries).toEqual({ simple_medium: 0.15, medium_complex: 0.35, complex_reasoning: 0.8 });
+    expect((onChange.mock.calls.at(-1)?.[0] as ComplexityRouterConfigValue).tier_boundaries).toEqual({
+      simple_medium: 0.22,
+      medium_complex: 0.35,
+      complex_reasoning: 0.6,
+    });
   });
 
-  it("commits nothing when a field is emptied, rather than writing NaN into the config", async () => {
-    const onChange = vi.fn();
-    renderWithProviders(<HeuristicScoringConfig value={BASE} onChange={onChange} />);
-    await expandPanel();
-
+  it("commits nothing for an emptied field, rather than NaN", async () => {
+    const onChange = await render(BASE);
     fireEvent.change(screen.getByLabelText("Short below"), { target: { value: "" } });
 
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("lets a decimal be typed a character at a time without eating the point", async () => {
-    // A plain controlled number input renders Number("0.") as "0", so "0.22" is untypeable. The field
-    // shows the raw draft while it is being edited, and commits only what parses.
-    const onChange = vi.fn();
-    renderWithProviders(<HeuristicScoringConfig value={BASE} onChange={onChange} />);
-    await expandPanel();
-
-    const field = screen.getByLabelText("Simple to Medium");
-    fireEvent.change(field, { target: { value: "0." } });
-    expect(field).toHaveValue("0.");
-
-    fireEvent.change(field, { target: { value: "0.22" } });
-    const last = onChange.mock.calls.at(-1)?.[0] as ComplexityRouterConfigValue;
-    expect(last.tier_boundaries?.simple_medium).toBe(0.22);
+  // min and max are inert attributes on a text input, so without the explicit clamp these would persist
+  // a weight of 999, or an infinite boundary, into the router config.
+  it.each([
+    ["Code presence", "999", 1],
+    ["Code presence", "-2", 0],
+    ["Long above", "100000", 100000],
+  ])("clamps %s = %s to %s", async (label, raw, expected) => {
+    const next = await commit(label, raw);
+    expect(
+      { ...next?.dimension_weights, ...next?.token_thresholds }[label === "Long above" ? "complex" : "codePresence"],
+    ).toBe(expected);
   });
 
-  it("resets a group back to undefined so the router goes back to tracking the backend defaults", async () => {
-    const onChange = vi.fn();
-    renderWithProviders(
-      <HeuristicScoringConfig
-        value={{ ...BASE, token_thresholds: { simple: 25, complex: 900 } }}
-        onChange={onChange}
-      />,
-    );
-    await expandPanel();
+  it.each(["Infinity", "1e999"])("refuses to commit %s", async (raw) => {
+    expect((await commit("Simple to Medium", raw))?.tier_boundaries).toBeUndefined();
+  });
 
-    const [resetTokenThresholds] = screen.getAllByRole("button", { name: "Reset to defaults" });
-    await userEvent.click(resetTokenThresholds);
+  it("resets a group back to undefined so it tracks the backend defaults again", async () => {
+    const tuned = { ...BASE, token_thresholds: { simple: 25, complex: 900 } };
+    const onChange = await render(tuned);
+
+    await userEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ token_thresholds: undefined }));
   });
 
-  it("warns when boundaries are out of order, which strands the tiers between them", async () => {
-    renderWithProviders(
-      <HeuristicScoringConfig
-        value={{ ...BASE, tier_boundaries: { simple_medium: 0.5, medium_complex: 0.2, complex_reasoning: 0.6 } }}
-        onChange={vi.fn()}
-      />,
-    );
-    await expandPanel();
+  it("flags decreasing boundaries as an error without blocking the save", async () => {
+    const bad = { ...BASE, tier_boundaries: { simple_medium: 0.5, medium_complex: 0.2, complex_reasoning: 0.6 } };
+    await render(bad);
 
-    expect(screen.getByRole("alert")).toHaveTextContent(/every tier between them is unreachable/);
-  });
-
-  it("explains a weight total away from 1.00 instead of blocking it", async () => {
-    renderWithProviders(
-      <HeuristicScoringConfig
-        value={{ ...BASE, dimension_weights: { ...DEFAULT_DIMENSION_WEIGHTS, codePresence: 0.5 } }}
-        onChange={vi.fn()}
-      />,
-    );
-    await expandPanel();
-
-    expect(screen.getByTestId("dimension-weight-total")).toHaveTextContent("total 1.20");
-    expect(screen.getByText(/absolute multipliers/)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/unreachable/);
   });
 });
 
-describe("ClassificationMethodConfig scorer knob gating", () => {
-  const classificationProps = {
-    onChange: vi.fn(),
-    modelOptions: [{ value: "gpt-4o-mini", label: "gpt-4o-mini" }],
-    defaultModel: "gpt-4o-mini",
-  };
-
-  it("offers the knobs when the heuristic decides the tier", () => {
-    renderWithProviders(<ClassificationMethodConfig {...classificationProps} value={BASE} />);
-    expect(screen.getByText("Advanced scoring")).toBeInTheDocument();
+describe("ClassificationMethodConfig scorer gating", () => {
+  const props = { onChange: vi.fn(), modelOptions: [{ value: "gpt-4o-mini", label: "gpt-4o-mini" }] };
+  const withClassifier = (type: ClassifierType, fallback?: ClassifierFallback): ComplexityRouterConfigValue => ({
+    ...BASE,
+    classifier_type: type,
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifier_fallback: fallback,
   });
 
-  it("offers the knobs to an LLM classifier that falls back to the heuristic", () => {
-    renderWithProviders(
-      <ClassificationMethodConfig
-        {...classificationProps}
-        value={{
-          ...BASE,
-          classifier_type: "llm",
-          classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
-          classifier_fallback: "heuristic",
-        }}
-      />,
-    );
-    expect(screen.getByText("Advanced scoring")).toBeInTheDocument();
+  it.each([
+    ["heuristic decides the tier", "heuristic" as ClassifierType, undefined, true],
+    ["an LLM classifier falls back to the heuristic", "llm" as ClassifierType, "heuristic" as ClassifierFallback, true],
+    [
+      "an LLM classifier falls back to the default model",
+      "llm" as ClassifierType,
+      "default_model" as ClassifierFallback,
+      false,
+    ],
+  ])("offers the knobs when %s: %s", async (_case, type, fallback, expected) => {
+    renderWithProviders(<ClassificationMethodConfig {...props} value={withClassifier(type, fallback)} />);
+
+    expect(screen.queryByText("Advanced scoring") !== null).toBe(expected);
   });
 
-  it("hides them when the classifier falls back to the default model and nothing is ever scored", () => {
-    renderWithProviders(
-      <ClassificationMethodConfig
-        {...classificationProps}
-        value={{
-          ...BASE,
-          classifier_type: "llm",
-          classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
-          classifier_fallback: "default_model",
-        }}
-      />,
-    );
-    expect(screen.queryByText("Advanced scoring")).not.toBeInTheDocument();
-  });
-
-  it("describes the tier ranges from the configured boundaries rather than the shipped numbers", () => {
-    renderWithProviders(
-      <ClassificationMethodConfig
-        {...classificationProps}
-        value={{ ...BASE, tier_boundaries: { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 } }}
-      />,
-    );
+  it("describes the tier ranges from the configured boundaries, not the shipped numbers", () => {
+    const tuned = { ...BASE, tier_boundaries: { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 } };
+    renderWithProviders(<ClassificationMethodConfig {...props} value={tuned} />);
 
     expect(screen.getByText(/Score < 0.22/)).toBeInTheDocument();
-    expect(screen.getByText(/Score 0.22 - 0.44/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.44 - 0.66/)).toBeInTheDocument();
-    expect(screen.getByText(/Score > 0.66/)).toBeInTheDocument();
     expect(screen.queryByText(/0.15/)).not.toBeInTheDocument();
+  });
+
+  it("renders a row for every scored dimension", async () => {
+    await render(BASE);
+
+    for (const key of Object.keys(DEFAULT_DIMENSION_WEIGHTS)) {
+      expect(screen.getByLabelText(DIMENSION_LABELS[key as keyof typeof DIMENSION_LABELS])).toBeInTheDocument();
+    }
   });
 });

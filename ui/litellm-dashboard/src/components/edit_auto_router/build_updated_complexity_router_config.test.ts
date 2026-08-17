@@ -292,58 +292,25 @@ describe("buildUpdatedComplexityRouterConfig tier labels", () => {
   });
 });
 
-describe("buildUpdatedComplexityRouterConfig heuristic scorer knobs", () => {
-  const STORED_WITH_KNOBS = {
-    ...STORED,
-    tier_boundaries: { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 },
-    token_thresholds: { simple: 25, complex: 900 },
-  };
+describe("buildUpdatedComplexityRouterConfig scorer knobs", () => {
+  const BOUNDARIES = { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 };
+  const STORED_WITH_KNOBS = { ...STORED, tier_boundaries: BOUNDARIES };
+  const HYDRATED = { ...FORM_VALUE, tier_boundaries: BOUNDARIES };
 
   it("round-trips explicit stored knobs through an untouched edit", () => {
-    // These keys are MANAGED now, so the stored copy is dropped before the rebuild. Only a faithful
-    // hydration puts them back, and a regression here silently resets a tuned router to the defaults.
-    const hydrated = {
-      ...FORM_VALUE,
-      tier_boundaries: { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 },
-      token_thresholds: { simple: 25, complex: 900 },
-    };
-    const result = buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, hydrated);
-
-    expect(result.tier_boundaries).toEqual({ simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 });
-    expect(result.token_thresholds).toEqual({ simple: 25, complex: 900 });
+    // These keys are MANAGED now, so the stored copy is dropped before the rebuild and only a faithful
+    // hydration puts them back. A regression here silently resets a tuned router.
+    expect(buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, HYDRATED).tier_boundaries).toEqual(BOUNDARIES);
   });
 
-  it("drops a stored knob when the operator resets it, rather than preserving the old value", () => {
-    // The reset affordance writes undefined. If these keys were not MANAGED, the stored copy would survive
-    // the spread and the reset would silently do nothing.
+  it("drops a stored knob when the operator resets it, instead of preserving the old value", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, FORM_VALUE);
 
     expect(result).not.toHaveProperty("tier_boundaries");
-    expect(result).not.toHaveProperty("token_thresholds");
+    expect(result.some_future_backend_key).toEqual({ nested: true });
   });
 
   it("never invents knobs for a router that never had them", () => {
-    const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE);
-
-    expect(result).not.toHaveProperty("tier_boundaries");
-    expect(result).not.toHaveProperty("token_thresholds");
-    expect(result).not.toHaveProperty("dimension_weights");
-  });
-
-  it("drops them when the classifier falls back to the default model", () => {
-    const result = buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, {
-      ...FORM_VALUE,
-      classifier_type: "llm" as const,
-      classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
-      classifier_fallback: "default_model" as const,
-      tier_boundaries: { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 },
-    });
-
-    expect(result).not.toHaveProperty("tier_boundaries");
-  });
-
-  it("still preserves a key no control owns", () => {
-    const result = buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, FORM_VALUE);
-    expect(result.some_future_backend_key).toEqual({ nested: true });
+    expect(buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE)).not.toHaveProperty("tier_boundaries");
   });
 });

@@ -40,6 +40,34 @@ export const normalizeClassifierLlmConfig = ({
     ? { model, timeout_ms, system_prompt }
     : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
 
+interface ScorerKnobInputs {
+  classifierType: ClassifierType;
+  classifierFallback: ClassifierFallback | undefined;
+  tierBoundaries: TierBoundaries | undefined;
+  tokenThresholds: TokenThresholds | undefined;
+  dimensionWeights: DimensionWeights | undefined;
+}
+
+/**
+ * The scorer knobs to persist, which is none of them on a router that never scores: an LLM classifier
+ * falling back to the default model would otherwise carry settings that can only mislead the next reader.
+ * Each is omitted while untouched, so the router keeps tracking the backend defaults.
+ */
+const scorerKnobPayload = ({
+  classifierType,
+  classifierFallback,
+  tierBoundaries,
+  tokenThresholds,
+  dimensionWeights,
+}: ScorerKnobInputs) =>
+  heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
+    ? {}
+    : {
+        ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
+        ...(tokenThresholds && { token_thresholds: tokenThresholds }),
+        ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+      };
+
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
   defaultModel: string | undefined;
@@ -193,9 +221,8 @@ export const buildComplexityRouterConfig = ({
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
-  // A router whose classifier falls back to the default model never scores anything, so shipping scorer
-  // knobs on it would persist settings that can only mislead whoever reads the config next.
-  const scorerRuns = heuristicScoringRoleFor(classifierType, classifierFallback) !== "never";
+  const scorerInputs = { classifierType, classifierFallback, tierBoundaries, tokenThresholds, dimensionWeights };
+  const scorerKnobs = scorerKnobPayload(scorerInputs);
 
   return {
     tiers,
@@ -234,8 +261,6 @@ export const buildComplexityRouterConfig = ({
       adaptive_eligible: adaptiveEligible,
     }),
     ...(returnRawModelName && { return_raw_model_name: true }),
-    ...(scorerRuns && tierBoundaries !== undefined && { tier_boundaries: tierBoundaries }),
-    ...(scorerRuns && tokenThresholds !== undefined && { token_thresholds: tokenThresholds }),
-    ...(scorerRuns && dimensionWeights !== undefined && { dimension_weights: dimensionWeights }),
+    ...scorerKnobs,
   };
 };
