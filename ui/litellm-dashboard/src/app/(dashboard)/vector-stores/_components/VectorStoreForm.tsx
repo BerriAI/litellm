@@ -189,8 +189,8 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                     Enter that index name as the Vector Store ID
                   </li>
                   <li>
-                    You know which embedding model created those stored embeddings. Pick the same model below, or
-                    searches will return wrong results
+                    You know which embedding model created those stored embeddings. That model must be added to this
+                    proxy under Models so you can pick it below. Using a different model returns wrong results
                   </li>
                   <li>
                     You know the field names your documents use for their text and their embedding. If they are not

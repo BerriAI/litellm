@@ -42,6 +42,13 @@ describe("getVectorStoreProviderLogoAndName", () => {
     ]);
   });
 
+  it("picks the valkey embedding model from the proxy's models like milvus does", () => {
+    const embeddingField = getProviderSpecificFields("valkey").find((field) => field.name === "embedding_model");
+
+    expect(embeddingField).toMatchObject({ type: "select", required: true });
+    expect(embeddingField).not.toHaveProperty("options");
+  });
+
   it("offers valkey_ssl as a false/true select defaulting to false", () => {
     const sslField = getProviderSpecificFields("valkey").find((field) => field.name === "valkey_ssl");
 

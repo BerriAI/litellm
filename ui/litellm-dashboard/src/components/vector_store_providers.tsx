@@ -211,10 +211,10 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       name: "embedding_model",
       label: "Embedding Model",
       tooltip:
-        "The embedding model that was used to create the embeddings already stored in your Valkey index. LiteLLM uses it to embed each search query, so it must be the same model or results will be wrong. Use the provider/model form, e.g. openai/text-embedding-3-small",
-      placeholder: "openai/text-embedding-3-small",
+        "The embedding model on this proxy that was used to create the embeddings already stored in your Valkey index. LiteLLM uses it to embed each search query, so it must be the same model or results will be wrong. Add it under Models first if it is not listed",
+      placeholder: "text-embedding-3-small",
       required: true,
-      type: "text",
+      type: "select",
     },
     {
       name: "valkey_text_field",
