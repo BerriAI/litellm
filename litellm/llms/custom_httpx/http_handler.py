@@ -962,7 +962,7 @@ class AsyncHTTPHandler:
             return
         session: Final = transport.client
         if isinstance(session, ClientSession) and not session.closed:
-            transport._mark_connector_closed(session)
+            transport._mark_connector_closed(session)  # pyright: ignore[reportPrivateUsage]  # deliberate reuse of the transport's finalizer-safe teardown; an async close can never run here
 
     def __del__(self) -> None:
         try:
