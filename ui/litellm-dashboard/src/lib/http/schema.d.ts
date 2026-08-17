@@ -8625,6 +8625,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_ocr_post"];
         delete?: never;
@@ -17777,6 +17782,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_v1_ocr_post"];
         delete?: never;
