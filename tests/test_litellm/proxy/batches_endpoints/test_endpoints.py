@@ -758,6 +758,30 @@ async def test_create__model_encoded_beats_loadbalancing(harness):
     harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, missing_param",
+    [
+        ({"endpoint": "/v1/chat/completions", "completion_window": "24h"}, "input_file_id"),
+        ({"input_file_id": "file-abc", "completion_window": "24h"}, "endpoint"),
+        ({"input_file_id": "file-abc", "endpoint": "/v1/chat/completions"}, "completion_window"),
+        ({}, "input_file_id"),
+    ],
+)
+async def test_create__missing_required_param_is_400(harness, body, missing_param):
+    set_body(harness, body)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_create(harness)
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == missing_param
+    assert exc_info.value.message == f"/batches: Missing required parameter: '{missing_param}'."
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
 # =========================================================================== #
 # Team-level batch expiry enforcement (independent of routing).
 # =========================================================================== #

@@ -1042,9 +1042,10 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
     [
         ("acompletion", "messages", "/chat/completions"),
         ("aembedding", "input", "/embeddings"),
+        ("acreate_batch", "input_file_id", "/batches"),
     ],
 )
-@pytest.mark.parametrize("data_extra", [{}, {"messages": None, "input": None}])
+@pytest.mark.parametrize("data_extra", [{}, {"messages": None, "input": None, "input_file_id": None}])
 def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, param, route, data_extra):
     from litellm.proxy.route_llm_request import (
         ProxyMissingRequiredParamError,
@@ -1054,10 +1055,31 @@ def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, 
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
         raise_if_required_body_param_missing(route_type=route_type, data={"model": "gpt-4o", **data_extra})
 
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "400"
     assert exc_info.value.param == param
     assert exc_info.value.type == "invalid_request_error"
-    assert exc_info.value.detail == {"error": f"{route}: Missing required parameter: '{param}'."}
+    assert exc_info.value.message == f"{route}: Missing required parameter: '{param}'."
+
+
+@pytest.mark.parametrize(
+    "data, param",
+    [
+        ({"endpoint": "/v1/chat/completions", "completion_window": "24h"}, "input_file_id"),
+        ({"input_file_id": "file-abc", "completion_window": "24h"}, "endpoint"),
+        ({"input_file_id": "file-abc", "endpoint": "/v1/chat/completions"}, "completion_window"),
+        ({}, "input_file_id"),
+    ],
+)
+def test_raise_if_required_body_param_missing_names_first_missing_batch_param(data, param):
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type="acreate_batch", data=data)
+
+    assert exc_info.value.param == param
 
 
 @pytest.mark.parametrize(
@@ -1069,6 +1091,10 @@ def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, 
         ("aembedding", {"model": "text-embedding-3-small", "input": "hi"}),
         ("arerank", {"model": "rerank-model"}),
         ("aimage_generation", {"model": "dall-e-3"}),
+        (
+            "acreate_batch",
+            {"input_file_id": "file-abc", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        ),
     ],
 )
 def test_raise_if_required_body_param_missing_allows_valid_requests(route_type, data):
@@ -1088,7 +1114,7 @@ async def test_route_request_rejects_chat_completion_without_messages():
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
         await route_request({"model": "gpt-4o"}, llm_router, None, "acompletion")
 
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "400"
     assert exc_info.value.param == "messages"
     llm_router.acompletion.assert_not_called()
 
