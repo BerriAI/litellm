@@ -125,6 +125,45 @@ class TestBlockedResponseUsage:
         mock_logging.post_call_failure_hook.assert_awaited_once()
 
 
+class TestProxyExceptionPassthrough:
+    @pytest.mark.asyncio
+    async def test_anthropic_response_reraises_proxy_exception_unwrapped(self):
+        """A 400 ProxyException from request validation must surface as-is,
+        not be re-wrapped into a code-500 ProxyException."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+        exc = ProxyException(
+            message="Invalid type for 'metadata': expected an object, but got a string instead.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="metadata",
+            code=400,
+        )
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={})),
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            with pytest.raises(ProxyException) as exc_info:
+                await ep.anthropic_response(
+                    fastapi_response=MagicMock(),
+                    request=MagicMock(),
+                    user_api_key_dict=MagicMock(),
+                )
+
+        assert exc_info.value is exc
+        assert exc_info.value.code == "400"
+        assert exc_info.value.param == "metadata"
+        mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
 class TestEventLoggingBatchEndpoint:
     """Test the stubbed event logging batch endpoint"""
 
