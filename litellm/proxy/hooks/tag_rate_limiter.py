@@ -815,6 +815,14 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         a clean rejection into an unhandled exception. A skipped refund
         self-heals via the key's TTL -- see `_ttl_for`.
 
+        A later key's own admission raising (a transient Redis error, or
+        this coroutine being cancelled mid-call, e.g. the caller
+        disconnecting) is treated the same as a normal rejection for refund
+        purposes: every earlier admission in this batch is refunded via the
+        `finally` block below before the exception propagates, so a
+        mid-batch infra failure can't leave a permanently-charged counter or
+        a leaked concurrency reservation behind for the rest of that key's TTL.
+
         Returns (failing_index, values). On success, failing_index is None
         and values holds each key's new post-increment value, same order as
         `checks`. On rejection, failing_index is the 0-based index of the
@@ -830,19 +838,34 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # this can't be expressed as a one-shot comprehension.
         admitted_values: Final = []  # mutable-ok: sequential async accumulator, discardable on early rejection; see comment above
         for index, (cache, key, limit, increment, ttl) in enumerate(checks):
-            admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl)
+            admitted = False
+            try:
+                admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl)
+            finally:
+                # Runs on a normal rejection (admitted stays False) and on
+                # any exception/cancellation from the awaited call above
+                # (admitted never gets assigned, so it's still the False set
+                # just before the try) -- either way, everything admitted so
+                # far in this batch must be refunded before this key's own
+                # outcome is used.
+                if not admitted:
+                    await self._refund_admitted(checks, up_to_index=index)
             if admitted:
                 admitted_values.append(value)  # mutable-ok: see accumulator comment above
                 continue
-            for refund_index in range(index):
-                refund_cache, refund_key, _limit, refund_increment, _ttl = checks[refund_index]
-                try:
-                    await self._decrement_floor_zero(refund_cache, refund_key, -refund_increment)
-                except Exception as e:  # noqa: BLE001 - one failed refund must not block refunding the rest
-                    verbose_proxy_logger.warning("tag_rate_limiter: failed to refund %s on rollback: %s", refund_key, e)
             return index, (value,)
 
         return None, tuple(admitted_values)
+
+    async def _refund_admitted(
+        self, checks: Sequence[tuple[InternalUsageCache, str, float, float, int]], up_to_index: int
+    ) -> None:
+        for refund_index in range(up_to_index):
+            refund_cache, refund_key, _limit, refund_increment, _ttl = checks[refund_index]
+            try:
+                await self._decrement_floor_zero(refund_cache, refund_key, -refund_increment)
+            except Exception as e:  # noqa: BLE001 - one failed refund must not block refunding the rest
+                verbose_proxy_logger.warning("tag_rate_limiter: failed to refund %s on rollback: %s", refund_key, e)
 
     async def async_filter_deployments(
         self,

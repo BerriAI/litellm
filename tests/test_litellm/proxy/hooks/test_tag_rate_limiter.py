@@ -1954,6 +1954,40 @@ async def test_refund_failure_on_one_key_does_not_block_others_or_raise(time_con
     assert (float(other_value) if other_value is not None else 0.0) == 0.0
 
 
+@pytest.mark.asyncio
+async def test_exception_mid_batch_refunds_every_earlier_admission_before_propagating(time_controller):
+    """
+    Regression test: a later key's own admission raising (a transient Redis
+    error, or this coroutine being cancelled mid-call) used to skip the
+    refund loop entirely, since it only ran on a normal rejection return.
+    An earlier admission in the same batch would then stay permanently
+    charged -- for concurrency, a leaked reservation the caller never gets
+    to release, incorrectly throttling that tag until the 1-hour safety TTL
+    expires.
+    """
+    admitted_key = "{tag_rl:test:exception-refund:a}:requests"
+    raising_key = "{tag_rl:test:exception-refund:b}:requests"
+
+    class _FlakyLimiter(_PROXY_TagRateLimiter):
+        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int):
+            if key == raising_key:
+                raise RuntimeError("simulated transient redis failure")
+            return await super()._check_and_increment_one(cache, key, limit, increment, ttl)
+
+    flaky = _FlakyLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
+
+    with pytest.raises(RuntimeError):
+        await flaky._atomic_check_and_increment(
+            [
+                (flaky.internal_usage_cache, admitted_key, 10.0, 1.0, 60),
+                (flaky.internal_usage_cache, raising_key, 10.0, 1.0, 60),
+            ]
+        )
+
+    admitted_value = await flaky.internal_usage_cache.async_get_cache(key=admitted_key, litellm_parent_otel_span=None)
+    assert (float(admitted_value) if admitted_value is not None else 0.0) == 0.0
+
+
 # ---------------------------------------------------------------------------
 # scope_by_key_hash -- opt-in per-calling-key bucket separation
 # ---------------------------------------------------------------------------
