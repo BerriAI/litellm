@@ -5876,3 +5876,138 @@ class TestProcessChunkWithCostInjection:
         )
 
         assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk
+
+
+class TestStreamedUsageCostInjection:
+    """Streamed-usage cost injection must price the deployment the router
+    actually served, not the client-sent model-group alias, and must price
+    Anthropic cache reads instead of subtracting them from uncached input."""
+
+    @pytest.fixture
+    def local_model_cost_map(self, monkeypatch):
+        """Use the bundled cost map so price assertions match this branch."""
+        original = litellm.model_cost
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.get_model_info.cache_clear()
+        try:
+            yield
+        finally:
+            litellm.model_cost = original
+            litellm.get_model_info.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_streamed_cost_injection_prices_routed_deployment_not_client_alias(
+        self, local_model_cost_map, monkeypatch
+    ):
+        """A request sent with a router alias (claude-opus-4-6) that the router
+        serves on a Bedrock deployment must have its injected usage.cost priced
+        at the Bedrock deployment's rate with cost_discount_config applied, not
+        at the direct-Anthropic list price the raw alias resolves to."""
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True, raising=False)
+        monkeypatch.setattr(litellm, "cost_discount_config", {"bedrock": 0.20}, raising=False)
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_params = {
+            "litellm_metadata": {"deployment": "bedrock/us.anthropic.claude-opus-4-6-v1"}
+        }
+        request_data = {"model": "claude-opus-4-6", "litellm_logging_obj": logging_obj}
+
+        frames = [
+            b'event: message_start\ndata: {"type": "message_start", "message": {"id": "m"}}\n\n',
+            (
+                b'event: message_delta\ndata: {"type": "message_delta",'
+                b' "delta": {"stop_reason": "end_turn"},'
+                b' "usage": {"input_tokens": 1000, "output_tokens": 10}}\n\n'
+            ),
+            b'event: message_stop\ndata: {"type": "message_stop"}\n\n',
+        ]
+
+        async def upstream(**kwargs):
+            for frame in frames:
+                yield frame
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = upstream
+        proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+            side_effect=lambda **kwargs: kwargs["response"]
+        )
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_finalize_streaming_generator_cleanup",
+            new=AsyncMock(),
+        ):
+            collected = []
+            async for out_chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                response=MagicMock(),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+                request_data=request_data,
+                proxy_logging_obj=proxy_logging_obj,
+            ):
+                collected.append(out_chunk)
+
+        delta_payloads = []
+        for out_chunk in collected:
+            text = out_chunk.decode("utf-8") if isinstance(out_chunk, bytes) else str(out_chunk)
+            for line in text.split("\n"):
+                if line.startswith("data:"):
+                    payload = json.loads(line.split("data:", 1)[1].strip())
+                    if payload.get("type") == "message_delta":
+                        delta_payloads.append(payload)
+
+        assert delta_payloads, "message_delta frame missing from streamed output"
+        injected_cost = delta_payloads[0]["usage"]["cost"]
+
+        bedrock_list_price = 1000 * 5.5e-06 + 10 * 2.75e-05
+        expected_cost = 0.80 * bedrock_list_price
+        assert injected_cost == pytest.approx(expected_cost, rel=1e-6)
+
+    def test_inject_cost_prices_cache_read_tokens_from_anthropic_usage(self, local_model_cost_map):
+        """Anthropic message_delta usage reports input_tokens EXCLUDING cache
+        reads. The injected cost must price cache reads at the cache-read rate
+        on top of the full uncached input, not subtract them from it."""
+        obj = {
+            "type": "message_delta",
+            "usage": {
+                "input_tokens": 10174,
+                "output_tokens": 500,
+                "cache_read_input_tokens": 9821,
+                "cache_creation_input_tokens": 0,
+            },
+        }
+
+        modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+            obj, "us.anthropic.claude-sonnet-4-6"
+        )
+
+        assert modified is not None
+        expected_cost = 10174 * 3.3e-06 + 9821 * 3.3e-07 + 500 * 1.65e-05
+        assert modified["usage"]["cost"] == pytest.approx(expected_cost, rel=1e-6)
+
+    def test_resolve_cost_injection_model_prefers_router_deployment(self):
+        logging_obj = MagicMock()
+        logging_obj.litellm_params = {
+            "metadata": {"deployment": "bedrock/us.anthropic.claude-opus-4-6-v1"}
+        }
+
+        model, provider = ProxyBaseLLMRequestProcessing._resolve_cost_injection_model(
+            {"model": "claude-opus-4-6", "litellm_logging_obj": logging_obj}
+        )
+
+        assert model == "bedrock/us.anthropic.claude-opus-4-6-v1"
+        assert provider is None
+
+    def test_resolve_cost_injection_model_falls_back_to_router_lookup(self):
+        from litellm.proxy.management_endpoints.cost_tracking_settings import ResolvedCostModel
+
+        with patch(
+            "litellm.proxy.management_endpoints.cost_tracking_settings._resolve_model_for_cost_lookup",
+            return_value=ResolvedCostModel("bedrock/us.anthropic.claude-opus-4-6-v1", "bedrock", None),
+        ) as mock_resolve:
+            model, provider = ProxyBaseLLMRequestProcessing._resolve_cost_injection_model(
+                {"model": "claude-opus-4-6"}
+            )
+
+        assert (model, provider) == ("bedrock/us.anthropic.claude-opus-4-6-v1", "bedrock")
+        mock_resolve.assert_called_once_with("claude-opus-4-6")

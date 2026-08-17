@@ -2953,6 +2953,11 @@ class ProxyBaseLLMRequestProcessing:
         caps: Final = ProxyLogging._callback_capabilities()
         cost_injection_enabled: Final = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
         fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
+        cost_model_name, cost_model_provider = (
+            ProxyBaseLLMRequestProcessing._resolve_cost_injection_model(request_data)
+            if cost_injection_enabled
+            else ("", None)
+        )
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
         client_disconnected = False
@@ -2990,8 +2995,9 @@ class ProxyBaseLLMRequestProcessing:
                     elif isinstance(chunk, dict):
                         str_so_far += str(chunk.get("content", ""))
 
-                    model_name = request_data.get("model", "")
-                    chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, model_name)
+                    chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                        chunk, cost_model_name, cost_model_provider
+                    )
 
                 # Set before the yield: an async generator suspends at the yield,
                 # so a GeneratorExit on client disconnect is raised there and any
@@ -3086,22 +3092,54 @@ class ProxyBaseLLMRequestProcessing:
             request=request,
         )
 
-    @overload
     @staticmethod
-    def _process_chunk_with_cost_injection(chunk: bytes, model_name: str) -> bytes: ...
+    def _resolve_cost_injection_model(request_data: dict) -> tuple[str, str | None]:
+        """Resolve the model that streamed-usage cost injection prices against.
+
+        The client-sent ``model`` is often a router model-group alias (e.g.
+        ``claude-opus-4-6``) whose name also exists as a direct-provider model,
+        so pricing the raw alias resolves the wrong provider and price table
+        and skips ``cost_discount_config``. Prefer the deployment the router
+        actually served (recorded on the logging object), then resolving the
+        alias through the router, and only then the raw request model.
+        """
+        requested_model: Final = str(request_data.get("model", "") or "")
+        deployment_model: Final = ProxyBaseLLMRequestProcessing._get_deployment_model_name(
+            request_data.get("litellm_logging_obj")
+        )
+        if deployment_model:
+            return deployment_model, None
+
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            _resolve_model_for_cost_lookup,  # pyright: ignore[reportPrivateUsage]  # the one alias-to-deployment resolver, shared with the cost-estimate endpoint
+        )
+
+        resolved: Final = _resolve_model_for_cost_lookup(requested_model)
+        return resolved.model, resolved.provider
 
     @overload
     @staticmethod
-    def _process_chunk_with_cost_injection(chunk: object, model_name: str) -> object: ...
+    def _process_chunk_with_cost_injection(
+        chunk: bytes, model_name: str, custom_llm_provider: str | None = None
+    ) -> bytes: ...
+
+    @overload
+    @staticmethod
+    def _process_chunk_with_cost_injection(
+        chunk: object, model_name: str, custom_llm_provider: str | None = None
+    ) -> object: ...
 
     @staticmethod
-    def _process_chunk_with_cost_injection(chunk: object, model_name: str) -> object:
+    def _process_chunk_with_cost_injection(
+        chunk: object, model_name: str, custom_llm_provider: str | None = None
+    ) -> object:
         """
         Process a streaming chunk and inject cost information if enabled.
 
         Args:
             chunk: The streaming chunk (dict, str, bytes, or bytearray)
             model_name: Model name for cost calculation
+            custom_llm_provider: Provider of the resolved deployment, when known
 
         Returns:
             The processed chunk with cost information injected if applicable
@@ -3111,21 +3149,27 @@ class ProxyBaseLLMRequestProcessing:
 
         try:
             if isinstance(chunk, dict):
-                maybe_modified: Final = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(chunk, model_name)
+                maybe_modified: Final = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                    chunk, model_name, custom_llm_provider
+                )
                 if maybe_modified is not None:
                     return maybe_modified
             elif isinstance(chunk, (bytes, bytearray)):
                 try:
                     s: Final = chunk.decode("utf-8")
                     if s.endswith(("\n\n", "\r\n\r\n")):
-                        maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
+                        maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                            s, model_name, custom_llm_provider
+                        )
                         if maybe_mod is not None:
                             return maybe_mod.encode("utf-8")
                 except Exception:
                     pass
             elif isinstance(chunk, str):
                 # Try to parse SSE frame and inject cost into the data line
-                maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(chunk, model_name)
+                maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                    chunk, model_name, custom_llm_provider
+                )
                 if maybe_mod is not None:
                     # Ensure trailing frame separator
                     return maybe_mod if maybe_mod.endswith("\n\n") else (maybe_mod + "\n\n")
@@ -3136,13 +3180,16 @@ class ProxyBaseLLMRequestProcessing:
         return chunk
 
     @staticmethod
-    def _inject_cost_into_sse_frame_str(frame_str: str, model_name: str) -> str | None:
+    def _inject_cost_into_sse_frame_str(
+        frame_str: str, model_name: str, custom_llm_provider: str | None = None
+    ) -> str | None:
         """
         Inject cost information into an SSE frame string by modifying the JSON in the 'data:' line.
 
         Args:
             frame_str: SSE frame string that may contain multiple lines
             model_name: Model name for cost calculation
+            custom_llm_provider: Provider of the resolved deployment, when known
 
         Returns:
             Modified SSE frame string with cost injected, or None if no modification needed
@@ -3156,7 +3203,9 @@ class ProxyBaseLLMRequestProcessing:
                     json_part = stripped_ln.split("data:", 1)[1].strip()
                     if json_part and json_part != "[DONE]":
                         obj = json.loads(json_part)
-                        maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model_name)
+                        maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                            obj, model_name, custom_llm_provider
+                        )
                         if maybe_modified is not None:
                             lines[idx] = "data: " + safe_dumps(maybe_modified) + ("\r" if ln.endswith("\r") else "")
                             return "\n".join(lines)
@@ -3223,24 +3272,38 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _completion_cost_or_none(
-        model_response: ModelResponse, model_name: str, service_tier: str | None
+        model_response: ModelResponse,
+        model_name: str,
+        service_tier: str | None,
+        custom_llm_provider: str | None = None,
     ) -> float | None:
         try:
             return litellm.completion_cost(
-                completion_response=model_response, model=model_name, service_tier=service_tier
+                completion_response=model_response,
+                model=model_name,
+                service_tier=service_tier,
+                custom_llm_provider=custom_llm_provider,
             )
         except Exception:
             return None
 
     @staticmethod
-    def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> dict | None:
+    def _inject_cost_into_usage_dict(obj: dict, model_name: str, custom_llm_provider: str | None = None) -> dict | None:
         """
         Inject cost information into the usage object of a streamed usage event
         (Anthropic ``message_delta`` or OpenAI ``chat.completion.chunk``).
 
+        Anthropic usage blocks carrying cache fields go through
+        ``AnthropicConfig.calculate_usage`` so ``prompt_tokens`` is
+        cache-inclusive like every other cost path; hand-building ``Usage``
+        from them left ``input_tokens`` uncached next to ``cached_tokens`` and
+        the calculator then billed ``input_tokens - cached_tokens`` fresh
+        tokens and the cache reads at the fresh-token rate.
+
         Args:
             obj: Dictionary containing the SSE event data
             model_name: Model name for cost calculation
+            custom_llm_provider: Provider of the resolved deployment, when known
 
         Returns:
             Modified dictionary with cost injected, or None if no modification needed
@@ -3251,11 +3314,17 @@ class ProxyBaseLLMRequestProcessing:
         usage_kwargs: Final = ProxyBaseLLMRequestProcessing._stream_usage_kwargs_for_event(obj, usage)
         if usage_kwargs is None:
             return None
+        usage_obj: Final = (
+            litellm.AnthropicConfig().calculate_usage(usage_object=usage, reasoning_content=None)
+            if obj.get("type") == "message_delta" and litellm.AnthropicConfig.is_anthropic_usage_object(usage)
+            else Usage(**usage_kwargs)
+        )
         service_tier: Final = obj.get("service_tier")
         cost_val: Final = ProxyBaseLLMRequestProcessing._completion_cost_or_none(
-            ModelResponse(usage=Usage(**usage_kwargs)),
+            ModelResponse(usage=usage_obj),
             model_name,
             service_tier if isinstance(service_tier, str) else None,
+            custom_llm_provider,
         )
         if cost_val is None:
             return None
