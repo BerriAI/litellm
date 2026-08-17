@@ -105,13 +105,17 @@ return { 1, new_value }
 # release a concurrency reservation -- floors at 0 so a decrement that can't
 # be attributed to the exact reservation that caused it (see
 # `_release_keys`'s docstring) degrades to under-counting rather than a
-# negative counter that would admit unlimited requests.
+# negative counter that would admit unlimited requests. Floors via DEL, not
+# `SET key 0`: releasing a reservation whose key already expired makes
+# INCRBY recreate it with no TTL, and a plain SET would leave that recreated
+# key permanently in Redis (SET clears any TTL); DEL removes it outright,
+# which reads back identically to 0 everywhere this key is read (`GET key or 0`).
 TAG_RL_DECR_FLOOR_ZERO_SCRIPT: Final = """
 local key = KEYS[1]
 local delta = tonumber(ARGV[1])
 local new_value = redis.call('INCRBY', key, delta)
 if new_value < 0 then
-    redis.call('SET', key, 0)
+    redis.call('DEL', key)
     new_value = 0
 end
 return new_value
