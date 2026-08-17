@@ -3,6 +3,8 @@ import {
   all_admin_roles,
   effectiveSessionRole,
   isAdminRole,
+  isOrgAdminForAnyOrg,
+  isOrgAdminSessionRole,
   isProxyAdminRole,
   isUserTeamAdminForAnyTeam,
   isUserTeamAdminForSingleTeam,
@@ -11,7 +13,10 @@ import {
   rolesWithWriteAccess,
   teamListScopeUserId,
 } from "./roles";
-import { Team } from "@/components/networking";
+import { Organization, Team } from "@/components/networking";
+
+const orgWithMembers = (members: { user_id: string; user_role: string }[]): Organization =>
+  ({ organization_id: "org-1", members }) as unknown as Organization;
 
 describe("roles", () => {
   describe("isAdminRole", () => {
@@ -153,6 +158,55 @@ describe("roles", () => {
 
     it("should return false when teams is empty array", () => {
       expect(isUserTeamAdminForAnyTeam([], "user-1")).toBe(false);
+    });
+  });
+
+  describe("isOrgAdminForAnyOrg", () => {
+    it("returns true when the user holds an org_admin membership in any organization", () => {
+      const organizations = [
+        orgWithMembers([{ user_id: "user-1", user_role: "internal_user" }]),
+        orgWithMembers([{ user_id: "user-1", user_role: "org_admin" }]),
+      ];
+      expect(isOrgAdminForAnyOrg(organizations, "user-1")).toBe(true);
+    });
+
+    it("returns false when the user is only a plain member", () => {
+      const organizations = [orgWithMembers([{ user_id: "user-1", user_role: "internal_user" }])];
+      expect(isOrgAdminForAnyOrg(organizations, "user-1")).toBe(false);
+    });
+
+    it("does not credit one user with another user's org_admin membership", () => {
+      const organizations = [orgWithMembers([{ user_id: "user-2", user_role: "org_admin" }])];
+      expect(isOrgAdminForAnyOrg(organizations, "user-1")).toBe(false);
+    });
+
+    it("returns false for missing organizations, missing members, or a missing user id", () => {
+      expect(isOrgAdminForAnyOrg(null, "user-1")).toBe(false);
+      expect(isOrgAdminForAnyOrg(undefined, "user-1")).toBe(false);
+      expect(isOrgAdminForAnyOrg([], "user-1")).toBe(false);
+      expect(isOrgAdminForAnyOrg([{ organization_id: "org-1" } as unknown as Organization], "user-1")).toBe(false);
+      expect(isOrgAdminForAnyOrg([orgWithMembers([{ user_id: "user-1", user_role: "org_admin" }])], null)).toBe(false);
+      expect(isOrgAdminForAnyOrg([orgWithMembers([{ user_id: "user-1", user_role: "org_admin" }])], "")).toBe(false);
+    });
+  });
+
+  describe("isOrgAdminSessionRole", () => {
+    it("accepts both the raw and the formatted org admin role", () => {
+      expect(isOrgAdminSessionRole("org_admin")).toBe(true);
+      expect(isOrgAdminSessionRole(effectiveSessionRole("org_admin"))).toBe(true);
+    });
+
+    it("returns false for the role a membership-granted org admin actually carries", () => {
+      expect(isOrgAdminSessionRole("Internal User")).toBe(false);
+      expect(isOrgAdminSessionRole("internal_user")).toBe(false);
+    });
+
+    it("returns false for admin and missing roles", () => {
+      expect(isOrgAdminSessionRole("Admin")).toBe(false);
+      expect(isOrgAdminSessionRole("proxy_admin")).toBe(false);
+      expect(isOrgAdminSessionRole(null)).toBe(false);
+      expect(isOrgAdminSessionRole(undefined)).toBe(false);
+      expect(isOrgAdminSessionRole("")).toBe(false);
     });
   });
 

@@ -105,6 +105,108 @@ def test_calculate_usage():
     assert usage._cache_read_input_tokens == 0
 
 
+def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
+    """
+    In the iterations path each iteration can carry the 5m/1h cache_creation
+    breakdown. calculate_usage must aggregate it into cache_creation_token_details
+    so 1h writes are priced at the 1h rate instead of silently falling back to 5m.
+
+    Regression for LIT-4868.
+    """
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    config = AnthropicConfig()
+    usage_object = {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "iterations": [
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 3,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+        ],
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    details = usage.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_5m_input_tokens == 0
+    assert details.ephemeral_1h_input_tokens == 20000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 20000
+
+    info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
+    rate_1h = info["cache_creation_input_token_cost_above_1hr"]
+    assert rate_1h > rate_5m
+
+    prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
+    assert prompt_cost == pytest.approx(20000 * rate_1h)
+    assert prompt_cost != pytest.approx(20000 * rate_5m)
+
+
+def test_calculate_usage_bills_undetailed_iteration_cache_writes_at_5m_rate():
+    """
+    When only some iterations carry the cache_creation breakdown, the writes
+    without a breakdown must still be billed (at the default 5m rate) instead
+    of silently priced at zero once details exist.
+
+    Regression for the Cursor Bugbot finding on the LIT-4868 fix.
+    """
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    config = AnthropicConfig()
+    usage_object = {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "iterations": [
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 3,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 7000,
+                "cache_read_input_tokens": 0,
+            },
+        ],
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    details = usage.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_5m_input_tokens == 7000
+    assert details.ephemeral_1h_input_tokens == 10000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 17000
+
+    info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
+    rate_1h = info["cache_creation_input_token_cost_above_1hr"]
+
+    prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
+    assert prompt_cost == pytest.approx(7000 * rate_5m + 10000 * rate_1h)
+    assert prompt_cost != pytest.approx(10000 * rate_1h)
+
+
 def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_output():
     config = AnthropicConfig()
 
