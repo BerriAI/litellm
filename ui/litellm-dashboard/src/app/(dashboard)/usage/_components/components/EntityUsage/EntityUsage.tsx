@@ -24,7 +24,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
-import { UsageExportHeader } from "@/components/EntityUsageExport";
+import { UsageExportHeader, type UsageFilterSelectProps } from "@/components/EntityUsageExport";
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import {
   agentDailyActivityCall,
@@ -84,6 +84,7 @@ interface EntityUsageProps {
   entityList: EntityList[] | null;
   premiumUser: boolean;
   dateValue: DateRangePickerValue;
+  filterSelectProps?: UsageFilterSelectProps;
 }
 
 const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
@@ -107,6 +108,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityList,
   userRole,
   dateValue,
+  filterSelectProps,
 }) => {
   const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -621,6 +623,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
+  const hasEntityFilterOptions = entityList !== null && entityList.length > 0;
+  const showEntityFilters = entityType !== "team" && (filterSelectProps !== undefined || hasEntityFilterOptions);
+
   return (
     <div style={{ width: "100%" }} className="relative">
       {isFetchingMore && (
@@ -679,7 +684,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
-        showFilters={entityType !== "team" && entityList !== null && entityList.length > 0}
+        showFilters={showEntityFilters}
         filterSlot={
           entityType === "team" ? <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} /> : undefined
         }
@@ -689,6 +694,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
         filterMode={entityType === "user" ? "single" : "multiple"}
+        filterSelectProps={filterSelectProps}
         teams={teams || []}
       />
       <Tabs defaultValue={tabs[0].key}>
