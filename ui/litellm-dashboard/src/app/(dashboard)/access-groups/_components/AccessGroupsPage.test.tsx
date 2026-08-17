@@ -62,11 +62,11 @@ vi.mock("./AccessGroupsDetailsPage", () => ({
   ),
 }));
 
-vi.mock("./AccessGroupsModal/AccessGroupCreateModal", () => ({
-  AccessGroupCreateModal: ({ visible, onCancel }: { visible: boolean; onCancel: () => void }) =>
-    visible ? (
+vi.mock("./access-group-create/AccessGroupCreateDialog", () => ({
+  AccessGroupCreateDialog: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) =>
+    open ? (
       <div data-testid="create-access-group-modal">
-        <button onClick={onCancel}>Cancel</button>
+        <button onClick={() => onOpenChange(false)}>Cancel</button>
       </div>
     ) : null,
 }));
