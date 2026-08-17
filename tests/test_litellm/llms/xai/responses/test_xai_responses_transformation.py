@@ -9,6 +9,7 @@ Source: litellm/llms/xai/responses/transformation.py
 
 import os
 import sys
+from typing import Final
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
@@ -16,6 +17,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
@@ -55,23 +57,26 @@ class TestXAIResponsesAPITransformation:
         assert result["tools"][0]["type"] == "code_interpreter"
         assert "container" not in result["tools"][0], "Container field should be removed"
 
-    def test_instructions_parameter_dropped(self):
-        """Test that instructions parameter is dropped for XAI"""
+    def test_instructions_parameter_preserved(self):
+        """XAI accepts `instructions`, so it must survive param mapping.
+
+        Dropping it silently discards the caller's system prompt.
+        """
         config = XAIResponsesAPIConfig()
 
         params = ResponsesAPIOptionalRequestParams(instructions="You are a helpful assistant.", temperature=0.7)
 
         result = config.map_openai_params(response_api_optional_params=params, model="grok-4-fast", drop_params=False)
 
-        assert "instructions" not in result, "Instructions should be dropped"
+        assert result.get("instructions") == "You are a helpful assistant.", "Instructions should be preserved"
         assert result.get("temperature") == 0.7, "Other params should be preserved"
 
-    def test_supported_params_excludes_instructions(self):
-        """Test that get_supported_openai_params excludes instructions"""
+    def test_supported_params_includes_instructions(self):
+        """Test that get_supported_openai_params includes instructions"""
         config = XAIResponsesAPIConfig()
         supported = config.get_supported_openai_params("grok-4-fast")
 
-        assert "instructions" not in supported, "instructions should not be supported"
+        assert "instructions" in supported, "instructions should be supported"
         assert "tools" in supported, "tools should be supported"
         assert "temperature" in supported, "temperature should be supported"
         assert "model" in supported, "model should be supported"
@@ -403,3 +408,74 @@ class TestXAIResponsesWebSearchBilling:
 
         bridged = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(event.response.usage)
         assert getattr(bridged, "server_side_tool_usage_details") == self._TOOL_DETAILS
+
+
+class TestXAICompletionBridgeSystemPrompt:
+    """`web_search_options` bridges xAI completions to the Responses API.
+
+    The bridge hoists a system message into `instructions`, so excluding
+    `instructions` from XAI's supported params made every web-search request
+    carrying a system prompt fail — and made `drop_params=True` silently
+    discard the system prompt instead.
+    """
+
+    MESSAGES = [
+        {"role": "system", "content": "Answer briefly."},
+        {"role": "user", "content": "Newest litellm version on PyPI?"},
+    ]
+
+    @staticmethod
+    def _mock_response() -> MagicMock:
+        mock_resp: Final = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {}
+        mock_resp.text = "raw"
+        mock_resp.json.return_value = {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1754900000,
+            "model": "grok-4.3",
+            "status": "completed",
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "1.97.0", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        }
+        return mock_resp
+
+    def test_system_prompt_survives_web_search_bridge(self):
+        """A system message + web_search_options must reach XAI as `instructions`."""
+        client: Final = HTTPHandler()
+        client.post = MagicMock(return_value=self._mock_response())
+
+        litellm.completion(
+            model="xai/grok-4.3",
+            messages=self.MESSAGES,
+            web_search_options={"search_context_size": "medium"},
+            api_key="fake-key",
+            client=client,
+        )
+
+        client.post.assert_called_once()
+        request_body: Final = client.post.call_args.kwargs["json"]
+
+        assert request_body["instructions"] == "Answer briefly.", "System prompt must not be dropped"
+        assert [tool["type"] for tool in request_body["tools"]] == ["web_search"]
+        # The system message is carried by `instructions`, not duplicated into input.
+        assert [item["role"] for item in request_body["input"]] == ["user"]

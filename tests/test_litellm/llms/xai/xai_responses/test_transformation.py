@@ -56,8 +56,11 @@ class TestXAIResponsesAPITransformation:
             "container" not in result["tools"][0]
         ), "Container field should be removed"
 
-    def test_instructions_parameter_dropped(self):
-        """Test that instructions parameter is dropped for XAI"""
+    def test_instructions_parameter_preserved(self):
+        """XAI accepts `instructions`, so it must survive param mapping.
+
+        Dropping it silently discards the caller's system prompt.
+        """
         config = XAIResponsesAPIConfig()
 
         params = ResponsesAPIOptionalRequestParams(
@@ -68,15 +71,17 @@ class TestXAIResponsesAPITransformation:
             response_api_optional_params=params, model="grok-4-fast", drop_params=False
         )
 
-        assert "instructions" not in result, "Instructions should be dropped"
+        assert (
+            result.get("instructions") == "You are a helpful assistant."
+        ), "Instructions should be preserved"
         assert result.get("temperature") == 0.7, "Other params should be preserved"
 
-    def test_supported_params_excludes_instructions(self):
-        """Test that get_supported_openai_params excludes instructions"""
+    def test_supported_params_includes_instructions(self):
+        """Test that get_supported_openai_params includes instructions"""
         config = XAIResponsesAPIConfig()
         supported = config.get_supported_openai_params("grok-4-fast")
 
-        assert "instructions" not in supported, "instructions should not be supported"
+        assert "instructions" in supported, "instructions should be supported"
         assert "tools" in supported, "tools should be supported"
         assert "temperature" in supported, "temperature should be supported"
         assert "model" in supported, "model should be supported"
