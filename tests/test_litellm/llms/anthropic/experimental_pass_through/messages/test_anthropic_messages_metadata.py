@@ -7,6 +7,7 @@ Related issue: https://github.com/BerriAI/litellm/issues/30663
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 
 class TestAnthropicMessagesMetadataSupport:
@@ -45,3 +46,27 @@ class TestAnthropicMessagesMetadataSupport:
         ]
         for param in expected_core_params:
             assert param in supported_params
+
+    def test_metadata_forwarded_in_transformed_request(self):
+        """Verify 'metadata' is actually forwarded in the final transformed Anthropic Messages request body."""
+        result = self.config.transform_anthropic_messages_request(
+            model="claude-sonnet-4-20250514",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello",
+                }
+            ],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 10,
+                "metadata": {
+                    "user_id": "test-user-123",
+                },
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["metadata"] == {
+            "user_id": "test-user-123",
+        }
