@@ -102,6 +102,9 @@ class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
 
+    # If True, every proxy lifecycle event runs this guardrail's own hooks, not apply_guardrail.
+    use_native_lifecycle_hooks: ClassVar[bool] = False
+
     records_own_guardrail_information: ClassVar[bool] = False
 
     def __init__(
@@ -632,7 +635,7 @@ class CustomGuardrail(CustomLogger):
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
     def _deployment_pre_call_target(self) -> "CustomLogger":
-        if not self.uses_apply_guardrail_interface():
+        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
         try:
             from litellm.proxy.utils import unified_guardrail
