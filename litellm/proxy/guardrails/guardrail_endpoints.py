@@ -7,6 +7,7 @@ import json
 import marshal
 import multiprocessing
 import os
+import queue
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
@@ -1993,7 +1994,7 @@ def _exec_guardrail_in_child(
     test_inputs: Mapping[str, Any],
     request_data: Mapping[str, Any],
     input_type: str,
-    result_queue: Any,
+    result_queue: multiprocessing.Queue,
 ) -> None:
     """Execute guardrail code inside a child process.
 
@@ -2027,7 +2028,7 @@ def _exec_guardrail_in_child(
             return
         result: object = apply_fn(test_inputs, request_data, input_type)
         result_queue.put(("ok", result))
-    except Exception as e:  # pragma: no cover - defensive; surfaced by caller
+    except Exception as e:  # noqa: BLE001 — user code may raise anything; surfaced via queue
         result_queue.put(("error", str(e)))
 
 
@@ -2182,8 +2183,8 @@ async def test_custom_code_guardrail(
         # timeout would reject valid code. Only the user-code window is
         # bounded by EXECUTION_TIMEOUT_SECONDS.
         try:
-            ready: Any = result_queue.get(timeout=30)
-        except Exception:
+            ready = result_queue.get(timeout=30)
+        except queue.Empty:
             proc.terminate()
             proc.join()
             return TestCustomCodeGuardrailResponse(
