@@ -616,7 +616,13 @@ describe("AddAutoRouterTab", () => {
 
       // Applying a preset collapses Detailed Configuration, so the default model row is behind it.
       expandDetailedConfiguration();
-      await user.click(screen.getByRole("combobox", { name: "Default model" }));
+      const defaultModelCombobox = screen.getByRole("combobox", { name: "Default model" });
+      await user.click(defaultModelCombobox);
+      // Filter the options via the search input rather than scroll: the select is virtualized,
+      // and JSDOM's zero-height layout means options past the visible window (o3, PINNED_MODEL
+      // with the current presets) never render at all. Typing the pin's name reduces the list to
+      // just the pin, dodging the virtualization entirely.
+      await user.keyboard(PINNED_MODEL);
       await user.click((await screen.findAllByTitle(PINNED_MODEL)).slice(-1)[0]);
     };
 
