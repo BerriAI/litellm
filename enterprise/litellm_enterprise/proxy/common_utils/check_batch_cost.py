@@ -24,12 +24,16 @@ if TYPE_CHECKING:
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 
-TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
+PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
     "completed",
     "complete",
     "failed",
     "expired",
     "cancelled",
+)
+
+TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
+    *PROVIDER_TERMINAL_BATCH_STATUSES,
     "stale_expired",
 )
 
@@ -796,7 +800,7 @@ class CheckBatchCost:
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if (
-                response.status in ("completed", "complete", "expired")
+                response.status in PROVIDER_TERMINAL_BATCH_STATUSES
                 and response.output_file_id is not None
             ):
                 try:
@@ -837,13 +841,7 @@ class CheckBatchCost:
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
 
-            elif response.status in (
-                "completed",
-                "complete",
-                "failed",
-                "expired",
-                "cancelled",
-            ):
+            elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
                 try:
                     from litellm.proxy.openai_files_endpoints.common_utils import (
                         _is_base64_encoded_unified_file_id,
