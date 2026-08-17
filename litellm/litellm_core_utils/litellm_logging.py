@@ -2574,6 +2574,8 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_cost: Final = kwargs.get("batch_cost", None)
             batch_usage = kwargs.get("batch_usage", None)
             batch_models = kwargs.get("batch_models", None)
+            batch_successful_requests = kwargs.get("batch_successful_requests", None)
+            batch_failed_requests = kwargs.get("batch_failed_requests", None)
             has_explicit_batch_data: Final = all(x is not None for x in (batch_cost, batch_usage, batch_models))
 
             should_compute_batch_data: Final = (
@@ -2582,22 +2584,22 @@ class Logging(LiteLLMLoggingBaseClass):
             if has_explicit_batch_data:
                 result._hidden_params["response_cost"] = batch_cost
                 result._hidden_params["batch_models"] = batch_models
+                result._hidden_params["batch_successful_requests"] = batch_successful_requests
+                result._hidden_params["batch_failed_requests"] = batch_failed_requests
                 result.usage = batch_usage
 
             elif should_compute_batch_data:
-                (
-                    response_cost,
-                    batch_usage,
-                    batch_models,
-                ) = await _handle_completed_batch(
+                batch_result = await _handle_completed_batch(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
                     litellm_params=self.litellm_params,
                 )
 
-                result._hidden_params["response_cost"] = response_cost
-                result._hidden_params["batch_models"] = batch_models
-                result.usage = batch_usage
+                result._hidden_params["response_cost"] = batch_result.cost
+                result._hidden_params["batch_models"] = batch_result.models
+                result._hidden_params["batch_successful_requests"] = batch_result.successful_requests
+                result._hidden_params["batch_failed_requests"] = batch_result.failed_requests
+                result.usage = batch_result.usage
 
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
@@ -5062,6 +5064,8 @@ class StandardLoggingPayloadSetup:
             additional_headers=None,
             litellm_overhead_time_ms=None,
             batch_models=None,
+            batch_successful_requests=None,
+            batch_failed_requests=None,
             litellm_model_name=None,
             usage_object=None,
         )
@@ -5451,6 +5455,8 @@ def _extract_response_obj_and_hidden_params(
                     response_cost=None,
                     litellm_overhead_time_ms=None,
                     batch_models=None,
+                    batch_successful_requests=None,
+                    batch_failed_requests=None,
                     litellm_model_name=None,
                     usage_object=None,
                 )
@@ -5819,6 +5825,8 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         additional_headers=None,
         litellm_overhead_time_ms=None,
         batch_models=None,
+        batch_successful_requests=None,
+        batch_failed_requests=None,
         litellm_model_name=None,
         usage_object=None,
     )

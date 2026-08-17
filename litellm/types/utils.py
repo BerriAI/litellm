@@ -39,7 +39,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -2880,6 +2880,8 @@ class StandardLoggingHiddenParams(TypedDict):
     litellm_overhead_time_ms: float | None
     additional_headers: StandardLoggingAdditionalHeaders | None
     batch_models: list[str] | None
+    batch_successful_requests: ReadOnly[int | None]
+    batch_failed_requests: ReadOnly[int | None]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 

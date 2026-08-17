@@ -116,16 +116,16 @@ def test_aggregate_batch_cost_uses_custom_model_info():
     """_aggregate_batch_cost_usage_models should thread model_info to batch_cost_calculator."""
     file_content = [_make_batch_output_line(prompt_tokens=10, completion_tokens=5)]
 
-    cost, _, _ = _aggregate_batch_cost_usage_models(
+    result = _aggregate_batch_cost_usage_models(
         entries=file_content,
         custom_llm_provider="openai",
         model_info=CUSTOM_MODEL_INFO,
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert cost == pytest.approx(
+    assert result.cost == pytest.approx(
         expected
-    ), f"Expected total cost {expected}, got {cost}"
+    ), f"Expected total cost {expected}, got {result.cost}"
 
 
 @pytest.mark.parametrize("data_residency", ["eu", "us"])
@@ -164,15 +164,15 @@ async def test_calculate_batch_cost_and_usage_uses_custom_model_info():
     """calculate_batch_cost_and_usage should thread model_info."""
     file_content = [_make_batch_output_line(prompt_tokens=10, completion_tokens=5)]
 
-    batch_cost, batch_usage, batch_models = await calculate_batch_cost_and_usage(
+    result = await calculate_batch_cost_and_usage(
         file_content_dictionary=file_content,
         custom_llm_provider="openai",
         model_info=CUSTOM_MODEL_INFO,
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert batch_cost == pytest.approx(
+    assert result.cost == pytest.approx(
         expected
-    ), f"Expected total cost {expected}, got {batch_cost}"
-    assert batch_usage.prompt_tokens == 10
-    assert batch_usage.completion_tokens == 5
+    ), f"Expected total cost {expected}, got {result.cost}"
+    assert result.usage.prompt_tokens == 10
+    assert result.usage.completion_tokens == 5
