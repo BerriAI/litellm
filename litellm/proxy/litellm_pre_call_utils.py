@@ -621,6 +621,23 @@ def _extract_codex_session_id_from_headers(
     )
 
 
+def _extract_bare_session_id_from_headers(
+    normalized: Mapping[str, str],
+) -> str | None:
+    """
+    Return a vendor-less ``x-session-id`` header value (e.g. opencode) when it
+    is a plausible session/trace identifier (same value rules as the
+    vendor-scoped scan).
+
+    Checked after the ``x-<vendor>-session-id`` headers so a more specific
+    header (e.g. opencode's ``x-parent-session-id`` on subagent calls) wins.
+    """
+    value: Final = normalized.get("x-session-id")
+    if isinstance(value, str) and _SESSION_ID_VALUE_RE.match(value):
+        return value
+    return None
+
+
 def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     Extract chain id for call chaining from request headers.
@@ -631,6 +648,9 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
     4. Codex's unprefixed ``session-id`` / ``thread-id``, for Codex callers only.
+    5. A vendor-less ``x-session-id`` header (e.g. opencode), with the same
+       value rules.  Checked last so a more specific vendor-scoped header
+       (e.g. opencode's ``x-parent-session-id`` on subagent calls) still wins.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -646,6 +666,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
         or _extract_codex_session_id_from_headers(normalized)
+        or _extract_bare_session_id_from_headers(normalized)
     )
 
 

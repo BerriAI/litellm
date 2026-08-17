@@ -3263,6 +3263,20 @@ def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic
     assert data["litellm_trace_id"] == "explicit-trace-id-value"
 
 
+def test_add_litellm_metadata_from_request_headers_bare_session_id():
+    """A vendor-less x-session-id header (e.g. opencode) lands on litellm_session_id."""
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"X-Session-Id": "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["litellm_session_id"] == "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J"
+    assert data["litellm_trace_id"] == "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J"
+    assert data["metadata"]["session_id"] == "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J"
+    assert data["metadata"]["trace_id"] == "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J"
+
+
 def test_get_chain_id_from_headers_generic_vendor_session_id():
     """get_chain_id_from_headers picks up any x-<vendor>-session-id with a valid value."""
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
@@ -3409,6 +3423,40 @@ def test_add_litellm_metadata_groups_codex_turns_into_one_session():
         assert turn["litellm_session_id"] == CODEX_SESSION_UUID
         assert turn["litellm_trace_id"] == CODEX_SESSION_UUID
         assert turn["litellm_metadata"]["session_id"] == CODEX_SESSION_UUID
+
+
+def test_get_chain_id_from_headers_bare_session_id():
+    """get_chain_id_from_headers picks up a vendor-less x-session-id (e.g. opencode)."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers({"x-session-id": "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J"})
+        == "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J"
+    )
+    assert (
+        get_chain_id_from_headers({"X-Session-Id": "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J"})
+        == "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J"
+    )
+    assert get_chain_id_from_headers({"x-session-id": "short"}) is None
+    assert get_chain_id_from_headers({"x-session-id": "has spaces!!"}) is None
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-litellm-session-id": "explicit-id-value",
+                "x-session-id": "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J",
+            }
+        )
+        == "explicit-id-value"
+    )
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-session-id": "ses_01J5Z8K2M4NQRA6BCD8E9FGH0J",
+                "x-parent-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
+            }
+        )
+        == "e96634a3-fa28-4083-b354-55542e2dca01"
+    )
 
 
 def test_trace_id_from_traceparent_valid():
