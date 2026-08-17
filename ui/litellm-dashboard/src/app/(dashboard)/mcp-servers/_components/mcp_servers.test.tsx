@@ -12,6 +12,11 @@ vi.mock("@/components/networking", () => ({
   fetchMCPServerHealth: vi.fn(),
   deleteMCPServer: vi.fn(),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
+  getProxyUISettings: vi.fn().mockResolvedValue({
+    PROXY_BASE_URL: "http://localhost:4000",
+    PROXY_LOGOUT_URL: "",
+    LITELLM_UI_API_DOC_BASE_URL: null,
+  }),
   fetchMCPClientIp: vi.fn().mockResolvedValue(null),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),

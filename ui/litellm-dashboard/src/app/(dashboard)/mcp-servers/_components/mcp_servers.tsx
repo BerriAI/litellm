@@ -707,7 +707,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
           </TabsContent>
           <TabsContent value="connect">
-            <MCPConnect />
+            <MCPConnect accessToken={accessToken} />
           </TabsContent>
           {isAdminRole(userRole) && (
             <TabsContent value="semantic-filter">
