@@ -579,6 +579,13 @@ def _classify_check(
     )
 
 
+def _bucket_ttl_seconds(entry: TagRateLimitEntry) -> int:
+    """Redis (and in-memory fallback) TTL for a non-concurrency bucket key.
+    `entry.key_ttl_seconds` overrides the default of period_seconds + 3600
+    when set -- see TagRateLimitEntry.key_ttl_seconds."""
+    return entry.key_ttl_seconds if entry.key_ttl_seconds is not None else entry.period_seconds + 3600
+
+
 def _increment_operation_for_limit(
     configured_limit: _ConfiguredLimit,
     model_group: str,
@@ -606,8 +613,30 @@ def _increment_operation_for_limit(
     return RedisPipelineIncrementOperation(
         key=key,
         increment_value=increment_value,
-        ttl=configured_limit.entry.period_seconds + 3600,
+        ttl=_bucket_ttl_seconds(configured_limit.entry),
     )
+
+
+def _resolve_max_in_memory_cache_size() -> int | None:
+    """
+    `litellm_settings` values reach `litellm.tag_rate_limiter_max_in_memory_cache_size`
+    via a plain, unvalidated `setattr`, so a config typo (a negative number, or a
+    string like "500" from an unresolved os.environ/ substitution) can reach here.
+    InMemoryCache raises when comparing its size against a non-positive-int
+    max_size_in_memory, and DualCache.async_set_cache swallows that exception, so
+    an invalid value would otherwise silently disable every counter write for this
+    hook rather than fail loudly -- rejected here in favor of the safe default instead.
+    """
+    configured: Final = litellm.tag_rate_limiter_max_in_memory_cache_size
+    if isinstance(configured, int) and not isinstance(configured, bool) and configured > 0:
+        return configured
+    if configured is not None:
+        verbose_proxy_logger.warning(
+            "tag_rate_limiter: tag_rate_limiter_max_in_memory_cache_size=%r is not a positive integer; "
+            "falling back to the default in-memory cache size.",
+            configured,
+        )
+    return None
 
 
 class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only referenced via the deferred import in litellm_logging.py's callback resolver; basedpyright doesn't trace that usage
@@ -631,13 +660,9 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # distinct tag value this hook sees. Deployments rate-limiting on a
         # high-cardinality tag_id (e.g. per end user) without Redis can raise
         # `litellm_settings.tag_rate_limiter_max_in_memory_cache_size` so
-        # active buckets aren't evicted before their period elapses. 0 would
-        # disable this hook's in-memory cache outright, so it's rejected here
-        # in favor of the safe default.
-        configured_max_cache_size: Final = litellm.tag_rate_limiter_max_in_memory_cache_size
-        max_cache_size: Final = configured_max_cache_size if configured_max_cache_size else None
+        # active buckets aren't evicted before their period elapses.
         isolated_dual_cache: Final = DualCache(
-            in_memory_cache=InMemoryCache(max_size_in_memory=max_cache_size),
+            in_memory_cache=InMemoryCache(max_size_in_memory=_resolve_max_in_memory_cache_size()),
             redis_cache=internal_usage_cache.redis_cache,
         )
         self.internal_usage_cache = InternalUsageCache(dual_cache=isolated_dual_cache)
@@ -819,11 +844,14 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
             # A reservation's TTL must comfortably outlast any real in-flight
             # request, or a slow request's reservation self-heals (expires)
             # while it is still genuinely running, silently admitting extra
-            # requests past the configured limit. period_seconds is still
-            # honored if the operator wants an even longer safety margin, but
-            # never shortens the floor below it.
-            return max(configured_limit.entry.period_seconds, _CONCURRENCY_MIN_SAFETY_TTL_SECONDS)
-        return configured_limit.entry.period_seconds + 3600
+            # requests past the configured limit. period_seconds (or an
+            # explicit key_ttl_seconds override) is still honored if the
+            # operator wants an even longer safety margin, but this floor is
+            # never lowered below it, even by an explicit override.
+            entry: Final = configured_limit.entry
+            requested_ttl: Final = entry.key_ttl_seconds if entry.key_ttl_seconds is not None else entry.period_seconds
+            return max(requested_ttl, _CONCURRENCY_MIN_SAFETY_TTL_SECONDS)
+        return _bucket_ttl_seconds(configured_limit.entry)
 
     async def _read_only_values(
         self,

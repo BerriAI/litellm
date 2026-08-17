@@ -161,6 +161,13 @@ class TagRateLimitEntry(BaseModel):
     limit: float
     period_seconds: int
     scope_by_key_hash: bool = False
+    # Overrides this entry's bucket/reservation key TTL (Redis, and the
+    # in-memory fallback when Redis isn't configured). Defaults to
+    # period_seconds + 3600 when unset -- see _PROXY_TagRateLimiter._ttl_for.
+    # A high-cardinality tag_id can keep many keys alive at once; lowering
+    # this lets an operator shed them sooner without shortening
+    # period_seconds itself.
+    key_ttl_seconds: int | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -168,6 +175,12 @@ class TagRateLimitEntry(BaseModel):
     def _validate_period_seconds(self) -> "TagRateLimitEntry":
         if self.period_seconds <= 0:
             raise ValueError("period_seconds must be a positive integer")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_key_ttl_seconds(self) -> "TagRateLimitEntry":
+        if self.key_ttl_seconds is not None and self.key_ttl_seconds <= 0:
+            raise ValueError("key_ttl_seconds must be a positive integer when set")
         return self
 
 

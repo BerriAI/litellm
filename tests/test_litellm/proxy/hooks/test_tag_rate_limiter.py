@@ -5,6 +5,7 @@ Unit tests for tag-scoped token/request/dollar rate limiting.
 import asyncio
 import uuid
 from datetime import datetime, timedelta
+from typing import Final
 
 import pytest
 
@@ -14,6 +15,7 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitErro
 from litellm.proxy.hooks.tag_rate_limiter import (
     _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
     _bucket_key,
+    _bucket_ttl_seconds,
     _build_group_limits,
     _build_limits_index,
     _ConfiguredLimit,
@@ -2243,16 +2245,27 @@ async def test_max_in_memory_cache_size_setting_lets_high_cardinality_tags_avoid
         )
 
 
+@pytest.mark.parametrize(
+    "invalid_configured_size",
+    [
+        0,  # would hit InMemoryCache.set_cache's `max_size_in_memory == 0` short-circuit, disabling the cache
+        -1,  # would loop `heapq.heappop` on an empty heap in InMemoryCache.evict_cache and raise IndexError
+        "500",  # an unresolved os.environ/ substitution or config typo; `len(...) >= "500"` raises TypeError
+        True,  # bool is an int subclass; must not be misread as the positive integer 1
+    ],
+)
 @pytest.mark.asyncio
-async def test_max_in_memory_cache_size_of_zero_falls_back_to_the_safe_default(time_controller, monkeypatch):
+async def test_invalid_max_in_memory_cache_size_falls_back_to_the_safe_default(
+    time_controller, monkeypatch, invalid_configured_size
+):
     """
-    0 would hit InMemoryCache.set_cache's own `max_size_in_memory == 0`
-    short-circuit and silently disable this hook's in-memory cache outright,
-    so it must be rejected in favor of the safe 200-item default rather than
-    passed straight through: a limit=1 bucket must still reject a second,
-    immediate request for the same tag.
+    DualCache.async_set_cache swallows any exception raised while writing, so an
+    invalid configured size would otherwise silently disable every counter write
+    for this hook (every read then sees an empty counter and is admitted) instead
+    of failing loudly. Each of these must be rejected in favor of the safe
+    default: a limit=1 bucket must still reject a second, immediate request.
     """
-    monkeypatch.setattr(litellm, "tag_rate_limiter_max_in_memory_cache_size", 0)
+    monkeypatch.setattr(litellm, "tag_rate_limiter_max_in_memory_cache_size", invalid_configured_size)
 
     limiter = _PROXY_TagRateLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
     router = _single_request_per_minute_router()
@@ -2273,3 +2286,60 @@ async def test_max_in_memory_cache_size_of_zero_falls_back_to_the_safe_default(t
             messages=None,
             request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
+
+
+# ---------------------------------------------------------------------------
+# per-tag Redis/bucket key TTL override
+# ---------------------------------------------------------------------------
+
+
+def _request_limit(period_seconds: int, key_ttl_seconds: int | None = None) -> _ConfiguredLimit:
+    return _ConfiguredLimit(
+        unit="requests",
+        entry=TagRateLimitEntry(
+            name="per_minute", tag_id="end_user_id", limit=1, period_seconds=period_seconds, key_ttl_seconds=key_ttl_seconds
+        ),
+        deployment_scope=None,
+    )
+
+
+def _concurrency_limit(period_seconds: int, key_ttl_seconds: int | None = None) -> _ConfiguredLimit:
+    return _ConfiguredLimit(
+        unit="concurrency",
+        entry=TagRateLimitEntry(
+            name="active", tag_id="end_user_id", limit=1, period_seconds=period_seconds, key_ttl_seconds=key_ttl_seconds
+        ),
+        deployment_scope=None,
+    )
+
+
+def test_bucket_ttl_seconds_defaults_to_period_plus_one_hour_when_unset():
+    assert _bucket_ttl_seconds(_request_limit(period_seconds=60).entry) == 60 + 3600
+
+
+def test_bucket_ttl_seconds_honors_key_ttl_seconds_override():
+    assert _bucket_ttl_seconds(_request_limit(period_seconds=60, key_ttl_seconds=120).entry) == 120
+
+
+def test_ttl_for_concurrency_honors_key_ttl_seconds_above_the_safety_floor():
+    above_floor: Final = _CONCURRENCY_MIN_SAFETY_TTL_SECONDS + 100
+    assert _PROXY_TagRateLimiter._ttl_for(_concurrency_limit(period_seconds=60, key_ttl_seconds=above_floor)) == above_floor
+
+
+def test_ttl_for_concurrency_never_drops_below_the_safety_floor_even_with_a_lower_override():
+    """
+    A reservation's TTL must comfortably outlast any real in-flight request, so
+    an operator-set override below _CONCURRENCY_MIN_SAFETY_TTL_SECONDS must not
+    be honored as-is -- a slow request's reservation would otherwise self-heal
+    (expire) while still genuinely running, silently admitting extra requests.
+    """
+    below_floor: Final = 10
+    assert (
+        _PROXY_TagRateLimiter._ttl_for(_concurrency_limit(period_seconds=60, key_ttl_seconds=below_floor))
+        == _CONCURRENCY_MIN_SAFETY_TTL_SECONDS
+    )
+
+
+def test_tag_rate_limit_entry_rejects_non_positive_key_ttl_seconds():
+    with pytest.raises(ValueError):
+        TagRateLimitEntry(name="per_minute", limit=1, period_seconds=60, key_ttl_seconds=0)

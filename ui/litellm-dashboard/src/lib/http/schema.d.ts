@@ -36246,6 +36246,8 @@ export interface components {
         };
         /** TagRateLimitEntry */
         TagRateLimitEntry: {
+            /** Key Ttl Seconds */
+            key_ttl_seconds?: number | null;
             /** Limit */
             limit: number;
             /** Name */
