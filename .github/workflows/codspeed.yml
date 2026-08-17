@@ -38,7 +38,7 @@ concurrency:
 jobs:
   benchmarks:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -55,17 +55,50 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Cache uv dependencies
+        timeout-minutes: 5
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-benchmarks-${{ hashFiles('uv.lock', '.github/workflows/codspeed.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-benchmarks-
+
+      - name: Cache cargo build of the Rust bridge
+        timeout-minutes: 5
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            litellm-rust/target
+          key: ${{ runner.os }}-cargo-benchmarks-${{ hashFiles('litellm-rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-benchmarks-
+
+      # Everything the CodSpeed step runs is wrapped in valgrind, which costs
+      # ~16x wall time, so installing there turned a 2 minute maturin build of
+      # the Rust bridge into a 40 minute one. Keep that step down to pytest.
+      - name: Install benchmark dependencies
+        timeout-minutes: 15
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --no-default-groups
+          uv pip install \
+            pytest==8.3.5 \
+            pytest-codspeed==4.3.0 \
+            "mcp>=1.26.0,<2.0" \
+            "a2a-sdk>=1.1.0,<2.0"
+
       - name: Run benchmarks
+        timeout-minutes: 10
         uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
         with:
           mode: simulation
           run: >
             env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-            uv run --frozen --no-default-groups
-            --with pytest==8.3.5
-            --with pytest-codspeed==4.3.0
-            --with "mcp>=1.26.0,<2.0"
-            --with "a2a-sdk>=1.1.0,<2.0"
+            uv run --no-sync
             pytest
             -p pytest_codspeed.plugin
             tests/benchmarks/
