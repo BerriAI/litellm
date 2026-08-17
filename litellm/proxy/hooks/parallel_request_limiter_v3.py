@@ -43,6 +43,9 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     map_v3_rate_limit_type,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.router_utils.add_retry_fallback_headers import (
+    ensure_response_additional_headers,
+)
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 from litellm.types.utils import (
@@ -3292,36 +3295,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
         Post-call hook to update rate limit headers in the response.
+
+        Works for both object responses (``ModelResponse`` and friends) and
+        the dict responses returned by /v1/messages, which hold their
+        ``_hidden_params`` under a key instead of an attribute.
         """
         try:
-            from pydantic import BaseModel
-
             stash: Final = get_request_stash()
             litellm_proxy_rate_limit_response: Final = stash.rate_limit_response if stash is not None else None
+            if litellm_proxy_rate_limit_response is None:
+                return
 
-            if litellm_proxy_rate_limit_response is not None:
-                # Update response headers
-                if hasattr(response, "_hidden_params"):
-                    _hidden_params = getattr(response, "_hidden_params")
-                else:
-                    _hidden_params = None
-
-                if _hidden_params is not None and (
-                    isinstance(_hidden_params, BaseModel) or isinstance(_hidden_params, dict)
-                ):
-                    if isinstance(_hidden_params, BaseModel):
-                        _hidden_params = _hidden_params.model_dump()
-
-                    _additional_headers: Final = self._merge_ratelimit_statuses_into_additional_headers(
-                        additional_headers=_hidden_params.get("additional_headers", {}) or {},
-                        statuses=litellm_proxy_rate_limit_response["statuses"],
-                    )
-
-                    setattr(
-                        response,
-                        "_hidden_params",
-                        {**_hidden_params, "additional_headers": _additional_headers},
-                    )
+            additional_headers: Final = ensure_response_additional_headers(response)
+            additional_headers.update(
+                self._merge_ratelimit_statuses_into_additional_headers(
+                    additional_headers=additional_headers,
+                    statuses=litellm_proxy_rate_limit_response["statuses"],
+                )
+            )
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit post-call hook: %s", e)

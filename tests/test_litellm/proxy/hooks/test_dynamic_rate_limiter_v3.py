@@ -1863,3 +1863,43 @@ async def test_tpm_only_model_enforces_priority_and_model_capacity():
         )
     assert capacity_blocked.value.status_code == 429
     assert "Model capacity reached" in capacity_blocked.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_priority_headers_attached_to_dict_response():
+    """
+    /v1/messages returns a plain dict rather than a ModelResponse, and used to be skipped
+    by the success hook, so priority rate limit headers never reached the client.
+    """
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        RateLimitResponse,
+        RateLimitStatus,
+        get_or_create_request_stash,
+    )
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    get_or_create_request_stash().rate_limit_response = RateLimitResponse(
+        overall_code="OK",
+        statuses=[
+            RateLimitStatus(
+                code="OK",
+                current_limit=75,
+                limit_remaining=74,
+                rate_limit_type="requests",
+                descriptor_key="priority_model",
+            )
+        ],
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(metadata={"priority": "premium"})
+    response: dict = {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+    await handler.async_post_call_success_hook(
+        data={"model": "claude"}, user_api_key_dict=user_api_key_dict, response=response
+    )
+
+    additional_headers = response["_hidden_params"]["additional_headers"]
+    assert additional_headers["x-ratelimit-priority_model-limit-requests"] == 75
+    assert additional_headers["x-ratelimit-priority_model-remaining-requests"] == 74
+    assert additional_headers["x-litellm-priority"] == "premium"
+    assert additional_headers["x-litellm-rate-limiter-version"] == "v3"

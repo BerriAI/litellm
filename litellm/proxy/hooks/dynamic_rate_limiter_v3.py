@@ -32,6 +32,9 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.router_utils.add_retry_fallback_headers import (
+    ensure_response_additional_headers,
+)
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
 
@@ -657,21 +660,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
 
-            # Add additional priority-specific headers
-            if isinstance(response, ModelResponse):
-                priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
-
-                # Get existing additional headers
-                additional_headers: Final = getattr(response, "_hidden_params", {}).get("additional_headers", {}) or {}
-
-                # Add priority information
-                additional_headers["x-litellm-priority"] = priority or "default"
-                additional_headers["x-litellm-rate-limiter-version"] = "v3"
-
-                # Update response
-                if not hasattr(response, "_hidden_params"):
-                    response._hidden_params = {}
-                response._hidden_params["additional_headers"] = additional_headers
+            priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
+            additional_headers: Final = ensure_response_additional_headers(response)
+            additional_headers["x-litellm-priority"] = priority or "default"
+            additional_headers["x-litellm-rate-limiter-version"] = "v3"
 
             return response
 
