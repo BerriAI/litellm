@@ -616,7 +616,12 @@ describe("AddAutoRouterTab", () => {
 
       // Applying a preset collapses Detailed Configuration, so the default model row is behind it.
       expandDetailedConfiguration();
-      await user.click(screen.getByRole("combobox", { name: "Default model" }));
+      const defaultModelSelect = screen.getByRole("combobox", { name: "Default model" });
+      await user.click(defaultModelSelect);
+      // The picker is a virtualized antd Select that only renders the visible slice of its options, and the
+      // pinned model sits after every model the presets contribute. Searching for it keeps this independent
+      // of how long that list grows.
+      await user.type(defaultModelSelect, PINNED_MODEL);
       await user.click((await screen.findAllByTitle(PINNED_MODEL)).slice(-1)[0]);
     };
 
