@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AccessGroupCreateRequest(BaseModel):
@@ -21,6 +21,13 @@ class AccessGroupUpdateRequest(BaseModel):
     access_agent_ids: list[str] | None = None
     assigned_team_ids: list[str] | None = None
     assigned_key_ids: list[str] | None = None
+
+
+class AccessGroupPatchRequest(AccessGroupUpdateRequest):
+    """`PATCH /management/v1/access-groups/{id}` body: a JSON merge patch, so an unknown key is a 422 rather
+    than a silent no-op."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class AccessGroupResponse(BaseModel):

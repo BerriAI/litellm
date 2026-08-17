@@ -1,12 +1,15 @@
 """Contract machinery shared by every `/management/v1` route."""
 
-from typing import Final
+from collections.abc import Sequence
+from http import HTTPStatus
+from typing import Final, TypedDict
 from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.dependencies.utils import get_flat_params
 from fastapi.params import ParamTypes
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListLinks,
@@ -35,6 +38,68 @@ def problem_response(problem: ProblemDetail) -> JSONResponse:
         status_code=problem.status,
         content=problem.model_dump(exclude_none=True),
         media_type=PROBLEM_CONTENT_TYPE,
+    )
+
+
+PROBLEM_DETAIL_SCHEMA_NAME: Final = "ProblemDetail"
+PROBLEM_DETAIL_REF: Final = f"#/components/schemas/{PROBLEM_DETAIL_SCHEMA_NAME}"
+
+
+def problem_responses(*status_codes: int) -> dict[int | str, dict[str, object]]:
+    """OpenAPI `responses` for a route: each code answers with a problem document.
+
+    FastAPI can only label a `model=` response with the route's own media type, so the
+    problem+json content is spelled out here and the `ProblemDetail` component is added
+    to the schema by `add_problem_detail_component`.
+    """
+    return {
+        code: {
+            "description": HTTPStatus(code).phrase,
+            "content": {PROBLEM_CONTENT_TYPE: {"schema": {"$ref": PROBLEM_DETAIL_REF}}},
+        }
+        for code in status_codes
+    }
+
+
+_SCHEMA_SECTION: Final = TypeAdapter(dict[str, object])
+
+
+def add_problem_detail_component(openapi_schema: dict[str, object]) -> dict[str, object]:
+    components: Final = _SCHEMA_SECTION.validate_python(openapi_schema.get("components", {}))
+    schemas: Final = _SCHEMA_SECTION.validate_python(components.get("schemas", {}))
+    if PROBLEM_DETAIL_SCHEMA_NAME in schemas:
+        return openapi_schema
+    problem_detail_schema: Final = _SCHEMA_SECTION.validate_python(ProblemDetail.model_json_schema())
+    return {
+        **openapi_schema,
+        "components": {**components, "schemas": {**schemas, PROBLEM_DETAIL_SCHEMA_NAME: problem_detail_schema}},
+    }
+
+
+class ValidationErrorDetail(TypedDict):
+    loc: tuple[int | str, ...]
+    msg: str
+
+
+def _describe(errors: Sequence[ValidationErrorDetail]) -> str:
+    return "; ".join(f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in errors)
+
+
+def validation_problem(errors: Sequence[ValidationErrorDetail]) -> ProblemDetail:
+    """A body that fails validation, unknown keys included, is a 422; a bad query string stays a 400."""
+    body_errors: Final = tuple(error for error in errors if tuple(error["loc"][:1]) == ("body",))
+    if body_errors:
+        return ProblemDetail(
+            type=f"{PROBLEM_TYPE_BASE}invalid-request-body",
+            title="Invalid request body",
+            status=422,
+            detail=_describe(body_errors),
+        )
+    return ProblemDetail(
+        type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
+        title="Invalid query parameter",
+        status=400,
+        detail=_describe(errors) or "The request query parameters are invalid.",
     )
 
 

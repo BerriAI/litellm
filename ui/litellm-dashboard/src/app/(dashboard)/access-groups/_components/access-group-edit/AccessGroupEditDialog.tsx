@@ -9,22 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { usePickDirty } from "@/lib/forms/pickDirty";
 import { useZodForm } from "@/lib/forms/useZodForm";
-import { fetchClient } from "@/lib/http/api";
 
 import { AccessGroupFormFields, GENERAL_TAB } from "../access-group-form/AccessGroupFormFields";
 import { accessGroupFormSchema } from "../access-group-form/schema";
 import { buildAccessGroupPatchBody, formValuesFromAccessGroup, type AccessGroupPatchBody } from "./mapper";
-
-const defaultPatchAccessGroup = async (
-  accessGroupId: string,
-  body: AccessGroupPatchBody,
-): Promise<AccessGroupResponse | undefined> => {
-  const { data } = await fetchClient.PATCH("/v1/access_group/{access_group_id}", {
-    params: { path: { access_group_id: accessGroupId } },
-    body,
-  });
-  return data;
-};
+import { patchAccessGroup as defaultPatchAccessGroup } from "./patchAccessGroup";
 
 interface AccessGroupEditDialogProps {
   open: boolean;

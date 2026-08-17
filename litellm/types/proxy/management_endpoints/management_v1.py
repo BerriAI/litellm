@@ -71,3 +71,10 @@ class ListResponse(BaseModel, Generic[TOut]):
     data: list[TOut]
     meta: ListMeta
     links: ListLinks
+
+
+class ItemResponse(BaseModel, Generic[TOut]):
+    """One resource on read, create and update, in the same `data` envelope as a list row, so etags or
+    warnings can join it later as siblings of `data` instead of colliding with a field."""
+
+    data: TOut

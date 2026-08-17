@@ -3,7 +3,7 @@ import type { components } from "@/lib/http/schema";
 
 import type { AccessGroupFormValues } from "../access-group-form/schema";
 
-export type AccessGroupPatchBody = components["schemas"]["AccessGroupUpdateRequest"];
+export type AccessGroupPatchBody = components["schemas"]["AccessGroupPatchRequest"];
 
 export const formValuesFromAccessGroup = (group: AccessGroupResponse): AccessGroupFormValues => ({
   name: group.access_group_name,
