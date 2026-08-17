@@ -132,9 +132,15 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
           - user explicitly passed thinking={"type": "enabled"} (opt-in check)
         """
         return (
+            # Keep original behavior: deepseek-provider models auto-support reasoning.
             supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and (optional_params.get("thinking") or {}).get("type") == "enabled"
-        )
+            # Extend: respect supports_reasoning declared in model_cost/model_info.
+            # This covers deepseek-backed models served through other providers
+            # (e.g. third-party OpenAI-compatible gateways) so multi-turn
+            # conversations trigger `_fill_reasoning_content` and don't hit
+            # "The reasoning_content in the thinking mode must be passed back".
+            or supports_reasoning(model=model)
+        ) and (optional_params.get("thinking") or {}).get("type") == "enabled"
 
     @staticmethod
     def _drop_unsupported_tools(optional_params: dict) -> dict:

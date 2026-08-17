@@ -187,3 +187,52 @@ class TestDeepSeekThinkingParams:
         ]
         assert "tool_choice" not in result
         assert result["parallel_tool_calls"] is True
+
+
+class TestDeepSeekThinkingModeActive:
+    """Test _thinking_mode_active reasoning detection across providers."""
+
+    def setup_method(self):
+        self.config = DeepSeekChatConfig()
+
+    def test_thinking_mode_active_deepseek_provider(self):
+        """DeepSeek-provider models are always detected (original behavior)."""
+        result = self.config._thinking_mode_active(
+            model="deepseek/deepseek-v4-flash",
+            optional_params={"thinking": {"type": "enabled"}},
+        )
+        assert result is True
+
+    def test_thinking_mode_active_openai_provider_without_declaration(self):
+        """OpenAI-provider deepseek model without declaration is not detected."""
+        result = self.config._thinking_mode_active(
+            model="openai/deepseek-v4-flash",
+            optional_params={"thinking": {"type": "enabled"}},
+        )
+        assert result is False
+
+    def test_thinking_mode_active_openai_provider_with_declaration(self):
+        """OpenAI-provider deepseek with supports_reasoning declared is detected."""
+        import litellm
+
+        litellm.register_model(
+            {
+                "openai/deepseek-v4-flash": {
+                    "supports_reasoning": True,
+                    "litellm_provider": "openai",
+                }
+            }
+        )
+        result = self.config._thinking_mode_active(
+            model="openai/deepseek-v4-flash",
+            optional_params={"thinking": {"type": "enabled"}},
+        )
+        assert result is True
+
+    def test_thinking_mode_inactive_without_thinking_param(self):
+        """Thinking mode is inactive when thinking is not explicitly enabled."""
+        result = self.config._thinking_mode_active(
+            model="deepseek/deepseek-v4-flash",
+            optional_params={},
+        )
+        assert result is False
