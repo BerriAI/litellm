@@ -79,18 +79,38 @@ def _metric(guardrail_id: str, date: str = "2026-04-25", requests: int = 10, pas
     return m
 
 
+def _units_row(
+    guardrail_id: str,
+    date: str = "2026-04-25",
+    team_id: str = "",
+    api_key: str = "",
+    usage_unit: str = "contentPolicyUnits",
+    units: int = 1,
+) -> Any:
+    r = MagicMock()
+    r.guardrail_id = guardrail_id
+    r.date = date
+    r.team_id = team_id
+    r.api_key = api_key
+    r.usage_unit = usage_unit
+    r.units = units
+    return r
+
+
 def _prisma(
     *,
     find_many=None,
     find_unique=None,
     metrics=None,
     index_find_many=None,
+    units=None,
 ) -> MagicMock:
     client = MagicMock()
     db = client.db
     db.litellm_guardrailstable.find_many = AsyncMock(return_value=find_many or [])
     db.litellm_guardrailstable.find_unique = AsyncMock(return_value=find_unique)
     db.litellm_dailyguardrailmetrics.find_many = AsyncMock(return_value=metrics or [])
+    db.litellm_dailyguardrailusageunits.find_many = AsyncMock(return_value=units or [])
     db.litellm_spendlogguardrailindex.find_many = AsyncMock(return_value=index_find_many or [])
     db.litellm_spendlogguardrailindex.count = AsyncMock(return_value=0)
     db.litellm_spendlogs.find_many = AsyncMock(return_value=[])
@@ -213,6 +233,62 @@ async def test_overview_excludes_db_sourced_in_memory_entry():
     ids = {r.id for r in resp.rows}
     assert "cfg" in ids
     assert "stale" not in ids
+
+
+@pytest.mark.asyncio
+async def test_overview_reports_usage_units_per_row_and_total():
+    """LIT-5650: billable units must surface per guardrail row (matched by
+    logical name like the daily metrics) and as a response-level total."""
+    prisma = _prisma(
+        find_many=[],
+        metrics=[_metric("yaml-pii", requests=4, passed=3, blocked=1)],
+        units=[
+            _units_row("yaml-pii", usage_unit="topicPolicyUnits", units=4),
+            _units_row("yaml-pii", usage_unit="contentPolicyUnits", units=3),
+            _units_row("yaml-pii", team_id="team-a", usage_unit="contentPolicyUnits", units=2),
+            _units_row("other-guard", usage_unit="topicPolicyUnits", units=7),
+        ],
+    )
+    handler = _config_handler(_yaml_guardrail(guardrail_id="yaml-uuid", name="yaml-pii"))
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_overview(start_date=START, end_date=END, user_api_key_dict=ADMIN)
+    row = next(r for r in resp.rows if r.id == "yaml-uuid")
+    assert row.usageUnits == {"topicPolicyUnits": 4, "contentPolicyUnits": 5}
+    assert resp.totalUsageUnits == {"topicPolicyUnits": 11, "contentPolicyUnits": 5}
+
+
+@pytest.mark.asyncio
+async def test_detail_breaks_units_down_by_day_team_and_key():
+    prisma = _prisma(
+        find_unique=None,
+        units=[
+            _units_row("yaml-pii", date="2026-04-25", team_id="team-a", api_key="hash-1", units=2),
+            _units_row("yaml-pii", date="2026-04-25", team_id="", api_key="hash-2", units=1),
+            _units_row(
+                "yaml-pii", date="2026-04-24", team_id="team-a", api_key="hash-1", usage_unit="topicPolicyUnits"
+            ),
+        ],
+    )
+    handler = _config_handler(_yaml_guardrail())
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_detail(
+            guardrail_id="yaml-1", start_date=START, end_date=END, user_api_key_dict=ADMIN
+        )
+    assert resp.usage_units == {"contentPolicyUnits": 3, "topicPolicyUnits": 1}
+    assert [p.model_dump() for p in resp.usage_units_daily] == [
+        {"date": "2026-04-24", "units": {"topicPolicyUnits": 1}},
+        {"date": "2026-04-25", "units": {"contentPolicyUnits": 3}},
+    ]
+    assert resp.usage_units_by_team == {
+        "team-a": {"contentPolicyUnits": 2, "topicPolicyUnits": 1},
+        "": {"contentPolicyUnits": 1},
+    }
+    assert resp.usage_units_by_key == {
+        "hash-1": {"contentPolicyUnits": 2, "topicPolicyUnits": 1},
+        "hash-2": {"contentPolicyUnits": 1},
+    }
 
 
 # ---- logs -------------------------------------------------------------------
