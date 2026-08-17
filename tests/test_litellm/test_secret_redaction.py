@@ -489,7 +489,7 @@ def bare_uvicorn_loggers(uvicorn_logger_state):
     yield
 
 
-def _apply_uvicorn_json_log_config() -> None:
+def _apply_uvicorn_json_log_config(*, dictconfig_accepts_filter_instances: bool = True) -> None:
     """Configure logging exactly as the proxy does when it starts uvicorn with JSON logs.
 
     Call this from the test body, never from a fixture. The config's handlers write to
@@ -497,8 +497,13 @@ def _apply_uvicorn_json_log_config() -> None:
     that instant, and pytest swaps that object between the setup and call phases: resolving
     it during setup captures the stream `capsys` is about to replace, and every assertion
     then reads an empty buffer.
+
+    The flag is passed explicitly rather than left to the production default so these tests
+    describe one runtime's behavior instead of the interpreter that happens to run them.
     """
-    logging.config.dictConfig(_get_uvicorn_json_log_config())
+    logging.config.dictConfig(
+        _get_uvicorn_json_log_config(dictconfig_accepts_filter_instances=dictconfig_accepts_filter_instances)
+    )
 
 
 def _emit_uvicorn_access_line(path: str, status: int = 200) -> None:
@@ -615,7 +620,72 @@ def test_uvicorn_log_config_declares_secret_filter_on_every_logger():
     The behavioral tests above only cover the loggers that exist today; this one fails when a
     fourth is added unfiltered.
     """
-    loggers = _get_uvicorn_json_log_config()["loggers"]
+    loggers = _get_uvicorn_json_log_config(dictconfig_accepts_filter_instances=True)["loggers"]
     unfiltered = tuple(name for name, cfg in loggers.items() if _secret_filter not in cfg.get("filters", ()))
 
     assert unfiltered == (), f"uvicorn log config leaves these loggers unredacted: {unfiltered}"
+
+
+def test_uvicorn_log_config_omits_filter_instances_below_python_311():
+    """`dictConfig` resolves each `filters` entry as an id into a top-level "filters" section
+    until Python 3.11, and raises `ValueError` on an instance. uvicorn applies this config from
+    `Config.__init__`, so shipping instances at the floor of the supported range would stop the
+    proxy from starting rather than leave it logging unredacted. Empty is what makes that safe:
+    `common_logger_config` only resolves `filters` when the value is truthy.
+    """
+    loggers = _get_uvicorn_json_log_config(dictconfig_accepts_filter_instances=False)["loggers"]
+    populated = tuple(name for name, cfg in loggers.items() if cfg["filters"])
+
+    assert populated == (), f"these loggers ship a filter dictConfig cannot resolve below 3.11: {populated}"
+
+
+def _dictconfig_resolves_filter_instances() -> bool:
+    """Whether this interpreter's `dictConfig` accepts a filter instance in a `filters` list.
+
+    Answered by trying it rather than by restating the version literal the gate uses, so a gate
+    that drifts from what the runtime actually supports fails the test below instead of agreeing
+    with itself.
+    """
+    probe = logging.getLogger("test.dictconfig_filter_instance_probe")
+    config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "loggers": {probe.name: {"filters": [_secret_filter]}},
+    }
+    try:
+        logging.config.dictConfig(config)
+    except ValueError:
+        return False
+    finally:
+        probe.filters.clear()
+    return True
+
+
+def test_uvicorn_log_config_ships_filters_exactly_when_dictconfig_resolves_them():
+    """The version gate itself, which every other test here bypasses by passing the flag.
+
+    The assertion is against what this interpreter's `dictConfig` actually does, so a gate that
+    disagrees with the runtime executing it fails here. A boundary that is wrong only on a
+    version this run is not using cannot be caught without that interpreter, which is what the
+    `dictconfig_accepts_filter_instances=False` tests stand in for.
+    """
+    expected = (_secret_filter,) if _dictconfig_resolves_filter_instances() else ()
+    loggers = _get_uvicorn_json_log_config()["loggers"]
+    mismatched = tuple(name for name, cfg in loggers.items() if cfg["filters"] != expected)
+
+    assert mismatched == (), f"version gate disagrees with this interpreter's dictConfig for: {mismatched}"
+
+
+def test_uvicorn_log_config_without_filter_instances_still_logs(bare_uvicorn_loggers, capsys):
+    """Dropping the filters must cost redaction and nothing else.
+
+    The sub-3.11 config still has to be one uvicorn can apply, with the same handlers and the
+    same JSON formatter, so a request line comes out whole on those runtimes too.
+    """
+    _apply_uvicorn_json_log_config(dictconfig_accepts_filter_instances=False)
+    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+
+    _emit_uvicorn_access_line("/health/liveliness")
+
+    message = json.loads(capsys.readouterr().out.strip())["message"]
+    assert message == '127.0.0.1:52814 - "GET /health/liveliness HTTP/1.1" 200'

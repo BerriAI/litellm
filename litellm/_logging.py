@@ -453,17 +453,34 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         lg.propagate = False  # prevent bubbling to parent/root
 
 
-def _get_uvicorn_json_log_config():
+_DICTCONFIG_TAKES_FILTER_INSTANCES: Final = sys.version_info >= (3, 11)
+
+
+def _get_uvicorn_json_log_config(*, dictconfig_accepts_filter_instances: bool = _DICTCONFIG_TAKES_FILTER_INSTANCES):
     """
     Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
 
     This ensures that uvicorn's access logs, error logs, and all application logs
     are formatted as JSON when json_logs is enabled.
+
+    Redaction is attached here because uvicorn.access is the only logger that records the
+    request line, query string included, and routes such as /key/info take a credential as a
+    query parameter. Below Python 3.11 the filters are omitted rather than shipped: `dictConfig`
+    resolves every `filters` entry as an id into a top-level "filters" section until then and
+    raises on an instance, and uvicorn applies this config from `Config.__init__`, so shipping
+    instances would stop the proxy from starting. An empty entry is skipped outright by
+    `common_logger_config`, which only resolves `filters` when it is truthy. Those runtimes keep
+    the redaction `_redact_third_party_loggers` attaches to uvicorn.error, which survives
+    `dictConfig` because it is registered on the logger rather than in the config.
+
+    The flag is a parameter so both branches are reachable from tests on any interpreter.
     """
     json_formatter_class: Final = "litellm._logging.JsonFormatter"
 
     # Use the module-level log_level variable for consistency
     uvicorn_log_level: Final = log_level.upper()
+
+    uvicorn_filters: Final = (_secret_filter,) if dictconfig_accepts_filter_instances else ()
 
     log_config: Final = {
         "version": 1,
@@ -494,19 +511,19 @@ def _get_uvicorn_json_log_config():
         "loggers": {
             "uvicorn": {
                 "handlers": ["default"],
-                "filters": [_secret_filter],
+                "filters": uvicorn_filters,
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
             "uvicorn.error": {
                 "handlers": ["default"],
-                "filters": [_secret_filter],
+                "filters": uvicorn_filters,
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
             "uvicorn.access": {
                 "handlers": ["access"],
-                "filters": [_secret_filter],
+                "filters": uvicorn_filters,
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
