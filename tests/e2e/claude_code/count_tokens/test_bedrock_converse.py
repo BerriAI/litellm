@@ -30,9 +30,9 @@ diff.
 
 The cell goes red if *any* tier's probe fails the minimal shape
 check; the matrix's per-cell aggregator handles that automatically.
-Three tiers run sequentially because count_tokens is cheap (<100ms
-per request typical) and the parallelization that matters for the
-CLI rows isn't useful here.
+The three tiers are probed concurrently via `run_probe_cell`: each
+probe first waits on the shared per-provider token bucket, so a
+sequential cell paid that wait three times before reporting.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ from __future__ import annotations
 import pytest
 
 from claude_code._env import require_proxy_client
+from claude_code._probe_cell import run_probe_cell
 from claude_code.http_probe import (
     assert_count_tokens_shape,
     probe_count_tokens,
@@ -59,19 +60,12 @@ def test_count_tokens_bedrock_converse(compat_result):
     assert the response shape."""
     client, api_key = require_proxy_client(compat_result)
 
-    failures = []
-    for model in BEDROCK_CONVERSE_MODELS:
-        result = probe_count_tokens(
+    run_probe_cell(
+        compat_result=compat_result,
+        models=BEDROCK_CONVERSE_MODELS,
+        probe=lambda model: probe_count_tokens(
             client=client, api_key=api_key, model=model
-        )
-        shape_error = assert_count_tokens_shape(result)
-        if shape_error is not None:
-            error = f"[{model}] count_tokens probe failed: {shape_error}"
-            compat_result.add({"status": "fail", "error": error})
-            failures.append(error)
-            continue
-
-        compat_result.add({"status": "pass"})
-
-    if failures:
-        pytest.fail("; ".join(failures), pytrace=False)
+        ),
+        check_shape=assert_count_tokens_shape,
+        probe_name="count_tokens",
+    )
