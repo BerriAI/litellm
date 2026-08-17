@@ -1056,6 +1056,44 @@ describe("ModelInfoView", () => {
     expect(mockTestModelGroupConnection).not.toHaveBeenCalled();
   });
 
+  // Bugbot finding on #36615: complexity_router_config.default_model is a UI-only bookkeeping
+  // marker — init_complexity_router_deployment (litellm/router.py) never reads it, falling back
+  // to tier-derivation instead when litellm_params.complexity_router_default_model is absent.
+  // Probing the blob field here would test a model the running router never calls.
+  it("ignores an unused config blob pin when litellm_params has no default, matching the backend's own tier-derivation fallback", async () => {
+    const complexityRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        model: "auto_router/complexity_router",
+        complexity_router_config: {
+          tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          default_model: "unused-blob-pin",
+        },
+        // no complexity_router_default_model
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [complexityRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+    mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const testConnectionButton = await screen.findByTestId("test-connection-button");
+    await userEvent.click(testConnectionButton);
+
+    await waitFor(() => {
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
+    });
+    expect(mockTestModelGroupConnection).not.toHaveBeenCalledWith("test-token", "unused-blob-pin", "chat");
+    expect(mockTestModelGroupConnection).toHaveBeenCalledTimes(1);
+  });
+
   it("should display model access groups field", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
