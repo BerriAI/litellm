@@ -417,10 +417,52 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     ), "Tool message should be placed before user message"
 
 
+def test_translate_anthropic_messages_to_openai_accepts_input_text_blocks():
+    """Claude Code / Claude Agent SDK send `input_text` blocks instead of `text`;
+    these must translate the same as `text` blocks instead of being silently dropped."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "input_text", "text": "What's the weather in Boston?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "input_text", "text": "Let me check."}],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234",
+                    "content": [{"type": "input_text", "text": "Sunny, 75°F"}],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert result[0]["content"][0]["type"] == "text"
+    assert result[0]["content"][0]["text"] == "What's the weather in Boston?"
+    # A single-block assistant message collapses to a plain string; only assert the text survived.
+    assistant_content = result[1]["content"]
+    assistant_text = assistant_content[0]["text"] if isinstance(assistant_content, list) else assistant_content
+    assert assistant_text == "Let me check."
+    tool_message = next(msg for msg in result if msg.get("role") == "tool")
+    assert tool_message["content"] == "Sunny, 75°F"
+
+
 @pytest.mark.parametrize(
     ("system_content", "expected_content"),
     [
         ("Use the corrected result.", "Use the corrected result."),
+        (
+            [{"type": "input_text", "text": "Use the corrected result."}],
+            [{"type": "text", "text": "Use the corrected result."}],
+        ),
         (
             [{"type": "text", "text": "Use the corrected result."}],
             [{"type": "text", "text": "Use the corrected result."}],

@@ -38,6 +38,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
 )
 
+import litellm
 from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
     ANTHROPIC_ONLY_REQUEST_KEYS,
     LiteLLMMessagesToCompletionTransformationHandler,
@@ -230,3 +231,35 @@ class TestEmptyExtraKwargsPath:
         # dict-like result.
         completion_kwargs = result[0] if isinstance(result, tuple) else result
         assert isinstance(completion_kwargs, dict)
+
+
+class TestThinkingAutoRoutingRespectsChatCompletionsOptOut:
+    """When ``LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES`` is set,
+    thinking requests to OpenAI models must stay on Chat Completions instead of
+    being auto-routed to the Responses API via the ``responses/`` prefix."""
+
+    def setup_method(self):
+        self._original_flag = litellm.use_chat_completions_url_for_anthropic_messages
+
+    def teardown_method(self):
+        litellm.use_chat_completions_url_for_anthropic_messages = self._original_flag
+
+    def test_prefix_not_added_when_opted_out(self):
+        litellm.use_chat_completions_url_for_anthropic_messages = True
+        completion_kwargs = {"model": "gpt-5.1", "custom_llm_provider": "openai"}
+
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking={"type": "enabled"}
+        )
+
+        assert completion_kwargs["model"] == "gpt-5.1"
+
+    def test_prefix_still_added_by_default(self):
+        litellm.use_chat_completions_url_for_anthropic_messages = False
+        completion_kwargs = {"model": "gpt-5.1", "custom_llm_provider": "openai"}
+
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking={"type": "enabled"}
+        )
+
+        assert completion_kwargs["model"] == "responses/gpt-5.1"

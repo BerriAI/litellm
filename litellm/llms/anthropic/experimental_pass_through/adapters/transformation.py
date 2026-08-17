@@ -13,6 +13,7 @@ from litellm.llms.anthropic.experimental_pass_through.utils import (
 OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
 TOOL_NAME_HASH_LENGTH: Final = 8
 TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
+TEXT_BLOCK_TYPES: Final = ("text", "input_text")
 
 
 def truncate_tool_name(name: str) -> str:
@@ -364,7 +365,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     user_message = ChatCompletionUserMessage(role="user", content=message_content)
                 elif message_content and isinstance(message_content, list):
                     for content in message_content:
-                        if content.get("type") == "text":
+                        if content.get("type") in TEXT_BLOCK_TYPES:
                             text_obj = ChatCompletionTextObject(type="text", text=content.get("text", ""))
                             self._add_cache_control_if_applicable(content, text_obj, model)
                             new_user_content_list.append(text_obj)
@@ -424,7 +425,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                         self._add_cache_control_if_applicable(content, tool_result, model)
                                         tool_message_list.append(tool_result)
                                     elif isinstance(c, dict):
-                                        if c.get("type") == "text":
+                                        if c.get("type") in TEXT_BLOCK_TYPES:
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
                                                 tool_call_id=content.get("tool_use_id", ""),
@@ -453,7 +454,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                         if isinstance(c, str):
                                             combined_content_parts.append(ChatCompletionTextObject(type="text", text=c))
                                         elif isinstance(c, dict):
-                                            if c.get("type") == "text":
+                                            if c.get("type") in TEXT_BLOCK_TYPES:
                                                 combined_content_parts.append(
                                                     ChatCompletionTextObject(
                                                         type="text",
@@ -497,7 +498,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         if isinstance(content, str):
                             assistant_message_str = str(content)
                         elif isinstance(content, dict):
-                            if content.get("type") == "text":
+                            if content.get("type") in TEXT_BLOCK_TYPES:
                                 text_block: dict[str, Any] = {
                                     "type": "text",
                                     "text": content.get("text", ""),
@@ -856,7 +857,7 @@ class LiteLLMAnthropicMessagesAdapter:
             return None
         text_parts: Final[list[ChatCompletionTextObject]] = []  # mutable-ok: API message payload
         for block in content:
-            if not isinstance(block, dict) or block.get("type") != "text":  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
+            if not isinstance(block, dict) or block.get("type") not in TEXT_BLOCK_TYPES:  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
                 continue
             text = block.get("text")
             if not text:
@@ -888,7 +889,7 @@ class LiteLLMAnthropicMessagesAdapter:
             openai_system_content: Final[list[dict[str, Any]]] = []
             model_name: Final = anthropic_message_request.get("model", "")
             for block in system_content:
-                if isinstance(block, dict) and block.get("type") == "text":
+                if isinstance(block, dict) and block.get("type") in TEXT_BLOCK_TYPES:
                     text_block: dict[str, Any] = {
                         "type": "text",
                         "text": block.get("text", ""),
