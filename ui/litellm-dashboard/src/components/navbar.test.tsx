@@ -93,7 +93,11 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 }));
 
 // Create mock functions that can be controlled in tests
-let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
+let mockUseThemeImpl = () => ({
+  logoUrl: null as string | null,
+  isDarkMode: false,
+  toggleDarkMode: vi.fn(),
+});
 let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
 let mockUseAuthorizedImpl = () => ({
@@ -239,7 +243,11 @@ describe("Navbar", () => {
   });
 
   it("should use custom logo from theme context", () => {
-    mockUseThemeImpl = () => ({ logoUrl: "https://example.com/custom-logo.png" });
+    mockUseThemeImpl = () => ({
+      logoUrl: "https://example.com/custom-logo.png",
+      isDarkMode: false,
+      toggleDarkMode: vi.fn(),
+    });
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
@@ -247,7 +255,11 @@ describe("Navbar", () => {
     expect(logoImg).toHaveAttribute("src", "https://example.com/custom-logo.png");
 
     // Reset mock
-    mockUseThemeImpl = () => ({ logoUrl: null });
+    mockUseThemeImpl = () => ({
+      logoUrl: null,
+      isDarkMode: false,
+      toggleDarkMode: vi.fn(),
+    });
   });
 
   it("should hide user dropdown and notifications on public pages", () => {
@@ -310,10 +322,9 @@ describe("Navbar", () => {
     });
   });
 
-  it("should not render dark mode toggle slider", () => {
+  it("should render dark mode toggle slider", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    // DO NOT RENDER THIS UNTIL ALL COMPONENTS ARE CONFIRMED TO SUPPORT DARK MODE STYLES. IT IS AN ISSUE IF THIS TEST FAILS.
-    expect(screen.queryByTestId("dark-mode-toggle")).not.toBeInTheDocument();
+    expect(screen.getByTestId("dark-mode-toggle")).toBeInTheDocument();
   });
 });
