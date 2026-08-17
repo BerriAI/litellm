@@ -2574,8 +2574,8 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_cost: Final = kwargs.get("batch_cost", None)
             batch_usage = kwargs.get("batch_usage", None)
             batch_models = kwargs.get("batch_models", None)
-            batch_successful_requests = kwargs.get("batch_successful_requests", None)
-            batch_failed_requests = kwargs.get("batch_failed_requests", None)
+            batch_successful_requests: Final = kwargs.get("batch_successful_requests", None)
+            batch_failed_requests: Final = kwargs.get("batch_failed_requests", None)
             has_explicit_batch_data: Final = all(x is not None for x in (batch_cost, batch_usage, batch_models))
 
             should_compute_batch_data: Final = (
@@ -2584,12 +2584,12 @@ class Logging(LiteLLMLoggingBaseClass):
             if has_explicit_batch_data:
                 result._hidden_params["response_cost"] = batch_cost
                 result._hidden_params["batch_models"] = batch_models
-                result._hidden_params["batch_successful_requests"] = batch_successful_requests
-                result._hidden_params["batch_failed_requests"] = batch_failed_requests
+                result._hidden_params["batch_successful_requests"] = batch_successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same result._hidden_params pattern as response_cost/batch_models above
+                result._hidden_params["batch_failed_requests"] = batch_failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_usage
 
             elif should_compute_batch_data:
-                batch_result = await _handle_completed_batch(
+                batch_result: Final = await _handle_completed_batch(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
                     litellm_params=self.litellm_params,
@@ -2597,8 +2597,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 result._hidden_params["response_cost"] = batch_result.cost
                 result._hidden_params["batch_models"] = batch_result.models
-                result._hidden_params["batch_successful_requests"] = batch_result.successful_requests
-                result._hidden_params["batch_failed_requests"] = batch_result.failed_requests
+                result._hidden_params["batch_successful_requests"] = batch_result.successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
+                result._hidden_params["batch_failed_requests"] = batch_result.failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_result.usage
 
         start_time, end_time, result = self._success_handler_helper_fn(

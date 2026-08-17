@@ -221,8 +221,8 @@ def calculate_vertex_ai_batch_cost_and_usage(
     total_tokens = 0
     prompt_tokens = 0
     completion_tokens = 0
-    successful_requests = 0
-    failed_requests = 0
+    successful_requests = 0  # rebind-ok: loop accumulator, matches total_cost/total_tokens above
+    failed_requests = 0  # rebind-ok: loop accumulator, matches total_cost/total_tokens above
     actual_model_name: Final = model_name or "gemini-2.0-flash-001"
 
     for response in vertex_ai_batch_responses:
