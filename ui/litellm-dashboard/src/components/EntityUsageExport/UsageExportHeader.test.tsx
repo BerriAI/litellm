@@ -1,4 +1,4 @@
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import UsageExportHeader from "./UsageExportHeader";
@@ -71,28 +71,17 @@ describe("UsageExportHeader", () => {
     expect(screen.getByText("Team")).toBeInTheDocument();
   });
 
-  it("should keep a searchable single filter usable when no options match", async () => {
-    const user = userEvent.setup();
-    const onSearchChange = vi.fn();
-
+  it("should render a caller-supplied filter and its label without any built-in options", () => {
     renderWithProviders(
       <UsageExportHeader
         {...defaultProps}
-        entityType="user"
-        showFilters
-        filterMode="single"
-        filterLabel="User"
-        filterPlaceholder="Select user to filter..."
-        filterOptions={[]}
-        filterSelectProps={{ onSearchChange, onLoadMore: vi.fn() }}
-        onFiltersChange={vi.fn()}
+        filterLabel="Filter by user"
+        filterSlot={<div data-testid="custom-filter" />}
       />,
     );
 
-    const userFilter = screen.getByRole("combobox");
-    await user.click(userFilter);
-    await user.type(userFilter, "alice");
-
-    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("alice"));
+    expect(screen.getByText("Filter by user")).toBeInTheDocument();
+    expect(screen.getByTestId("custom-filter")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 });
