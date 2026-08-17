@@ -4516,9 +4516,9 @@ class TestAllmPassthroughStreamingProviderGate:
         """
         Regression for LIT-4561. The unbuffered Bedrock event-stream relay
         (invoke-with-response-stream, no post-call guardrail rewriting) must set
-        content-type: application/vnd.amazon.eventstream instead of leaving it to
-        Starlette's application/octet-stream default, which trips Claude Code's
-        content-type guard added in 2.1.208
+        content-type: application/vnd.amazon.eventstream instead of emitting no
+        content-type header at all, which trips Claude Code's content-type guard
+        added in 2.1.208
         """
         processing_obj = self._build_processing_obj(
             "bedrock", "model/us.anthropic.claude-sonnet-4-20250514-v1:0/invoke-with-response-stream"
