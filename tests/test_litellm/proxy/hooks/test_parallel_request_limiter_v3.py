@@ -17,6 +17,7 @@ from fastapi import HTTPException
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
@@ -5554,3 +5555,120 @@ async def test_configured_estimate_blocks_the_overrun_the_static_floor_admits(mo
 
     assert await admitted({}) == 7
     assert await admitted({"default_estimated_output_tokens": 3000}) == 2
+
+
+def test_internal_call_origin_success_ops_are_skipped():
+    """Internal sub-calls (auto-router classifier, shadow eval shadow/judge) bill spend
+    to the caller's key but must not consume its TPM counters: the same kwargs charge
+    ops without the origin stamp and none with it."""
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    response = ModelResponse(
+        id="internal-origin-tpm",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+
+    def _kwargs(metadata: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": hash_token("sk-internal-origin")}
+            },
+            "litellm_params": {"metadata": metadata},
+            "model": "gpt-4o-mini",
+        }
+
+    charged = handler._build_success_event_pipeline_operations(
+        kwargs=_kwargs({}), response_obj=response, rate_limit_type="output"
+    )
+    skipped = handler._build_success_event_pipeline_operations(
+        kwargs=_kwargs({INTERNAL_CALL_ORIGIN_METADATA_KEY: "shadow_eval_judge"}),
+        response_obj=response,
+        rate_limit_type="output",
+    )
+
+    assert charged
+    assert skipped == []
+
+
+def _conflicting_budget_bodies() -> Dict[str, Dict[str, object]]:
+    """The same request, three ways of declaring the output budget."""
+    base = {"model": "gpt-5-chat", "messages": [{"role": "user", "content": "hi"}]}
+    return {
+        "both": {**base, "max_tokens": 1, "max_completion_tokens": 10000},
+        "only_large": {**base, "max_completion_tokens": 10000},
+        "only_small": {**base, "max_tokens": 1},
+    }
+
+
+def test_conflicting_token_limits_reserve_the_larger_declared_budget():
+    """Both spellings together must reserve the larger budget, not whichever is read first.
+
+    A request declaring max_tokens=1 alongside max_completion_tokens=10000 previously
+    reserved one output token while the provider stayed free to emit ten thousand.
+    """
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    bodies = _conflicting_budget_bodies()
+
+    reserved = {
+        label: handler._estimate_tokens_for_request(data=body)
+        for label, body in bodies.items()
+    }
+
+    assert reserved["both"] == reserved["only_large"]
+    assert reserved["both"] > reserved["only_small"]
+
+
+@pytest.mark.parametrize("declared", [10000, 10000.0, "10000"])
+def test_non_integer_output_budgets_still_reserve_their_declared_size(declared):
+    """A budget litellm cannot read is a budget it cannot reserve against.
+
+    A float or numeric-string max_tokens is explicit enough to suppress the capped
+    output floor, so dropping it from the estimate under-reserves and reopens the
+    same TPM bypass that reading both spellings was meant to close.
+    """
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    base = {"model": "gpt-5-chat", "messages": [{"role": "user", "content": "hi"}]}
+
+    reserved = handler._estimate_tokens_for_request(data={**base, "max_tokens": declared})
+    reserved_int = handler._estimate_tokens_for_request(data={**base, "max_tokens": 10000})
+
+    assert reserved == reserved_int
+
+
+@pytest.mark.asyncio
+async def test_conflicting_token_limits_cannot_bypass_tpm_reservation():
+    """The pre-call hook must refuse a request whose larger declared budget exceeds the TPM limit."""
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-conflicting-budgets"), tpm_limit=100, models=[]
+    )
+    bodies = _conflicting_budget_bodies()
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=dict(bodies["only_small"]),
+        call_type="",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=dict(bodies["both"]),
+            call_type="",
+        )
+
+    assert exc_info.value.status_code == 429

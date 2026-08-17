@@ -384,9 +384,45 @@ class AnthropicCustomTool(BaseModel):
 type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
 
 
+class AnthropicContentBlock(BaseModel):
+    """One block of a `content` array. Only the fields a test reads are
+    declared; `extra="allow"` keeps the rest (a `server_tool_use` block's
+    `input`, a `tool_search_tool_result` block's nested `content`) so an
+    assistant turn read off the wire can be replayed into history verbatim
+    instead of being silently flattened to its text."""
+
+    model_config = ConfigDict(extra="allow")
+    type: str | None = None
+    text: str | None = None
+    id: str | None = None
+
+
+class AnthropicToolResultBlock(BaseModel):
+    """The user-turn answer to a client-side `tool_use`. `tool_use_id` must be
+    the id the model actually emitted; an invented one is rejected by
+    Anthropic's own schema validator, which Bedrock inherits."""
+
+    type: Literal["tool_result"] = "tool_result"
+    tool_use_id: str
+    content: str
+
+
+class AnthropicAssistantTurn(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: list[AnthropicContentBlock]
+
+
+class AnthropicToolResultTurn(BaseModel):
+    role: Literal["user"] = "user"
+    content: list[AnthropicToolResultBlock]
+
+
+type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
+
+
 class AnthropicMessagesBody(BaseModel):
     model: str
-    messages: list[ChatMessage]
+    messages: list[AnthropicMessage]
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
@@ -399,11 +435,6 @@ class CountTokensBody(BaseModel):
 
     model: str
     messages: list[ChatMessage]
-
-
-class AnthropicContentBlock(BaseModel):
-    type: str | None = None
-    text: str | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):

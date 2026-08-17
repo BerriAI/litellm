@@ -30,6 +30,54 @@
   }
 }
 
+/* Verbatim end-edge subset of the shadcn scroll-fade utility (shadcn@4.17.0 dist/tailwind.css),
+   vendored so the CLI package is not a build dependency. Re-copy from upstream to update. */
+@property --scroll-fade-e {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-mask {
+  syntax: "*";
+  inherits: false;
+}
+
+@theme inline {
+  @keyframes scroll-fade-reveal-e {
+    from {
+      --scroll-fade-e: var(--_scroll-fade-size-e, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+    to {
+      --scroll-fade-e: 0px;
+    }
+  }
+}
+
+@utility scroll-fade-e {
+  --_scroll-fade-size-e: var(--scroll-fade-e-size, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+  --scroll-fade-mask: linear-gradient(to right, #000 0, #000 calc(100% - var(--scroll-fade-e, 0px)), transparent 100%);
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-mask: linear-gradient(to left, #000 0, #000 calc(100% - var(--scroll-fade-e, 0px)), transparent 100%);
+  }
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
 :root {
   --radius: 0.5rem;
   --background: oklch(1 0 0);
@@ -211,6 +259,30 @@
     outline-color: color-mix(in oklab, var(--color-ring) 50%, transparent);
   }
 
+  /* @tailwindcss/forms paints a 1px blue-600 ring via box-shadow on :focus, which `outline-none`
+     cannot cancel. Components that declare their own focus ring override this from the utilities
+     layer; the ones that do not inherit a blue rectangle. `:not([disabled])` is here only to
+     outweigh the plugin's own (0,1,1) selector, which Tailwind emits after this block. Delete
+     along with the plugin once no route renders a Tremor form control. */
+  :is(input, textarea, select):focus:not([disabled]) {
+    --tw-ring-color: initial;
+    --tw-ring-shadow: 0 0 #0000;
+    border-color: var(--color-border);
+  }
+
+  /* Same plugin, resting state: it also gives every bare input a border, a white fill, 0.5rem/0.75rem
+     padding and 1rem text. shadcn primitives style themselves and only break where a base class omits
+     those, which today is `combobox-chip-input` alone (audited against every input-rendering file in
+     components/ui). These values restore Tailwind's own preflight, and `[data-slot]` outweighs the
+     plugin's zero-specificity `input:where(:not([type]))`. Delete along with the plugin. */
+  [data-slot="combobox-chip-input"] {
+    border-width: 0;
+    background-color: transparent;
+    padding: 0;
+    font: inherit;
+    letter-spacing: inherit;
+  }
+
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
@@ -241,4 +313,14 @@
    showing its own edges around a differently sized child. */
 [data-slot="dialog-content"][data-nested-dialog-open] {
   visibility: hidden;
+}
+
+/* Base UI portals a popup into an `isolate z-50` positioner, which an antd Modal at z-index 1000
+   then paints over, so options on a half-migrated page are visible but not clickable. The
+   positioner is not reachable from the call site, hence the parent selector. Delete this once no
+   route renders an antd Modal. */
+body:has(.ant-modal-wrap) div:has(> [data-slot="select-content"]),
+body:has(.ant-modal-wrap) div:has(> [data-slot="combobox-content"]),
+body:has(.ant-modal-wrap) div:has(> [data-slot="tooltip-content"]) {
+  z-index: 1100;
 }

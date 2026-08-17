@@ -93,9 +93,9 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def merge_client_forwarded_headers(
-        extra_headers: dict[str, Any] | None,
+        extra_headers: dict[str, object] | None,
         client_headers: dict[str, str] | None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """
         Merge headers forwarded by the proxy (`headers` kwarg, set when
         `forward_client_headers_to_llm_api` is enabled) into `extra_headers`.
@@ -210,9 +210,9 @@ class ResponsesAPIRequestUtils:
 
         valid_keys: Final = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
         custom_llm_provider: Final = params.pop("custom_llm_provider", None)
-        special_params: Final = params.pop("kwargs", {})
+        special_params: Final[dict[str, object]] = params.pop("kwargs", {})
 
-        additional_drop_params: Final = params.pop("additional_drop_params", None)
+        additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
         non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
             passed_params=params,
             special_params=special_params,
@@ -401,9 +401,9 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _update_encrypted_content_item_ids_in_response(
-        response: Union["ResponsesAPIResponse", dict[str, Any]],
+        response: Union["ResponsesAPIResponse", dict[str, object]],
         model_id: str | None,
-    ) -> Union["ResponsesAPIResponse", dict[str, Any]]:
+    ) -> Union["ResponsesAPIResponse", dict[str, object]]:
         """Rewrite item IDs for output items that contain ``encrypted_content``.
 
         Encodes ``model_id`` into the item ID so that follow-up requests can be
@@ -415,7 +415,7 @@ class ResponsesAPIRequestUtils:
         if not model_id:
             return response
 
-        output: list | None = None
+        output: object = None
         if isinstance(response, dict):
             output = response.get("output")
         else:
@@ -459,7 +459,7 @@ class ResponsesAPIRequestUtils:
         return response
 
     @staticmethod
-    def _restore_encrypted_content_item_ids_in_input(request_input: Any) -> Any:
+    def _restore_encrypted_content_item_ids_in_input(request_input: object) -> Any:
         """Decode litellm-encoded item IDs in request input back to original IDs.
 
         Called before forwarding the request to the upstream provider so the
@@ -867,7 +867,7 @@ class ResponsesAPIRequestUtils:
             )
 
     @staticmethod
-    def collect_container_ids_from_responses_response(response: Any) -> list[str]:
+    def collect_container_ids_from_responses_response(response: object) -> list[str]:
         """Return unique container IDs referenced in a Responses API payload."""
         if response is None:
             return []
@@ -953,7 +953,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def extract_mcp_headers_from_request(
         secret_fields: dict[str, Any] | None,
-        tools: Iterable[Any] | None,
+        tools: Iterable[object] | None,
     ) -> tuple[
         str | None,
         dict[str, dict[str, str]] | None,

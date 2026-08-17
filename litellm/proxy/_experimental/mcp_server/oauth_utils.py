@@ -633,7 +633,7 @@ def canonicalize_url_identity(url: str) -> str:
     return urlunparse((scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
 
 
-def _canonical_resource_uri(url: str) -> str | None:
+def canonical_resource_uri(url: str) -> str | None:
     """Canonicalize an upstream MCP server URL into an RFC 8707 resource identifier.
 
     Keeps only the scheme, host, port and path, which is the shape the MCP authorization spec's
@@ -693,7 +693,7 @@ def resolve_upstream_resource(mcp_server: "MCPServer") -> str | None:
             mcp_server.server_id,
         )
         return None
-    canonical: Final = _canonical_resource_uri(mcp_server.url)
+    canonical: Final = canonical_resource_uri(mcp_server.url)
     if canonical is None:
         verbose_logger.warning(
             "MCP server %s sets upstream_resource=auto but its url is not an absolute URI, so no "

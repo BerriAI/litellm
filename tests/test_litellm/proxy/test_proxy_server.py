@@ -6873,6 +6873,91 @@ async def test_update_general_settings_propagates_apply_user_budget_to_team_keys
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_propagates_spend_log_cleanup_bounds():
+    """The dashboard writes the cleanup bounds straight to the DB config, so
+    without runtime propagation the scheduled job never sees them and the knobs
+    do nothing until the process restarts."""
+    from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+        SPEND_LOG_CLEANUP_BOUND_SETTINGS,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    db_settings = {
+        "maximum_spend_logs_cleanup_batch_size": 2000,
+        "maximum_spend_logs_cleanup_max_batches": 250,
+        "maximum_spend_logs_cleanup_run_budget": "90s",
+        "maximum_spend_logs_cleanup_batch_timeout": "10s",
+    }
+    assert set(db_settings) == set(SPEND_LOG_CLEANUP_BOUND_SETTINGS)
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(db_general_settings=db_settings)
+
+        import litellm.proxy.proxy_server as ps
+
+        assert {key: ps.general_settings.get(key) for key in db_settings} == db_settings
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clears_a_spend_log_cleanup_bound_dropped_from_the_db():
+    """Blanking the field in the dashboard deletes the key outright, so leaving
+    the last value in memory would keep a bound the operator just removed."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"maximum_spend_logs_cleanup_run_budget": "90s", "maximum_spend_logs_cleanup_batch_timeout": "10s"},
+    ):
+        await proxy_config._update_general_settings(
+            db_general_settings={"maximum_spend_logs_cleanup_batch_timeout": "10s"}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] is None
+        assert ps.general_settings["maximum_spend_logs_cleanup_batch_timeout"] == "10s"
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_keeps_a_yaml_set_spend_log_cleanup_bound():
+    """A YAML-set bound never appears in the DB object, so treating its absence
+    as a dashboard clear would discard the deployed config on every reload."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_spend_log_cleanup_bounds = {"maximum_spend_logs_cleanup_run_budget": "90s"}
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_cleanup_run_budget": "90s"}):
+        await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] == "90s"
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clearing_a_db_override_falls_back_to_the_yaml_bound():
+    """Clearing a dashboard override of a YAML-declared bound must restore the
+    YAML value. Leaving the deleted override in memory would keep enforcing the
+    bound the operator just removed, until the process restarted."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_spend_log_cleanup_bounds = {"maximum_spend_logs_cleanup_run_budget": "90s"}
+
+    # Memory currently holds the dashboard override, and the DB no longer carries it.
+    with patch("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_cleanup_run_budget": "30s"}):
+        await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] == "90s"
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins():
     """A DB value must not silently override an explicit YAML setting on reload."""
     from litellm.proxy.proxy_server import ProxyConfig
@@ -6983,6 +7068,44 @@ async def test_update_general_settings_store_model_in_db_none_keeps_current():
         import litellm.proxy.proxy_server as ps
 
         assert ps.store_model_in_db is False
+
+
+@pytest.mark.asyncio
+async def test_batch_cost_poller_is_confirmed_before_serving(monkeypatch):
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.openai_files_endpoints.common_utils import batch_cost_poller_is_active
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", AsyncMock()),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.PROXY_BATCH_POLLING_ENABLED", True),
+        patch("litellm.constants.PROXY_BATCH_POLLING_ENABLED", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        poller = proxy_server_module.scheduler.get_job("check_batch_cost_job").func.__self__
+        assert poller.batch_processed_support_confirmed is True
+        assert batch_cost_poller_is_active() is True
+        probe_where = mock_prisma_client.db.litellm_managedobjecttable.find_first.call_args[1]["where"]
+        assert probe_where["batch_processed"] is False
 
 
 @pytest.mark.asyncio

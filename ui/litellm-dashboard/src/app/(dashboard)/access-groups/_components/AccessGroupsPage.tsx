@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
-import { AccessGroupCreateModal } from "./AccessGroupsModal/AccessGroupCreateModal";
+import { AccessGroupCreateDialog } from "./access-group-create/AccessGroupCreateDialog";
 import { AccessGroupsTable } from "./AccessGroupsTable";
 import { AccessGroup } from "./types";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -104,7 +104,7 @@ export function AccessGroupsPage() {
         onDeleteClick={setGroupToDelete}
       />
 
-      <AccessGroupCreateModal visible={isCreateModalVisible} onCancel={() => setIsCreateModalVisible(false)} />
+      <AccessGroupCreateDialog open={isCreateModalVisible} onOpenChange={setIsCreateModalVisible} />
 
       <DeleteResourceModal
         isOpen={!!groupToDelete}
