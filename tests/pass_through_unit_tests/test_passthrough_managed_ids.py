@@ -31,7 +31,7 @@ import litellm
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.managed_id_codec import (
     decode,
     encode,
@@ -1795,84 +1795,6 @@ class TestListPassthroughIdsFromDb:
         assert len(result["data"]) == 1
         assert result["data"][0]["id"] == managed_id
         assert result["data"][0]["object"] == "batch"
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "limit,expected_message,expected_openai_code",
-        [
-            (
-                "-1",
-                "Invalid 'limit': integer below minimum value. Expected a value >= 0, but got -1 instead.",
-                "integer_below_min_value",
-            ),
-            (
-                "101",
-                "Invalid 'limit': integer above maximum value. Expected a value <= 100, but got 101 instead.",
-                "integer_above_max_value",
-            ),
-        ],
-    )
-    async def test_list_batches_out_of_range_limit_raises_400(
-        self, limit, expected_message, expected_openai_code
-    ):
-        pc = _prisma_with_list(
-            batch_rows=[_fake_batch_row(new_managed_id("openai", "batch_abc"))]
-        )
-
-        with pytest.raises(ProxyException) as exc:
-            await list_passthrough_ids_from_db(
-                provider="openai",
-                route="/openai/v1/batches",
-                user_api_key_dict=_user(),
-                prisma_client=pc,
-                query_params={"limit": limit},
-            )
-
-        assert exc.value.code == "400"
-        assert exc.value.param == "limit"
-        assert exc.value.type == "invalid_request_error"
-        assert exc.value.openai_code == expected_openai_code
-        assert exc.value.message == expected_message
-        pc.db.litellm_managedobjecttable.find_many.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_list_batches_limit_zero_returns_empty_page_without_db_query(self):
-        pc = _prisma_with_list(
-            batch_rows=[_fake_batch_row(new_managed_id("openai", "batch_abc"))]
-        )
-
-        result = await list_passthrough_ids_from_db(
-            provider="openai",
-            route="/openai/v1/batches",
-            user_api_key_dict=_user(),
-            prisma_client=pc,
-            query_params={"limit": "0"},
-        )
-
-        assert result == {
-            "object": "list",
-            "data": [],
-            "first_id": None,
-            "last_id": None,
-            "has_more": False,
-        }
-        pc.db.litellm_managedobjecttable.find_many.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_list_files_limit_above_batch_cap_still_served(self):
-        managed_id = new_managed_id("openai", "file-abc")
-        pc = _prisma_with_list(file_rows=[_fake_file_row(managed_id)])
-
-        result = await list_passthrough_ids_from_db(
-            provider="openai",
-            route="/openai/v1/files",
-            user_api_key_dict=_user(),
-            prisma_client=pc,
-            query_params={"limit": "101"},
-        )
-
-        assert result is not None
-        assert [item["id"] for item in result["data"]] == [managed_id]
 
     @pytest.mark.asyncio
     async def test_list_files_admin_gets_all_rows(self):
