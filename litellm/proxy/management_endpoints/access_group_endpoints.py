@@ -416,6 +416,10 @@ async def get_access_group(
     return _record_to_response(record)
 
 
+@router.patch(
+    "/v1/access_group/{access_group_id}",
+    response_model=AccessGroupResponse,
+)
 @router.put(
     "/v1/access_group/{access_group_id}",
     response_model=AccessGroupResponse,
@@ -635,6 +639,12 @@ router.add_api_route(
     "/v1/unified_access_group/{access_group_id}",
     update_access_group,
     methods=["PUT"],
+    response_model=AccessGroupResponse,
+)
+router.add_api_route(
+    "/v1/unified_access_group/{access_group_id}",
+    update_access_group,
+    methods=["PATCH"],
     response_model=AccessGroupResponse,
 )
 router.add_api_route(

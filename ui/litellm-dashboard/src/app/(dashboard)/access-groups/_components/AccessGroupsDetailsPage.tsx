@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { AccessGroupEditModal } from "./AccessGroupsModal/AccessGroupEditModal";
+import { AccessGroupEditDialog } from "./access-group-edit/AccessGroupEditDialog";
 
 interface AccessGroupDetailProps {
   accessGroupId: string;
@@ -218,11 +218,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
         </CardContent>
       </Card>
 
-      <AccessGroupEditModal
-        visible={isEditModalVisible}
-        accessGroup={accessGroup}
-        onCancel={() => setIsEditModalVisible(false)}
-      />
+      <AccessGroupEditDialog open={isEditModalVisible} onOpenChange={setIsEditModalVisible} accessGroup={accessGroup} />
     </div>
   );
 }

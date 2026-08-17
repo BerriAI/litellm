@@ -410,6 +410,7 @@ def test_get_access_group_forbidden_non_admin(client_and_mocks, user_role):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("method", ["put", "patch"])
 @pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
 @pytest.mark.parametrize(
     "update_payload",
@@ -419,16 +420,34 @@ def test_get_access_group_forbidden_non_admin(client_and_mocks, user_role):
         {"assigned_team_ids": [], "assigned_key_ids": ["key-1"]},
     ],
 )
-def test_update_access_group_success(client_and_mocks, base_path, update_payload):
-    """Update access group with various payloads returns 200."""
+def test_update_access_group_success(client_and_mocks, method, base_path, update_payload):
+    """Update access group with various payloads returns 200 over both PUT and PATCH."""
     client, _, mock_table, *_ = client_and_mocks
 
     existing = _make_access_group_record(access_group_id="ag-update")
     mock_table.find_unique = AsyncMock(return_value=existing)
 
-    resp = client.put(f"{base_path}/ag-update", json=update_payload)
+    resp = client.request(method, f"{base_path}/ag-update", json=update_payload)
     assert resp.status_code == 200
     mock_table.update.assert_awaited_once()
+
+
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_patch_access_group_writes_only_sent_fields(client_and_mocks, base_path):
+    """PATCH with one field leaves every other column out of the write, so untouched grants survive."""
+    client, _, mock_table, *_ = client_and_mocks
+
+    existing = _make_access_group_record(
+        access_group_id="ag-update", access_model_names=["model-1"], access_agent_ids=["agent-1"]
+    )
+    mock_table.find_unique = AsyncMock(return_value=existing)
+
+    resp = client.patch(f"{base_path}/ag-update", json={"description": "Only this changes"})
+    assert resp.status_code == 200
+    assert mock_table.update.call_args.kwargs["data"] == {
+        "updated_by": "admin_user",
+        "description": "Only this changes",
+    }
 
 
 def test_update_access_group_not_found(client_and_mocks):

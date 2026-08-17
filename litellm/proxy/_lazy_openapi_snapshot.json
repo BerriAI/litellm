@@ -782,6 +782,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -1202,6 +1209,61 @@
             "access_groups"
           ]
         },
+        "patch": {
+          "operationId": "update_access_group_v1_access_group__access_group_id__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group_id",
+              "required": true,
+              "schema": {
+                "title": "Access Group Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGroupUpdateRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AccessGroupResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Access Group",
+          "tags": [
+            "access_groups"
+          ]
+        },
         "put": {
           "operationId": "update_access_group_v1_access_group__access_group_id__put",
           "parameters": [
@@ -1412,6 +1474,61 @@
             }
           ],
           "summary": "Get Access Group",
+          "tags": [
+            "access_groups"
+          ]
+        },
+        "patch": {
+          "operationId": "update_access_group_v1_unified_access_group__access_group_id__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group_id",
+              "required": true,
+              "schema": {
+                "title": "Access Group Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGroupUpdateRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AccessGroupResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Access Group",
           "tags": [
             "access_groups"
           ]

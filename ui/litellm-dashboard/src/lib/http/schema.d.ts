@@ -15725,7 +15725,8 @@ export interface paths {
         delete: operations["delete_access_group_v1_access_group__access_group_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Access Group */
+        patch: operations["update_access_group_v1_access_group__access_group_id__patch"];
         trace?: never;
     };
     "/v1/agents": {
@@ -18741,7 +18742,8 @@ export interface paths {
         delete: operations["delete_access_group_v1_unified_access_group__access_group_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Access Group */
+        patch: operations["update_access_group_v1_unified_access_group__access_group_id__patch"];
         trace?: never;
     };
     "/v1/vector_store/list": {
@@ -55437,6 +55439,41 @@ export interface operations {
             };
         };
     };
+    update_access_group_v1_access_group__access_group_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                access_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGroupUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGroupResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_agents_v1_agents_get: {
         parameters: {
             query?: {
@@ -59606,6 +59643,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_access_group_v1_unified_access_group__access_group_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                access_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGroupUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGroupResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

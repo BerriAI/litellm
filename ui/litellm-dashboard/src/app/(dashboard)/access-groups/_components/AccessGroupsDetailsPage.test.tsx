@@ -7,11 +7,11 @@ import { renderWithProviders } from "../../../../../tests/test-utils";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails");
-vi.mock("./AccessGroupsModal/AccessGroupEditModal", () => ({
-  AccessGroupEditModal: ({ visible, onCancel }: { visible: boolean; onCancel: () => void }) =>
-    visible ? (
+vi.mock("./access-group-edit/AccessGroupEditDialog", () => ({
+  AccessGroupEditDialog: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) =>
+    open ? (
       <div role="dialog" aria-label="Edit Access Group">
-        <button onClick={onCancel}>Close Modal</button>
+        <button onClick={() => onOpenChange(false)}>Close Modal</button>
       </div>
     ) : null,
 }));

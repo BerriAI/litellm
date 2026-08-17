@@ -1,18 +1,10 @@
 import type { components } from "@/lib/http/schema";
 
-import type { AccessGroupCreateFormValues } from "./schema";
+import type { AccessGroupFormValues } from "../access-group-form/schema";
 
 export type AccessGroupCreateBody = components["schemas"]["AccessGroupCreateRequest"];
 
-export const emptyAccessGroupFormValues: AccessGroupCreateFormValues = {
-  name: "",
-  description: "",
-  modelIds: [],
-  mcpServerIds: [],
-  agentIds: [],
-};
-
-export const buildAccessGroupCreateBody = (values: AccessGroupCreateFormValues): AccessGroupCreateBody => ({
+export const buildAccessGroupCreateBody = (values: AccessGroupFormValues): AccessGroupCreateBody => ({
   access_group_name: values.name.trim(),
   ...(values.description.trim() !== "" && { description: values.description.trim() }),
   ...(values.modelIds.length > 0 && { access_model_names: values.modelIds }),

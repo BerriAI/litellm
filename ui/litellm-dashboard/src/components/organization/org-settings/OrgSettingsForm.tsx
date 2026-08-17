@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
-import { pickDirty } from "@/lib/forms/pickDirty";
+import { usePickDirty } from "@/lib/forms/pickDirty";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { fetchClient } from "@/lib/http/api";
 
@@ -59,6 +59,7 @@ export const OrgSettingsForm = ({
   const queryClient = useQueryClient();
   const form = useZodForm(orgSettingsSchema, { defaultValues: orgToForm(org) });
   const { isDirty } = form.formState;
+  const pickDirty = usePickDirty(form.control);
 
   const mutation = useMutation({
     mutationFn: (body: OrgPatchBody) => patchOrganization(organizationId, body),
@@ -74,7 +75,7 @@ export const OrgSettingsForm = ({
   });
 
   const onSubmit = form.handleSubmit((values) => {
-    mutation.mutate(buildOrgPatch(pickDirty(values, form.formState.dirtyFields)));
+    mutation.mutate(buildOrgPatch(pickDirty(values)));
   });
 
   return (
