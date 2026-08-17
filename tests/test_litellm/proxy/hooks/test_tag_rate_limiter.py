@@ -1510,6 +1510,34 @@ def test_build_limits_index_preserves_key_ttl_seconds_and_max_in_memory_cache_si
     assert configured[0].entry.max_in_memory_cache_size == 500
 
 
+def test_build_limits_index_treats_a_duplicated_entry_on_one_deployment_as_chain_wide():
+    """
+    Regression test: a single deployment declaring the identical
+    concurrency_limits entry twice (a config duplicate) used to append that
+    deployment's id twice, inflating len(declaring_ids) past
+    total_deployments. That made is_chain_wide false even though every
+    deployment (there's only one) actually agreed on the entry, and for
+    concurrency a non-chain-wide entry is silently dropped entirely --
+    disabling enforcement rather than degrading it.
+    """
+    deployment = _deployment(
+        "grp",
+        "dep-1",
+        {
+            "concurrency_limits": {
+                "limits": [
+                    {"name": "inflight", "tag_id": "end_user_id", "limit": 5, "period_seconds": 300},
+                    {"name": "inflight", "tag_id": "end_user_id", "limit": 5, "period_seconds": 300},
+                ]
+            }
+        },
+    )
+    index = _build_limits_index([deployment])
+    configured = index.resolve("grp", team_id=None)
+    assert len(configured) == 1
+    assert configured[0].deployment_scope is None  # chain-wide, not dropped
+
+
 def test_build_limits_index_keeps_different_teams_same_alias_separate():
     """
     `team_public_model_name` is only unique per team: Router itself lets two

@@ -280,7 +280,14 @@ def _build_group_limits(deployments: Sequence[Mapping[str, object]], unit: _Limi
         for entry in _entries_for_unit(deployment, unit):
             signature = (entry.tag_id, entry.name, entry.limit, entry.period_seconds, entry.scope_by_key_hash)
             ids_for_signature = declaring_ids_by_signature.setdefault(signature, [])  # mutable-ok: see comment above
-            ids_for_signature.append(dep_id)
+            # One deployment declaring the identical entry twice (a config
+            # duplicate) must count once, or len(declaring_ids) inflates past
+            # total_deployments below, making is_chain_wide false for an
+            # entry every deployment actually agrees on -- for concurrency
+            # that silently drops the entry entirely (see the docstring
+            # above), disabling enforcement rather than degrading it.
+            if dep_id not in ids_for_signature:
+                ids_for_signature.append(dep_id)  # mutable-ok: see comment above
             representative_entry_by_signature.setdefault(signature, entry)  # mutable-ok: see comment above
 
     distinct_signature_count_by_name: Final[Mapping[tuple[str, str], int]] = MappingProxyType(
