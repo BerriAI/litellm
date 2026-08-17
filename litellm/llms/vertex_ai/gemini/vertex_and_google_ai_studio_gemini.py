@@ -2,6 +2,7 @@
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
 import json
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
@@ -105,6 +106,8 @@ else:
     LoggingClass = Any
     StreamingChoices = Any
 
+
+GEMINI_MAJOR_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"gemini-(\d+)")
 
 GEMINI_ROLLING_LATEST_ALIASES: Final[frozenset[str]] = frozenset(
     {
@@ -266,23 +269,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _is_gemini_3_or_newer(model: str) -> bool:
         """
-        Check if the model is Gemini 3 Pro or newer.
+        Check if the model is Gemini 3 or newer, e.g. gemini-3-pro-preview,
+        gemini-3.1-flash, gemini-3.5-flash, and every later major version.
 
-        Gemini 3 models include:
-        - gemini-3-pro-preview
-        - gemini-3-flash
-        - gemini-3-flash-preview (Gemini 3 Flash)
-        - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview
-        - gemini-3.5-flash
-        - Any future Gemini 3.x models
-        - GEMINI_ROLLING_LATEST_ALIASES, which resolve to Gemini 3.x and carry
-          no version number of their own. Matched by exact name, since
-          versioned names such as `gemini-2.5-flash-native-audio-latest` also
-          end in `-latest` yet are not Gemini 3
+        The major version is read off the model name, so Gemini 4 and beyond
+        satisfy this without a code change. Names carrying no version at all are
+        matched against GEMINI_ROLLING_LATEST_ALIASES, which always resolve to
+        the newest release of their tier.
         """
-        # Check for Gemini 3 models
-        if "gemini-3" in model:
-            return True
+        major_version: Final = GEMINI_MAJOR_VERSION_PATTERN.search(model)
+        if major_version is not None:
+            return int(major_version.group(1)) >= 3
         return model.split("/")[-1] in GEMINI_ROLLING_LATEST_ALIASES
 
     @staticmethod

@@ -2292,6 +2292,15 @@ def test_is_gemini_3_or_newer():
         == False
     )
 
+    # Later major versions must satisfy this without a code change
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-4-flash") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-4.2-pro-preview") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-10-flash") == True
+
+    # Unversioned names that are not rolling aliases stay excluded
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-embedding-001") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-exp-1206") == False
+
 
 def test_thought_signature_fallback_for_rolling_latest_alias():
     """
