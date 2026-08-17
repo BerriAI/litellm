@@ -2416,7 +2416,7 @@ def _build_oauth_authorization_server_response(
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
     return {
-        "issuer": request_base_url,  # point to your proxy
+        "issuer": f"{request_base_url}/{mcp_server_name}" if mcp_server_name else request_base_url,
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
@@ -2464,7 +2464,14 @@ async def oauth_authorization_server_mcp(request: Request, mcp_server_name: str 
 # Alias for standard OpenID discovery
 @router.get("/.well-known/openid-configuration")
 async def openid_configuration(request: Request):
-    response = await oauth_authorization_server_mcp(request)
+    response: Final = await oauth_authorization_server_mcp(request)
+    if not isinstance(response, dict):
+        return response
+
+    request_base_url: Final = get_request_base_url(request)
+    # OIDC verifiers derive this URL from their configured issuer (the proxy origin),
+    # so keep the origin issuer here even when root resolution scoped the metadata.
+    unscoped_response: Final = {**response, "issuer": request_base_url}
 
     # If MCPJWTSigner is active, augment the discovery doc with JWKS fields so
     # MCP servers and gateways (e.g. AWS Bedrock AgentCore Gateway) can resolve
@@ -2476,17 +2483,15 @@ async def openid_configuration(request: Request):
 
         signer: Final = get_mcp_jwt_signer()
         if signer is not None:
-            request_base_url: Final = get_request_base_url(request)
-            if isinstance(response, dict):
-                response = {
-                    **response,
-                    "jwks_uri": f"{request_base_url}/.well-known/jwks.json",
-                    "id_token_signing_alg_values_supported": ["RS256"],
-                }
+            return {
+                **unscoped_response,
+                "jwks_uri": f"{request_base_url}/.well-known/jwks.json",
+                "id_token_signing_alg_values_supported": ["RS256"],
+            }
     except ImportError:
         pass
 
-    return response
+    return unscoped_response
 
 
 @router.get("/.well-known/jwks.json")
