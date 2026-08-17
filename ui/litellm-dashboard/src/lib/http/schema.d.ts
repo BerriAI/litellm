@@ -22633,7 +22633,7 @@ export interface components {
              */
             apply_to_all_teams: boolean;
             /** Permissions */
-            permissions: components["schemas"]["KeyManagementRoutes"][];
+            permissions: components["schemas"]["TeamMemberPermissions"][];
             /** Team Ids */
             team_ids?: string[] | null;
         };
@@ -24600,7 +24600,7 @@ export interface components {
              * Team Member Permissions
              * @description Default permissions granted to members of newly created teams (e.g. /key/generate, /key/update, /key/delete). /key/info and /key/health are always included.
              */
-            team_member_permissions?: components["schemas"]["KeyManagementRoutes"][] | null;
+            team_member_permissions?: components["schemas"]["TeamMemberPermissions"][] | null;
             /**
              * Tpm Limit
              * @description Default tpm limit for new teams, when not explicitly provided
@@ -25933,12 +25933,6 @@ export interface components {
             /** Total Pages */
             total_pages?: number | null;
         };
-        /**
-         * KeyManagementRoutes
-         * @description Enum for key management routes
-         * @enum {string}
-         */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -33637,6 +33631,15 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /**
+         * TeamMemberPermissions
+         * @description The subset of KeyManagementRoutes accepted as team member permission
+         *     grants. The remaining KeyManagementRoutes values are admin-gated or
+         *     enforced under one of these grants, so accepting them would store a
+         *     grant that silently never takes effect.
+         * @enum {string}
+         */
+        TeamMemberPermissions: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/list" | "/key/access_group_assignment" | "/spend/logs" | "/team/daily/activity" | "/key/info" | "/key/health";
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
             /**
@@ -34685,7 +34688,7 @@ export interface components {
             /** Team Id */
             team_id: string;
             /** Team Member Permissions */
-            team_member_permissions: string[];
+            team_member_permissions: components["schemas"]["TeamMemberPermissions"][];
         };
         /**
          * UpdateTeamRequest

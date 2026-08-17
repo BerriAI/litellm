@@ -118,6 +118,10 @@ vi.mock("./ModelSelect/ModelSelect", () => {
   ModelSelect.displayName = "ModelSelect";
   return {
     ModelSelect,
+    MODEL_SENTINEL_OPTIONS: [
+      { value: "all-proxy-models", label: "All Proxy Models" },
+      { value: "no-default-models", label: "No Default Models" },
+    ],
   };
 });
 

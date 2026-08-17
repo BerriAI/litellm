@@ -8,6 +8,7 @@ import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { ModelSelect, MODEL_SENTINEL_OPTIONS } from "@/components/ModelSelect/ModelSelect";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
+import { BUDGET_DURATION_OPTIONS, NO_RESET } from "@/components/shared/form/budgetDuration";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
@@ -21,16 +22,6 @@ import { fetchClient } from "@/lib/http/api";
 
 import { buildBody, settingsToForm, type DefaultInternalUserParams, type InternalUserSettings } from "./mapper";
 import { defaultUserSettingsSchema, EMPTY_TEAM_ROW, type DefaultUserSettingsFormValues } from "./schema";
-
-const NO_RESET = "never";
-
-const BUDGET_DURATION_OPTIONS = [
-  { value: NO_RESET, label: "No reset" },
-  { value: "1h", label: "hourly" },
-  { value: "24h", label: "daily" },
-  { value: "7d", label: "weekly" },
-  { value: "30d", label: "monthly" },
-] as const;
 
 const TEAM_ROLE_OPTIONS = [
   { value: "user", label: "User" },
@@ -133,7 +124,7 @@ const TeamsField = ({ control }: { control: SettingsControl }) => {
 
             <FormField control={control} name={`teams.${index}.max_budget_in_team`} label="Max Budget in Team (USD)">
               {({ ref, ...budgetField }) => (
-                <Input {...budgetField} ref={ref} type="number" step="any" min={0} placeholder="Optional" />
+                <Input {...budgetField} ref={ref} type="text" inputMode="decimal" placeholder="Optional" />
               )}
             </FormField>
 
@@ -234,8 +225,13 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
 
   const mutation = useMutation({
     mutationFn: (values: DefaultUserSettingsFormValues) => updateSettings(buildBody(values)),
-    onSuccess: (_result, values) => {
+    onSuccess: async (_result, values) => {
       NotificationsManager.success("Default user settings updated successfully");
+      await queryClient.cancelQueries({ queryKey: SETTINGS_QUERY_KEY });
+      queryClient.setQueryData<InternalUserSettings>(SETTINGS_QUERY_KEY, (existing) => ({
+        field_schema: existing?.field_schema ?? {},
+        values: buildBody(values),
+      }));
       queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
       form.reset(values);
       onSaved();
@@ -286,7 +282,7 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
           label="Max Budget (USD)"
           description="Default maximum budget for new users"
         >
-          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step="any" min={0} />}
+          {({ ref, ...field }) => <Input {...field} ref={ref} type="text" inputMode="decimal" />}
         </FormField>
 
         <FormField
