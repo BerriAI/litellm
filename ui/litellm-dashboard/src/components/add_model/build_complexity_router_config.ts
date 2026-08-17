@@ -16,12 +16,29 @@ import {
  * Drop an empty system_prompt so the payload carries an override only when there is one. The
  * backend rejects a blank string rather than reading it as "use the default", and sending `""`
  * would turn an untouched editor into a validation error.
+ *
+ * A custom prompt is the classifier's whole system role, so the backend also rejects a rubric preset
+ * sent alongside one. Each branch rebuilds the object rather than spreading it, so a preset left on
+ * the form state from before the prompt was written cannot reach the wire and fail the save.
+ *
+ * An untouched picker sends no rubric at all rather than a copy of the default it displays. The
+ * backend reads absence as "use the default preset", so omitting it keeps a router the operator never
+ * configured on whatever that default becomes, and keeps routers built here behaving the same as ones
+ * written by hand in config.
  */
-export const normalizeClassifierLlmConfig = (config: ClassifierLLMConfig): ClassifierLLMConfig =>
-  config.system_prompt?.trim() ? config : { model: config.model, timeout_ms: config.timeout_ms };
+export const normalizeClassifierLlmConfig = ({
+  model,
+  timeout_ms,
+  classification_rubric,
+  system_prompt,
+}: ClassifierLLMConfig): ClassifierLLMConfig =>
+  system_prompt?.trim()
+    ? { model, timeout_ms, system_prompt }
+    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  defaultModel: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
@@ -46,6 +63,7 @@ export interface BuildComplexityRouterConfigParams {
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
+  default_model?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -104,6 +122,12 @@ export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined)
   return null;
 };
 
+// Requires all 4 tiers non-empty, so the create form can never reach the
+// resolveComplexityDefaultModel(tiers, ...) === undefined case — MEDIUM (or SIMPLE) is always
+// populated. The edit modal has no equivalent of this check (it allows saving with only some
+// tiers filled), which is why it needs its own explicit `!defaultModel` guard after deriving —
+// see edit_auto_router_modal.tsx's save handler. A future contributor copying this form's submit
+// handler elsewhere should not assume the same guarantee holds without this check.
 export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
   const missing = TIER_KEYS.filter((tier) => tiers[tier].length === 0);
   if (missing.length === 0) return null;
@@ -131,6 +155,7 @@ export const getSemanticConfigError = ({
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  defaultModel,
   tierLabels,
   classifierType,
   classifierLlmConfig,
@@ -158,6 +183,7 @@ export const buildComplexityRouterConfig = ({
 
   return {
     tiers,
+    ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...(classifierType === "llm" &&

@@ -25,6 +25,7 @@ import {
   PTU_COUNT_FIELD,
   PTU_RATE_FIELD,
   ptuCountRules,
+  ptuNoUsageCostRule,
   ptuPairRule,
   ptuRateRules,
   ptuStartRequiredRule,
@@ -40,7 +41,7 @@ import { isMaskedSecret, stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
-import { normalizeTierModels } from "./add_model/complexity_router_tiers";
+import { normalizeTierModels, resolveComplexityDefaultModel } from "./add_model/complexity_router_tiers";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,
@@ -128,6 +129,12 @@ const PTU_EDIT_FIELDS: PtuEditField[] = [
   },
 ];
 
+/** Per-1M-token rate for the first rate that is set, so a deliberate 0 seeds the form as 0. */
+const perMillionTokens = (...rates: (number | null | undefined)[]): number | null => {
+  const rate = rates.find((candidate) => candidate != null);
+  return rate == null ? null : rate * 1_000_000;
+};
+
 const ptuFieldDependencies = ({ isStart, pairedWith, windowPeer }: PtuEditField): string[] | undefined => {
   const deps = [
     ...(isStart ? [PTU_COUNT_FIELD] : []),
@@ -146,6 +153,7 @@ interface ComplexityRouterTierConfig {
   };
   semantic_keyword_matching?: boolean;
   embedding_model?: string;
+  default_model?: string;
 }
 
 interface ComplexityRouterModelData {
@@ -170,25 +178,26 @@ const buildComplexityRouterTestTargets = (
     config = rawConfig;
   }
 
-  const tierTargets = buildAutoRouterTestTargets({
-    tiers: {
-      SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
-      MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
-      COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
-      REASONING: normalizeTierModels(config.tiers?.REASONING),
-    },
+  const tiers = {
+    SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
+    MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
+    COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
+    REASONING: normalizeTierModels(config.tiers?.REASONING),
+  };
+
+  // Mirrors init_complexity_router_deployment (litellm/router.py): litellm_params wins, otherwise
+  // pure tier-derivation. complexity_router_config.default_model is a UI-only marker the backend
+  // never reads — folding it in here could point Test Connection at a model the router never
+  // calls (see PR #36615 discussion).
+  const effectiveDefaultModel = modelData?.litellm_params?.complexity_router_default_model || undefined;
+
+  const testTargetParams = {
+    tiers,
     semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
     embeddingModel: config.embedding_model,
-  });
-
-  const defaultModel = modelData?.litellm_params?.complexity_router_default_model?.trim();
-  if (!defaultModel || tierTargets.some((target) => target.modelGroup === defaultModel)) {
-    return tierTargets;
-  }
-  return [
-    ...tierTargets,
-    { labels: ["Default (unconfigured tiers)"], modelGroup: defaultModel, mode: "chat" as const },
-  ];
+    defaultModel: resolveComplexityDefaultModel(tiers, effectiveDefaultModel),
+  };
+  return buildAutoRouterTestTargets(testTargetParams);
 };
 
 export default function ModelInfoView({
@@ -227,6 +236,8 @@ export default function ModelInfoView({
   const { data: modelHubData } = useModelHub();
   const { data: teams } = useTeams();
   const ptuCostAttributionEnabled = usePtuCostAttributionEnabled();
+  const ptuCostRule = (field: string) =>
+    ptuCostAttributionEnabled ? [ptuNoUsageCostRule(PTU_COUNT_FIELD, field)] : [];
 
   // Transform the model data
   const getProviderFromModel = (model: string) => {
@@ -835,12 +846,14 @@ export default function ModelInfoView({
                     max_retries: localModelData.litellm_params.max_retries,
                     timeout: localModelData.litellm_params.timeout,
                     stream_timeout: localModelData.litellm_params.stream_timeout,
-                    input_cost: localModelData.litellm_params.input_cost_per_token
-                      ? localModelData.litellm_params.input_cost_per_token * 1_000_000
-                      : localModelData.model_info?.input_cost_per_token * 1_000_000 || null,
-                    output_cost: localModelData.litellm_params?.output_cost_per_token
-                      ? localModelData.litellm_params.output_cost_per_token * 1_000_000
-                      : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
+                    input_cost: perMillionTokens(
+                      localModelData.litellm_params.input_cost_per_token,
+                      localModelData.model_info?.input_cost_per_token,
+                    ),
+                    output_cost: perMillionTokens(
+                      localModelData.litellm_params?.output_cost_per_token,
+                      localModelData.model_info?.output_cost_per_token,
+                    ),
                     ptu_count: localModelData.model_info?.ptu_count ?? null,
                     cost_per_ptu_per_hour: localModelData.model_info?.cost_per_ptu_per_hour ?? null,
                     ptu_effective_from: utcIsoToPickerValue(localModelData.model_info?.ptu_effective_from),
@@ -917,14 +930,19 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Input Cost (per 1M tokens)</Text>
                         {isEditing ? (
-                          <Form.Item name="input_cost" className="mb-0">
+                          <Form.Item
+                            name="input_cost"
+                            className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("input_cost")}
+                          >
                             <NumericalInput placeholder="Enter input cost" />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
-                            {localModelData?.litellm_params?.input_cost_per_token
-                              ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.input_cost_per_token
+                            {localModelData?.litellm_params?.input_cost_per_token != null
+                              ? (localModelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.input_cost_per_token != null
                                 ? (localModelData.model_info.input_cost_per_token * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
@@ -934,14 +952,19 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Output Cost (per 1M tokens)</Text>
                         {isEditing ? (
-                          <Form.Item name="output_cost" className="mb-0">
+                          <Form.Item
+                            name="output_cost"
+                            className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("output_cost")}
+                          >
                             <NumericalInput placeholder="Enter output cost" />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
-                            {localModelData?.litellm_params?.output_cost_per_token
+                            {localModelData?.litellm_params?.output_cost_per_token != null
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.output_cost_per_token
+                              : localModelData?.model_info?.output_cost_per_token != null
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
@@ -995,6 +1018,8 @@ export default function ModelInfoView({
                           <Form.Item
                             name="cache_read_cost"
                             className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("cache_read_cost")}
                             tooltip="If left blank on save, defaults to Input Cost."
                           >
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />
@@ -1018,6 +1043,8 @@ export default function ModelInfoView({
                           <Form.Item
                             name="cache_write_cost"
                             className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("cache_write_cost")}
                             tooltip="If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token)."
                           >
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />
