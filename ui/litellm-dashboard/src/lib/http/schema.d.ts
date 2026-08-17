@@ -23725,6 +23725,11 @@ export interface components {
              */
             master_key?: string | null;
             /**
+             * Max File Size Mb
+             * @description max size in MB for file uploads to /v1/files, overriding max_request_size_mb on that route so batch input files are not capped by the global request limit. Falls back to max_request_size_mb when unset
+             */
+            max_file_size_mb?: number | null;
+            /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
              */
