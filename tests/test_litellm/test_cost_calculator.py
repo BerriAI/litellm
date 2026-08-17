@@ -3595,6 +3595,43 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
 
 
+@pytest.mark.parametrize(
+    "batch_rate,expected_prompt,expected_completion",
+    [
+        (0.0, 0.0, 0.0),
+        (1e-6, 1000 * 1e-6, 500 * 1e-6),
+        (None, 1000 * 3e-6 / 2, 500 * 15e-6 / 2),
+    ],
+    ids=["explicit-zero", "explicit-nonzero", "unset"],
+)
+def test_batch_cost_calculator_honors_an_explicitly_zero_batch_rate(
+    batch_rate: float | None,
+    expected_prompt: float,
+    expected_completion: float,
+) -> None:
+    """A batch rate configured as 0.0 means free, not unset.
+
+    Gating the batch fields on truthiness read an explicit 0.0 as absent and
+    charged half the standard rate for that token direction instead.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: dict[str, float] = {"input_cost_per_token": 3e-6, "output_cost_per_token": 15e-6}
+    if batch_rate is not None:
+        model_info["input_cost_per_token_batches"] = batch_rate
+        model_info["output_cost_per_token_batches"] = batch_rate
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info=model_info,  # type: ignore[arg-type]
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost_value == pytest.approx(expected_completion)
+
+
 def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     """
     cache_write_tokens and cache_creation_tokens mirror each other on
