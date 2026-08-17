@@ -95,9 +95,7 @@ class TolerantCallToolResult(MCPCallToolResult):
         return MappingProxyType(
             {
                 **data,
-                "content": tuple(
-                    block if _block_is_valid(block) else _as_text_block(block) for block in content
-                ),
+                "content": tuple(block if _block_is_valid(block) else _as_text_block(block) for block in content),
             }
         )
 
