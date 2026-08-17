@@ -16,6 +16,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
@@ -711,6 +712,7 @@ async def list_batches(
 
     ```
     """
+    validate_batch_list_limit(limit)
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,

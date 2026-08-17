@@ -442,6 +442,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 code=400,
             )
 
+        if limit == 0:
+            return build_list_page([])
+
         owner_filter = build_owner_filter(user_api_key_dict)
         if owner_filter is None:
             return build_list_page([])
