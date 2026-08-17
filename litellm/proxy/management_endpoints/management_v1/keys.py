@@ -35,6 +35,15 @@ from litellm.types.proxy.management_endpoints.management_v1 import (
 
 router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
+# A JSON column that the schema declares NOT NULL with a `{}` default, so it is always present on
+# the wire. `Mapping` keeps it read-only to callers. The factory is unavoidable: pydantic deep-copies
+# field defaults, and a `MappingProxyType` cannot be deep-copied, so an immutable default raises at
+# validation time. Declared once here rather than repeated on each of the seven fields that use it.
+_JsonObject = Annotated[
+    Mapping[str, JsonValue],
+    Field(default_factory=dict),  # mutable-ok: pydantic hands each instance its own copy, so no state is shared
+]
+
 
 class KeyResource(BaseModel):
     """A key as every `/management/v1/keys` operation returns it.
@@ -62,20 +71,20 @@ class KeyResource(BaseModel):
     organization_id: str | None = None
     budget_id: str | None = None
     object_permission_id: str | None = None
-    models: list[str] = Field(default_factory=list)
-    policies: list[str] = Field(default_factory=list)
-    access_group_ids: list[str] = Field(default_factory=list)
-    allowed_cache_controls: list[str] = Field(default_factory=list)
-    allowed_routes: list[str] = Field(default_factory=list)
-    aliases: dict[str, JsonValue] = Field(default_factory=dict)
-    config: dict[str, JsonValue] = Field(default_factory=dict)
-    permissions: dict[str, JsonValue] = Field(default_factory=dict)
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-    model_spend: dict[str, JsonValue] = Field(default_factory=dict)
-    model_max_budget: dict[str, JsonValue] = Field(default_factory=dict)
-    budget_fallbacks: dict[str, JsonValue] = Field(default_factory=dict)
-    router_settings: dict[str, JsonValue] | None = None
-    budget_limits: dict[str, JsonValue] | None = None
+    models: tuple[str, ...] = ()
+    policies: tuple[str, ...] = ()
+    access_group_ids: tuple[str, ...] = ()
+    allowed_cache_controls: tuple[str, ...] = ()
+    allowed_routes: tuple[str, ...] = ()
+    aliases: _JsonObject
+    config: _JsonObject
+    permissions: _JsonObject
+    metadata: _JsonObject
+    model_spend: _JsonObject
+    model_max_budget: _JsonObject
+    budget_fallbacks: _JsonObject
+    router_settings: Mapping[str, JsonValue] | None = None
+    budget_limits: Mapping[str, JsonValue] | None = None
     spend: float = 0.0
     max_budget: float | None = None
     max_parallel_requests: int | None = None

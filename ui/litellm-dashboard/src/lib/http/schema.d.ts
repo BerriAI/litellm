@@ -26195,18 +26195,27 @@ export interface components {
          *     display form safe to show in a UI.
          */
         KeyResource: {
-            /** Access Group Ids */
-            access_group_ids?: string[];
+            /**
+             * Access Group Ids
+             * @default []
+             */
+            access_group_ids: string[];
             /** Agent Id */
             agent_id?: string | null;
             /** Aliases */
             aliases?: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
-            /** Allowed Cache Controls */
-            allowed_cache_controls?: string[];
-            /** Allowed Routes */
-            allowed_routes?: string[];
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: string[];
+            /**
+             * Allowed Routes
+             * @default []
+             */
+            allowed_routes: string[];
             /** Auto Rotate */
             auto_rotate?: boolean | null;
             /** Blocked */
@@ -26265,8 +26274,11 @@ export interface components {
             model_spend?: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
-            /** Models */
-            models?: string[];
+            /**
+             * Models
+             * @default []
+             */
+            models: string[];
             /** Object Permission Id */
             object_permission_id?: string | null;
             /** Organization Id */
@@ -26275,8 +26287,11 @@ export interface components {
             permissions?: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
-            /** Policies */
-            policies?: string[];
+            /**
+             * Policies
+             * @default []
+             */
+            policies: string[];
             /** Project Id */
             project_id?: string | null;
             /** Rotation Count */

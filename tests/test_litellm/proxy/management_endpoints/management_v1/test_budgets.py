@@ -17,7 +17,6 @@ from litellm.proxy.management_endpoints.management_v1.budgets import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import (
     MANAGEMENT_V1_PREFIX,
-    PROBLEM_TYPE_BASE,
     ManagementProblem,
     problem_response,
     validation_problem,
@@ -27,7 +26,6 @@ from litellm.proxy.management_endpoints.management_v1.list_framework import (
     ScopeWhere,
     build_query_plan,
 )
-from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 app = FastAPI()
 

@@ -461,7 +461,6 @@ from litellm.proxy.management_endpoints.management_v1 import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import (
     MANAGEMENT_V1_PREFIX,
-    PROBLEM_TYPE_BASE,
     ManagementProblem,
     ValidationErrorDetail,
     problem_response,
@@ -526,7 +525,6 @@ from litellm.proxy.plugin_routes import (
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
-from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (

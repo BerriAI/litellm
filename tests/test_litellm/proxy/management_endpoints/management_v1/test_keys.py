@@ -185,6 +185,17 @@ def test_answers_in_the_item_envelope_without_the_plaintext_secret(key_write, as
     assert "key" not in body["data"]
 
 
+def test_a_row_without_its_own_id_fails_rather_than_falling_back(key_write, as_proxy_admin):
+    """`key_id` has exactly one source, the row's hashed token. Without this, a fallback to any
+    other field on the row would quietly put the caller's plaintext secret in the response."""
+    key_write.update_data = AsyncMock(return_value={"data": {k: v for k, v in _row().items() if k != "token"}})
+
+    response = _patch({"tpm_limit": 1}, key_id=PLAINTEXT_KEY)
+
+    assert response.status_code == 500
+    assert PLAINTEXT_KEY not in response.text
+
+
 def test_null_clears_and_omission_preserves(key_write, as_proxy_admin):
     """Both directions in one test: a route that cleared everything would pass a clear-only
     assertion, and a route that cleared nothing would pass a preserve-only one."""
