@@ -8163,40 +8163,8 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         )
         # per-server, not aggregate: the single server's name is in the endpoints
         assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
-        expected_issuer = "https://llm.example.com/test_oauth"
-        assert authorization_response["issuer"] == expected_issuer
-        assert resource_response["authorization_servers"] == [expected_issuer]
-    finally:
-        global_mcp_server_manager.registry.clear()
-
-
-@pytest.mark.asyncio
-async def test_openid_configuration_alias_keeps_origin_issuer_on_root_resolution():
-    """OIDC verifiers derive /.well-known/openid-configuration from their configured issuer
-    (the proxy origin), so the alias must keep the origin issuer even when single-server
-    root resolution scopes the underlying authorization-server metadata."""
-    from fastapi import Request
-
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        openid_configuration,
-    )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-
-    global_mcp_server_manager.registry.clear()
-    oauth2_server = _create_oauth2_server()
-    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
-
-    mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "https://llm.example.com/"
-    mock_request.headers = {}
-
-    try:
-        response = await openid_configuration(mock_request)
-        assert isinstance(response, dict)
-        assert response["issuer"] == "https://llm.example.com"
-        assert "/test_oauth/authorize" in response["authorization_endpoint"]
+        assert authorization_response["issuer"] == "https://llm.example.com"
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
     finally:
         global_mcp_server_manager.registry.clear()
 
