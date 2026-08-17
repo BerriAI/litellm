@@ -38,6 +38,7 @@ export const normalizeClassifierLlmConfig = ({
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  defaultModel: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
@@ -62,6 +63,7 @@ export interface BuildComplexityRouterConfigParams {
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
+  default_model?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -120,6 +122,12 @@ export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined)
   return null;
 };
 
+// Requires all 4 tiers non-empty, so the create form can never reach the
+// resolveComplexityDefaultModel(tiers, ...) === undefined case — MEDIUM (or SIMPLE) is always
+// populated. The edit modal has no equivalent of this check (it allows saving with only some
+// tiers filled), which is why it needs its own explicit `!defaultModel` guard after deriving —
+// see edit_auto_router_modal.tsx's save handler. A future contributor copying this form's submit
+// handler elsewhere should not assume the same guarantee holds without this check.
 export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
   const missing = TIER_KEYS.filter((tier) => tiers[tier].length === 0);
   if (missing.length === 0) return null;
@@ -147,6 +155,7 @@ export const getSemanticConfigError = ({
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  defaultModel,
   tierLabels,
   classifierType,
   classifierLlmConfig,
@@ -174,6 +183,7 @@ export const buildComplexityRouterConfig = ({
 
   return {
     tiers,
+    ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...(classifierType === "llm" &&

@@ -532,10 +532,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                     {option.label}
                   </ComboboxChip>
                 ))}
-                <ComboboxChipsInput
-                  className="border-0 bg-transparent"
-                  placeholder={mode.length === 0 ? "Select modes" : undefined}
-                />
+                <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
               </ComboboxChips>
               <ComboboxContent anchor={anchor}>
                 <ComboboxEmpty>No matching modes</ComboboxEmpty>

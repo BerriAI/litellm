@@ -38,6 +38,7 @@ from litellm.types.mcp import (
     MCPTransportType,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -679,6 +680,7 @@ class LiteLLMRoutes(enum.Enum):
         # permitted teams exactly like /spend/logs/ui — it belongs to the same
         # access tier, not to customer management.
         "/management/v1/spend_logs/end_users",
+        "/management/v1/spend_logs/users",
         "/cost/estimate",
     ]
 
@@ -871,12 +873,13 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session) and the end-user filter
-            # facet. The list endpoint `/spend/logs/ui` is covered via
+            # UI Logs page detail drawer (single + session) and the filter facets.
+            # The list endpoint `/spend/logs/ui` is covered via
             # spend_tracking_routes below.
             "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
             "/management/v1/spend_logs/end_users",
+            "/management/v1/spend_logs/users",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
             # Invitations).
@@ -2332,6 +2335,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
         ),
     )
+    control_plane_url: str | None = Field(
+        None,
+        description=(
+            "Global Control Plane: URL of the control plane whose admin UI manages this instance. "
+            "Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate "
+            "against it cross-origin, and restricts the SSO return_to origin to that URL. "
+            "No state is shared with the control plane"
+        ),
+    )
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
@@ -2629,6 +2641,14 @@ class ConfigYAML(LiteLLMPydanticObjectBase):
         description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache",
     )
     general_settings: ConfigGeneralSettings | None = None
+    worker_registry: list[WorkerRegistryEntry] | None = Field(
+        None,
+        description=(
+            "Global Control Plane: the independent proxy instances this instance's admin UI manages. "
+            "Setting it makes this a control plane, which serves the UI and does not route LLM requests. "
+            "Enterprise-only"
+        ),
+    )
     router_settings: UpdateRouterConfig | None = Field(
         None,
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
@@ -2744,6 +2764,13 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # key off. Server-only and stripped from validated input for the same reason as the marker
     # above: a forged entry would let a caller pick which team's rpm bucket it is charged against.
     mcp_source_team_rpm_limits: dict[str, dict[str, int]] | None = Field(default=None, exclude=True)
+    # The single MCP server_id a gateway session bearer was scoped to at authorize time (RFC 8707
+    # resource), or None for an aggregate-scope session. A RESTRICTION intersected against the live
+    # grant resolution, never a grant. Server-only, set exclusively by the MCP gateway admission
+    # path via post-construction assignment and stripped from validated input like the markers
+    # above; a forged value could at most narrow, but the stripping keeps the field's provenance
+    # single-owner so its meaning stays trustworthy.
+    mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -2780,6 +2807,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
         values.pop("mcp_source_team_rpm_limits", None)
+        values.pop("mcp_session_resource_server_id", None)
         values.pop("via_virtual_key", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})

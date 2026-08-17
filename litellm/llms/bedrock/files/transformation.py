@@ -64,6 +64,10 @@ from ..common_utils import BedrockError, merge_bedrock_aws_request_params, resol
 # Same pattern as the `upload_url` handoff in `transform_create_file_request`.
 S3_SIGNED_GET_HEADERS_PARAM: Final = "_s3_signed_get_headers"
 
+# litellm_params key carrying the size of the body uploaded to S3, handed from
+# `transform_create_file_request` to `transform_create_file_response`.
+UPLOAD_CONTENT_LENGTH_PARAM: Final = "_s3_upload_content_length"
+
 
 def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]:
     return MappingProxyType(dict(items))
@@ -195,6 +199,18 @@ def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
             "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
         )
     return bucket_name
+
+
+def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Response) -> int:
+    """
+    S3 answers PutObject with an empty body, so the stored object size comes from the
+    signed request recorded by `transform_create_file_request`, not the response headers.
+    """
+    uploaded_size: Final = litellm_params.get(UPLOAD_CONTENT_LENGTH_PARAM)
+    if isinstance(uploaded_size, int):
+        return uploaded_size
+    response_content_length: Final = raw_response.headers.get("Content-Length", "0")
+    return int(response_content_length) if response_content_length.isdigit() else 0
 
 
 class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
@@ -924,6 +940,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
 
         litellm_params["upload_url"] = api_base
+        upload_content_length: Final = len(file_content.encode("utf-8"))
+        litellm_params[UPLOAD_CONTENT_LENGTH_PARAM] = upload_content_length  # rebind-ok: same handoff as upload_url
 
         # Return a dict that tells the HTTP handler exactly what to do
         return {
@@ -1081,12 +1099,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         Transform S3 File upload response into OpenAI-style FileObject
         """
-        # For S3 uploads, we typically get an ETag and other metadata
-        response_headers: Final = raw_response.headers
-        # Extract S3 object information from the response
-        # S3 PUT object returns ETag and other metadata in headers
-        content_length: Final[str] = response_headers.get("Content-Length", "0")
-
         # Use the actual upload URL that was used for the S3 upload
         upload_url: Final = litellm_params.get("upload_url")
         file_id: str = ""
@@ -1101,7 +1113,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             filename=filename,
             created_at=int(time.time()),  # Current timestamp
             status="uploaded",
-            bytes=int(content_length) if content_length.isdigit() else 0,
+            bytes=_uploaded_object_size(litellm_params=litellm_params, raw_response=raw_response),
             object="file",
         )
 

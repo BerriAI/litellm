@@ -586,6 +586,60 @@ class TestBedrockFilesTransformation:
         assert "x-amz-server-side-encryption" not in headers
         assert "x-amz-server-side-encryption-aws-kms-key-id" not in headers
 
+    def test_create_file_response_reports_uploaded_object_size(self):
+        """
+        S3 answers PutObject with an empty body, so the returned FileObject must report the
+        size of the body that was uploaded instead of the response's Content-Length (always 0).
+        """
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+        litellm_params: dict = {"s3_bucket_name": "litellm-batch-bucket"}
+        jsonl_content = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock/amazon.nova-pro-v1:0",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 10,
+                },
+            }
+        ).encode()
+
+        request = config.transform_create_file_request(
+            model="amazon.nova-pro-v1:0",
+            create_file_data={
+                "file": ("batch.jsonl", jsonl_content, "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params=litellm_params,
+        )
+        assert isinstance(request, dict)
+        uploaded_size = len(request["data"].encode("utf-8"))
+        assert uploaded_size > 0
+
+        file_object = config.transform_create_file_response(
+            model=None,
+            raw_response=httpx.Response(
+                status_code=200,
+                headers={"Content-Length": "0", "ETag": '"abc123"'},
+                content=b"",
+            ),
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert file_object.bytes == uploaded_size
+
     def test_openai_passthrough_still_works(self):
         """
         Regression test: ensure OpenAI-compatible models (e.g. gpt-oss)
