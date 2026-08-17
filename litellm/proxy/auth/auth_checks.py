@@ -257,7 +257,13 @@ all_routes: Final = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management
 # The event loop only keeps weak references to tasks, so a background task whose
 # only reference was the create_task() call can be collected before it runs. Hold
 # each one until it completes.
-_background_tasks: set[asyncio.Task] = set()  # mutable-ok: task registry
+_background_tasks: Final[set[asyncio.Task]] = set()  # mutable-ok: task registry
+
+
+def _hold_background_task(task: asyncio.Task) -> None:
+    """Keep a strong reference to a fire-and-forget task until it finishes."""
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
@@ -1755,14 +1761,14 @@ async def _get_fuzzy_user_object(
         )
 
         if response is not None and sso_user_id is not None:  # update sso_user_id
-            _background_task = asyncio.create_task(  # background task to update user with sso id
-                _user_table(UserRepository(prisma_client)).update(
-                    where={"user_id": response.user_id},
-                    data={"sso_user_id": sso_user_id},
+            _hold_background_task(
+                asyncio.create_task(  # background task to update user with sso id
+                    _user_table(UserRepository(prisma_client)).update(
+                        where={"user_id": response.user_id},
+                        data={"sso_user_id": sso_user_id},
+                    )
                 )
             )
-            _background_tasks.add(_background_task)
-            _background_task.add_done_callback(_background_tasks.discard)
 
     return response
 
@@ -3798,14 +3804,14 @@ async def _virtual_key_max_budget_check(
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
         )
-        _background_task = asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="token_budget",
-                user_info=call_info,
+        _hold_background_task(
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="token_budget",
+                    user_info=call_info,
+                )
             )
         )
-        _background_tasks.add(_background_task)
-        _background_task.add_done_callback(_background_tasks.discard)
 
         ####################################
         # collect information for alerting #
@@ -3904,14 +3910,14 @@ async def _virtual_key_soft_budget_check(
             event_group=Litellm_EntityType.KEY,
         )
 
-        _background_task = asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="soft_budget",
-                user_info=call_info,
+        _hold_background_task(
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="soft_budget",
+                    user_info=call_info,
+                )
             )
         )
-        _background_tasks.add(_background_task)
-        _background_task.add_done_callback(_background_tasks.discard)
 
 
 def _parse_email_list(raw: str | Sequence[object] | None) -> list[str]:
@@ -3997,14 +4003,14 @@ async def _virtual_key_max_budget_alert_check(
                 event_group=Litellm_EntityType.KEY,
                 max_budget_alert_emails=alert_email_config,
             )
-            _background_task = asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="max_budget_alert",
-                    user_info=call_info,
+            _hold_background_task(
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="max_budget_alert",
+                        user_info=call_info,
+                    )
                 )
             )
-            _background_tasks.add(_background_task)
-            _background_task.add_done_callback(_background_tasks.discard)
         else:
             # Old path: existing single 80% threshold — completely unchanged
             alert_threshold: Final = valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
@@ -4031,14 +4037,14 @@ async def _virtual_key_max_budget_alert_check(
                     event_group=Litellm_EntityType.KEY,
                 )
 
-                _background_task = asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        type="max_budget_alert",
-                        user_info=call_info,
+                _hold_background_task(
+                    asyncio.create_task(
+                        proxy_logging_obj.budget_alerts(
+                            type="max_budget_alert",
+                            user_info=call_info,
+                        )
                     )
                 )
-                _background_tasks.add(_background_task)
-                _background_task.add_done_callback(_background_tasks.discard)
 
 
 async def _check_team_member_budget(
@@ -4197,14 +4203,14 @@ async def _team_max_budget_check(
                     organization_id=valid_token.org_id,
                     event_group=Litellm_EntityType.TEAM,
                 )
-                _background_task = asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        type="team_budget",
-                        user_info=call_info,
+                _hold_background_task(
+                    asyncio.create_task(
+                        proxy_logging_obj.budget_alerts(
+                            type="team_budget",
+                            user_info=call_info,
+                        )
                     )
                 )
-                _background_tasks.add(_background_task)
-                _background_task.add_done_callback(_background_tasks.discard)
 
             raise litellm.BudgetExceededError(
                 current_cost=spend,
@@ -4317,14 +4323,14 @@ async def _team_soft_budget_check(
                 alert_emails=alert_emails,
             )
 
-            _background_task = asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="soft_budget",
-                    user_info=call_info,
+            _hold_background_task(
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="soft_budget",
+                        user_info=call_info,
+                    )
                 )
             )
-            _background_tasks.add(_background_task)
-            _background_task.add_done_callback(_background_tasks.discard)
 
 
 async def _project_max_budget_check(
@@ -4363,14 +4369,14 @@ async def _project_max_budget_check(
                 organization_id=valid_token.org_id,
                 event_group=Litellm_EntityType.PROJECT,
             )
-            _background_task = asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="project_budget",
-                    user_info=call_info,
+            _hold_background_task(
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="project_budget",
+                        user_info=call_info,
+                    )
                 )
             )
-            _background_tasks.add(_background_task)
-            _background_task.add_done_callback(_background_tasks.discard)
 
         raise litellm.BudgetExceededError(
             current_cost=project_object.spend,
@@ -4417,14 +4423,14 @@ async def _project_soft_budget_check(
                 organization_id=valid_token.org_id,
                 event_group=Litellm_EntityType.PROJECT,
             )
-            _background_task = asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="soft_budget",
-                    user_info=call_info,
+            _hold_background_task(
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="soft_budget",
+                        user_info=call_info,
+                    )
                 )
             )
-            _background_tasks.add(_background_task)
-            _background_task.add_done_callback(_background_tasks.discard)
 
 
 def _project_cache_key(project_id: str) -> str:
@@ -4587,14 +4593,14 @@ async def _organization_max_budget_check(
             organization_id=org_id,
             event_group=Litellm_EntityType.ORGANIZATION,
         )
-        _background_task = asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="organization_budget",
-                user_info=call_info,
+        _hold_background_task(
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="organization_budget",
+                    user_info=call_info,
+                )
             )
         )
-        _background_tasks.add(_background_task)
-        _background_task.add_done_callback(_background_tasks.discard)
 
         raise litellm.BudgetExceededError(
             current_cost=org_spend,
