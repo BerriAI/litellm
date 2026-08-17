@@ -758,12 +758,6 @@ async def test_create__model_encoded_beats_loadbalancing(harness):
     harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
 
 
-# =========================================================================== #
-# Missing required body params - 400 naming the field, never a 500 TypeError
-# from acreate_batch() (https://github.com/BerriAI/litellm/issues/37146).
-# =========================================================================== #
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body, missing_param",
