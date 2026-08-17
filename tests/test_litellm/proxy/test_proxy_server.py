@@ -11064,3 +11064,62 @@ async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
 
     assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is None
     assert len(scheduler.get_jobs()) > 0
+
+
+CONFIG_WITH_NON_ASCII = """model_list:
+  - model_name: café-gpt
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-test
+"""
+
+
+def test_load_yaml_file_reads_non_ascii_config(tmp_path):
+    """A UTF-8 config decoded with the locale encoding silently yields cafÃ©-gpt on a cp1252 host,
+    so the wrong model name reaches routing with no error raised."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(CONFIG_WITH_NON_ASCII, encoding="utf-8")
+
+    config = ProxyConfig()._load_yaml_file(str(config_path))
+
+    assert config["model_list"][0]["model_name"] == "café-gpt"
+
+
+def test_load_yaml_file_reads_config_with_byte_undefined_in_cp1252(tmp_path):
+    """Cafe plus U+0301 encodes to a 0x81 byte, which cp1252 has no mapping for, so this raised
+    UnicodeDecodeError rather than merely mangling the name."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("model_list:\n  - model_name: Café\n", encoding="utf-8")
+
+    config = ProxyConfig()._load_yaml_file(str(config_path))
+
+    assert config["model_list"][0]["model_name"] == "Café"
+
+
+def test_load_yaml_file_specifies_an_encoding(tmp_path):
+    """Asserting the decoded value passes on any UTF-8 host regardless of the fix, and CI is Linux.
+    Running the loader under warn_default_encoding fails on every platform instead."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(CONFIG_WITH_NON_ASCII, encoding="utf-8")
+
+    body = (
+        "import warnings\n"
+        "from litellm.proxy.proxy_server import ProxyConfig\n"
+        'warnings.simplefilter("error", EncodingWarning)\n'
+        f'config = ProxyConfig()._load_yaml_file(r"{config_path}")\n'
+        'assert config["model_list"][0]["model_name"] == "caf\u00e9-gpt", config\n'
+        'print("OK")\n'
+    )
+    proc = subprocess.run(
+        [sys.executable, "-X", "warn_default_encoding", "-W", "error::EncodingWarning", "-c", body],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert "EncodingWarning" not in proc.stderr, proc.stderr
+    assert proc.returncode == 0, proc.stderr

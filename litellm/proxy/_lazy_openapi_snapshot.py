@@ -46,7 +46,7 @@ def load_snapshot() -> dict[str, dict] | None:
     if not SNAPSHOT_FILE.exists():
         return None
     try:
-        with SNAPSHOT_FILE.open() as f:
+        with SNAPSHOT_FILE.open(encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return None

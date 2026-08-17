@@ -28,7 +28,7 @@ from litellm.proxy.container_endpoints.ownership import (
 def _load_endpoints_config() -> dict:
     """Load the endpoints configuration from JSON file."""
     config_path: Final = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         return json.load(f)
 
 
