@@ -955,8 +955,8 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
-      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
     });
+    expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
     expect(mockTestConnectionRequest).not.toHaveBeenCalled();
   });
 
@@ -988,8 +988,8 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
-      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
     });
+    expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
   });
 
   it("does not duplicate the default model as a test target when it is already covered by a configured tier", async () => {
@@ -1128,7 +1128,7 @@ describe("ModelInfoView", () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
     const logo = await screen.findByAltText("openai logo");
-    expect(logo.getAttribute("src")).toContain("openai_small");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("openai_small"));
   });
 
   it("renders a letter avatar instead of an img for an unknown provider slug", async () => {

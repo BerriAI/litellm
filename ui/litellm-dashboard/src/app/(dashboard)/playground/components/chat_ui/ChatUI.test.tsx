@@ -148,10 +148,10 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
       expect(screen.getAllByText("NoModeModel").length).toBeGreaterThan(0);
-      expect(screen.queryByText("SpeechModel")).toBeNull();
-      expect(screen.queryByText("ImageModel")).toBeNull();
-      expect(screen.queryByText("ResponsesModel")).toBeNull();
-      expect(screen.queryByText("RealtimeModel")).toBeNull();
+      expect(screen.queryByText("SpeechModel")).not.toBeInTheDocument();
+      expect(screen.queryByText("ImageModel")).not.toBeInTheDocument();
+      expect(screen.queryByText("ResponsesModel")).not.toBeInTheDocument();
+      expect(screen.queryByText("RealtimeModel")).not.toBeInTheDocument();
     });
   });
 
@@ -182,7 +182,7 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(screen.getAllByText("RealtimeModel").length).toBeGreaterThan(0);
       expect(screen.getAllByText("NoModeModel").length).toBeGreaterThan(0);
-      expect(screen.queryByText("ChatModel")).toBeNull();
+      expect(screen.queryByText("ChatModel")).not.toBeInTheDocument();
     });
   });
 
@@ -234,7 +234,7 @@ describe("ChatUI", () => {
     await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
 
     await waitFor(() => {
-      expect(mcpInput()).not.toBeDisabled();
+      expect(mcpInput()).toBeEnabled();
     });
   });
 
@@ -432,7 +432,7 @@ describe("ChatUI", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("Fill")).toBeNull();
+      expect(screen.queryByText("Fill")).not.toBeInTheDocument();
     });
 
     const customProxyInput = screen.getByPlaceholderText(
@@ -461,7 +461,7 @@ describe("ChatUI", () => {
 
     const mcpInput = screen.getByLabelText("Select MCP servers");
     expect(mcpInput).toBeInTheDocument();
-    expect(mcpInput).not.toBeDisabled();
+    expect(mcpInput).toBeEnabled();
 
     await user.click(mcpInput);
 
@@ -521,7 +521,7 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
     });
-    expect(screen.queryByText("SpeechModel")).toBeNull();
+    expect(screen.queryByText("SpeechModel")).not.toBeInTheDocument();
   });
 
   it("should attach an audio file dropped on the transcription upload area", async () => {
@@ -611,7 +611,7 @@ describe("ChatUI", () => {
     await user.clear(keyField);
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText("Select a Model")).not.toBeDisabled();
+      expect(screen.getByPlaceholderText("Select a Model")).toBeEnabled();
     });
   });
 });

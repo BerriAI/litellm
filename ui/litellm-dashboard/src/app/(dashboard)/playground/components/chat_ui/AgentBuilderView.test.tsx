@@ -132,7 +132,7 @@ describe("AgentBuilderView", () => {
 
     expect(screen.getByRole("button", { name: "research-agent litellm_agent" })).toBeInTheDocument();
     expect(screen.getByText("Agent Builder")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByDisplayValue("support-agent")).toBeInTheDocument());
+    expect(await screen.findByDisplayValue("support-agent")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Be helpful.")).toBeInTheDocument();
     expect(screen.getByDisplayValue("0.3")).toBeInTheDocument();
   });
@@ -144,7 +144,7 @@ describe("AgentBuilderView", () => {
 
     await user.click(screen.getByRole("button", { name: "research-agent litellm_agent" }));
 
-    await waitFor(() => expect(screen.getByDisplayValue("research-agent")).toBeInTheDocument());
+    expect(await screen.findByDisplayValue("research-agent")).toBeInTheDocument();
   });
 
   it("offers a blank draft and a save control for a new agent", async () => {
