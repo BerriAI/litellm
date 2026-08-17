@@ -213,6 +213,14 @@ class LangfuseOtelLogger(OpenTelemetry):
                     safe_dumps(output_items_data),
                 )
 
+        rerank_results: Final = response_obj.get("results")
+        if rerank_results:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                safe_dumps(rerank_results),
+            )
+
     @staticmethod
     def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
         """
