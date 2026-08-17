@@ -60,6 +60,10 @@ const savedConfig = () => {
   return payload?.litellm_params?.complexity_router_config;
 };
 
+const selectedValueIn = (combobox: HTMLElement): string | null =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd keeps the rendered selection in a sibling of the combobox, reachable only through these classes; the tier selects show the same models, so an unscoped title query is ambiguous
+  combobox.closest(".ant-select")?.querySelector(".ant-select-selection-item")?.getAttribute("title") ?? null;
+
 describe("EditAutoRouterModal keyword matching", () => {
   beforeEach(() => {
     modelPatchUpdateCall.mockClear();
@@ -547,5 +551,197 @@ describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().classifier_llm_config).not.toHaveProperty("system_prompt");
+  });
+});
+
+describe("EditAutoRouterModal default model", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const savedDefaultModel = () => {
+    const [, payload] = modelPatchUpdateCall.mock.calls.at(-1) ?? [];
+    return payload?.litellm_params?.complexity_router_default_model;
+  };
+
+  const renderWithStoredPin = (default_model?: string) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_CONFIG, ...(default_model && { default_model }) },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // No config blob marker — only litellm_params.complexity_router_default_model, as an untouched
+  // router looked before this PR's marker existed, or one an external API call wrote directly to.
+  const renderWithLitellmParamsDefaultOnly = (complexityRouterDefaultModel: string) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: STORED_CONFIG,
+            complexity_router_default_model: complexityRouterDefaultModel,
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  it("preserves a stored pin through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredPin("out-of-band-default");
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedDefaultModel()).toBe("out-of-band-default");
+    expect(savedConfig()).toMatchObject({ default_model: "out-of-band-default" });
+  });
+
+  it("shows a stored pin as the selection, so the saved value is not a hidden one", async () => {
+    renderWithStoredPin("out-of-band-default");
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(selectedValueIn(select)).toBe("out-of-band-default");
+  });
+
+  // The pin is recorded in the config rather than inferred by comparing the stored default to a
+  // re-derivation, so pinning the model the tiers already imply still reads back as a pin.
+  it("keeps a pin that matches what the tiers derive", async () => {
+    const user = userEvent.setup();
+    renderWithStoredPin(STORED_CONFIG.tiers.MEDIUM[0]);
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(selectedValueIn(select)).toBe(STORED_CONFIG.tiers.MEDIUM[0]);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ default_model: STORED_CONFIG.tiers.MEDIUM[0] });
+  });
+
+  // Greptile P1 on #36615: with no config blob marker, a litellm_params default that merely
+  // matches what the tiers derive is indistinguishable from the pre-PR auto-derive-and-write
+  // behavior (main always wrote a tier-derived value there on every save). Treating it as a pin
+  // would freeze every pre-existing router's default away from its tiers, so it stays unpinned.
+  it("treats a litellm_params default matching tier-derivation as unpinned, not a frozen-in pin", async () => {
+    const user = userEvent.setup();
+    renderWithLitellmParamsDefaultOnly(STORED_CONFIG.tiers.MEDIUM[0]);
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(selectedValueIn(select)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("default_model");
+    expect(savedDefaultModel()).toBe(STORED_CONFIG.tiers.MEDIUM[0]);
+  });
+
+  // Greptile P1 on #36615: a litellm_params default that diverges from tier-derivation could only
+  // have gotten there via an explicit override — set by the API directly, since this UI's own
+  // save path keeps it in sync with tiers whenever there's no pin. That divergence must survive
+  // the next save instead of being silently recomputed away.
+  it("treats a diverging litellm_params default as an external pin and preserves it", async () => {
+    const user = userEvent.setup();
+    renderWithLitellmParamsDefaultOnly("claude-sonnet-4");
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(selectedValueIn(select)).toBe("claude-sonnet-4");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ default_model: "claude-sonnet-4" });
+    expect(savedDefaultModel()).toBe("claude-sonnet-4");
+  });
+
+  // The config blob marker is this UI's own authoritative record of intent (see
+  // hydratePinnedDefaultModel), so it wins even over a litellm_params value that disagrees —
+  // e.g. a stale value from before the operator most recently changed the pin.
+  it("prefers the config blob marker over a diverging litellm_params value", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_CONFIG, default_model: "blob-pin" },
+            complexity_router_default_model: "stale-litellm-params-value",
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(selectedValueIn(select)).toBe("blob-pin");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ default_model: "blob-pin" });
+  });
+
+  // This modal only requires one non-empty tier, so a COMPLEX-only router is reachable here even
+  // though the backend raises on it. The block keeps that failure at save time instead of init.
+  it("blocks a save when neither the tiers nor a pin give the backend a default", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: {
+              ...STORED_CONFIG,
+              tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: ["complex-model"], REASONING: [] },
+            },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringContaining("Simple or Medium tier")),
+    );
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("leaves a router with no stored pin tracking its tiers", async () => {
+    const user = userEvent.setup();
+    renderWithStoredPin();
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(selectedValueIn(select)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedDefaultModel()).toBe(STORED_CONFIG.tiers.MEDIUM[0]);
+    expect(savedConfig()).not.toHaveProperty("default_model");
   });
 });

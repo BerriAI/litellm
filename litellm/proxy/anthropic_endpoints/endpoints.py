@@ -193,6 +193,9 @@ async def anthropic_response(
         )
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.anthropic_response(): Exception occured - %s", e)
 
+        if isinstance(e, ProxyException):
+            raise
+
         # Extract model_id from request metadata (same as success path)
         litellm_metadata: Final = data.get("litellm_metadata", {}) or {}
         model_info: Final = litellm_metadata.get("model_info", {}) or {}
