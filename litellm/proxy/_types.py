@@ -2324,6 +2324,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_google_kms: bool | None = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: bool | None = Field(None, description="load keys from azure key vault")
     master_key: str | None = Field(None, description="require a key for all calls to proxy")
+    user_api_key_cache_max_size: int | None = Field(
+        None,
+        description=(
+            "max entries in the in-memory tier of user_api_key_cache. Shared across key, "
+            "team, user and org objects; defaults to InMemoryCache's 200, so proxies with "
+            "more active virtual keys than that evict on every insert and fall through to "
+            "Redis (or the DB) on each request"
+        ),
+    )
     coordination_redis: CoordinationRedisParams | None = Field(
         None,
         description=(
