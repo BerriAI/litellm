@@ -176,10 +176,30 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
             description={
               <div>
                 <p>
-                  Your Valkey instance must have the valkey-search module loaded, with an FT index already created over
-                  HASH documents that includes a vector field whose name matches the Vector Field Name setting below
-                  (defaults to &quot;embedding&quot;). LiteLLM embeds your query with the embedding model below and runs
-                  a KNN search against that index.
+                  LiteLLM searches documents you have already stored in Valkey. It does not create the index or upload
+                  documents for you. Before creating this vector store, make sure:
+                </p>
+                <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
+                  <li>
+                    Your Valkey server has vector search enabled (the valkey-search module, included in the
+                    valkey-bundle image and in AWS ElastiCache / MemoryDB for Valkey)
+                  </li>
+                  <li>
+                    You have already created a search index and loaded your documents and their embeddings into it.
+                    Enter that index name as the Vector Store ID
+                  </li>
+                  <li>
+                    You know which embedding model created those stored embeddings. Pick the same model below, or
+                    searches will return wrong results
+                  </li>
+                  <li>
+                    You know the field names your documents use for their text and their embedding. If they are not
+                    &quot;text&quot; and &quot;embedding&quot;, set them below
+                  </li>
+                </ol>
+                <p style={{ marginTop: "8px" }}>
+                  When a query comes in, LiteLLM converts it to an embedding with the model below and returns the
+                  closest matching documents from your index.
                 </p>
               </div>
             }
