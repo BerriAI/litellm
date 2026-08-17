@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { toast as sonner } from "sonner";
-import { ApiError, deriveErrorMessage, extractProxyErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
+import { ApiError, deriveErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
 
 export type ToastKind = "success" | "info" | "warning" | "error";
 
@@ -74,17 +74,27 @@ const proxyTypeOf = (payload: unknown): string | undefined => {
   return typeof type === "string" ? type : undefined;
 };
 
+const EMBEDDED_JSON = /\{[\s\S]*\}/;
+
+const describeText = (text: string): ErrorFacts => {
+  const embedded = text.match(EMBEDDED_JSON)?.[0];
+  const parsed = embedded === undefined ? undefined : parseJson(embedded);
+  if (embedded === undefined || asRecord(parsed) === undefined) {
+    return { status: undefined, proxyType: undefined, text: unwrapProxyErrorMessage(text) };
+  }
+  return {
+    status: toStatus(proxyEnvelope(parsed)?.code),
+    proxyType: proxyTypeOf(parsed),
+    text: text.replace(embedded, unwrapProxyErrorMessage(deriveErrorMessage(parsed))).trim(),
+  };
+};
+
 const describeError = (input: unknown): ErrorFacts => {
   if (input instanceof ApiError) {
     return { status: input.status, proxyType: proxyTypeOf(input.body), text: unwrapProxyErrorMessage(input.message) };
   }
   if (input instanceof Error || typeof input === "string") {
-    const parsed = parseJson(input instanceof Error ? input.message : input);
-    return {
-      status: toStatus(proxyEnvelope(parsed)?.code),
-      proxyType: proxyTypeOf(parsed),
-      text: extractProxyErrorMessage(input),
-    };
+    return describeText(input instanceof Error ? input.message : input);
   }
   const record = asRecord(input) ?? {};
   const response = asRecord(record.response);

@@ -90,6 +90,25 @@ describe("toast", () => {
       );
       expect(sonner.error).toHaveBeenCalledWith("Not Found", { description: "Team not found", duration: 6000 });
     });
+
+    it("reads type and code from a JSON envelope embedded after a caller's prefix, keeping the prefix", () => {
+      const envelope = JSON.stringify({
+        error: { message: "Key with alias 'k' already exists.", type: "bad_request_error", code: "400" },
+      });
+      toast.fromError(`Error creating the key: Error: ${envelope}`);
+      expect(sonner.error).toHaveBeenCalledWith("Request Error", {
+        description: "Error creating the key: Error: Key with alias 'k' already exists.",
+        duration: 6000,
+      });
+    });
+
+    it("leaves a string alone when its braces are not a JSON envelope", () => {
+      toast.fromError("Template {name} is invalid");
+      expect(sonner.error).toHaveBeenCalledWith("Error", {
+        description: "Template {name} is invalid",
+        duration: 6000,
+      });
+    });
   });
 
   describe("fromError title from the HTTP status", () => {
