@@ -8,6 +8,7 @@ const CONFIGURED_SETTINGS = {
   budget_duration: "30d",
   tpm_limit: 1000,
   rpm_limit: 50,
+  organization_id: "org-1",
   models: ["gpt-5.2"],
   team_member_permissions: ["/key/generate", "/key/update"],
 };
@@ -17,6 +18,7 @@ const UNCONFIGURED_SETTINGS = {
   budget_duration: null,
   tpm_limit: null,
   rpm_limit: null,
+  organization_id: null,
   models: null,
   team_member_permissions: null,
 };
@@ -26,6 +28,7 @@ const CONFIGURED_FORM = {
   budget_duration: "30d",
   tpm_limit: "1000",
   rpm_limit: "50",
+  organization_id: "org-1",
   models: ["gpt-5.2"],
   team_member_permissions: ["/key/generate", "/key/update"],
 };
@@ -35,6 +38,7 @@ const UNCONFIGURED_FORM = {
   budget_duration: "",
   tpm_limit: "",
   rpm_limit: "",
+  organization_id: "",
   models: [],
   team_member_permissions: [],
 };
@@ -62,7 +66,13 @@ describe("settingsToForm", () => {
 
   it("degrades unrecognisable value types to empty widget state instead of throwing", () => {
     expect(
-      settingsToForm({ max_budget: "lots", tpm_limit: [], models: "gpt-5.2", team_member_permissions: 7 }),
+      settingsToForm({
+        max_budget: "lots",
+        tpm_limit: [],
+        organization_id: 12,
+        models: "gpt-5.2",
+        team_member_permissions: 7,
+      }),
     ).toStrictEqual(UNCONFIGURED_FORM);
   });
 });
@@ -72,6 +82,7 @@ const formValues = (overrides: Partial<DefaultTeamSettingsFormValues> = {}): Def
   budget_duration: "30d",
   tpm_limit: "1000",
   rpm_limit: "50",
+  organization_id: "org-1",
   models: ["gpt-5.2"],
   team_member_permissions: ["/key/generate"],
   ...overrides,
@@ -82,6 +93,7 @@ const SAVED_BODY = {
   budget_duration: "30d",
   tpm_limit: 1000,
   rpm_limit: 50,
+  organization_id: "org-1",
   models: ["gpt-5.2"],
   team_member_permissions: ["/key/generate"],
 };
@@ -99,6 +111,7 @@ describe("buildBody", () => {
           budget_duration: "",
           tpm_limit: "",
           rpm_limit: "",
+          organization_id: "",
           models: [],
           team_member_permissions: [],
         }),
@@ -108,6 +121,7 @@ describe("buildBody", () => {
       budget_duration: null,
       tpm_limit: null,
       rpm_limit: null,
+      organization_id: null,
       models: [],
       team_member_permissions: null,
     });

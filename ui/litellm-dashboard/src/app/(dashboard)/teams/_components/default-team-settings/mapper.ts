@@ -13,6 +13,7 @@ const serverValuesShape = {
   budget_duration: z.string().nullish().catch(null),
   tpm_limit: z.number().nullish().catch(null),
   rpm_limit: z.number().nullish().catch(null),
+  organization_id: z.string().nullish().catch(null),
   models: z.array(z.string()).nullish().catch(null),
   team_member_permissions: z.array(z.string()).nullish().catch(null),
 };
@@ -27,6 +28,7 @@ export const settingsToForm = (values: DefaultTeamSettings["values"]): DefaultTe
     budget_duration: parsed.budget_duration ?? "",
     tpm_limit: parsed.tpm_limit?.toString() ?? "",
     rpm_limit: parsed.rpm_limit?.toString() ?? "",
+    organization_id: parsed.organization_id ?? "",
     models: parsed.models ?? [],
     team_member_permissions: (parsed.team_member_permissions ?? []).filter(isSelectablePermission),
   };
@@ -43,6 +45,7 @@ export const buildBody = (values: DefaultTeamSettingsFormValues): DefaultTeamPar
   budget_duration: textOrNull(values.budget_duration),
   tpm_limit: numberOrNull(values.tpm_limit),
   rpm_limit: numberOrNull(values.rpm_limit),
+  organization_id: textOrNull(values.organization_id),
   models: [...values.models],
   team_member_permissions: listOrNull(values.team_member_permissions),
 });

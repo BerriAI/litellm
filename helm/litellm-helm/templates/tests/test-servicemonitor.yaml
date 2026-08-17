@@ -10,7 +10,7 @@ metadata:
 spec:
   containers:
     - name: test
-      image: bitnami/kubectl:latest
+      image: docker.io/bitnamilegacy/kubectl:1.29.2-debian-12-r3
       command: ['sh', '-c']
       args:
         - |

@@ -28,6 +28,7 @@ export const defaultTeamSettingsSchema = z.object({
   budget_duration: z.string(),
   tpm_limit: wholeNumberOrEmpty,
   rpm_limit: wholeNumberOrEmpty,
+  organization_id: z.string(),
   models: z.array(z.string()),
   team_member_permissions: z.array(selectablePermission),
 });

@@ -4,8 +4,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { type Control } from "react-hook-form";
 
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import OrganizationDropdown from "@/components/common_components/OrganizationDropdown";
 import { ModelSelect, MODEL_SENTINEL_OPTIONS } from "@/components/ModelSelect/ModelSelect";
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import type { Organization } from "@/components/networking";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { BUDGET_DURATION_OPTIONS, NO_RESET } from "@/components/shared/form/budgetDuration";
@@ -104,6 +107,11 @@ const PermissionsField = ({ control }: { control: SettingsControl }) => (
   </FormField>
 );
 
+const organizationLabel = (organizationId: string, organizations: readonly Organization[] | undefined): string => {
+  const match = organizations?.find((organization) => organization.organization_id === organizationId);
+  return match?.organization_alias ? `${match.organization_alias} (${organizationId})` : organizationId;
+};
+
 const ViewRow = ({ label, children }: { label: string; children: React.ReactNode }) => (
   <div>
     <p className="text-sm font-medium">{label}</p>
@@ -111,7 +119,13 @@ const ViewRow = ({ label, children }: { label: string; children: React.ReactNode
   </div>
 );
 
-const SettingsView = ({ values }: { values: DefaultTeamSettingsFormValues }) => {
+const SettingsView = ({
+  values,
+  organizations,
+}: {
+  values: DefaultTeamSettingsFormValues;
+  organizations: readonly Organization[] | undefined;
+}) => {
   const durationValue = values.budget_duration === "" ? NO_RESET : values.budget_duration;
   const durationLabel =
     BUDGET_DURATION_OPTIONS.find((option) => option.value === durationValue)?.label ?? values.budget_duration;
@@ -122,6 +136,9 @@ const SettingsView = ({ values }: { values: DefaultTeamSettingsFormValues }) => 
       <ViewRow label="Reset Budget">{durationLabel}</ViewRow>
       <ViewRow label="TPM Limit">{values.tpm_limit === "" ? "Not set" : values.tpm_limit}</ViewRow>
       <ViewRow label="RPM Limit">{values.rpm_limit === "" ? "Not set" : values.rpm_limit}</ViewRow>
+      <ViewRow label="Default Organization">
+        {values.organization_id === "" ? "Not set" : organizationLabel(values.organization_id, organizations)}
+      </ViewRow>
       <ViewRow label="Default Models">
         {values.models.length === 0
           ? "Not set"
@@ -136,12 +153,21 @@ const SettingsView = ({ values }: { values: DefaultTeamSettingsFormValues }) => 
 
 interface SettingsFormProps {
   initialValues: DefaultTeamSettingsFormValues;
+  organizations: readonly Organization[] | undefined;
+  organizationsLoading: boolean;
   updateSettings: (body: DefaultTeamParams) => Promise<void>;
   onCancel: () => void;
   onSaved: () => void;
 }
 
-const SettingsForm = ({ initialValues, updateSettings, onCancel, onSaved }: SettingsFormProps) => {
+const SettingsForm = ({
+  initialValues,
+  organizations,
+  organizationsLoading,
+  updateSettings,
+  onCancel,
+  onSaved,
+}: SettingsFormProps) => {
   const queryClient = useQueryClient();
   const form = useZodForm(defaultTeamSettingsSchema, { defaultValues: initialValues });
   const { isDirty } = form.formState;
@@ -225,6 +251,24 @@ const SettingsForm = ({ initialValues, updateSettings, onCancel, onSaved }: Sett
 
         <FormField
           control={form.control}
+          name="organization_id"
+          label="Default Organization"
+          description="Teams created without an explicit organization are assigned to this organization"
+        >
+          {({ id, value, onChange }) => (
+            <OrganizationDropdown
+              organizations={organizations === undefined ? undefined : [...organizations]}
+              loading={organizationsLoading}
+              value={value === "" ? undefined : value}
+              onChange={onChange}
+              placeholder="Select an organization"
+              id={id}
+            />
+          )}
+        </FormField>
+
+        <FormField
+          control={form.control}
           name="models"
           label="Default Models"
           description="Models new teams can access"
@@ -286,6 +330,7 @@ export const DefaultTeamSettingsForm = ({
 }: DefaultTeamSettingsFormProps) => {
   const [isEditing, setIsEditing] = React.useState(false);
   const { data, isPending, isError } = useQuery({ queryKey: SETTINGS_QUERY_KEY, queryFn: fetchSettings });
+  const { data: organizations, isLoading: organizationsLoading } = useOrganizations();
 
   const initialValues = React.useMemo(() => (data === undefined ? undefined : settingsToForm(data.values)), [data]);
 
@@ -318,12 +363,14 @@ export const DefaultTeamSettingsForm = ({
       {isEditing ? (
         <SettingsForm
           initialValues={initialValues}
+          organizations={organizations}
+          organizationsLoading={organizationsLoading}
           updateSettings={updateSettings}
           onCancel={() => setIsEditing(false)}
           onSaved={() => setIsEditing(false)}
         />
       ) : (
-        <SettingsView values={initialValues} />
+        <SettingsView values={initialValues} organizations={organizations} />
       )}
     </SettingsCard>
   );

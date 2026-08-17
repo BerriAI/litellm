@@ -7,6 +7,7 @@ const values = (overrides: Partial<DefaultTeamSettingsFormValues> = {}): Default
   budget_duration: "",
   tpm_limit: "",
   rpm_limit: "",
+  organization_id: "",
   models: [],
   team_member_permissions: [],
   ...overrides,

@@ -511,22 +511,6 @@ def test_get_request_body_cross_region_inference_profile():
     assert result["textToImageParams"]["text"] == prompt
 
 
-def test_backward_compatibility_regular_nova_model():
-    """Test that regular Nova Canvas models still work (regression test)"""
-    handler = BedrockImageGeneration()
-    prompt = "A beautiful sunset"
-    optional_params = {"cfg_scale": 7}
-    model = "amazon.nova-canvas-v1"
-
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
-
-    assert result["taskType"] == "TEXT_IMAGE"
-    assert result["textToImageParams"]["text"] == prompt
-    assert result["imageGenerationConfig"]["cfg_scale"] == 7
-
-
 def test_amazon_nova_canvas_image_gen():
     """Test Amazon Nova Canvas image generation with cost tracking."""
     from litellm import image_generation

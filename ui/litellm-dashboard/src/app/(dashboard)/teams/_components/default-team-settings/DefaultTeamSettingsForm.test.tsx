@@ -4,6 +4,16 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => ({
+    data: [
+      { organization_id: "org-1", organization_alias: "Org One" },
+      { organization_id: "org-2", organization_alias: "Org Two" },
+    ],
+    isLoading: false,
+  }),
+}));
+
 vi.mock("@/components/ModelSelect/ModelSelect", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/ModelSelect/ModelSelect")>();
   return {
@@ -27,6 +37,7 @@ const SETTINGS: DefaultTeamSettings = {
     budget_duration: "30d",
     tpm_limit: 1000,
     rpm_limit: 50,
+    organization_id: "org-1",
     models: ["gpt-5.2"],
     team_member_permissions: ["/key/generate"],
   },
@@ -38,6 +49,7 @@ const SAVED_BODY = {
   budget_duration: "30d",
   tpm_limit: 1000,
   rpm_limit: 50,
+  organization_id: "org-1",
   models: ["gpt-5.2"],
   team_member_permissions: ["/key/generate"],
 };
@@ -77,6 +89,7 @@ describe("DefaultTeamSettingsForm", () => {
     expect(screen.getByText("monthly")).toBeInTheDocument();
     expect(screen.getByText("1000")).toBeInTheDocument();
     expect(screen.getByText("50")).toBeInTheDocument();
+    expect(screen.getByText("Org One (org-1)")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.2")).toBeInTheDocument();
     expect(screen.getByText("/key/generate")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
@@ -171,6 +184,19 @@ describe("DefaultTeamSettingsForm", () => {
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, models: ["all-proxy-models"] });
+  });
+
+  it("saves a newly selected default organization", async () => {
+    const user = userEvent.setup();
+    const { updateSettings } = renderForm();
+
+    await enterEditMode(user);
+    await user.click(await screen.findByLabelText("Default Organization"));
+    await user.click(await screen.findByText("Org Two"));
+    await user.click(await saveButton());
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, organization_id: "org-2" });
   });
 
   it("saves a newly granted permission", async () => {
