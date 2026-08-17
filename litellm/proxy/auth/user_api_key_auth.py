@@ -556,20 +556,19 @@ async def get_global_proxy_spend(
             user_api_key_cache=user_api_key_cache,
             prisma_client=prisma_client,
         )
-        if global_proxy_spend is not None:
-            user_info: Final = CallInfo(
-                user_id=litellm_proxy_admin_name,
-                max_budget=litellm.max_budget,
-                spend=global_proxy_spend,
-                token=token,
-                event_group=Litellm_EntityType.PROXY,
+        user_info: Final = CallInfo(
+            user_id=litellm_proxy_admin_name,
+            max_budget=litellm.max_budget,
+            spend=global_proxy_spend,
+            token=token,
+            event_group=Litellm_EntityType.PROXY,
+        )
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="proxy_budget",
+                user_info=user_info,
             )
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="proxy_budget",
-                    user_info=user_info,
-                )
-            )
+        )
     return global_proxy_spend
 
 
@@ -2068,21 +2067,20 @@ async def _user_api_key_auth_builder(
                         prisma_client=prisma_client,
                     )
 
-                if global_proxy_spend is not None:
-                    call_info: Final = CallInfo(
-                        token=valid_token.token,
-                        spend=global_proxy_spend,
-                        max_budget=litellm.max_budget,
-                        user_id=litellm_proxy_admin_name,
-                        team_id=valid_token.team_id,
-                        event_group=Litellm_EntityType.PROXY,
+                call_info: Final = CallInfo(
+                    token=valid_token.token,
+                    spend=global_proxy_spend,
+                    max_budget=litellm.max_budget,
+                    user_id=litellm_proxy_admin_name,
+                    team_id=valid_token.team_id,
+                    event_group=Litellm_EntityType.PROXY,
+                )
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="proxy_budget",
+                        user_info=call_info,
                     )
-                    asyncio.create_task(
-                        proxy_logging_obj.budget_alerts(
-                            type="proxy_budget",
-                            user_info=call_info,
-                        )
-                    )
+                )
             # Token passed all checks
             if valid_token is None:
                 raise HTTPException(401, detail="Invalid API key")
