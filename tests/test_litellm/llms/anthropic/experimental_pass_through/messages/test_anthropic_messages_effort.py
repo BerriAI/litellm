@@ -98,7 +98,9 @@ def test_adaptive_effort_passes_through_untouched_for_4_6():
 def test_thinking_and_effort_dropped_for_non_reasoning_model():
     """A model with no reasoning support cannot take thinking or effort, so both are
     silently dropped (no drop_params required) so the request still succeeds."""
-    result = _transform("claude-3-5-haiku-latest", _claude_code_payload(effort="medium"))
+    result = _transform(
+        "claude-3-5-haiku-latest", _claude_code_payload(effort="medium")
+    )
 
     assert "thinking" not in result
     assert "output_config" not in result
@@ -154,8 +156,12 @@ def test_opus_4_5_unsupported_effort_level_translated_to_legacy_thinking():
     Claude Code defaults to xhigh on newer models, and forwarding that level raw
     would be rejected with "effort='xhigh' is not supported by this model". An
     unsupported level must fall through to the legacy translation (budget-based
-    thinking, effort stripped) instead of being preserved."""
-    result = _transform("claude-opus-4-5", _claude_code_payload(effort="xhigh", max_tokens=64000))
+    thinking, effort stripped) instead of being preserved. With passthrough-on-
+    unknown semantics, xhigh is not degraded (Opus 4.5 has supports_xhigh=None,
+    which is not explicitly False), so the xhigh budget is preserved."""
+    result = _transform(
+        "claude-opus-4-5", _claude_code_payload(effort="xhigh", max_tokens=64000)
+    )
 
     assert result["thinking"] == {
         "type": "enabled",
@@ -182,7 +188,9 @@ def test_budget_capped_below_max_tokens():
     """Adaptive thinking carries no budget, so the translated legacy budget must be
     capped below max_tokens (Anthropic requires max_tokens > budget_tokens). A
     high-effort budget (4096) with max_tokens=3000 must be capped to 2999."""
-    result = _transform("claude-haiku-4-5", _claude_code_payload(effort="high", max_tokens=3000))
+    result = _transform(
+        "claude-haiku-4-5", _claude_code_payload(effort="high", max_tokens=3000)
+    )
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 2999}
 
@@ -190,7 +198,9 @@ def test_budget_capped_below_max_tokens():
 def test_thinking_dropped_when_max_tokens_too_small_for_min_budget():
     """When max_tokens can't fit even the minimum thinking budget, thinking is
     silently dropped so the request still succeeds rather than being rejected."""
-    result = _transform("claude-haiku-4-5", _claude_code_payload(effort="medium", max_tokens=512))
+    result = _transform(
+        "claude-haiku-4-5", _claude_code_payload(effort="medium", max_tokens=512)
+    )
 
     assert "thinking" not in result
     assert "output_config" not in result

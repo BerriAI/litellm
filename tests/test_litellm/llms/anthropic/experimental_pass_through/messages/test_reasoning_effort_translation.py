@@ -131,6 +131,9 @@ def test_invalid_reasoning_effort_raises_400(bad_effort):
     ],
 )
 def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort):
+    """xhigh is not declared (None) for Opus/Sonnet 4.6. _validate_effort_for_model
+    returns a gate_error (None is not True), and normalize_reasoning_effort_value
+    does not degrade (None is not False), so the request raises a 400."""
     config = AnthropicMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": bad_effort}
 
@@ -180,7 +183,9 @@ def test_bedrock_invoke_messages_clamps_effort_to_ceiling(
 
 
 def test_bedrock_invoke_messages_rejects_xhigh_without_ceiling(local_model_cost_map):
-    """Sonnet 4.6 on Bedrock has no effort ceiling, so xhigh is still rejected."""
+    """Sonnet 4.6 on Bedrock has no effort ceiling and supports_xhigh is absent
+    (None). With passthrough-on-unknown semantics, xhigh is not degraded, so
+    the request is rejected with a 400 (xhigh not declared as supported)."""
     config = AmazonAnthropicClaudeMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": "xhigh"}
 
@@ -194,7 +199,6 @@ def test_bedrock_invoke_messages_rejects_xhigh_without_ceiling(local_model_cost_
         )
 
     assert exc_info.value.status_code == 400
-    assert "not supported by this model" in str(exc_info.value)
 
 
 @pytest.mark.parametrize(

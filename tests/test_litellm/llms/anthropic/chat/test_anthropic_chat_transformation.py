@@ -1699,7 +1699,9 @@ def test_effort_beta_header_injection():
     # Test with effort parameter
     optional_params = {"output_config": {"effort": "low"}}
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params, custom_llm_provider="anthropic")
+    effort_used = model_info.is_effort_used(
+        optional_params=optional_params, custom_llm_provider="anthropic"
+    )
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
@@ -1779,17 +1781,21 @@ def test_effort_validation_with_opus_46():
         assert result["output_config"]["effort"] == effort
 
 
-def test_max_effort_rejected_for_opus_45():
-    """Test that effort='max' is rejected when using Claude Opus 4.5."""
+def test_max_effort_raises_for_opus_45():
+    """Opus 4.5 has supports_max absent (None) in the cost map. With
+    passthrough-on-unknown semantics, normalize does not degrade (None is
+    not False), so _validate_effort_for_model's gate_error is raised as a
+    BadRequestError. The user must explicitly declare supports_max=True
+    or supports_max=False to control the behavior."""
     config = AnthropicConfig()
 
     messages = [{"role": "user", "content": "Test"}]
 
+    optional_params = {"output_config": {"effort": "max"}, "max_tokens": 8192}
     with pytest.raises(
         litellm.exceptions.BadRequestError,
         match="effort='max' is not supported by this model",
     ):
-        optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
             messages=messages,
@@ -2498,7 +2504,10 @@ def test_raw_adaptive_thinking_translates_to_legacy_for_pre_46_model():
     )
 
     assert result["thinking"]["type"] == "enabled"
-    assert result["thinking"]["budget_tokens"] == DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+    assert (
+        result["thinking"]["budget_tokens"]
+        == DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+    )
 
 
 def test_raw_adaptive_thinking_budget_capped_below_max_tokens():
@@ -2995,6 +3004,9 @@ def test_reasoning_effort_garbage_raises_bad_request(effort):
 @pytest.mark.parametrize(
     "effort,expected_budget",
     [
+        # Sonnet 4.5 has no supports_xhigh/supports_max in cost map (None),
+        # so with passthrough-on-unknown semantics, xhigh and max pass through
+        # unchanged (8192 / 16384) rather than being degraded.
         ("xhigh", DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET),
         ("max", DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET),
     ],
@@ -3002,7 +3014,8 @@ def test_reasoning_effort_garbage_raises_bad_request(effort):
 def test_reasoning_effort_xhigh_max_maps_to_budget_on_budget_model(
     effort, expected_budget
 ):
-    """``xhigh`` / ``max`` extend the budget_tokens progression on budget-mode models."""
+    """``xhigh`` / ``max`` pass through unchanged on budget-mode models whose
+    supports_xhigh/supports_max flags are absent (None) — passthrough-on-unknown."""
     config = AnthropicConfig()
 
     result = config.map_openai_params(

@@ -213,15 +213,20 @@ class TestNormalizeReasoningEffortValue:
     # --- exception fallback ---
 
     def test_exception_fallback_uses_empty_model_info(self):
-        """When get_model_info raises, treat model_info as {} (no capabilities)."""
+        """When get_model_info raises, treat model_info as None (no capabilities).
+        With passthrough-on-unknown semantics, absent flags mean the effort
+        is passed through unchanged rather than degraded."""
         with patch(
             "litellm.utils.get_model_info",
             side_effect=Exception("model not found"),
         ):
-            # "max" with no capabilities -> "high"
-            assert normalize_reasoning_effort_value("max", model="unknown") == "high"
-            # "minimal" with no capabilities -> "low"
-            assert normalize_reasoning_effort_value("minimal", model="unknown") == "low"
+            # "max" with no capability info -> "max" (passthrough, not degraded)
+            assert normalize_reasoning_effort_value("max", model="unknown") == "max"
+            # "minimal" with no capability info -> "minimal" (passthrough, not degraded)
+            assert (
+                normalize_reasoning_effort_value("minimal", model="unknown")
+                == "minimal"
+            )
 
 
 # ---------------------------------------------------------------------------
