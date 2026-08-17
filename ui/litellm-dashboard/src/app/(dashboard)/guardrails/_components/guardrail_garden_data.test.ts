@@ -12,6 +12,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   panw: "palo_alto_networks.jpeg",
   cisco_ai_defense: "cisco.png",
   noma: "noma_security.png",
+  neuraltrust: "neuraltrust.svg",
   aporia: "aporia.png",
   aim: "aim_security.jpeg",
   cato_networks: "cato_networks.svg",
@@ -50,5 +51,11 @@ describe("guardrail_garden_data logos", () => {
       expect(card.logo, `card ${card.id}`).not.toBe("");
       expect(card.logo, `card ${card.id}`).not.toContain("/ui/assets/logos/");
     }
+  });
+
+  it("does not publish unsourced NeuralTrust eval numbers", () => {
+    const card = PARTNER_GUARDRAIL_CARDS.find((c) => c.id === "neuraltrust");
+    expect(card).toBeDefined();
+    expect(card?.eval).toBeUndefined();
   });
 });

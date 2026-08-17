@@ -13,6 +13,7 @@ import lakeraAiLogo from "../../../../../public/assets/logos/lakeraai.jpeg";
 import lassoLogo from "../../../../../public/assets/logos/lasso.png";
 import litellmLogo from "../../../../../public/assets/logos/litellm_logo.jpg";
 import microsoftAzureLogo from "../../../../../public/assets/logos/microsoft_azure.svg";
+import neuraltrustLogo from "../../../../../public/assets/logos/neuraltrust.svg";
 import nomaSecurityLogo from "../../../../../public/assets/logos/noma_security.png";
 import openaiSmallLogo from "../../../../../public/assets/logos/openai_small.svg";
 import paloAltoNetworksLogo from "../../../../../public/assets/logos/palo_alto_networks.jpeg";
@@ -172,6 +173,7 @@ export const guardrailLogoMap = {
   "Aporia AI": aporiaLogo.src,
   "PANW Prisma AIRS": paloAltoNetworksLogo.src,
   "Cisco AI Defense": ciscoLogo.src,
+  NeuralTrust: neuraltrustLogo.src,
   "Noma Security": nomaSecurityLogo.src,
   "Javelin Guardrails": javelinLogo.src,
   "Pillar Guardrail": pillarLogo.src,

@@ -195,6 +195,20 @@ describe("guardrail_info_helpers", () => {
       expect(result.logo).toContain("noma_security.png");
     });
 
+    it("should resolve NeuralTrust logo and display name", () => {
+      populateGuardrailProviders({
+        neuraltrust: { ui_friendly_name: "NeuralTrust" },
+      });
+      populateGuardrailProviderMap({
+        neuraltrust: { ui_friendly_name: "NeuralTrust" },
+      });
+
+      const result = getGuardrailLogoAndName("neuraltrust");
+
+      expect(result.displayName).toBe("NeuralTrust");
+      expect(result.logo).toContain("neuraltrust.svg");
+    });
+
     it("should resolve RepelloAI Argus logo and display name", () => {
       populateGuardrailProviders({
         repelloai: { ui_friendly_name: "RepelloAI Argus" },
