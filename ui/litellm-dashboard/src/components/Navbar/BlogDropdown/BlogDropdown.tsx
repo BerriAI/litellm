@@ -11,10 +11,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ChevronDown, LoaderCircle } from "lucide-react";
 import React from "react";
+import { useTranslation } from "react-i18next";
 
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string, locale: string): string {
   const date = new Date(dateStr + "T00:00:00");
-  return date.toLocaleDateString("en-US", {
+  return date.toLocaleDateString(locale, {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -22,6 +23,7 @@ function formatDate(dateStr: string): string {
 }
 
 export const BlogDropdown: React.FC = () => {
+  const { t, i18n } = useTranslation();
   const disableBlogPosts = useDisableBlogPosts();
 
   const { data, isLoading, isError, refetch } = useBlogPosts();
@@ -34,7 +36,7 @@ export const BlogDropdown: React.FC = () => {
     if (isLoading) {
       return (
         <div className="flex items-center px-2 py-1.5 text-sm">
-          <LoaderCircle role="img" aria-label="loading" className="size-4 animate-spin" />
+          <LoaderCircle role="img" aria-label={t("blog.loading")} className="size-4 animate-spin" />
         </div>
       );
     }
@@ -42,16 +44,16 @@ export const BlogDropdown: React.FC = () => {
     if (isError) {
       return (
         <div className="flex items-center gap-2 px-2 py-1.5 text-sm">
-          <span className="text-destructive">Failed to load posts</span>
+          <span className="text-destructive">{t("blog.loadFailed")}</span>
           <Button variant="outline" size="sm" onClick={() => refetch()}>
-            Retry
+            {t("blog.retry")}
           </Button>
         </div>
       );
     }
 
     if (!data || data.posts.length === 0) {
-      return <div className="px-2 py-1.5 text-sm text-muted-foreground">No posts available</div>;
+      return <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("blog.noPosts")}</div>;
     }
 
     return (
@@ -63,7 +65,7 @@ export const BlogDropdown: React.FC = () => {
                 {post.title}
               </h5>
               <span className="text-muted-foreground" style={{ fontSize: 11 }}>
-                {formatDate(post.date)}
+                {formatDate(post.date, i18n.language)}
               </span>
               <p className="line-clamp-2">{post.description}</p>
             </a>
@@ -72,7 +74,7 @@ export const BlogDropdown: React.FC = () => {
         <DropdownMenuSeparator />
         <DropdownMenuItem>
           <a href="https://docs.litellm.ai/blog" target="_blank" rel="noopener noreferrer">
-            View all posts
+            {t("blog.viewAll")}
           </a>
         </DropdownMenuItem>
       </>
@@ -87,7 +89,7 @@ export const BlogDropdown: React.FC = () => {
         closeDelay={100}
         render={<Button variant="ghost" className={`${NAV_PRODUCT_LINK_CLASS} border-0! bg-transparent!`} />}
       >
-        Blog
+        {t("blog.title")}
         <ChevronDown className="size-2.5 text-gray-500" aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" side="bottom" className="w-auto">

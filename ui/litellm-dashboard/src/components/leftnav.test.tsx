@@ -1,7 +1,8 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
+import i18n from "@/i18n/i18n";
 
 vi.mock("../utils/roles", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/roles")>();
@@ -94,9 +95,13 @@ describe("Sidebar (leftnav)", () => {
     collapsed: false,
   };
 
-  afterEach(() => {
+  afterEach(async () => {
+    cleanup();
     mockUseAuthorized.mockReset();
     mockUseOrganizations.mockReset();
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
   });
 
   it("should link the logo to the UI home route rather than the proxy origin", () => {
@@ -135,6 +140,16 @@ describe("Sidebar (leftnav)", () => {
     topLevelLabels.forEach((label) => {
       expect(screen.getByText(label)).toBeInTheDocument();
     });
+  });
+
+  it("renders translated navigation labels after switching to Simplified Chinese", async () => {
+    await i18n.changeLanguage("zh-CN");
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByText("虚拟密钥")).toBeInTheDocument();
+    expect(screen.getByText("模型与端点")).toBeInTheDocument();
+    expect(screen.getByText("日志")).toBeInTheDocument();
+    expect(screen.getByText("AI 网关")).toBeInTheDocument();
   });
 
   it("expands a nested tab to reveal its children (Tools > Search Tools)", async () => {

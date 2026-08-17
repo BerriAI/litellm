@@ -19,6 +19,8 @@ import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { useTranslation } from "react-i18next";
 
 interface DashboardHeaderProps {
   page: string;
@@ -27,7 +29,8 @@ interface DashboardHeaderProps {
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
 export function DashboardHeader({ page }: DashboardHeaderProps) {
-  const { title } = getBreadcrumb(page);
+  const { t } = useTranslation();
+  const { title } = getBreadcrumb(page, t);
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
   const hideCommunityLinks = useDisableShowPrompts();
@@ -68,10 +71,11 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
           render={<a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" />}
           className="text-muted-foreground"
         >
-          Docs
+          {t("common.docs")}
         </Button>
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
+        <LanguageSwitcher />
         <ToolbarSeparator />
         <NotificationsBell />
       </div>

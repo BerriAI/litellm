@@ -14,6 +14,7 @@ import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tool
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
@@ -146,6 +147,7 @@ export const fetchUserModels = async (
  * ─────────────────────────────────────────────────────────────────────────
  */
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
+  const { t } = useTranslation();
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const canViewPolicies = useCan("viewPolicies");
@@ -562,7 +564,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
 
       setApiKey(response["key"]);
-      NotificationsManager.success("Virtual Key Created");
+      NotificationsManager.success(t("virtualKeys.created"));
       form.resetFields();
       setBudgetLimits([]);
       setTagRateLimits([]);
@@ -684,7 +686,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     <div>
       {userRole && rolesWithWriteAccess.includes(userRole) && (
         <Button className="mx-auto" onClick={() => setIsModalVisible(true)} data-testid="create-key-button">
-          + Create New Key
+          + {t("virtualKeys.createNew")}
         </Button>
       )}
       <Modal open={isModalVisible} width={1000} footer={null} onOk={handleOk} onCancel={handleCancel}>
@@ -1700,7 +1702,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit" disabled={isFormDisabled} style={{ opacity: isFormDisabled ? 0.5 : 1 }}>
-              Create Key
+              {t("virtualKeys.create")}
             </Button2>
           </div>
         </Form>

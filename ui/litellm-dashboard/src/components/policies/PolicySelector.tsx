@@ -3,6 +3,7 @@ import useCan from "@/app/(dashboard)/hooks/useCan";
 import { Policy } from "./types";
 import { getPoliciesList } from "../networking";
 import { MultiSelect } from "@/components/shared/MultiSelect";
+import { useTranslation } from "react-i18next";
 
 /** Prefix for policy version IDs in request body; must match backend POLICY_VERSION_ID_PREFIX. */
 export const POLICY_VERSION_ID_PREFIX = "policy_";
@@ -52,6 +53,7 @@ const PolicySelector: React.FC<PolicySelectorProps> = ({
   disabled,
   onPoliciesLoaded,
 }) => {
+  const { t } = useTranslation();
   const canViewPolicies = useCan("viewPolicies");
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(false);
@@ -89,9 +91,7 @@ const PolicySelector: React.FC<PolicySelectorProps> = ({
     <div className="min-w-0">
       <MultiSelect
         disabled={disabled}
-        placeholder={
-          disabled ? "Setting policies is a premium feature." : "Select policies (production or published versions)"
-        }
+        placeholder={disabled ? t("selectors.policiesPremium") : t("selectors.policies")}
         onValueChange={handlePolicyChange}
         value={value}
         loading={loading}

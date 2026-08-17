@@ -2,6 +2,7 @@ import React from "react";
 import { ArrowUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useTranslation } from "react-i18next";
 
 interface MessageInputProps {
   value: string;
@@ -13,6 +14,7 @@ interface MessageInputProps {
 }
 
 export function MessageInput({ value, onChange, onSend, disabled, hasAttachment, uploadComponent }: MessageInputProps) {
+  const { t } = useTranslation();
   const canSend = !disabled && (value.trim().length > 0 || Boolean(hasAttachment));
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -32,7 +34,7 @@ export function MessageInput({ value, onChange, onSend, disabled, hasAttachment,
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type your message... (Shift+Enter for new line)"
+          placeholder={t("playground.chat.messagePlaceholder")}
           disabled={disabled}
           rows={1}
           className="max-h-20 min-h-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-0 py-1 text-sm leading-5 shadow-none focus-visible:ring-0"
@@ -43,7 +45,7 @@ export function MessageInput({ value, onChange, onSend, disabled, hasAttachment,
           size="icon-sm"
           variant="outline"
           className="rounded-full"
-          aria-label="Send message"
+          aria-label={t("playground.chat.sendMessage")}
         >
           <ArrowUp />
         </Button>

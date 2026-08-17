@@ -63,6 +63,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
@@ -97,7 +99,8 @@ interface SidebarProps {
 interface MenuItem {
   key: string;
   page: string;
-  label: string | React.ReactNode;
+  label: string;
+  badge?: "beta" | "new" | "new-dot";
   roles?: string[];
   children?: MenuItem[];
   icon?: React.ReactNode;
@@ -205,11 +208,8 @@ const menuGroups: MenuGroup[] = [
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: (
-          <span className="flex items-center gap-2">
-            Cost Optimization <BetaBadge />
-          </span>
-        ),
+        label: "Cost Optimization",
+        badge: "beta",
       },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
       {
@@ -228,11 +228,8 @@ const menuGroups: MenuGroup[] = [
       {
         key: "projects",
         page: "projects",
-        label: (
-          <span className="flex items-center gap-2">
-            Projects <BetaBadge />
-          </span>
-        ),
+        label: "Projects",
+        badge: "beta",
         icon: <Folder {...ICON} />,
         roles: all_admin_roles,
       },
@@ -318,11 +315,8 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: (
-          <span className="flex items-center gap-2">
-            Settings <NewBadge />
-          </span>
-        ),
+        label: "Settings",
+        badge: "new",
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles,
         children: [
@@ -343,14 +337,8 @@ const menuGroups: MenuGroup[] = [
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: (
-              <span className="flex items-center gap-2">
-                Admin Settings{" "}
-                <NewBadge dot>
-                  <span />
-                </NewBadge>
-              </span>
-            ),
+            label: "Admin Settings",
+            badge: "new-dot",
             icon: <SettingsIcon {...ICON} />,
             roles: all_admin_roles,
           },
@@ -396,23 +384,37 @@ const SECTION_DISPLAY: Record<string, string> = {
   SETTINGS: "Settings",
 };
 
+const GROUP_TRANSLATION_KEYS: Record<string, string> = {
+  "AI GATEWAY": "navigation.groups.aiGateway",
+  OBSERVABILITY: "navigation.groups.observability",
+  "ACCESS CONTROL": "navigation.groups.accessControl",
+  "DEVELOPER TOOLS": "navigation.groups.developerTools",
+  SETTINGS: "navigation.groups.settings",
+};
+
 const prettify = (key: string): string =>
   key
     .split(/[-_]/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 
-const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
+const labelText = (item: MenuItem, t?: TFunction): string =>
+  t ? t(`navigation.items.${item.page}`, { defaultValue: item.label }) : item.label;
+
+const groupLabelText = (groupLabel: string, t?: TFunction): string => {
+  const fallback = SECTION_DISPLAY[groupLabel] ?? groupLabel;
+  const translationKey = GROUP_TRANSLATION_KEYS[groupLabel];
+  return t && translationKey ? t(translationKey, { defaultValue: fallback }) : fallback;
+};
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
-export const getBreadcrumb = (page: string): { section: string | null; title: string } => {
+export const getBreadcrumb = (page: string, t?: TFunction): { section: string | null; title: string } => {
   for (const group of menuGroups) {
     for (const item of group.items) {
-      const section = SECTION_DISPLAY[group.groupLabel] ?? group.groupLabel;
-      if (item.page === page)
-        return { section, title: typeof item.label === "string" ? item.label : prettify(item.key) };
+      const section = groupLabelText(group.groupLabel, t);
+      if (item.page === page) return { section, title: labelText(item, t) };
       const child = item.children?.find((c) => c.page === page);
-      if (child) return { section, title: typeof child.label === "string" ? child.label : prettify(child.key) };
+      if (child) return { section, title: labelText(child, t) };
     }
   }
   return { section: null, title: prettify(page) };
@@ -430,6 +432,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
+  const { t } = useTranslation();
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
@@ -528,10 +531,27 @@ const Sidebar_: React.FC<SidebarProps> = ({
     setPage(item.page);
   };
 
+  const renderBadge = (item: MenuItem) => {
+    if (item.badge === "beta") return <BetaBadge />;
+    if (item.badge === "new") return <NewBadge />;
+    if (item.badge === "new-dot") {
+      return (
+        <NewBadge dot>
+          <span />
+        </NewBadge>
+      );
+    }
+    return null;
+  };
+
   const renderLeaf = (item: MenuItem, isChild: boolean) => {
     const active = selectedKey === item.key;
     const size = isChild ? "sub" : "default";
-    const label = <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{item.label}</span>;
+    const label = (
+      <span className="flex flex-1 items-center gap-2 truncate group-data-[collapsed=true]/sidebar:hidden">
+        {labelText(item, t)} {renderBadge(item)}
+      </span>
+    );
 
     if (item.external_url) {
       return (
@@ -540,7 +560,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           href={item.external_url}
           target="_blank"
           rel="noopener noreferrer"
-          title={collapsed ? labelText(item) : undefined}
+          title={collapsed ? labelText(item, t) : undefined}
           data-active={active || undefined}
           className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
         >
@@ -557,7 +577,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
         key={item.key}
         href={href}
         onClick={(e) => handleLeafClick(e, item)}
-        title={collapsed ? labelText(item) : undefined}
+        title={collapsed ? labelText(item, t) : undefined}
         data-active={active || undefined}
         className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
       >
@@ -580,10 +600,12 @@ const Sidebar_: React.FC<SidebarProps> = ({
         <SidebarMenuButton
           isActive={active}
           onClick={() => toggleGroup(item.key)}
-          title={collapsed ? labelText(item) : undefined}
+          title={collapsed ? labelText(item, t) : undefined}
         >
           {item.icon}
-          <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{item.label}</span>
+          <span className="flex flex-1 items-center gap-2 truncate group-data-[collapsed=true]/sidebar:hidden">
+            {labelText(item, t)} {renderBadge(item)}
+          </span>
           <ChevronRight
             className={cn(
               "size-4 shrink-0 transition-transform group-data-[collapsed=true]/sidebar:hidden",
@@ -609,7 +631,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
         <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
           <div className="flex min-w-0 items-center gap-2">
-            <Link href={migratedHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
+            <Link href={migratedHref("")} className="flex min-w-0 items-center" aria-label={t("navigation.home")}>
               <img
                 src={logoSrc}
                 alt="LiteLLM"
@@ -631,7 +653,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
               variant="ghost"
               size="icon-sm"
               onClick={onToggleCollapsed}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={collapsed ? t("navigation.expandSidebar") : t("navigation.collapseSidebar")}
               className="flex-none text-muted-foreground"
             >
               {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
@@ -645,7 +667,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           {visibleGroups.map((group, gi) => (
             <SidebarGroup key={group.groupLabel}>
               {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
-              <SidebarGroupLabel>{group.groupLabel}</SidebarGroupLabel>
+              <SidebarGroupLabel>{groupLabelText(group.groupLabel, t)}</SidebarGroupLabel>
               <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
             </SidebarGroup>
           ))}
