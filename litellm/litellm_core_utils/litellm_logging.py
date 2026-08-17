@@ -610,8 +610,11 @@ class Logging(LiteLLMLoggingBaseClass):
         decides that: the router registers an entry for every deployment, and
         get_model_info fills absent costs with 0, so asking it directly cannot
         tell "configured as free" apart from "no pricing configured". A deployment
-        may declare only one side of its pricing, so a rate it leaves unset keeps
-        the model's published value instead of billing as zero.
+        may declare only one side of its pricing, so the side it leaves out keeps
+        the model's published rates instead of billing as zero. Ownership is per
+        token direction: declaring either rate for a direction takes that whole
+        direction, so a published batch rate can never displace a standard rate
+        the deployment configured itself.
         """
         model_id: Final = self.get_router_model_id()
         if model_id is None:
@@ -628,13 +631,19 @@ class Logging(LiteLLMLoggingBaseClass):
         published: Final = self._published_model_info()
         if published is None:
             return merged
-        if registered.get("input_cost_per_token") is None:
+        declares_input: Final = (
+            registered.get("input_cost_per_token") is not None
+            or registered.get("input_cost_per_token_batches") is not None
+        )
+        declares_output: Final = (
+            registered.get("output_cost_per_token") is not None
+            or registered.get("output_cost_per_token_batches") is not None
+        )
+        if not declares_input:
             merged["input_cost_per_token"] = published.get("input_cost_per_token")
-        if registered.get("output_cost_per_token") is None:
-            merged["output_cost_per_token"] = published.get("output_cost_per_token")
-        if registered.get("input_cost_per_token_batches") is None:
             merged["input_cost_per_token_batches"] = published.get("input_cost_per_token_batches")
-        if registered.get("output_cost_per_token_batches") is None:
+        if not declares_output:
+            merged["output_cost_per_token"] = published.get("output_cost_per_token")
             merged["output_cost_per_token_batches"] = published.get("output_cost_per_token_batches")
         return merged
 
