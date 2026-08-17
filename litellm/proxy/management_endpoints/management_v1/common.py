@@ -1,6 +1,7 @@
 """Contract machinery shared by every `/management/v1` route."""
 
-from typing import Final
+from collections.abc import Sequence
+from typing import Final, TypedDict
 from urllib.parse import urlencode
 
 from fastapi import Request
@@ -55,6 +56,34 @@ def _declared_query_params(request: Request) -> frozenset[str]:
 def escape_like(value: str) -> str:
     """Escape LIKE/ILIKE metacharacters. Ids routinely contain `_`, which is a wildcard unescaped."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+class ValidationErrorDetail(TypedDict):
+    loc: tuple[int | str, ...]
+    msg: str
+
+
+def validation_problem(errors: Sequence[ValidationErrorDetail]) -> ProblemDetail:
+    """A body error is a 422; a query or path error is a 400.
+
+    The two have different causes and different fixes. An unknown body field is a malformed
+    request the caller corrects against the schema, which is what 422 means. An unknown query
+    parameter is this surface refusing to silently ignore a filter, which is a 400 because the
+    request line itself is what was wrong.
+    """
+    from_body: Final = any(error["loc"][:1] == ("body",) for error in errors)
+    detail: Final = "; ".join(
+        f"{location}: {error['msg']}"
+        if (location := ".".join(str(part) for part in error["loc"][1:]))
+        else error["msg"]
+        for error in errors
+    ) or ("The request body is invalid." if from_body else "The request query parameters are invalid.")
+    return ProblemDetail(
+        type=f"{PROBLEM_TYPE_BASE}{'invalid-request-body' if from_body else 'invalid-query-parameter'}",
+        title="Invalid request body" if from_body else "Invalid query parameter",
+        status=422 if from_body else 400,
+        detail=detail,
+    )
 
 
 def unknown_query_param_problem(unknown: tuple[str, ...], allowed: tuple[str, ...]) -> ProblemDetail:

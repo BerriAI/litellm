@@ -20,12 +20,11 @@ import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, Final, Literal, Optional, Protocol, TypeVar, cast
+from typing import Any, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -69,7 +68,6 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
-from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -2903,79 +2901,6 @@ async def update_key_fn(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
-
-
-async def _merge_key_metadata(
-    key: str,
-    prisma_client: PrismaClient | None,
-    metadata_patch: JsonValue,
-) -> JsonValue:
-    """Deep-merge a metadata patch onto the key's stored metadata, per RFC 7386."""
-    existing_key_row: Final = await _get_and_validate_existing_key(token=key, prisma_client=prisma_client)
-    existing_metadata: Final = existing_key_row.metadata if isinstance(existing_key_row.metadata, dict) else {}
-    return apply_json_merge_patch(existing_metadata, metadata_patch)
-
-
-@router.patch(
-    "/key/{key:path}",
-    tags=["key management"],
-    dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
-)
-async def patch_key(
-    key: str,
-    data: PatchKeyRequest,
-    request: Request,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    litellm_changed_by: Annotated[
-        str | None,
-        Header(
-            description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-        ),
-    ] = None,
-):
-    """
-    Partially update a key using RFC 7386 JSON Merge Patch semantics.
-
-    `key` is taken from the path; a `key` in the body is accepted only when it matches.
-    `metadata` is merged with the key's stored metadata rather than replacing it: an
-    omitted entry is preserved, `entry: null` deletes it, and any other value overwrites
-    (recursing into nested objects). Every other field behaves exactly like
-    `POST /key/update` (omitted preserves, `null` clears, a value overwrites). An unknown
-    field is rejected with a 422 rather than silently ignored. Returns the updated key.
-
-    ```
-    curl --location --request PATCH 'http://0.0.0.0:4000/key/sk-1234' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data-raw '{
-        "metadata": {"cost_center": "1234", "deprecated_entry": null}
-    }'
-    ```
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if data.key is not None and data.key != key:
-        raise ProxyException(
-            message="key in body does not match key in path",
-            type=ProxyErrorTypes.bad_request_error,
-            param="key",
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-
-    patch_fields: Final = data.model_dump(exclude_unset=True, exclude={"key"})
-    merged_fields: Final = (
-        {**patch_fields, "metadata": await _merge_key_metadata(key, prisma_client, patch_fields["metadata"])}
-        if "metadata" in patch_fields
-        else patch_fields
-    )
-
-    return await update_key_fn(
-        request=request,
-        data=UpdateKeyRequest.model_validate({"key": key, **merged_fields}),
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by=litellm_changed_by,
-    )
 
 
 @router.post(

@@ -71,3 +71,14 @@ class ListResponse(BaseModel, Generic[TOut]):
     data: list[TOut]
     meta: ListMeta
     links: ListLinks
+
+
+class ItemResponse(BaseModel, Generic[TOut]):
+    """One resource, under the same `data` member `ListResponse` uses, so a client unwraps every
+    control-plane route the same way.
+
+    `meta` and `links` are absent until there is something to put in them. Adding either later is
+    additive precisely because they are siblings of `data` rather than keys alongside the resource's
+    own fields, where a new key could collide with a real one."""
+
+    data: TOut
