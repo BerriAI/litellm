@@ -53,7 +53,8 @@ from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.utils import CredentialItem, LiteLLMBatch
 
-from fastapi import Response
+from fastapi import FastAPI, Response
+from fastapi.testclient import TestClient
 
 # --------------------------------------------------------------------------- #
 # Fixtures: distinguishable credentials per model so a wrong/hardcoded model_id
@@ -1664,6 +1665,37 @@ async def test_list__exception_calls_failure_hook(list_harness):
 
     list_harness.logging.post_call_failure_hook.assert_called_once()
     assert list_harness.logging.post_call_failure_hook.call_args.kwargs["original_exception"].args[0] == "provider boom"
+
+
+@pytest.fixture
+def list_route_client(list_harness):
+    app = FastAPI()
+    app.dependency_overrides[endpoints.user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test")
+    app.include_router(endpoints.router)
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("path", ["/v1/batches", "/batches", "/openai/v1/batches"])
+@pytest.mark.parametrize("limit", [None, 1, 100], ids=["omitted", "minimum", "maximum"])
+def test_list_route_accepts_valid_limit_values(list_route_client, list_harness, path, limit):
+    params = {} if limit is None else {"limit": limit}
+
+    response = list_route_client.get(path, params=params)
+
+    assert response.status_code == 200, response.text
+    assert list_harness.litellm_alist.call_count == 1
+    assert list_harness.litellm_alist.call_args.kwargs["limit"] == limit
+    list_harness.router_alist.assert_not_called()
+
+
+@pytest.mark.parametrize("path", ["/v1/batches", "/batches", "/openai/v1/batches"])
+@pytest.mark.parametrize("limit", [0, -1, 101, 1000])
+def test_list_route_rejects_invalid_limit_values_without_downstream_calls(list_route_client, list_harness, path, limit):
+    response = list_route_client.get(path, params={"limit": limit})
+
+    assert response.status_code == 422, response.text
+    list_harness.litellm_alist.assert_not_called()
+    list_harness.router_alist.assert_not_called()
 
 
 # =========================================================================== #

@@ -7,7 +7,7 @@
 import asyncio
 from typing import Any, Final, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -661,7 +661,7 @@ async def list_batches(
     request: Request,
     fastapi_response: Response,
     provider: str | None = None,
-    limit: int | None = None,
+    limit: int | None = Query(default=None, ge=1, le=100),
     after: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     target_model_names: str | None = None,
