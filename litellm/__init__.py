@@ -1785,6 +1785,9 @@ if TYPE_CHECKING:
     from .llms.databricks.responses.transformation import (
         DatabricksResponsesAPIConfig as DatabricksResponsesAPIConfig,
     )
+    from .llms.azure_ai.responses.transformation import (
+        AzureAIResponsesAPIConfig as AzureAIResponsesAPIConfig,
+    )
     from .llms.openrouter.responses.transformation import (
         OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig,
     )

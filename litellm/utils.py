@@ -8440,6 +8440,12 @@ class ProviderConfigManager:
             return litellm.ManusResponsesAPIConfig()
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityResponsesConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.common_utils import is_agents_v2_model
+
+            if model and is_agents_v2_model(model):
+                return litellm.AzureAIResponsesAPIConfig()
+            return None
         elif litellm.LlmProviders.DATABRICKS == provider:
             # Databricks Responses API is only compatible with OpenAI GPT models
             if model and "gpt" in model.lower():
