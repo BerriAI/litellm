@@ -604,6 +604,25 @@ class TestThinkingSummaryPreservation:
         finally:
             litellm.reasoning_auto_summary = original
 
+    def test_stop_present_keeps_thinking_model_on_chat_completions(self):
+        """Regression for #37118: the Responses API has no `stop` equivalent, so a
+        translated `stop` must keep the request on chat/completions even when
+        thinking is enabled, instead of being rerouted (and silently dropped)."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        completion_kwargs = {
+            "model": "openai/gpt-5.2",
+            "custom_llm_provider": "openai",
+            "reasoning_effort": "medium",
+            "stop": ["STOPPROBE"],
+        }
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking={"type": "enabled", "budget_tokens": 5000}
+        )
+        assert completion_kwargs["model"] == "openai/gpt-5.2"
+
     def test_openai_model_with_thinking_summary_end_to_end(self):
         """End-to-end: anthropic_messages_handler should preserve thinking.summary for OpenAI models."""
         from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
