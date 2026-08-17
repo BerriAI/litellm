@@ -2921,18 +2921,22 @@ def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict)
     expected = 19 * 5e-6 + 512 * 8e-6 + 158 * 3e-5
     assert cost is not None
     assert round(cost, 12) == round(expected, 12)
-GEMINI_DAY0_LAUNCH_PRICING = [
-    ("gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
-    ("gemini/gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
-    ("vertex_ai/gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
+GEMINI_FLASH_PRICING = [
+    ("gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("gemini/gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("vertex_ai/gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
     ("gemini-3.5-flash-lite", 3e-07, 2.5e-06, 3e-08),
     ("gemini/gemini-3.5-flash-lite", 3e-07, 2.5e-06, 3e-08),
     ("vertex_ai/gemini-3.5-flash-lite", 3e-07, 2.5e-06, 3e-08),
 ]
 
 
-@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_DAY0_LAUNCH_PRICING)
-def test_gemini_36_flash_and_35_flash_lite_launch_pricing(model, input_cost, output_cost, cache_read_cost):
+@pytest.mark.parametrize(
+    "model,input_cost,output_cost,cache_read_cost", GEMINI_FLASH_PRICING
+)
+def test_gemini_36_flash_and_35_flash_lite_pricing(
+    model, input_cost, output_cost, cache_read_cost
+):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -2966,8 +2970,8 @@ def test_generic_cost_per_token_gemini_36_flash():
         usage=usage,
         custom_llm_provider="gemini",
     )
-    assert prompt_cost == pytest.approx(0.0015)
-    assert completion_cost == pytest.approx(0.00375)
+    assert prompt_cost == pytest.approx(0.00075)
+    assert completion_cost == pytest.approx(0.001875)
 
 
 def test_generic_cost_per_token_gemini_35_flash_lite():
