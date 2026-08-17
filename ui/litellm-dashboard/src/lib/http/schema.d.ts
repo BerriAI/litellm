@@ -32855,6 +32855,16 @@ export interface components {
              */
             judged_count?: number | null;
             /**
+             * Key Alias
+             * @description Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted
+             */
+            key_alias?: string | null;
+            /**
+             * Key Name
+             * @description Masked display name (sk-...) of the shadowed key, resolved at read time like key_alias
+             */
+            key_name?: string | null;
+            /**
              * Last Error
              * @description Most recent attempt error; detail endpoint only
              */
