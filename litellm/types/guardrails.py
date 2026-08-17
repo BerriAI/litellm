@@ -1062,6 +1062,7 @@ class GuardrailEventHooks(str, Enum):
     during_mcp_call = "during_mcp_call"
     post_mcp_call = "post_mcp_call"
     realtime_input_transcription = "realtime_input_transcription"
+    realtime_audio = "realtime_audio"
 
 
 class DynamicGuardrailParams(TypedDict):

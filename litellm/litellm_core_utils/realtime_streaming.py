@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -126,6 +126,11 @@ class RealTimeStreaming:
         self._is_transcription_session: bool = force_transcription_model is not None
         # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
         self._event_normalizer = event_normalizer
+        # Monotonic per-speaker frame counters for the realtime_audio hook.
+        self._audio_frame_seq: dict[str, int] = {"user": 0, "model": 0}
+        # Audio formats as declared by the client's session config, when it declares them.
+        self._client_audio_format: str | None = None
+        self._model_audio_format: str | None = None
 
     # Per-connection caps for pre-setup audio frames (message count + total bytes).
     _MAX_BUFFERED_MESSAGES: int = 200
@@ -141,6 +146,13 @@ class RealTimeStreaming:
         ]
     )
     _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(["input_audio_buffer.commit", "input_audio_buffer.end"])
+    # Both beta and GA spellings of the model audio delta.
+    _AUDIO_DELTA_EVENT_TYPES = frozenset(["response.audio.delta", "response.output_audio.delta"])
+    # Client messages that may declare the session's audio formats.
+    _SESSION_CONFIG_CLIENT_TYPES = frozenset(["session.update", "session.create"])
+    # Realtime defaults when the session declares no explicit format: client mics
+    # commonly send 16 kHz while model output is 24 kHz.
+    _DEFAULT_AUDIO_SAMPLE_RATE_HZ: ClassVar[dict[str, int]] = {"user": 16000, "model": 24000}
     _AUDIO_FORMAT_MAP: dict[str, dict[str, str | int]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
         "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
@@ -555,6 +567,25 @@ class RealTimeStreaming:
                 return False
         return True
 
+    async def _should_withhold_model_audio(self, event: object, event_str: str) -> bool:
+        """Screen a model audio delta before it reaches the client.
+
+        Returns True when the frame must not be forwarded. This is the holdback
+        point: the frame is dropped and the session stays open, so a guardrail
+        can suppress a fragment of speech without hanging up the call.
+        """
+        if not self._has_realtime_audio_guardrails():
+            return False
+        event_obj: dict | None = event if isinstance(event, dict) else self._parse_backend_event(event_str)  # type: ignore[assignment]
+        if not isinstance(event_obj, dict):
+            return False
+        if event_obj.get("type") not in self._AUDIO_DELTA_EVENT_TYPES:
+            return False
+        delta = event_obj.get("delta")
+        if not isinstance(delta, str) or not delta:
+            return False
+        return await self.run_realtime_audio_guardrails(delta, speaker="model")
+
     def _should_drop_event_from_client(self, event: object) -> bool:
         """Return True for provider-specific events that must not reach GA clients."""
         if self._event_normalizer is not None:
@@ -572,6 +603,8 @@ class RealTimeStreaming:
 
     async def _send_event_to_client(self, event: object, event_str: str) -> bool:
         if self._should_drop_event_from_client(event):
+            return False
+        if await self._should_withhold_model_audio(event, event_str):
             return False
         if isinstance(event, dict):
             event = self._normalize_event_for_ga_client(event)
@@ -697,6 +730,110 @@ class RealTimeStreaming:
                 GuardrailEventHooks.post_call,
             ]
         )
+
+    def _has_realtime_audio_guardrails(self) -> bool:
+        """Return True when a guardrail opted into the raw-audio hook.
+
+        Kept separate from ``_has_realtime_guardrails`` so that sessions with
+        only text guardrails pay nothing for this path: no parse of audio
+        events, no await before forwarding, no added latency.
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return self._has_realtime_guardrails_for_event_hooks([GuardrailEventHooks.realtime_audio])
+
+    async def run_realtime_audio_guardrails(
+        self,
+        audio_b64: str,
+        speaker: Literal["user", "model"],
+        encoding: str = "pcm16",
+        sample_rate_hz: int | None = None,
+    ) -> bool:
+        """Run registered guardrails on a single realtime audio frame.
+
+        Returns True when the frame must be withheld (not forwarded), False when clean.
+
+        ``run_realtime_guardrails`` sees only the provider's own transcription.
+        This hands the guardrail the audio itself, so a guardrail can apply its
+        own speech models rather than inheriting the provider's transcription
+        quality, timing and vocabulary.
+
+        A withheld frame is dropped and the session stays open — the audio
+        analogue of ``stream_holdback_chars``, rather than the all-or-nothing
+        ``end_session_after_n_fails``.
+        """
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.types.utils import GuardrailAudioFrame
+
+        seq: Final = self._audio_frame_seq.get(speaker, 0)
+        self._audio_frame_seq[speaker] = seq + 1
+
+        if sample_rate_hz is None:
+            sample_rate_hz = self._audio_sample_rate_hz(speaker)
+
+        frame: GuardrailAudioFrame = {
+            "speaker": speaker,
+            "audio": audio_b64,
+            "encoding": encoding,
+            "sample_rate_hz": sample_rate_hz,
+            "sequence": seq,
+        }
+        _already_run: Final[set] = set()
+
+        for callback in litellm.callbacks:
+            if not isinstance(callback, CustomGuardrail):
+                continue
+            if id(callback) in _already_run:
+                continue
+            if not callback.should_run_guardrail(
+                data=self.request_data,
+                event_type=GuardrailEventHooks.realtime_audio,
+            ):
+                continue
+            _already_run.add(id(callback))
+            try:
+                await callback.apply_guardrail(
+                    inputs={"texts": [], "images": [], "audio": [frame]},
+                    request_data={"user_api_key_dict": self.user_api_key_dict},
+                    input_type="request" if speaker == "user" else "response",
+                )
+            except Exception as e:  # noqa: BLE001 - must classify block vs bug, as the text path does
+                # Same contract as the text path: a policy block raises with
+                # status_code/detail. Anything else is a bug in the guardrail and
+                # must not silently discard the caller's audio.
+                is_guardrail_block: Final = hasattr(e, "status_code") or isinstance(e, ValueError)
+                if not is_guardrail_block:
+                    verbose_logger.exception("[realtime audio guardrail] unexpected error: %s", e)
+                    continue
+                return True
+        return False
+
+    def _audio_sample_rate_hz(self, speaker: Literal["user", "model"]) -> int:
+        """Sample rate for ``speaker``, from the session config where declared.
+
+        Falls back per direction rather than to a single default: ``_AUDIO_FORMAT_MAP``
+        carries the 24 kHz model rate for ``pcm16``, which is wrong for the client mic.
+        """
+        declared: Final = self._client_audio_format if speaker == "user" else self._model_audio_format
+        if declared is not None:
+            rate = self._AUDIO_FORMAT_MAP.get(declared, {}).get("rate")
+            if isinstance(rate, int):
+                return rate
+        return self._DEFAULT_AUDIO_SAMPLE_RATE_HZ[speaker]
+
+    def _remember_declared_audio_formats(self, msg_obj: dict) -> None:
+        """Record audio formats from a client ``session.update``/``session.create``."""
+        session = msg_obj.get("session")
+        if not isinstance(session, dict):
+            return
+        for key, attr in (
+            ("input_audio_format", "_client_audio_format"),
+            ("output_audio_format", "_model_audio_format"),
+        ):
+            value = session.get(key)
+            if isinstance(value, str):
+                setattr(self, attr, value)
 
     def _has_audio_transcription_guardrails(self) -> bool:
         """Return True when a guardrail is configured for the audio/VAD transcript path.
@@ -1193,6 +1330,21 @@ class RealTimeStreaming:
 
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
+
+                    if msg_type in self._SESSION_CONFIG_CLIENT_TYPES:
+                        self._remember_declared_audio_formats(msg_obj)
+
+                    ## GUARDRAIL: hand raw client audio to realtime_audio guardrails.
+                    # Withholding halts the turn without closing the session, so a
+                    # guardrail can suppress speech without dropping the call.
+                    if msg_type == "input_audio_buffer.append" and self._has_realtime_audio_guardrails():
+                        client_audio = msg_obj.get("audio")
+                        if (
+                            isinstance(client_audio, str)
+                            and client_audio
+                            and await self.run_realtime_audio_guardrails(client_audio, speaker="user")
+                        ):
+                            continue  # do not relay violating client audio upstream
 
                     if msg_type == "conversation.item.create":
                         # Check user text messages for prompt injection

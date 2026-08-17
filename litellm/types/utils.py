@@ -4076,9 +4076,25 @@ class PriorityReservationSettings(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class GuardrailAudioFrame(TypedDict, total=False):
+    """A single audio frame from a realtime session.
+
+    The sample rate travels with the frame because a realtime session carries
+    different rates in each direction (e.g. 16 kHz client mic, 24 kHz model
+    output), so it cannot be assumed per session.
+    """
+
+    speaker: Literal["user", "model"]
+    audio: str  # base64-encoded audio payload, exactly as it appears on the wire
+    encoding: str  # e.g. "pcm16", "g711_ulaw", "g711_alaw"
+    sample_rate_hz: int
+    sequence: int  # monotonic per speaker, so a guardrail can order and dedup frames
+
+
 class GenericGuardrailAPIInputs(TypedDict, total=False):
     texts: list[str]  # extracted text from the LLM response - for basic text guardrails
     images: list[str]  # extracted images from the LLM response - for image guardrails
+    audio: list[GuardrailAudioFrame]  # realtime audio frames - for audio guardrails
     tools: list[ChatCompletionToolParam]  # tools sent to the LLM
     tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall]  # tool calls sent from the LLM
     structured_messages: list[
