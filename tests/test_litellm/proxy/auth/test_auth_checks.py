@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -4574,6 +4575,51 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
         for c in cache2.async_set_cache.await_args_list
     ]
     assert written_keys_aliasless == ["team_id:team-no-alias"]
+
+
+@pytest.mark.asyncio
+async def test_delete_cache_key_object_is_best_effort_on_an_unreachable_cache(caplog):
+    """
+    Every caller evicts after its own DB write has committed, so an unreachable Redis must not
+    raise: `/key/update` turned the circuit breaker's exception into a 400 for a key update that
+    had already landed, and callers retried a change that was in fact applied.
+
+    The auth cache and the internal usage cache are separate DualCache instances, so a failure on
+    the first must still leave the second evicted, and both failures have to be logged loudly: an
+    entry that survives keeps the key authenticating with its previous settings until its TTL.
+    """
+    from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+
+    breaker_open = Exception("Redis circuit breaker is open — skipping async_delete_cache")
+
+    cache = MagicMock()
+    cache.delete_cache = MagicMock(side_effect=breaker_open)
+    logging_obj = MagicMock()
+    logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(
+        side_effect=breaker_open
+    )
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        await _delete_cache_key_object(
+            hashed_token="hashed-token-1234",
+            user_api_key_cache=cache,
+            proxy_logging_obj=logging_obj,
+        )
+
+    cache.delete_cache.assert_called_once_with(key="hashed-token-1234")
+    logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
+        key="hashed-token-1234"
+    )
+
+    eviction_errors = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "LiteLLM Proxy"
+        and record.levelno >= logging.ERROR
+        and "Failed to evict cached key entry" in record.getMessage()
+    ]
+    assert len(eviction_errors) == 2, eviction_errors
+    assert all("hashed-token-1234" in message for message in eviction_errors)
 
 
 class _SharedFakeRedis(RedisCache):

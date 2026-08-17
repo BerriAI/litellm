@@ -2739,6 +2739,63 @@ async def test_update_key_by_duplicate_alias_returns_400(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_key_reports_success_when_cache_eviction_fails(monkeypatch):
+    """
+    Regression: an unreachable Redis makes cache eviction raise, but only after
+    prisma_client.update_data has committed. update_key_fn's broad handler turned that into a 400,
+    so a caller was told nothing was written for a change GET /key/info already reflected, and
+    retried an update that had in fact been applied.
+
+    Eviction runs through the real helper here, which is best-effort, so the committed write is
+    reported as the success it is and neither cache is skipped because the other one is down.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    hashed_token = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
+    key_in_db = LiteLLM_VerificationToken(
+        token=hashed_token, user_id="test-user", max_budget=200.0
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_in_db
+    )
+    mock_prisma_client.update_data = AsyncMock(
+        return_value={"data": {"max_budget": 50.0}}
+    )
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    breaker_open = Exception("Redis circuit breaker is open — skipping async_delete_cache")
+    failing_cache = AsyncMock()
+    failing_cache.delete_cache = MagicMock(side_effect=breaker_open)
+    failing_logging_obj = MagicMock()
+    failing_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(
+        side_effect=breaker_open
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", failing_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", failing_logging_obj)
+
+    result = await update_key_fn(
+        request=MagicMock(),
+        data=UpdateKeyRequest(key=hashed_token, max_budget=50.0),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert result["key"] == hashed_token
+    assert result["max_budget"] == 50.0
+    mock_prisma_client.update_data.assert_awaited_once()
+    failing_cache.delete_cache.assert_called_once_with(key=hashed_token)
+    failing_logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
+        key=hashed_token
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_key_with_key_and_alias_selects_by_key(monkeypatch):
     """
     Regression: passing both key and key_alias keeps today's behavior. The key
