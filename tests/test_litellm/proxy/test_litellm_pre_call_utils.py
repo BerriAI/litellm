@@ -11,7 +11,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
-from litellm.proxy._types import AddTeamCallback, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -415,6 +415,69 @@ async def test_add_litellm_data_to_request_string_metadata_does_not_crash():
     # from a raw string snapshot).
     assert isinstance(updated["metadata"], dict)
     assert updated["metadata"].get("generation_name") == "test"
+
+
+def _batches_request_mock() -> MagicMock:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/batches"
+    request_mock.url.path = "/v1/batches"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value,received_type",
+    [
+        ("metadata", "abc", "a string"),
+        ("litellm_metadata", "abc", "a string"),
+        ("metadata", 42, "an integer"),
+        ("litellm_metadata", [1, 2], "an array"),
+        ("metadata", True, "a boolean"),
+    ],
+)
+async def test_add_litellm_data_to_request_rejects_non_object_metadata(field, value, received_type):
+    """Regression for https://github.com/BerriAI/litellm/issues/37147: a
+    non-object metadata was silently dropped with a 200, and a non-object
+    litellm_metadata crashed later with a 500 ('str' object has no attribute
+    'update'). Both must be a 400 naming the field, like OpenAI returns."""
+    data = {"input_file_id": "file-abc", "endpoint": "/v1/chat/completions", field: value}
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data=data,
+            request=_batches_request_mock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == field
+    assert exc_info.value.message == f"Invalid type for '{field}': expected an object, but got {received_type} instead."
+    assert field not in data
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_parses_json_object_string_litellm_metadata():
+    data = {"input_file_id": "file-abc", "litellm_metadata": json.dumps({"cost_centre": "research"})}
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_batches_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["litellm_metadata"]["cost_centre"] == "research"
 
 
 @pytest.mark.asyncio
