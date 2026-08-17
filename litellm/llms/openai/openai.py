@@ -2465,13 +2465,9 @@ class OpenAIAssistantsAPI(BaseLLM):
             **message_data,
         )
 
-        response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage.model_validate(thread_message.dict())
-        else:
-            response_obj = OpenAIMessage.model_validate(thread_message.dict())
-        return response_obj
+        return OpenAIMessage.model_validate(thread_message.model_dump())
 
     # fmt: off
 
@@ -2544,13 +2540,9 @@ class OpenAIAssistantsAPI(BaseLLM):
             **message_data,
         )
 
-        response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage.model_validate(thread_message.dict())
-        else:
-            response_obj = OpenAIMessage.model_validate(thread_message.dict())
-        return response_obj
+        return OpenAIMessage.model_validate(thread_message.model_dump())
 
     async def async_get_messages(
         self,
