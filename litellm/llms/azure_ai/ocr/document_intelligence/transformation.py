@@ -24,6 +24,7 @@ from litellm.constants import (
     AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI,
     AZURE_OPERATION_POLLING_TIMEOUT,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin, encode_url_path_segment
 from litellm.llms.base_llm.ocr.transformation import (
     OCR_REQUEST_FORMAT_PARAM,
@@ -133,11 +134,18 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             **({"pages": normalized_pages} if normalized_pages else {}),
             **({"features": normalized_features} if normalized_features else {}),
             **(
-                {OCR_REQUEST_FORMAT_PARAM: parse_ocr_request_format(request_format)}
+                {OCR_REQUEST_FORMAT_PARAM: self._parse_request_format(request_format, model)}
                 if request_format is not None
                 else {}
             ),
         }
+
+    @staticmethod
+    def _parse_request_format(request_format: object, model: str) -> OCRRequestFormat:
+        try:
+            return parse_ocr_request_format(request_format)
+        except ValueError as e:
+            raise UnsupportedParamsError(message=f"{e}", model=model, llm_provider="azure_ai") from e
 
     @staticmethod
     def _normalize_pages_param(pages: Any) -> str:

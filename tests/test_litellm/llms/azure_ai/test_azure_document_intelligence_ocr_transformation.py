@@ -3,6 +3,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from litellm.exceptions import UnsupportedParamsError
+
 from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
     AzureDocumentIntelligenceOCRConfig,
 )
@@ -249,11 +251,13 @@ def test_map_ocr_params_passes_through_req_format(req_format):
     assert config.map_ocr_params({"req_format": req_format}, {}, "prebuilt-layout") == {"req_format": req_format}
 
 
-def test_map_ocr_params_rejects_unknown_req_format():
+def test_map_ocr_params_rejects_unknown_req_format_as_bad_request():
     config = AzureDocumentIntelligenceOCRConfig()
 
-    with pytest.raises(ValueError, match="Invalid `req_format`"):
+    with pytest.raises(UnsupportedParamsError, match="Invalid `req_format`") as exc_info:
         config.map_ocr_params({"req_format": "azure"}, {}, "prebuilt-layout")
+
+    assert exc_info.value.status_code == 400
 
 
 def test_get_complete_url_omits_req_format_query_param():

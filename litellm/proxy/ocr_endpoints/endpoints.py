@@ -154,9 +154,9 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     return data
 
 
-async def _parse_ocr_request(request: Request) -> dict[str, Any]:
+async def _parse_ocr_request(request: Request) -> Mapping[str, Any]:
     """Parse an OCR request and apply the `x-req-format` header, if any."""
-    return {**_with_request_format(await _parse_ocr_request_body(request), request)}
+    return _with_request_format(await _parse_ocr_request_body(request), request)
 
 
 async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
@@ -315,7 +315,7 @@ async def ocr(
     data: dict = {}
     try:
         # Parse request body (JSON or multipart form)
-        data = await _parse_ocr_request(request)
+        data = dict(await _parse_ocr_request(request))
 
         # Process request using ProxyBaseLLMRequestProcessing
         processor = ProxyBaseLLMRequestProcessing(data=data)
