@@ -2,10 +2,13 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Select as AntdSelect, Card, InputNumber, Radio, Space, Switch, Tooltip, Typography } from "antd";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
+import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import {
   ClassifierFallback,
   ClassifierType,
   ComplexityRouterConfigValue,
+  DEFAULT_TIER_BOUNDARIES,
+  heuristicScoringRole,
   DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
   DEFAULT_CLASSIFIER_FALLBACK,
@@ -68,6 +71,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   defaultModel,
 }) => {
   const hasDefaultModel = Boolean(defaultModel);
+  const effectiveBoundaries = value.tier_boundaries ?? DEFAULT_TIER_BOUNDARIES;
+  const simpleMedium = effectiveBoundaries.simple_medium.toFixed(2);
+  const mediumComplex = effectiveBoundaries.medium_complex.toFixed(2);
+  const complexReasoning = effectiveBoundaries.complex_reasoning.toFixed(2);
   const classifierModelMissing =
     showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
@@ -375,6 +382,8 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
+      {heuristicScoringRole(value) !== "never" && <HeuristicScoringConfig value={value} onChange={onChange} />}
+
       <Card className="bg-gray-50 mt-4">
         <Text strong style={{ display: "block", marginBottom: 8 }}>
           How Classification Works
@@ -384,17 +393,18 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </Text>
         <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
           <li>
-            <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; 0.15
+            <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; {simpleMedium}
           </li>
           <li>
-            <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>: Score 0.15 - 0.35
+            <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>: Score {simpleMedium} - {mediumComplex}
           </li>
           <li>
-            <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>: Score 0.35 - 0.60
+            <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>: Score {mediumComplex} -{" "}
+            {complexReasoning}
           </li>
           <li>
-            <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; 0.60 (or 2+ reasoning
-            markers)
+            <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; {complexReasoning} (or 2+
+            reasoning markers)
           </li>
         </ul>
       </Card>

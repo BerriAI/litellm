@@ -575,3 +575,62 @@ describe("hydrateTierLabels", () => {
     expect(hydrateTierLabels(["Cheap"])).toBeUndefined();
   });
 });
+
+describe("buildComplexityRouterConfig heuristic scorer knobs", () => {
+  const BOUNDARIES = { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 };
+  const THRESHOLDS = { simple: 25, complex: 900 };
+  const WEIGHTS = {
+    codePresence: 0.5,
+    reasoningMarkers: 0.2,
+    technicalTerms: 0.15,
+    tokenCount: 0.05,
+    simpleIndicators: 0.05,
+    multiStepPatterns: 0.03,
+    questionComplexity: 0.02,
+  };
+
+  it("omits all three when the operator never touched them, so the router tracks the backend defaults", () => {
+    const config = buildComplexityRouterConfig(baseParams);
+    expect(config).not.toHaveProperty("tier_boundaries");
+    expect(config).not.toHaveProperty("token_thresholds");
+    expect(config).not.toHaveProperty("dimension_weights");
+  });
+
+  it("emits exactly what was set", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierBoundaries: BOUNDARIES,
+      tokenThresholds: THRESHOLDS,
+      dimensionWeights: WEIGHTS,
+    });
+    expect(config.tier_boundaries).toEqual(BOUNDARIES);
+    expect(config.token_thresholds).toEqual(THRESHOLDS);
+    expect(config.dimension_weights).toEqual(WEIGHTS);
+  });
+
+  it("emits them for an LLM classifier that falls back to the heuristic, since the scorer still runs", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierFallback: "heuristic",
+      tierBoundaries: BOUNDARIES,
+    });
+    expect(config.tier_boundaries).toEqual(BOUNDARIES);
+  });
+
+  it("drops them when the classifier falls back to the default model, because nothing is ever scored", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierFallback: "default_model",
+      tierBoundaries: BOUNDARIES,
+      tokenThresholds: THRESHOLDS,
+      dimensionWeights: WEIGHTS,
+    });
+    expect(config).not.toHaveProperty("tier_boundaries");
+    expect(config).not.toHaveProperty("token_thresholds");
+    expect(config).not.toHaveProperty("dimension_weights");
+  });
+});

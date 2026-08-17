@@ -83,6 +83,87 @@ export interface AdaptiveRouterWeights {
 
 export const DEFAULT_ADAPTIVE_WEIGHTS: AdaptiveRouterWeights = { quality: 0.3, cost: 0.7 };
 
+export interface TierBoundaries {
+  simple_medium: number;
+  medium_complex: number;
+  complex_reasoning: number;
+}
+
+export interface TokenThresholds {
+  simple: number;
+  complex: number;
+}
+
+/**
+ * Display order for the scorer's 7 dimensions, highest default weight first. Fixed rather than sorted by
+ * current weight so a row cannot jump out from under the cursor mid-drag.
+ */
+export const DIMENSION_KEYS = [
+  "codePresence",
+  "reasoningMarkers",
+  "technicalTerms",
+  "tokenCount",
+  "simpleIndicators",
+  "multiStepPatterns",
+  "questionComplexity",
+] as const;
+
+export type DimensionKey = (typeof DIMENSION_KEYS)[number];
+
+export type DimensionWeights = Record<DimensionKey, number>;
+
+export const DIMENSION_LABELS: Record<DimensionKey, string> = {
+  codePresence: "Code presence",
+  reasoningMarkers: "Reasoning markers",
+  technicalTerms: "Technical terms",
+  tokenCount: "Token count",
+  simpleIndicators: "Simple indicators",
+  multiStepPatterns: "Multi-step patterns",
+  questionComplexity: "Question complexity",
+};
+
+/**
+ * Mirrors DEFAULT_TIER_BOUNDARIES / DEFAULT_TOKEN_THRESHOLDS / DEFAULT_DIMENSION_WEIGHTS in
+ * litellm/router_strategy/complexity_router/config.py. These are placeholders the controls display, never
+ * values a save writes: an untouched knob is omitted from the payload so the router keeps tracking whatever
+ * the backend default becomes. Drift here therefore shows a stale number, and cannot pin a router to one.
+ */
+export const DEFAULT_TIER_BOUNDARIES: TierBoundaries = {
+  simple_medium: 0.15,
+  medium_complex: 0.35,
+  complex_reasoning: 0.6,
+};
+
+export const DEFAULT_TOKEN_THRESHOLDS: TokenThresholds = { simple: 15, complex: 400 };
+
+export const DEFAULT_DIMENSION_WEIGHTS: DimensionWeights = {
+  codePresence: 0.3,
+  reasoningMarkers: 0.25,
+  technicalTerms: 0.25,
+  tokenCount: 0.1,
+  simpleIndicators: 0.05,
+  multiStepPatterns: 0.03,
+  questionComplexity: 0.02,
+};
+
+export type HeuristicScoringRole = "decides" | "fallback_only" | "never";
+
+/**
+ * Whether the heuristic scorer runs on this router at all, which is what gates its knobs. An LLM
+ * classifier still falls back to the scorer unless the fallback is the default model, so the gate cannot be
+ * a plain classifier_type check.
+ */
+export const heuristicScoringRoleFor = (
+  classifierType: ClassifierType,
+  classifierFallback: ClassifierFallback | undefined,
+): HeuristicScoringRole => {
+  if (classifierType === "heuristic") return "decides";
+  return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
+};
+
+export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
+  heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+
 export type AdaptiveEligible = "all" | "classified_tier";
 
 export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
@@ -105,6 +186,13 @@ export interface ComplexityRouterConfigValue {
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  /**
+   * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
+   * payload so the router tracks the backend defaults rather than freezing today's numbers.
+   */
+  tier_boundaries?: TierBoundaries;
+  token_thresholds?: TokenThresholds;
+  dimension_weights?: DimensionWeights;
 }
 
 interface ComplexityRouterConfigProps {

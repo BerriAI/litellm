@@ -8,8 +8,12 @@ import {
   ClassifierType,
   ComplexityTierLabels,
   ComplexityTiers,
+  DimensionWeights,
   TIER_DESCRIPTIONS,
+  TierBoundaries,
+  TokenThresholds,
   effectiveTierLabel,
+  heuristicScoringRoleFor,
 } from "./ComplexityRouterConfig";
 
 /**
@@ -59,6 +63,9 @@ export interface BuildComplexityRouterConfigParams {
   tierDistancePenalty: number;
   adaptiveEligible: AdaptiveEligible;
   returnRawModelName: boolean;
+  tierBoundaries?: TierBoundaries;
+  tokenThresholds?: TokenThresholds;
+  dimensionWeights?: DimensionWeights;
 }
 
 export interface ComplexityRouterConfigPayload {
@@ -84,6 +91,9 @@ export interface ComplexityRouterConfigPayload {
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  tier_boundaries?: TierBoundaries;
+  token_thresholds?: TokenThresholds;
+  dimension_weights?: DimensionWeights;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -176,10 +186,16 @@ export const buildComplexityRouterConfig = ({
   tierDistancePenalty,
   adaptiveEligible,
   returnRawModelName,
+  tierBoundaries,
+  tokenThresholds,
+  dimensionWeights,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
+  // A router whose classifier falls back to the default model never scores anything, so shipping scorer
+  // knobs on it would persist settings that can only mislead whoever reads the config next.
+  const scorerRuns = heuristicScoringRoleFor(classifierType, classifierFallback) !== "never";
 
   return {
     tiers,
@@ -218,5 +234,8 @@ export const buildComplexityRouterConfig = ({
       adaptive_eligible: adaptiveEligible,
     }),
     ...(returnRawModelName && { return_raw_model_name: true }),
+    ...(scorerRuns && tierBoundaries !== undefined && { tier_boundaries: tierBoundaries }),
+    ...(scorerRuns && tokenThresholds !== undefined && { token_thresholds: tokenThresholds }),
+    ...(scorerRuns && dimensionWeights !== undefined && { dimension_weights: dimensionWeights }),
   };
 };
