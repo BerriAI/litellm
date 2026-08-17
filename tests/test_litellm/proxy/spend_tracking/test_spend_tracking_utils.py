@@ -1566,6 +1566,38 @@ def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_preserves_guardrail_usage_when_flag_false(
+    mock_should_store,
+):
+    """
+    LIT-5650 regression: provider-reported billable usage counters live in
+    guardrail_usage, a sibling of guardrail_response, precisely so the
+    default spend-log redaction cannot drop them. The response blob (which
+    also embeds a usage copy) must still be redacted wholesale.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "bedrock-guard",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": {
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "Sorry, the model cannot answer this question."}],
+                "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+            },
+            "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0},
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    entry = result[0]
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0}
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_passthrough_when_flag_true(
     mock_should_store,
 ):

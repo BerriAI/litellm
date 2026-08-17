@@ -5,15 +5,24 @@ insert into SpendLogGuardrailIndex when spend logs are written.
 
 import json
 from collections import defaultdict
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
+    DailyGuardrailUsageUnitsRepository,
     SpendLogGuardrailIndexRepository,
 )
+
+if TYPE_CHECKING:
+    from prisma import types as prisma_types
+
+_UsageUnitKey = tuple[str, str, str, str, str]
+"""(guardrail_id, date, team_id, api_key, usage_unit)"""
 
 
 def _guardrail_status_to_action(status: str | None) -> str:
@@ -28,7 +37,7 @@ def _guardrail_status_to_action(status: str | None) -> str:
     return "passed"
 
 
-def _parse_guardrail_info_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _parse_guardrail_info_from_payload(payload: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
     """Extract guardrail_information from spend log payload metadata."""
     meta = payload.get("metadata")
     if not meta:
@@ -51,6 +60,68 @@ def _date_str(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _parse_payload_start_time(payload: Mapping[str, Any]) -> datetime | None:
+    start_time: Final = payload.get("startTime")
+    if isinstance(start_time, datetime):
+        return start_time
+    if not isinstance(start_time, str):
+        return None
+    try:
+        return datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _iter_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) -> Iterator[tuple[_UsageUnitKey, int]]:
+    for payload in logs_to_process:
+        start_time = _parse_payload_start_time(payload)
+        if start_time is None:
+            continue
+        date_key = _date_str(start_time)
+        team_id = str(payload.get("team_id") or "")
+        api_key = str(payload.get("api_key") or "")
+        for entry in _parse_guardrail_info_from_payload(payload):
+            guardrail_id = entry.get("guardrail_id") or entry.get("guardrail_name") or ""
+            usage = entry.get("guardrail_usage")
+            if not guardrail_id or not isinstance(usage, dict):
+                continue
+            for unit_name, units in usage.items():
+                if isinstance(units, int) and not isinstance(units, bool) and units > 0:
+                    yield (guardrail_id, date_key, team_id, api_key, unit_name), units
+
+
+def _sum_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) -> Mapping[_UsageUnitKey, int]:
+    increments: Final = tuple(_iter_usage_unit_increments(logs_to_process))
+    keys: Final = frozenset(k for k, _ in increments)
+    return MappingProxyType({key: sum(u for k, u in increments if k == key) for key in keys})
+
+
+async def _upsert_usage_unit_row(prisma_client: PrismaClient, key: _UsageUnitKey, units: int) -> None:
+    guardrail_id, date_key, team_id, api_key, usage_unit = key
+    row: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsCreateInput] = {
+        "guardrail_id": guardrail_id,
+        "date": date_key,
+        "team_id": team_id,
+        "api_key": api_key,
+        "usage_unit": usage_unit,
+        "units": units,
+    }
+    where: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsWhereUniqueInput] = {
+        "guardrail_id_date_team_id_api_key_usage_unit": {
+            "guardrail_id": guardrail_id,
+            "date": date_key,
+            "team_id": team_id,
+            "api_key": api_key,
+            "usage_unit": usage_unit,
+        }
+    }
+    data: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsUpsertInput] = {
+        "create": row,
+        "update": {"units": {"increment": units}},
+    }
+    await DailyGuardrailUsageUnitsRepository(prisma_client).table.upsert(where=where, data=data)
 
 
 async def process_spend_logs_guardrail_usage(
@@ -76,14 +147,9 @@ async def process_spend_logs_guardrail_usage(
 
     for payload in logs_to_process:
         request_id = payload.get("request_id")
-        start_time = payload.get("startTime")
-        if not request_id or not start_time:
+        start_time = _parse_payload_start_time(payload)
+        if not request_id or start_time is None:
             continue
-        if isinstance(start_time, str):
-            try:
-                start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                continue
         date_key = _date_str(start_time)
 
         for entry in _parse_guardrail_info_from_payload(payload):
@@ -109,31 +175,17 @@ async def process_spend_logs_guardrail_usage(
                 }
             )
 
-    if not daily_guardrail and not index_rows:
+    usage_unit_totals: Final = _sum_usage_unit_increments(logs_to_process)
+
+    if not daily_guardrail and not index_rows and not usage_unit_totals:
         return
 
     try:
         # Insert index rows (skip duplicates by request_id + guardrail_id)
         if index_rows:
-            index_data: Final = []
-            for r in index_rows:
-                st = r["start_time"]
-                if isinstance(st, str):
-                    try:
-                        st = datetime.fromisoformat(st.replace("Z", "+00:00"))
-                    except (ValueError, TypeError):
-                        continue
-                index_data.append(
-                    {
-                        "request_id": r["request_id"],
-                        "guardrail_id": r["guardrail_id"],
-                        "policy_id": r.get("policy_id"),
-                        "start_time": st,
-                    }
-                )
             try:
                 await SpendLogGuardrailIndexRepository(prisma_client).table.create_many(
-                    data=index_data,
+                    data=index_rows,
                     skip_duplicates=True,
                 )
             except Exception as e:
@@ -168,5 +220,8 @@ async def process_spend_logs_guardrail_usage(
                     },
                 },
             )
+
+        for unit_key, units in usage_unit_totals.items():
+            await _upsert_usage_unit_row(prisma_client, unit_key, units)
     except Exception as e:
         verbose_proxy_logger.warning("Guardrail usage tracking failed (non-fatal): %s", e)

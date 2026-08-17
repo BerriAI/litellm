@@ -1069,6 +1069,22 @@ model LiteLLM_DailyGuardrailMetrics {
   @@index([guardrail_id])
 }
 
+// Daily guardrail billable usage units (one row per guardrail/day/team/key/unit type)
+model LiteLLM_DailyGuardrailUsageUnits {
+  guardrail_id String
+  date         String   // YYYY-MM-DD
+  team_id      String   // empty string when the request had no team
+  api_key      String   // hashed virtual key; empty string when unknown
+  usage_unit   String   // provider counter name, e.g. Bedrock's contentPolicyUnits
+  units        BigInt   @default(0)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@id([guardrail_id, date, team_id, api_key, usage_unit])
+  @@index([date])
+  @@index([guardrail_id, date])
+}
+
 // Daily policy metrics for usage dashboard (one row per policy per day)
 model LiteLLM_DailyPolicyMetrics {
   policy_id           String
