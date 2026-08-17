@@ -168,6 +168,15 @@ class TagRateLimitEntry(BaseModel):
     # this lets an operator shed them sooner without shortening
     # period_seconds itself.
     key_ttl_seconds: int | None = None
+    # Overrides the size of the dedicated in-memory cache partition this
+    # entry's own keys live in, when Redis isn't configured (or as a local
+    # fast-path cache when it is). Unset means this entry shares the hook's
+    # single default partition, sized by
+    # litellm.tag_rate_limiter_max_in_memory_cache_size (200 if that's also
+    # unset). A high-cardinality tag_id can churn past that shared cap and
+    # evict another entry's active counters; setting this gives the entry
+    # its own dedicated partition instead.
+    max_in_memory_cache_size: int | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -181,6 +190,12 @@ class TagRateLimitEntry(BaseModel):
     def _validate_key_ttl_seconds(self) -> "TagRateLimitEntry":
         if self.key_ttl_seconds is not None and self.key_ttl_seconds <= 0:
             raise ValueError("key_ttl_seconds must be a positive integer when set")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_max_in_memory_cache_size(self) -> "TagRateLimitEntry":
+        if self.max_in_memory_cache_size is not None and self.max_in_memory_cache_size <= 0:
+            raise ValueError("max_in_memory_cache_size must be a positive integer when set")
         return self
 
 

@@ -1474,6 +1474,41 @@ def test_build_limits_index_is_also_keyed_by_team_public_model_name():
     assert by_alias[0].team_scope == "team-1"
 
 
+def test_build_limits_index_preserves_key_ttl_seconds_and_max_in_memory_cache_size():
+    """
+    Regression test: _configured_limit_for_signature used to reconstruct a
+    fresh TagRateLimitEntry from a 5-field dedup signature that didn't
+    include key_ttl_seconds or max_in_memory_cache_size, silently resetting
+    both to None for every entry that went through the real indexing path
+    (which is every entry reachable from async_filter_deployments /
+    async_log_success_event) -- only entries built directly in a test, never
+    through _build_limits_index, kept their configured values.
+    """
+    deployment = _deployment(
+        "grp",
+        "dep-1",
+        {
+            "request_limits": {
+                "limits": [
+                    {
+                        "name": "user_cap",
+                        "tag_id": "end_user_id",
+                        "limit": 5,
+                        "period_seconds": 60,
+                        "key_ttl_seconds": 120,
+                        "max_in_memory_cache_size": 500,
+                    }
+                ]
+            }
+        },
+    )
+    index = _build_limits_index([deployment])
+    configured = index.resolve("grp", team_id=None)
+    assert len(configured) == 1
+    assert configured[0].entry.key_ttl_seconds == 120
+    assert configured[0].entry.max_in_memory_cache_size == 500
+
+
 def test_build_limits_index_keeps_different_teams_same_alias_separate():
     """
     `team_public_model_name` is only unique per team: Router itself lets two
@@ -1845,7 +1880,7 @@ async def test_cross_unit_refund_leaves_no_phantom_increment_in_memory(time_cont
 async def test_release_floors_at_zero_instead_of_going_negative(time_controller):
     limiter = _make_limiter(time_controller)
     key = "{tag_rl:test:concurrency:floor:chain:u1}:inflight"
-    await limiter._decrement_floor_zero(key, -1.0)
+    await limiter._decrement_floor_zero(limiter.internal_usage_cache, key, -1.0)
     value = await limiter.internal_usage_cache.async_get_cache(key=key, litellm_parent_otel_span=None)
     assert (float(value) if value is not None else 0.0) == 0.0
 
@@ -1869,18 +1904,18 @@ async def test_refund_failure_on_one_key_does_not_block_others_or_raise(time_con
     rejecting_key = "{tag_rl:test:refund-fail:c}:requests"
 
     class _FlakyLimiter(_PROXY_TagRateLimiter):
-        async def _decrement_floor_zero(self, key: str, delta: float) -> None:
+        async def _decrement_floor_zero(self, cache, key: str, delta: float) -> None:
             if key == failing_key:
                 raise RuntimeError("simulated transient redis failure")
-            await super()._decrement_floor_zero(key, delta)
+            await super()._decrement_floor_zero(cache, key, delta)
 
     flaky = _FlakyLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
 
     failing_index, values = await flaky._atomic_check_and_increment(
         [
-            (failing_key, 10.0, 1.0, 60),
-            (other_key, 10.0, 1.0, 60),
-            (rejecting_key, 0.0, 1.0, 60),
+            (flaky.internal_usage_cache, failing_key, 10.0, 1.0, 60),
+            (flaky.internal_usage_cache, other_key, 10.0, 1.0, 60),
+            (flaky.internal_usage_cache, rejecting_key, 0.0, 1.0, 60),
         ]
     )
 
@@ -2343,3 +2378,268 @@ def test_ttl_for_concurrency_never_drops_below_the_safety_floor_even_with_a_lowe
 def test_tag_rate_limit_entry_rejects_non_positive_key_ttl_seconds():
     with pytest.raises(ValueError):
         TagRateLimitEntry(name="per_minute", limit=1, period_seconds=60, key_ttl_seconds=0)
+
+
+# ---------------------------------------------------------------------------
+# per-tag max_in_memory_cache_size override -- dedicated cache partitions
+# ---------------------------------------------------------------------------
+
+
+def test_tag_rate_limit_entry_rejects_non_positive_max_in_memory_cache_size():
+    with pytest.raises(ValueError):
+        TagRateLimitEntry(name="per_minute", limit=1, period_seconds=60, max_in_memory_cache_size=0)
+
+
+def _two_request_limit_router(team_limit: int, user_limit: int, user_cache_size: int | None) -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [
+                            {"name": "team_cap", "tag_id": "team_id", "limit": team_limit, "period_seconds": 60},
+                            {
+                                "name": "user_cap",
+                                "tag_id": "end_user_id",
+                                "limit": user_limit,
+                                "period_seconds": 60,
+                                "max_in_memory_cache_size": user_cache_size,
+                            },
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_max_in_memory_cache_size_override_isolates_a_flood_on_that_entry_from_a_default_partition_entry(
+    time_controller,
+):
+    """
+    An entry with its own max_in_memory_cache_size gets a dedicated cache
+    partition. Flooding that entry's own high-cardinality tag values must
+    never evict a *different* entry's bucket that was never given an
+    override and still lives on the hook's single default partition.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _two_request_limit_router(team_limit=1, user_limit=1000, user_cache_size=5)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # team_cap's bucket (default partition) is created and admitted once.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["team_id:t1"]}}
+    )
+
+    # Flood user_cap's own dedicated partition (cap=5) past its own capacity
+    # many times over -- this must stay fully confined to user_cap's own
+    # partition and never touch team_cap's default-partition bucket.
+    for i in range(250):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": [f"end_user_id:flood-{i}"]}},
+        )
+
+    # team_cap's bucket must still be at its limit (1) -- a second team_id:t1
+    # request is rejected. If it had been evicted by user_cap's flood, this
+    # would instead admit (a fresh, zeroed counter).
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["team_id:t1"]}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_two_entries_sharing_the_identical_max_in_memory_cache_size_still_get_separate_partitions(
+    time_controller,
+):
+    """
+    Partitions are keyed by the entry's full signature, not the override
+    value alone: two unrelated entries that happen to choose the identical
+    max_in_memory_cache_size must not be merged into one shared cache, or
+    flooding one would evict the other's bucket exactly like the bug this
+    override exists to fix.
+    """
+    limiter = _make_limiter(time_controller)
+    # Both team_cap and user_cap set the identical max_in_memory_cache_size (5).
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [
+                            {
+                                "name": "team_cap",
+                                "tag_id": "team_id",
+                                "limit": 1,
+                                "period_seconds": 60,
+                                "max_in_memory_cache_size": 5,
+                            },
+                            {
+                                "name": "user_cap",
+                                "tag_id": "end_user_id",
+                                "limit": 1000,
+                                "period_seconds": 60,
+                                "max_in_memory_cache_size": 5,
+                            },
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["team_id:t1"]}}
+    )
+
+    for i in range(250):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": [f"end_user_id:flood-{i}"]}},
+        )
+
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["team_id:t1"]}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrency_slot_with_a_cache_size_override_is_released_against_the_same_partition(time_controller):
+    """
+    A concurrency reservation on an entry with its own max_in_memory_cache_size
+    must be released against that same dedicated partition. If the release
+    path fell back to the default partition instead, it would silently no-op
+    (nothing to decrement there) and the reservation would leak forever.
+    """
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "concurrency_limits": {
+                        "limits": [
+                            {
+                                "name": "inflight",
+                                "tag_id": "end_user_id",
+                                "limit": 1,
+                                "period_seconds": 300,
+                                "max_in_memory_cache_size": 10,
+                            }
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    limiter = _make_limiter(time_controller)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
+    await limiter.async_filter_deployments(model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs)
+
+    # At capacity: a second concurrent reservation for the same tag is rejected.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+
+    # The first request completes -- its slot is released against the
+    # overridden partition -- freeing capacity again.
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 0,
+        "response_cost": 0,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_token_accounting_with_a_cache_size_override_lands_on_that_entrys_own_partition(time_controller):
+    """
+    tokens/dollars increments go through a per-partition v3 handler (grouped
+    in async_log_success_event), not always the default one -- an entry with
+    its own max_in_memory_cache_size must have its usage actually accounted,
+    not silently dropped or misrouted to the default partition's handler.
+    """
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "token_limits": {
+                        "limits": [
+                            {
+                                "name": "daily",
+                                "tag_id": "end_user_id",
+                                "limit": 100,
+                                "period_seconds": 86400,
+                                "max_in_memory_cache_size": 10,
+                            }
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    limiter = _make_limiter(time_controller)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    kwargs = {
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "standard_logging_object": {
+            "model_group": "grp",
+            "model_id": "dep-1",
+            "total_tokens": 150,
+            "response_cost": 0,
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # 150 tokens already used, over the limit of 100 -- the next admission
+    # check must reject. If the increment had been silently dropped (never
+    # reaching the overridden partition), this would incorrectly admit.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )

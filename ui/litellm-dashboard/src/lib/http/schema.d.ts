@@ -36250,6 +36250,8 @@ export interface components {
             key_ttl_seconds?: number | null;
             /** Limit */
             limit: number;
+            /** Max In Memory Cache Size */
+            max_in_memory_cache_size?: number | null;
             /** Name */
             name: string;
             /** Period Seconds */
