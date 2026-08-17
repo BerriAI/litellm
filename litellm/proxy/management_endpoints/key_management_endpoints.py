@@ -3517,23 +3517,44 @@ async def _build_model_max_budget_usage(
     return result
 
 
-def _budget_window_to_dict(window: object) -> dict | None:
+def _budget_window_to_dict(window: object) -> Mapping[str, object] | None:
     """Coerce a budget_limits entry to a dict; None when the entry is unusable."""
     if isinstance(window, dict):
         return window
-    model_dump = getattr(window, "model_dump", None)
-    if callable(model_dump):
+    model_dump: Final = getattr(window, "model_dump", None)
+    if not callable(model_dump):
+        return None
+    try:
+        dumped: Final = model_dump()
+    except Exception:  # noqa: BLE001  # model_dump implementations can raise arbitrary errors
+        return None
+    return dumped if isinstance(dumped, dict) else None
+
+
+def _coerce_budget_limits(budget_limits: object) -> Sequence[object] | None:
+    """Coerce budget_limits to a sequence of windows, parsing JSON strings; None when unusable."""
+    if isinstance(budget_limits, str):
         try:
-            dumped: Any = model_dump()
-        except Exception:  # noqa: BLE001
+            parsed: Final = json.loads(budget_limits)
+        except (TypeError, ValueError):
             return None
-        return dumped if isinstance(dumped, dict) else None
+        return parsed if isinstance(parsed, list) else None
+    return budget_limits if isinstance(budget_limits, list) else None
+
+
+def _parse_window_max_budget(value: object) -> float | None:
+    """Coerce a window's max_budget to float; None when absent or unparseable."""
+    if isinstance(value, (int, float, str)):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
     return None
 
 
-async def _attach_budget_limits_usage(key_info: dict, api_key_hash: str) -> None:
+async def _budget_window_with_usage(window: Mapping[str, object], api_key_hash: str) -> Mapping[str, object]:
     """
-    Attach current-window spend to each entry in key_info["budget_limits"], in place.
+    Return a copy of a budget window with current-window spend attached.
 
     Per-window spend is not persisted in the DB; it lives in the cross-pod spend
     counters (spend:key:{hashed_token}:window:{budget_duration}) that
@@ -3544,39 +3565,43 @@ async def _attach_budget_limits_usage(key_info: dict, api_key_hash: str) -> None
     """
     from litellm.proxy.proxy_server import get_current_spend
 
-    budget_limits: Any = key_info.get("budget_limits")
-    if isinstance(budget_limits, str):
-        try:
-            budget_limits = json.loads(budget_limits)
-        except (TypeError, ValueError):
-            return
-        key_info["budget_limits"] = budget_limits
-    if not isinstance(budget_limits, list):
-        return
+    duration: Final = window.get("budget_duration")
+    if not duration:
+        return dict(window)  # mutable-ok: per-window response copy, built once per window
+    spend: Final = await get_current_spend(
+        counter_key=f"spend:key:{api_key_hash}:window:{duration}",
+        fallback_spend=0.0,
+        max_budget=_parse_window_max_budget(window.get("max_budget")),
+        window_entity_type="Key",
+        window_entity_id=api_key_hash,
+        window_start=get_budget_window_start(window),
+    )
+    return {**window, "current_spend": round(spend, 4)}  # mutable-ok: per-window response copy, built once per window
 
-    for idx, window in enumerate(budget_limits):
-        w = _budget_window_to_dict(window)
-        if not w:
-            continue
-        budget_limits[idx] = w
-        duration: Any = w.get("budget_duration")
-        max_budget: Any = w.get("max_budget")
-        if not duration:
-            continue
-        try:
-            max_budget = float(max_budget) if max_budget is not None else None
-        except (TypeError, ValueError):
-            max_budget = None
-        counter_key = f"spend:key:{api_key_hash}:window:{duration}"
-        spend = await get_current_spend(
-            counter_key=counter_key,
-            fallback_spend=0.0,
-            max_budget=max_budget,
-            window_entity_type="Key",
-            window_entity_id=api_key_hash,
-            window_start=get_budget_window_start(w),
-        )
-        w["current_spend"] = round(spend, 4)
+
+async def _budget_limits_entry_with_usage(window: object, api_key_hash: str) -> object:
+    """Return the window as an enriched dict when dict-coercible; the original entry otherwise."""
+    coerced: Final = _budget_window_to_dict(window)
+    if not coerced:
+        return window
+    return await _budget_window_with_usage(window=coerced, api_key_hash=api_key_hash)
+
+
+async def _budget_limits_with_usage(budget_limits: object, api_key_hash: str) -> Sequence[object] | None:
+    """
+    Return budget_limits as window dicts with current-window spend attached.
+
+    None when budget_limits is not a usable (possibly JSON-encoded) list; the
+    caller keeps the original value then. Entries that are not dict-coercible
+    are preserved as-is.
+    """
+    windows: Final = _coerce_budget_limits(budget_limits)
+    if windows is None:
+        return None
+    return [  # mutable-ok: entries are awaited, so they cannot be built inside a frozen wrapper
+        await _budget_limits_entry_with_usage(window=window, api_key_hash=api_key_hash)
+        for window in windows
+    ]
 
 
 @router.post(
@@ -3661,7 +3686,12 @@ async def info_key_fn_v2(
                     user_api_key_cache=user_api_key_cache,
                 )
             if k_token_hash:
-                await _attach_budget_limits_usage(key_info=k_dict, api_key_hash=k_token_hash)
+                budget_limits_usage = await _budget_limits_with_usage(
+                    budget_limits=k_dict.get("budget_limits"),
+                    api_key_hash=k_token_hash,
+                )
+                if budget_limits_usage is not None:
+                    k_dict["budget_limits"] = budget_limits_usage
 
             filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
@@ -3777,7 +3807,12 @@ async def info_key_fn(
                 model_max_budget=model_max_budget,
                 user_api_key_cache=user_api_key_cache,
             )
-        await _attach_budget_limits_usage(key_info=key_info, api_key_hash=key_token_hash)
+        budget_limits_usage: Final = await _budget_limits_with_usage(
+            budget_limits=key_info.get("budget_limits"),
+            api_key_hash=key_token_hash,
+        )
+        if budget_limits_usage is not None:
+            key_info["budget_limits"] = budget_limits_usage
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
