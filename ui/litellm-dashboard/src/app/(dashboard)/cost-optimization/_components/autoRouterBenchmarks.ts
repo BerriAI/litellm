@@ -24,8 +24,11 @@ export const windowFor = (range: BenchmarkWindow, now: Date): { start_date: stri
 
 export interface BenchmarkView {
   label: string;
-  stats: AutoRouterBenchmarkTotals;
+  stats: AutoRouterBenchmarkTotals | AutoRouterBenchmarkGroup;
 }
+
+export const viewGroup = (view: BenchmarkView): AutoRouterBenchmarkGroup | null =>
+  "router_name" in view.stats ? view.stats : null;
 
 export const groupKey = (group: AutoRouterBenchmarkGroup): string => `${group.router_name} ${group.router_type}`;
 
@@ -91,9 +94,9 @@ export const bucketRows = (cache: AutoRouterCacheStats): BucketRow[] => {
 };
 
 export const expiredMissShare = (cache: AutoRouterCacheStats): number | null => {
-  const misses = cache.return_to_tier.turns - cache.return_to_tier.hits;
-  if (misses <= 0) return null;
-  return (100 * cache.return_misses_expired) / misses;
+  const total = bucketTurnsTotal(cache);
+  if (total <= 0) return null;
+  return (100 * cache.return_misses_expired) / total;
 };
 
 export const pctLabel = (value: number, digits: number = 1): string => `${value.toFixed(digits)}%`;

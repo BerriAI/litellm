@@ -39,6 +39,12 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.bedrock.request_metadata import (
+    bedrock_request_metadata_headers,
+    bedrock_request_metadata_is_owned,
+    merge_bedrock_invoke_headers,
+    resolve_bedrock_request_metadata,
+)
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -80,6 +86,7 @@ from ..common_utils import (
     bedrock_converse_supports_parallel_tool_use_config,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
+    is_bedrock_application_inference_profile_arn,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
 )
@@ -514,6 +521,7 @@ class AmazonConverseConfig(BaseConfig):
             supported_params.append("tool_choice")
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+            supported_params.append("output_config")
             # For nova imported models, also add web_search_options
             if "nova" in model.lower():
                 supported_params.append("web_search_options")
@@ -564,6 +572,7 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+            supported_params.append("output_config")
 
         if base_model.startswith("anthropic"):
             supported_params.append("context_management")
@@ -919,6 +928,10 @@ class AmazonConverseConfig(BaseConfig):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
                 )
+            elif param == "output_config" and isinstance(value, dict):
+                mapped_output_config = dict(value)
+                normalize_bedrock_opus_output_config_effort(model=model, output_config=mapped_output_config)
+                optional_params["output_config"] = mapped_output_config  # rebind-ok: out-param store like siblings
             elif param == "context_management" and isinstance(value, (dict, list)):
                 self._map_context_management_param(value, optional_params)
             if param == "requestMetadata":
@@ -1312,7 +1325,12 @@ class AmazonConverseConfig(BaseConfig):
         additional_request_params = filter_exceptions_from_params(additional_request_params)
 
         if anthropic_output_config is not None and isinstance(anthropic_output_config, dict):
-            if base_model.startswith("anthropic"):
+            # Application inference profile ARNs hide the underlying model, so the
+            # effort ceiling and capability gates below cannot run; forward
+            # verbatim (like ``thinking``) and let Bedrock enforce.
+            if is_bedrock_application_inference_profile_arn(model):
+                additional_request_params["output_config"] = anthropic_output_config
+            elif base_model.startswith("anthropic"):
                 if litellm.drop_params is True and not AnthropicConfig._model_supports_effort_param(model, "bedrock"):
                     litellm.verbose_logger.warning(
                         DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -1640,6 +1658,13 @@ class AmazonConverseConfig(BaseConfig):
             user_continue_message=litellm_params.pop("user_continue_message", None),
         )
 
+        request_metadata: Final = resolve_bedrock_request_metadata(
+            litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
+        )
+        if bedrock_request_metadata_is_owned():
+            _data.pop("requestMetadata", None)
+            if request_metadata is not None:
+                _data["requestMetadata"] = request_metadata
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
 
         return data
@@ -1693,6 +1718,13 @@ class AmazonConverseConfig(BaseConfig):
             user_continue_message=litellm_params.pop("user_continue_message", None),
         )
 
+        request_metadata: Final = resolve_bedrock_request_metadata(
+            litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
+        )
+        if bedrock_request_metadata_is_owned():
+            _data.pop("requestMetadata", None)
+            if request_metadata is not None:
+                _data["requestMetadata"] = request_metadata
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
 
         return data
@@ -2246,7 +2278,8 @@ class AmazonConverseConfig(BaseConfig):
     ) -> dict:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        return headers
+        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+        return merge_bedrock_invoke_headers(headers, (), metadata_headers, owned_names)
 
     def should_fake_stream(
         self,

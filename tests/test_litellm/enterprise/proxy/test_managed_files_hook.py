@@ -8,6 +8,7 @@ async_post_call_success_hook when processing completed batch responses.
 import asyncio
 import base64
 import json
+import logging
 
 import pytest
 from typing import Optional
@@ -144,8 +145,11 @@ async def test_get_user_created_file_ids_skips_rows_without_file_object():
     managed_files = _make_managed_files_instance()
     managed_files.prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
         return_value=[
-            MagicMock(file_object=_make_file_object().model_dump()),
-            MagicMock(file_object=None),
+            MagicMock(
+                file_object=_make_file_object().model_dump(),
+                unified_file_id="unified-id-1",
+            ),
+            MagicMock(file_object=None, unified_file_id="unified-id-2"),
         ]
     )
 
@@ -153,7 +157,78 @@ async def test_get_user_created_file_ids_skips_rows_without_file_object():
         _make_user_api_key_dict(), ["file-output-abc"]
     )
 
-    assert [file.id for file in files] == ["file-output-abc"]
+    assert [file.id for file in files] == ["unified-id-1"]
+
+
+@pytest.mark.asyncio
+async def test_get_user_created_file_ids_remaps_stored_raw_provider_id_to_unified_id():
+    """
+    Rows registered from batch outputs store the provider's file object, whose
+    id is the raw provider id (e.g. file-abc). Listing must return the row's
+    unified_file_id so callers get ids that work on the managed routes.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/35362.
+    """
+    unified_id = "bGl0ZWxsbV9wcm94eTt1bmlmaWVkX2lkLGRlYWRiZWVm"
+    raw_provider_object = _make_file_object("file-raw-provider-123")
+    managed_files = _make_managed_files_instance()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(
+                file_object=raw_provider_object.model_dump(),
+                unified_file_id=unified_id,
+            ),
+        ]
+    )
+
+    files = await managed_files.get_user_created_file_ids(
+        _make_user_api_key_dict(), ["file-raw-provider-123"]
+    )
+
+    assert [file.id for file in files] == [unified_id]
+    assert files[0].filename == raw_provider_object.filename
+    assert files[0].purpose == raw_provider_object.purpose
+
+
+@pytest.mark.asyncio
+async def test_parse_managed_file_object_warning_omits_rejected_values(caplog):
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _parse_managed_file_object,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        parsed = _parse_managed_file_object(
+            {"id": "file-corrupt", "object": "file", "filename": "confidential.jsonl"},
+            "unified-corrupt",
+        )
+
+    assert parsed is None
+    assert "unified-corrupt" in caplog.text
+    assert "bytes" in caplog.text
+    assert "confidential.jsonl" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_get_user_created_file_ids_skips_unparseable_rows():
+    managed_files = _make_managed_files_instance()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(
+                file_object={"id": "file-corrupt", "object": "file"},
+                unified_file_id="unified-corrupt",
+            ),
+            MagicMock(
+                file_object=_make_file_object().model_dump(),
+                unified_file_id="unified-valid",
+            ),
+        ]
+    )
+
+    files = await managed_files.get_user_created_file_ids(
+        _make_user_api_key_dict(), ["file-output-abc"]
+    )
+
+    assert [file.id for file in files] == ["unified-valid"]
 
 
 @pytest.mark.asyncio
@@ -435,6 +510,117 @@ def _make_real_managed_files_instance():
     )
 
 
+def _make_object_store_instance():
+    """A real store_unified_object_id over an AsyncMock prisma client, so both the
+    upsert and the update-only write path can be asserted."""
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.async_set_cache = AsyncMock()
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock()
+    mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock()
+
+    return (
+        _PROXY_LiteLLMManagedFiles(
+            internal_usage_cache=mock_cache,
+            prisma_client=mock_prisma,
+        ),
+        mock_prisma,
+    )
+
+
+@pytest.mark.asyncio
+async def test_poll_refreshes_batch_state_without_claiming_the_row():
+    """Regression (stale batch state): a poll observes a batch it did not create, so it
+    must still refresh status and file_object -- otherwise GET /v1/batches serves the
+    create-time snapshot forever -- while writing none of the attribution columns and
+    never creating a row it would then own."""
+    managed_files, mock_prisma = _make_object_store_instance()
+    poller = UserAPIKeyAuth(
+        api_key="sk-the-poller", user_id="bob", team_id="team-bravo", parent_otel_span=None
+    )
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="uoi-1",
+        file_object=_make_batch_response(status="completed"),
+        litellm_parent_otel_span=None,
+        model_object_id="batch-123",
+        file_purpose="batch",
+        user_api_key_dict=poller,
+        request_tags=("poller:tag",),
+        persist_attribution=False,
+        create_if_missing=False,
+    )
+
+    # the row is refreshed in place, and cannot be conjured by a poll
+    mock_prisma.db.litellm_managedobjecttable.upsert.assert_not_awaited()
+    update_many = mock_prisma.db.litellm_managedobjecttable.update_many
+    update_many.assert_awaited_once()
+    call = update_many.await_args
+    assert call.kwargs["where"] == {"unified_object_id": "uoi-1"}
+
+    written = call.kwargs["data"]
+    assert written["status"] == "completed"
+    assert json.loads(written["file_object"])["output_file_id"] == "file-output-abc"
+    # nothing the poller could be billed for
+    for owned in ("api_key", "request_tags", "created_by", "team_id"):
+        assert owned not in written
+
+
+@pytest.mark.asyncio
+async def test_create_still_upserts_and_claims_attribution():
+    """The create is the one caller that can speak for the batch, so it keeps the upsert
+    (creating the row when absent) and writes the attribution columns."""
+    managed_files, mock_prisma = _make_object_store_instance()
+    creator = UserAPIKeyAuth(
+        api_key="sk-the-creator", user_id="alice", team_id="team-alpha", parent_otel_span=None
+    )
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="uoi-2",
+        file_object=_make_batch_response(status="validating"),
+        litellm_parent_otel_span=None,
+        model_object_id="batch-456",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+        request_tags=("env:prod",),
+        persist_attribution=True,
+    )
+
+    mock_prisma.db.litellm_managedobjecttable.update_many.assert_not_awaited()
+    upsert = mock_prisma.db.litellm_managedobjecttable.upsert
+    upsert.assert_awaited_once()
+    created = upsert.await_args.kwargs["data"]["create"]
+    # UserAPIKeyAuth hashes an sk- token on construction; the hash is what is billed
+    assert created["api_key"] == creator.api_key
+    assert created["api_key"] != "sk-the-creator"
+    assert created["created_by"] == "alice"
+    assert created["team_id"] == "team-alpha"
+
+
+@pytest.mark.asyncio
+async def test_default_callers_still_create_their_rows():
+    """create_if_missing defaults to True, so the fine-tune, Responses and managed
+    /v1/batches callers, none of which passes it, keep upserting exactly as before."""
+    managed_files, mock_prisma = _make_object_store_instance()
+
+    await managed_files.store_unified_object_id(
+        unified_object_id="uoi-3",
+        file_object=_make_batch_response(),
+        litellm_parent_otel_span=None,
+        model_object_id="ft-789",
+        file_purpose="fine-tune",
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    mock_prisma.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+    mock_prisma.db.litellm_managedobjecttable.update_many.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_store_unified_file_id_is_idempotent_via_upsert():
     """Regression test for the managed-batch retrieve 500 (UniqueViolationError on
@@ -642,3 +828,49 @@ async def test_cost_job_and_retrieve_paths_mint_identical_unified_output_file_id
         model_id="model-deploy-xyz",
         model_name=cost_job_model_name,
     )
+
+
+@pytest.mark.asyncio
+async def test_batch_create_hook_persists_creating_key_and_tags():
+    """Regression: the /v1/batches create hook must persist the creating key and the
+    request's tags on the managed object row. CheckBatchCost, which owns the batch's
+    accounting once the retrieve path defers to it, bills whatever the row carries, and
+    without these columns the cost lands on the user alone and the key's spend and
+    budget never see it."""
+    managed_files = _make_managed_files_instance()
+    creator = UserAPIKeyAuth(api_key="sk-the-creator", user_id="alice", parent_otel_span=None)
+    create_response = _make_batch_response(status="validating", output_file_id=None)
+
+    await managed_files.async_post_call_success_hook(
+        data={"litellm_metadata": {"tags": ["env:prod", "team:ml"], "user_api_key": creator.api_key}},
+        user_api_key_dict=creator,
+        response=create_response,
+    )
+
+    managed_files.store_unified_object_id.assert_awaited_once()
+    stored = managed_files.store_unified_object_id.await_args.kwargs
+    assert stored["persist_attribution"] is True
+    assert stored["request_tags"] == ("env:prod", "team:ml")
+    assert stored["user_api_key_dict"] is creator
+
+
+@pytest.mark.asyncio
+async def test_batch_retrieve_hook_does_not_claim_attribution():
+    """A retrieve carries unified_batch_id but no unified_file_id, so it must not rewrite
+    the row's paying key to whoever happens to poll the batch."""
+    managed_files = _make_managed_files_instance()
+    retrieve_response = _make_batch_response(status="in_progress", output_file_id=None)
+    retrieve_response._hidden_params = {
+        "unified_batch_id": "some-unified-batch-id",
+        "model_id": "model-deploy-xyz",
+        "model_name": "azure/gpt-4",
+    }
+
+    await managed_files.async_post_call_success_hook(
+        data={"litellm_metadata": {"tags": ["poller:tag"]}},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-the-poller", user_id="bob", parent_otel_span=None),
+        response=retrieve_response,
+    )
+
+    managed_files.store_unified_object_id.assert_awaited_once()
+    assert managed_files.store_unified_object_id.await_args.kwargs["persist_attribution"] is False

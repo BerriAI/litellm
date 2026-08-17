@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final
@@ -142,8 +143,95 @@ def verify_proxy_key(
         )
 
 
-def _exec(path: str, args: Sequence[str], env: Mapping[str, str]) -> None:
-    os.execvpe(path, list(args), dict(env))
+_WINDOWS_SHIM_SUFFIXES: Final[frozenset[str]] = frozenset({".cmd", ".bat"})
+_CMD_PERCENT_GUARD: Final = "%%cd:~,%"
+_CMD_LINE_BREAKS: Final = ("\r", "\n")
+
+
+def _double_trailing_backslashes(segment: str) -> str:
+    bare: Final = segment.rstrip("\\")
+    return bare + "\\" * 2 * (len(segment) - len(bare))
+
+
+def _quote_for_cmd(token: str) -> str:
+    """Quote one token so both parsers that read it see the original text.
+
+    Follows the algorithm the Rust standard library settled on for batch files
+    after CVE-2024-24576. Two parsers see this token: cmd.exe, which ends a
+    quoted string on a lone `"` and so wants an embedded one doubled, and the
+    shim's own interpreter, which re-splits `%*` under C runtime rules where a
+    backslash escapes the quote that follows it, so every backslash run standing
+    before a quote is doubled. Quoting cannot stop cmd expanding `%VAR%`, so each
+    `%` is prefixed with `%%cd:~,`: the zero-length substring of the always
+    defined `cd` expands to nothing and leaves no `%` pair for cmd to match.
+    """
+    escaped: Final = '""'.join(_double_trailing_backslashes(part) for part in token.split('"'))
+    return '"' + escaped.replace("%", _CMD_PERCENT_GUARD) + '"'
+
+
+def _windows_command(path: str, args: Sequence[str]) -> str | tuple[str, ...]:
+    """Build what CreateProcess runs, routing batch shims through cmd.exe.
+
+    npm installs Claude Code as `claude.cmd`, which PATHEXT lets shutil.which
+    resolve but CreateProcess refuses to run (WinError 193), so a shim has to go
+    through the command processor. cmd.exe does not follow the C runtime quoting
+    that subprocess would apply to an argument list, and it would split on `&` or
+    `|` in a forwarded argument, so the shim case is emitted as one verbatim
+    command line with every token quoted. Every switch is load-bearing: `/s`
+    makes cmd strip only the outer pair, leaving each token quoted and its
+    metacharacters inert, `/e:on` keeps the command extensions that the percent
+    guard is built out of, `/v:off` keeps `!` from expanding, and `/d` keeps a
+    machine's AutoRun commands out of the launch. argv[0] carries the
+    caller-facing name on POSIX; Windows needs the resolved path there.
+
+    Raises AgentRunError for an argument holding a line break, which cmd would
+    read as the end of the command line and silently drop the rest of.
+    """
+    rest: Final = tuple(args[1:])
+    if os.path.splitext(path)[1].lower() not in _WINDOWS_SHIM_SUFFIXES:
+        return (path, *rest)
+    if any(brk in token for token in rest for brk in _CMD_LINE_BREAKS):
+        raise AgentRunError(
+            f"Cannot pass an argument containing a line break to `{os.path.basename(path)}` on "
+            "Windows: cmd.exe ends the command line there, so the agent would silently lose it."
+        )
+    inner: Final = " ".join(_quote_for_cmd(token) for token in (path, *rest))
+    return f'cmd.exe /d /e:on /v:off /s /c "{inner}"'
+
+
+def _spawn_and_wait(command: str | Sequence[str], env: Mapping[str, str]) -> int:
+    return subprocess.run(command, env=dict(env), check=False).returncode
+
+
+def _replace_process(
+    path: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    execvpe: Callable[..., None] = os.execvpe,
+) -> None:
+    execvpe(path, list(args), dict(env))
+
+
+def _hand_off(
+    path: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    platform: str = sys.platform,
+    replace: Callable[[str, Sequence[str], Mapping[str, str]], None] = _replace_process,
+    spawn: Callable[[str | Sequence[str], Mapping[str, str]], int] = _spawn_and_wait,
+) -> None:
+    """Replace this process with the agent; on Windows, run it as a child instead.
+
+    os.exec* has no process-replacement semantics on Windows: the C runtime
+    spawns a detached child and terminates the parent, so the shell reclaims the
+    console and the agent's TUI never gets one. Windows therefore waits on the
+    child and exits with its status.
+    """
+    if platform.startswith("win"):
+        raise SystemExit(spawn(_windows_command(path, args), env))
+    replace(path, list(args), dict(env))
 
 
 def _restore_controlling_terminal() -> None:
@@ -175,13 +263,14 @@ def run_agent(
     base_env: Mapping[str, str] | None = None,
     which: Callable[[str], str | None] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
-    launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _exec,
+    launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
-    On success this replaces the current process and never returns. Raises
-    AgentRunError for missing binaries, an unreachable proxy, or a rejected key.
+    On success this never returns: POSIX replaces the current process, Windows
+    waits on the agent and exits with its status. Raises AgentRunError for
+    missing binaries, an unreachable proxy, or a rejected key.
     reattach_terminal, when given, runs just before handoff to restore stdin.
     """
     if not command:
@@ -277,9 +366,9 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
     return _command
 
 
-def agent_commands() -> list[click.Command]:
+def agent_commands() -> tuple[click.Command, ...]:
     """Build one top-level command per known agent, e.g. `lite claude`."""
-    return [_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items()]
+    return tuple(_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items())
 
 
 __all__ = [
