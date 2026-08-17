@@ -154,3 +154,27 @@ def test_accumulation_of_many_fragments_is_not_quadratic():
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     assert elapsed_ms < 50, f"1000-fragment append took {elapsed_ms:.1f} ms (expected < 50 ms); O(n^2) regression?"
+
+
+def test_could_close_json_after_many_blank_fragments_is_not_quadratic():
+    """
+    Regression test: a hostile upstream can send malformed JSON that never
+    closes, followed by thousands of blank keepalive fragments. Rescanning
+    every blank fragment on each could_close_json() call would make N calls
+    cost O(n^2) total; it must be O(1) regardless of how many blank
+    fragments preceded it.
+    """
+    accumulator = JSONFragmentAccumulator()
+    accumulator.append('{"a": ')  # never closes
+
+    start = time.perf_counter()
+    for _ in range(20_000):
+        accumulator.append("")
+        accumulator.could_close_json()
+    elapsed_ms = (time.perf_counter() - start) * 1000
+
+    assert accumulator.could_close_json() is False
+    assert elapsed_ms < 300, (
+        f"20000 blank-fragment could_close_json() calls took {elapsed_ms:.1f} ms "
+        "(expected < 300 ms); quadratic rescan regression?"
+    )
