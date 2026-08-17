@@ -28,12 +28,7 @@ def test_validate_tool_choice_standard_dict():
 
 
 def test_validate_tool_choice_cursor_format():
-    """Cursor IDE format {"type": "auto"} must be unwrapped to the bare string.
-
-    No OpenAI surface accepts the object form of these values. Forwarding it
-    verbatim makes the provider reject the call with
-    "Invalid value: 'auto' ... param: tool_choice.type".
-    """
+    """Cursor IDE format {"type": "auto"} is unwrapped to the bare string."""
     assert validate_chat_completion_tool_choice({"type": "auto"}) == "auto"
     assert validate_chat_completion_tool_choice({"type": "none"}) == "none"
     assert validate_chat_completion_tool_choice({"type": "required"}) == "required"

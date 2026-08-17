@@ -3419,14 +3419,7 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
     tool_choice: str | dict[str, object],
     expected_wire_tool_choice: str | dict[str, str],
 ) -> None:
-    """Object-wrapped tool_choice must never reach /v1/responses.
-
-    Clients (Cursor, Claude Code via /v1/messages) send ``{"type": "auto"}``.
-    The Responses API only accepts a hosted-tool name in ``tool_choice.type``,
-    so forwarding the wrapper verbatim fails the whole call with
-    ``Invalid value: 'auto' ... param: tool_choice.type`` -- which broke every
-    tool call, including web search, on responses-mode models.
-    """
+    """Object-wrapped tool_choice must never reach /v1/responses."""
     from unittest.mock import AsyncMock
 
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
