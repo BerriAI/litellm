@@ -1167,6 +1167,83 @@ class TestCheckBatchCost:
         ), f"billed {terminal_status} batch must keep its real terminal status in the DB"
 
     @pytest.mark.asyncio
+    async def test_terminal_batch_with_missing_output_file_is_retired_unbilled(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A terminal batch whose advertised output file 404s at the provider has
+        nothing to fetch on this or any later poll (Vertex AI advertises an output
+        path for every batch, even ones that never wrote it), so the job must be
+        retired as terminal on the first cycle instead of retrying until the
+        staleness sweep gives up on it.
+        """
+        import base64
+        from unittest.mock import patch
+
+        from litellm.exceptions import NotFoundError
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-output-gone-1"
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
+        mock_job.created_by = "user-1"
+
+        assert check_batch_cost_instance._has_batch_processed_column is True
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        missing_output_file_id = "gs://batch-out/job-1/predictions.jsonl"
+        mock_response = MagicMock()
+        mock_response.status = "failed"
+        mock_response.output_file_id = missing_output_file_id
+        mock_response.error_file_id = None
+        mock_response.model_dump_json.return_value = (
+            '{"id":"batch-1","status":"failed"}'
+        )
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"api_key": "sk-test"}
+        )
+
+        with (
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                side_effect=NotFoundError(
+                    message=f"404: output file {missing_output_file_id} does not exist",
+                    model="gemini-2.5-pro",
+                    llm_provider="vertex_ai",
+                ),
+            ) as mock_afile_content,
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+            ) as mock_calculate,
+        ):
+            await check_batch_cost_instance.check_batch_cost()
+
+        assert mock_afile_content.await_count == 1
+        mock_calculate.assert_not_awaited()
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        ), "a terminal batch with a 404ing output file must be retired, not retried forever"
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert update_data["status"] == "failed"
+        assert update_data["batch_processed"] is True
+
+    @pytest.mark.asyncio
     async def test_raw_output_file_id_converted_to_managed_id(
         self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
     ):
