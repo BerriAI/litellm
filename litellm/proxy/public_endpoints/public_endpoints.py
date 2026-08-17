@@ -415,9 +415,9 @@ async def get_complexity_scorer_defaults() -> ComplexityScorerDefaults:
     )
 
     return ComplexityScorerDefaults(
-        tier_boundaries=dict(DEFAULT_TIER_BOUNDARIES),
-        token_thresholds=dict(DEFAULT_TOKEN_THRESHOLDS),
-        dimension_weights=dict(DEFAULT_DIMENSION_WEIGHTS),
+        tier_boundaries=DEFAULT_TIER_BOUNDARIES,
+        token_thresholds=DEFAULT_TOKEN_THRESHOLDS,
+        dimension_weights=DEFAULT_DIMENSION_WEIGHTS,
     )
 
 

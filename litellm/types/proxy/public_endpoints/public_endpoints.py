@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -77,6 +78,6 @@ class ComplexityScorerDefaults(BaseModel):
     a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
     """
 
-    tier_boundaries: dict[str, float]
-    token_thresholds: dict[str, int]
-    dimension_weights: dict[str, float]
+    tier_boundaries: Mapping[str, float]
+    token_thresholds: Mapping[str, int]
+    dimension_weights: Mapping[str, float]
