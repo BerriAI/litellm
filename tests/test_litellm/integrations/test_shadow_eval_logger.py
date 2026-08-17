@@ -16,6 +16,7 @@ from litellm.integrations.shadow_eval_logger import (
     JUDGE_MAX_OUTPUT_TOKENS,
     ActiveShadowEvalJob,
     ShadowEvalLogger,
+    _failure_detail,
     _judge_user_prompt,
     _sample_hits,
     _unmask_preference,
@@ -438,6 +439,15 @@ def test_unmask_preference(raw, real_is_a, expected):
     assert _unmask_preference(raw, real_is_a) == expected
 
 
+def test_failure_detail_names_the_raising_frame():
+    try:
+        raise TypeError("'tuple' object does not support item assignment")
+    except TypeError as e:
+        detail = _failure_detail(e)
+        lineno = e.__traceback__.tb_lineno
+    assert detail == f"TypeError: 'tuple' object does not support item assignment at test_shadow_eval_logger.py:{lineno}"
+
+
 def test_judge_prompt_is_bounded_however_large_the_inputs():
     prompt = _judge_user_prompt("c" * 200_000, "a" * 200_000, "b" * 200_000)
     assert len(prompt) < _MAX_JUDGE_PROMPT_CHARS + 100
@@ -475,6 +485,30 @@ class TestSuccessHookSkipChain:
         assert row["judge_cost"] == 0.005
         assert row["error"] is None
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 0
+
+    async def test_shadow_call_messages_survive_in_place_provider_rewrites(self, monkeypatch: pytest.MonkeyPatch):
+        """Provider transforms (anthropic factory, cache-control hook) rewrite messages with
+        `messages[i] = ...`; the logger's immutable snapshot must never reach them directly."""
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        router = _router()
+        inner = router.acompletion.side_effect
+
+        async def mutating_acompletion(**kwargs):
+            kwargs["messages"][0] = dict(kwargs["messages"][0])
+            return await inner(**kwargs)
+
+        router.acompletion = MagicMock(side_effect=mutating_acompletion)
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["error"] is None
+        assert row["outcome"] in ("real", "shadow", "tie")
 
     @pytest.mark.parametrize(
         "kwargs_mutation,job_mutation",
