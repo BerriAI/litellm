@@ -15,6 +15,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
 )
+from litellm.litellm_core_utils.data_residency import infer_openai_data_residency
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -1301,6 +1302,15 @@ def completion_cost(  # noqa: PLR0915
                             "custom_llm_provider", custom_llm_provider or None
                         )
                         region_name = hidden_params.get("region_name", region_name)
+
+                        # For OpenAI, infer data_residency from api_base if it
+                        # wasn't passed in explicitly. Keeps external
+                        # completion_cost(response) in sync with the internal
+                        # cost calculation (which reads it from litellm_params).
+                        if data_residency is None and custom_llm_provider == "openai":
+                            data_residency = infer_openai_data_residency(
+                                hidden_params.get("api_base")
+                            )
 
                         # For Gemini/Vertex AI responses, trafficType is stored in
                         # provider_specific_fields.  Map it to the service_tier used

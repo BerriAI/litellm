@@ -1530,3 +1530,45 @@ def test_data_residency_composes_with_service_tier(_local_model_cost_map):
 
     assert priority_base_total > 0
     assert priority_eu_total == pytest.approx(priority_base_total * 1.10, rel=1e-9)
+
+
+def test_completion_cost_infers_data_residency_from_hidden_params(
+    _local_model_cost_map,
+):
+    """External completion_cost(response) infers data_residency from
+    the api_base recorded on hidden_params, so it matches the internal cost
+    calculation from the completion flow."""
+    from litellm import ModelResponse, completion_cost
+    from litellm.types.utils import Choices, Message
+    from litellm.types.utils import Usage as U
+
+    def _resp(api_base):
+        r = ModelResponse(
+            id="test",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="ok", role="assistant"),
+                )
+            ],
+            model="gpt-5",
+            object="chat.completion",
+            created=0,
+            usage=U(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        )
+        r._hidden_params = {
+            "custom_llm_provider": "openai",
+            "api_base": api_base,
+        }
+        return r
+
+    global_cost = completion_cost(
+        completion_response=_resp("https://api.openai.com/v1")
+    )
+    eu_cost = completion_cost(completion_response=_resp("https://eu.api.openai.com/v1"))
+    us_cost = completion_cost(completion_response=_resp("https://us.api.openai.com/v1"))
+
+    assert global_cost > 0
+    assert eu_cost == pytest.approx(global_cost * 1.10, rel=1e-9)
+    assert us_cost == pytest.approx(global_cost * 1.10, rel=1e-9)
