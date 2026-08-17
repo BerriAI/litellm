@@ -42,8 +42,16 @@ const MOCK_USER_DATA_NO_TEAMS = {
   teams: [],
 };
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/users",
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+
+// entityLinks -> migratedPages imports serverRootPath from the same module, so the mock must export it too.
 vi.mock("@/components/networking", () => {
   return {
+    serverRootPath: "/",
     userGetInfoV2: (...args: any[]) => mockUserGetInfoV2(...args),
     userDeleteCall: vi.fn(),
     userUpdateUserCall: (...args: unknown[]) => mockUserUpdateUserCall(...args),
@@ -142,6 +150,21 @@ describe("UserInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Alpha Team")).toBeInTheDocument();
       expect(screen.getByText("Beta Team")).toBeInTheDocument();
+    });
+  });
+
+  it("should link each team name to its team page", async () => {
+    render(<UserInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Alpha Team" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/teams?team=team-1"),
+      );
+      expect(screen.getByRole("link", { name: "Beta Team" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/teams?team=team-2"),
+      );
     });
   });
 

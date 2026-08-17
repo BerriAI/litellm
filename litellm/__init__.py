@@ -26,6 +26,7 @@ def _dev_env_hot_reload_enabled() -> bool:
 if os.getenv("LITELLM_MODE", "DEV") == "DEV":
     _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
+from collections.abc import Sequence
 from typing import (
     Any,
     Callable,
@@ -172,6 +173,7 @@ callbacks: List[
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
+langfuse_enable_update_trace_keys: bool = False
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 prometheus_latency_buckets: Optional[List[float]] = None
@@ -215,6 +217,9 @@ add_user_information_to_llm_headers: Optional[bool] = (
 )
 overwrite_user_with_key_hash: bool = (
     False  # force the outgoing `user` param to the hashed api key, so providers see a stable, tamper-proof id
+)
+bedrock_request_metadata_fields: Optional[Sequence[str]] = (
+    None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
 )
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 skip_system_message_in_guardrail: bool = False

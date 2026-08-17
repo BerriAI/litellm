@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CostTrackingSettings from "./cost_tracking_settings";
@@ -195,6 +195,28 @@ describe("CostTrackingSettings", () => {
 
       expect(mockRemoveDiscount).not.toHaveBeenCalled();
       expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    });
+
+    it("should hold the confirmation open while the removal is still in flight", async () => {
+      mockDiscountConfig.mockReturnValue({ openai: 0.05 });
+      const { promise, resolve: settleRemoval } = Promise.withResolvers<void>();
+      mockRemoveDiscount.mockReturnValue(promise);
+
+      const user = await expandAndRemove("Provider Discounts", "Remove discount for openai");
+      await user.click(await screen.findByRole("button", { name: "Remove" }));
+
+      const removing = await screen.findByRole("button", { name: "Removing…" });
+      expect(removing).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+
+      await act(async () => {
+        settleRemoval();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      });
+      expect(mockRemoveDiscount).toHaveBeenCalledWith("openai");
     });
 
     it("should remove the margin once removal is confirmed", async () => {

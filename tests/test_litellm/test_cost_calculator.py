@@ -42,6 +42,26 @@ def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
     assert prompt_usd + completion_usd > 0
 
 
+def test_cost_per_token_tiered_only_model_bills_at_tier_rate(monkeypatch):
+    """
+    Regression: models that publish only tiered_pricing (no top-level per-token rates),
+    e.g. volcengine doubao-seed-2.0, must reach the generic tiered path instead of
+    recording zero spend.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    prompt_usd, completion_usd = cost_per_token(
+        model="volcengine/doubao-seed-2-0-pro-260215",
+        prompt_tokens=40000,
+        completion_tokens=500,
+        custom_llm_provider="volcengine",
+    )
+
+    assert prompt_usd == pytest.approx(40000 * 7e-07)
+    assert completion_usd == pytest.approx(500 * 3.5e-06)
+
+
 def test_cost_per_token_non_string_model_does_not_hang():
     """
     The provider-prefix dedup loop must not spin forever when `model` is a
@@ -2724,6 +2744,105 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier():
     expected_completion = 500 * 30e-6 * 2
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(expected_completion)
+
+
+def _register_anthropic_geo_cache_model(model: str) -> None:
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 25e-6,
+                "cache_creation_input_token_cost": 6.25e-6,
+                "cache_read_input_token_cost": 0.5e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"us": 1.1, "fast": 2.0},
+            }
+        }
+    )
+
+
+def test_anthropic_geo_multiplier_applies_to_cache_tokens(monkeypatch):
+    """
+    Regression: the regional (geo) uplift must scale cache read and cache write
+    cost too, not just non-cache input and output.
+
+    Anthropic's regional surcharge applies to every token type, so a cache-heavy
+    row (nearly all cache-creation tokens) must still come in 10% above the
+    global-priced row. Before the fix the uplift was applied only to the
+    non-cache portion, so cache-heavy spend was under-reported by ~10%.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-geo-cache-model"
+    _register_anthropic_geo_cache_model(model)
+
+    def make_usage() -> "Usage":
+        return Usage(
+            prompt_tokens=1_000_000,
+            completion_tokens=500,
+            total_tokens=1_000_500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=200_000,
+                cache_creation_tokens=799_800,
+            ),
+        )
+
+    base_usage = make_usage()
+    base_prompt_cost, base_completion_cost = anthropic_cost_per_token(model=model, usage=base_usage)
+
+    geo_usage = make_usage()
+    geo_usage.inference_geo = "us"
+    geo_prompt_cost, geo_completion_cost = anthropic_cost_per_token(model=model, usage=geo_usage)
+
+    expected_base_prompt = 200 * 5e-6 + 200_000 * 0.5e-6 + 799_800 * 6.25e-6
+    assert base_prompt_cost == pytest.approx(expected_base_prompt)
+    assert geo_prompt_cost == pytest.approx(expected_base_prompt * 1.1)
+    assert geo_completion_cost == pytest.approx(base_completion_cost * 1.1)
+
+
+def test_anthropic_geo_and_fast_multipliers_compose(monkeypatch):
+    """
+    The ``fast`` speed multiplier stays cache-exclusive (the old explicit
+    ``fast/`` entries kept base cache rates) while the geo multiplier scales the
+    whole cost, so a fast + regional row prices as
+    ``((non_cache * fast) + cache) * geo``.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-geo-fast-cache-model"
+    _register_anthropic_geo_cache_model(model)
+
+    usage = Usage(
+        prompt_tokens=10_000,
+        completion_tokens=500,
+        total_tokens=10_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=2_000,
+            cache_creation_tokens=6_000,
+        ),
+    )
+    usage.inference_geo = "us"
+    usage.speed = "fast"
+
+    prompt_cost, completion_cost = anthropic_cost_per_token(model=model, usage=usage)
+
+    cache_cost = 2_000 * 0.5e-6 + 6_000 * 6.25e-6
+    non_cache_cost = 2_000 * 5e-6
+    assert prompt_cost == pytest.approx((non_cache_cost * 2.0 + cache_cost) * 1.1)
+    assert completion_cost == pytest.approx(500 * 25e-6 * 2.0 * 1.1)
 
 
 def test_gemini_cache_tokens_details_no_negative_values():

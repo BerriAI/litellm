@@ -15,6 +15,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -65,6 +66,7 @@ function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
 }
 
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
+  const anchor = useComboboxAnchor();
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
   const [agentHubData, setAgentHubData] = useState<AgentCard[] | null>(null);
   const [mcpHubData, setMcpHubData] = useState<MCPServerData[] | null>(null);
@@ -622,7 +624,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         value={selectedProviders}
                         onValueChange={(values: string[]) => setSelectedProviders(values)}
                       >
-                        <ComboboxChips className="min-h-8 w-full py-1 text-sm">
+                        <ComboboxChips render={<div ref={anchor} />} className="min-h-8 w-full py-1 text-sm">
                           <ComboboxValue>
                             {(values: string[]) =>
                               values.map((provider) => (
@@ -635,10 +637,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           <ComboboxChipsInput
                             placeholder="Select providers"
                             aria-label="Select providers"
-                            className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
+                            className="min-w-24"
                           />
                         </ComboboxChips>
-                        <ComboboxContent>
+                        <ComboboxContent anchor={anchor}>
                           <ComboboxEmpty>No providers found</ComboboxEmpty>
                           <ComboboxList>
                             {(provider: string) => {

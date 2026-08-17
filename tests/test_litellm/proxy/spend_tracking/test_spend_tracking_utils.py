@@ -4,7 +4,7 @@ import json
 import os
 import sys
 from datetime import timezone
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,6 +37,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
+    get_spend_logs_id,
 )
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
@@ -2959,3 +2960,151 @@ def test_user_traffic_carries_no_internal_call_origin():
     )
     metadata = json.loads(payload["metadata"])
     assert metadata["internal_call_origin"] is None
+
+
+REDACTED_RESPONSE_PLACEHOLDER: Final = {"text": "redacted-by-litellm"}
+CONSTANT_ID_FROM_HASHED_PLACEHOLDER: Final = "00fcbef15a3b0097e14b0ca016ed30a0"
+
+
+@pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
+def test_get_spend_logs_id_stays_unique_when_the_response_is_a_redaction_placeholder(call_type):
+    """request_id is the LiteLLM_SpendLogs primary key and the flush inserts with
+    skip_duplicates, so two calls must never derive the same id from identical response
+    content. Message redaction replaces every body it cannot redact with one fixed
+    placeholder, which is what a batch and a file body both become, so hashing the
+    response collapsed all of them onto a single id and silently dropped every row
+    after the first."""
+    suffix = "_batch_cost" if call_type == "aretrieve_batch" else ""
+    first = get_spend_logs_id(call_type, dict(REDACTED_RESPONSE_PLACEHOLDER), {"litellm_call_id": "call-id-1"})
+    second = get_spend_logs_id(call_type, dict(REDACTED_RESPONSE_PLACEHOLDER), {"litellm_call_id": "call-id-2"})
+
+    assert first == f"call-id-1{suffix}"
+    assert second == f"call-id-2{suffix}"
+    assert first != second
+    assert first != CONSTANT_ID_FROM_HASHED_PLACEHOLDER
+    assert second != CONSTANT_ID_FROM_HASHED_PLACEHOLDER
+
+
+@pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
+def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call_type):
+    """A batch or file response that survives redaction carries its own id, so the row
+    keys off that rather than the per-call id."""
+    expected = "batch_abc123_batch_cost" if call_type == "aretrieve_batch" else "batch_abc123"
+    assert get_spend_logs_id(call_type, {"id": "batch_abc123"}, {"litellm_call_id": "call-id-1"}) == expected
+
+
+def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():
+    """End to end at the payload level: a batch retrieve and a file create whose bodies
+    were both flattened to the same redaction placeholder must still produce two
+    insertable rows, each carrying its own spend."""
+    payloads = [
+        get_logging_payload(
+            kwargs={
+                "call_type": call_type,
+                "model": model,
+                "litellm_call_id": call_id,
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+            response_obj=dict(REDACTED_RESPONSE_PLACEHOLDER),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )
+        for call_type, model, call_id in (
+            ("aretrieve_batch", "global.anthropic.claude-haiku-4-5-20251001-v1:0", "call-id-batch"),
+            ("acreate_file", "vertex_ai/gemini-2.5-flash", "call-id-file"),
+        )
+    ]
+    request_ids = [payload["request_id"] for payload in payloads]
+
+    assert request_ids == ["call-id-batch_batch_cost", "call-id-file"]
+    assert len(set(request_ids)) == len(request_ids)
+    assert CONSTANT_ID_FROM_HASHED_PLACEHOLDER not in request_ids
+
+
+@pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
+def test_get_spend_logs_id_keys_off_batch_identity_when_the_body_was_redacted(call_type):
+    """Retrieving one batch twice must produce one row, not two. Redaction strips the id
+    off the response body, so the identity has to come from the standard logging payload,
+    which is built from the unredacted response and keeps it. Falling through to the
+    per-call id here would write a second row carrying the same batch's full cost and
+    overstate spend by a multiple of how often the caller polled."""
+    standard_logging_object = {"id": "batch_abc123"}
+    first = get_spend_logs_id(
+        call_type,
+        dict(REDACTED_RESPONSE_PLACEHOLDER),
+        {"litellm_call_id": "call-id-1", "standard_logging_object": standard_logging_object},
+    )
+    second = get_spend_logs_id(
+        call_type,
+        dict(REDACTED_RESPONSE_PLACEHOLDER),
+        {"litellm_call_id": "call-id-2", "standard_logging_object": standard_logging_object},
+    )
+
+    expected = "batch_abc123_batch_cost" if call_type == "aretrieve_batch" else "batch_abc123"
+    assert first == second == expected
+    assert first != CONSTANT_ID_FROM_HASHED_PLACEHOLDER
+
+
+def test_get_spend_logs_id_separates_distinct_batches_whose_bodies_were_both_redacted():
+    """The flip side of idempotency: two different batches must not share a row just
+    because redaction flattened both bodies to the same placeholder."""
+    ids = [
+        get_spend_logs_id(
+            "aretrieve_batch",
+            dict(REDACTED_RESPONSE_PLACEHOLDER),
+            {"litellm_call_id": f"call-id-{index}", "standard_logging_object": {"id": batch_id}},
+        )
+        for index, batch_id in enumerate(("batch_first", "batch_second"))
+    ]
+
+    assert ids == ["batch_first_batch_cost", "batch_second_batch_cost"]
+
+
+def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id():
+    """An unredacted response keeps deciding its own row key, so cache-hit ids and every
+    other call type behave exactly as they did before."""
+    assert (
+        get_spend_logs_id(
+            "acompletion",
+            {"id": "chatcmpl-from-response"},
+            {"litellm_call_id": "call-id-1", "standard_logging_object": {"id": "id-from-standard-payload"}},
+        )
+        == "chatcmpl-from-response"
+    )
+
+
+def test_batch_cost_row_does_not_collide_with_the_batch_creation_row():
+    """Creating a batch writes a row keyed by the batch's own id, so keying the cost row
+    the same way makes the insert a duplicate of it. request_id is the primary key and the
+    flush skips duplicates, so the cost row is dropped with no error and the batch is
+    billed nothing. Observed against a live proxy: the poller computed and flushed the
+    cost, and the only row carrying that id was the acreate_batch row written when the
+    batch was submitted."""
+    batch_id = "bGl0ZWxsbV9wcm94eTttb2RlbF9pZDphYmM7bGxtX2JhdGNoX2lkOnh5eg"
+
+    creation_row_id = get_spend_logs_id("acreate_batch", {"id": batch_id}, {"litellm_call_id": "call-create"})
+    cost_row_id = get_spend_logs_id(
+        "aretrieve_batch",
+        dict(REDACTED_RESPONSE_PLACEHOLDER),
+        {"litellm_call_id": "call-poller", "standard_logging_object": {"id": batch_id}},
+    )
+
+    assert creation_row_id == batch_id
+    assert cost_row_id != creation_row_id
+    assert cost_row_id == f"{batch_id}_batch_cost"
+
+
+def test_batch_cost_row_id_is_stable_across_repeated_accounting():
+    """The cost row stays keyed to the batch, so accounting the same batch twice collapses
+    to one row instead of billing it twice."""
+    standard_logging_object = {"id": "batch_same"}
+    ids = [
+        get_spend_logs_id(
+            "aretrieve_batch",
+            dict(REDACTED_RESPONSE_PLACEHOLDER),
+            {"litellm_call_id": f"call-{index}", "standard_logging_object": standard_logging_object},
+        )
+        for index in range(2)
+    ]
+
+    assert ids[0] == ids[1] == "batch_same_batch_cost"

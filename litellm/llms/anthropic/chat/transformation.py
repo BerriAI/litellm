@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
@@ -1266,13 +1267,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         import copy
 
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            DEFS_MAX_INLINED_BYTES,
             unpack_defs,
         )
 
         json_schema = copy.deepcopy(json_schema)
         defs: Final = json_schema.pop("$defs", json_schema.pop("definitions", {}))
         if defs:
-            unpack_defs(json_schema, defs)
+            unpack_defs(json_schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
 
         # Filter out unsupported fields for Anthropic's output_format API
         filtered_schema: Final = self.filter_anthropic_output_schema(json_schema)
@@ -2117,6 +2119,37 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return False
         return any(key in usage_object for key in ("cache_read_input_tokens", "cache_creation_input_tokens"))
 
+    @staticmethod
+    def _aggregate_cache_creation_token_details(
+        iterations: Sequence[Mapping[str, Any]],
+    ) -> CacheCreationTokenDetails | None:
+        breakdowns: Final = tuple(c for c in (it.get("cache_creation") for it in iterations) if isinstance(c, Mapping))
+        if not breakdowns:
+            return None
+        detailed_5m: Final = sum(int(c.get("ephemeral_5m_input_tokens") or 0) for c in breakdowns)
+        detailed_1h: Final = sum(int(c.get("ephemeral_1h_input_tokens") or 0) for c in breakdowns)
+        total: Final = sum(int(it.get("cache_creation_input_tokens") or 0) for it in iterations)
+        undetailed: Final = max(total - detailed_5m - detailed_1h, 0)
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=detailed_5m + undetailed,
+            ephemeral_1h_input_tokens=detailed_1h,
+        )
+
+    @staticmethod
+    def _resolve_cache_creation_token_details(usage: Mapping[str, Any]) -> CacheCreationTokenDetails | None:
+        iterations: Final = usage.get("iterations")
+        if iterations:
+            aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(iterations)
+            if aggregated is not None:
+                return aggregated
+        cache_creation: Final = usage.get("cache_creation")
+        if not isinstance(cache_creation, Mapping):
+            return None
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=cache_creation.get("ephemeral_5m_input_tokens"),
+            ephemeral_1h_input_tokens=cache_creation.get("ephemeral_1h_input_tokens"),
+        )
+
     def calculate_usage(
         self,
         usage_object: dict,
@@ -2132,7 +2165,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _usage: Final = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
-        cache_creation_token_details: CacheCreationTokenDetails | None = None
+        cache_creation_token_details: Final = self._resolve_cache_creation_token_details(_usage)
         web_search_requests: int | None = None
         tool_search_requests: int | None = None
         inference_geo: str | None = None
@@ -2181,12 +2214,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         tool_search_count += 1
             if tool_search_count > 0:
                 tool_search_requests = tool_search_count
-
-        if "cache_creation" in _usage and _usage["cache_creation"] is not None:
-            cache_creation_token_details = CacheCreationTokenDetails(
-                ephemeral_5m_input_tokens=_usage["cache_creation"].get("ephemeral_5m_input_tokens"),
-                ephemeral_1h_input_tokens=_usage["cache_creation"].get("ephemeral_1h_input_tokens"),
-            )
 
         raw_input_tokens: Final = prompt_tokens - cache_read_input_tokens - cache_creation_input_tokens
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(

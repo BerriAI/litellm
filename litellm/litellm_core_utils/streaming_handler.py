@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
@@ -155,6 +155,33 @@ class _TextCompletionChoiceLike(Protocol):
     finish_reason: str | None
 
 
+class _VertexFunctionCallLike(Protocol):
+    name: str
+    args: Mapping[str, Iterable[object]]
+
+
+class _VertexPartLike(Protocol):
+    function_call: _VertexFunctionCallLike
+
+
+class _VertexContentLike(Protocol):
+    parts: Sequence[_VertexPartLike]
+
+
+class _VertexFinishReasonLike(Protocol):
+    name: str
+
+
+class _VertexCandidateLike(Protocol):
+    content: _VertexContentLike
+    finish_reason: _VertexFinishReasonLike
+
+
+class _VertexChunkLike(Protocol):
+    text: str
+    candidates: Sequence[_VertexCandidateLike]
+
+
 class CustomStreamWrapper:
     def __init__(
         self,
@@ -291,13 +318,13 @@ class CustomStreamWrapper:
         that has since taken over the same Task/thread's context.
         """
         try:
-            logging_obj: Final = getattr(self, "logging_obj", None)
+            logging_obj: Final[object | None] = getattr(self, "logging_obj", None)
             if logging_obj is None:
                 return
             method_name: Final = (
                 "_restore_correlation_context_if_unclaimed" if guarded else "_restore_correlation_context"
             )
-            restore: Final = getattr(logging_obj, method_name, None)
+            restore: Final[Callable[[], object] | None] = getattr(logging_obj, method_name, None)
             if restore is not None:
                 restore()
         except Exception as restore_error:  # noqa: BLE001  # best-effort cleanup; must not raise into the caller
@@ -1261,18 +1288,18 @@ class CustomStreamWrapper:
                         raise Exception("An unknown error occurred with the stream")
                     self.received_finish_reason = "stop"
         elif self.custom_llm_provider == "vertex_ai" and not isinstance(chunk, ModelResponseStream):
-            chunk = cast(Any, chunk)
+            vertex_chunk: Final = cast(_VertexChunkLike, chunk)
             import proto
 
-            if hasattr(chunk, "candidates") is True:
+            if hasattr(vertex_chunk, "candidates") is True:
                 try:
                     try:
-                        completion_obj["content"] = chunk.text
+                        completion_obj["content"] = vertex_chunk.text
                     except Exception as e:
                         original_exception: Final = e
                         if "Part has no text." in str(e):
                             ## check for function calling
-                            function_call: Final = chunk.candidates[0].content.parts[0].function_call
+                            function_call: Final = vertex_chunk.candidates[0].content.parts[0].function_call
 
                             args_dict: Final = {}
 
@@ -1311,15 +1338,15 @@ class CustomStreamWrapper:
                         else:
                             raise original_exception
                     if (
-                        hasattr(chunk.candidates[0], "finish_reason")
-                        and chunk.candidates[0].finish_reason.name != "FINISH_REASON_UNSPECIFIED"
+                        hasattr(vertex_chunk.candidates[0], "finish_reason")
+                        and vertex_chunk.candidates[0].finish_reason.name != "FINISH_REASON_UNSPECIFIED"
                     ):  # every non-final chunk in vertex ai has this
-                        self.received_finish_reason = map_finish_reason(chunk.candidates[0].finish_reason.name)
+                        self.received_finish_reason = map_finish_reason(vertex_chunk.candidates[0].finish_reason.name)
                 except Exception:
-                    if chunk.candidates[0].finish_reason.name == "SAFETY":
-                        raise Exception(f"The response was blocked by VertexAI. {chunk}")
+                    if vertex_chunk.candidates[0].finish_reason.name == "SAFETY":
+                        raise Exception(f"The response was blocked by VertexAI. {vertex_chunk}")
             else:
-                completion_obj["content"] = str(chunk)
+                completion_obj["content"] = str(vertex_chunk)
         elif self.custom_llm_provider == "petals":
             if self.completion_stream is None or len(self.completion_stream) == 0:
                 if self.received_finish_reason is not None:
@@ -1357,13 +1384,14 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
             if response_obj["usage"] is not None:
+                _text_completion_usage: Final[Usage] = response_obj["usage"]
                 setattr(
                     model_response,
                     "usage",
                     litellm.Usage(
-                        prompt_tokens=response_obj["usage"].prompt_tokens,
-                        completion_tokens=response_obj["usage"].completion_tokens,
-                        total_tokens=response_obj["usage"].total_tokens,
+                        prompt_tokens=_text_completion_usage.prompt_tokens,
+                        completion_tokens=_text_completion_usage.completion_tokens,
+                        total_tokens=_text_completion_usage.total_tokens,
                     ),
                 )
         elif self.custom_llm_provider == "text-completion-codestral":
@@ -1395,15 +1423,17 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "cached_response":
-            chunk = cast(ModelResponseStream, chunk)
-            chunk_finish_reason: Final = chunk.choices[0].finish_reason
+            cached_chunk: Final = cast(ModelResponseStream, chunk)
+            chunk_finish_reason: Final = cached_chunk.choices[0].finish_reason
             response_obj = {
-                "text": chunk.choices[0].delta.content,
+                "text": cached_chunk.choices[0].delta.content,
                 "is_finished": chunk_finish_reason is not None,
                 "finish_reason": chunk_finish_reason,
-                "original_chunk": chunk,
+                "original_chunk": cached_chunk,
                 "tool_calls": (
-                    chunk.choices[0].delta.tool_calls if hasattr(chunk.choices[0].delta, "tool_calls") else None
+                    cached_chunk.choices[0].delta.tool_calls
+                    if hasattr(cached_chunk.choices[0].delta, "tool_calls")
+                    else None
                 ),
             }
 
@@ -1411,11 +1441,11 @@ class CustomStreamWrapper:
             if response_obj["tool_calls"] is not None:
                 completion_obj["tool_calls"] = response_obj["tool_calls"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
-            if hasattr(chunk, "id"):
-                model_response.id = chunk.id
-                self.response_id = chunk.id
-            if hasattr(chunk, "system_fingerprint"):
-                self.system_fingerprint = chunk.system_fingerprint
+            if hasattr(cached_chunk, "id"):
+                model_response.id = cached_chunk.id
+                self.response_id = cached_chunk.id
+            if hasattr(cached_chunk, "system_fingerprint"):
+                self.system_fingerprint = cached_chunk.system_fingerprint
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         else:  # openai / azure chat model
@@ -2310,16 +2340,16 @@ class CustomStreamWrapper:
         def _normalize_status_code(exc: Exception) -> int | None:
             """Best-effort status_code extraction."""
             try:
-                code: Final = getattr(exc, "status_code", None)
+                code: Final[int | str | None] = getattr(exc, "status_code", None)
                 if code is not None:
                     return int(code)
             except Exception:
                 pass
 
-            response: Final = getattr(exc, "response", None)
+            response: Final[object | None] = getattr(exc, "response", None)
             if response is not None:
                 try:
-                    status_code: Final = getattr(response, "status_code", None)
+                    status_code: Final[int | str | None] = getattr(response, "status_code", None)
                     if status_code is not None:
                         return int(status_code)
                 except Exception:

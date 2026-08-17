@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 
 import httpx
-from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES
+from litellm.proxy.utils import update_spend
 
 
 class MockPrismaClient:
