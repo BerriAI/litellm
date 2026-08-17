@@ -14,7 +14,7 @@ import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { ChevronDown, ChevronRight, ExternalLink, Info, Loader2 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
@@ -680,18 +680,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </AlertDescription>
         </Alert>
       )}
-      {entityType === "team" && (
-        <div className="mb-4">
-          <p className="mb-2 text-sm text-foreground">Filter by team</p>
-          <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />
-        </div>
-      )}
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
         showFilters={showEntityFilters}
-        filterLabel={getFilterLabel(entityType)}
+        filterSlot={
+          entityType === "team" ? <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} /> : undefined
+        }
+        filterLabel={entityType === "team" ? "Filter by team" : getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}

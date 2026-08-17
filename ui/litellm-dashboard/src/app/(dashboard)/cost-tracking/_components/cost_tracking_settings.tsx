@@ -3,7 +3,6 @@ import { ChevronDown } from "lucide-react";
 import { Modal, Form } from "antd";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -66,6 +65,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   const [fixedAmountValue, setFixedAmountValue] = useState<string>("");
   const [models, setModels] = useState<string[]>([]);
   const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
   const [form] = Form.useForm();
   const [marginForm] = Form.useForm();
 
@@ -131,14 +131,19 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
     setPendingRemoval({ kind: "discount", provider, displayName: providerDisplayName });
   };
 
-  const handleConfirmRemoval = () => {
+  const handleConfirmRemoval = async () => {
     if (!pendingRemoval) return;
-    if (pendingRemoval.kind === "discount") {
-      removeProvider(pendingRemoval.provider);
-    } else {
-      removeMargin(pendingRemoval.provider);
+    setIsRemoving(true);
+    try {
+      if (pendingRemoval.kind === "discount") {
+        await removeProvider(pendingRemoval.provider);
+      } else {
+        await removeMargin(pendingRemoval.provider);
+      }
+    } finally {
+      setIsRemoving(false);
+      setPendingRemoval(null);
     }
-    setPendingRemoval(null);
   };
 
   const handleAddMargin = async () => {
@@ -311,7 +316,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
       </div>
 
       {pendingRemoval && (
-        <AlertDialog open onOpenChange={(open) => !open && setPendingRemoval(null)}>
+        <AlertDialog open onOpenChange={(open) => !open && !isRemoving && setPendingRemoval(null)}>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>{REMOVAL_COPY[pendingRemoval.kind].title}</AlertDialogTitle>
@@ -321,10 +326,10 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction variant="destructive" onClick={handleConfirmRemoval}>
-                Remove
-              </AlertDialogAction>
+              <AlertDialogCancel disabled={isRemoving}>Cancel</AlertDialogCancel>
+              <Button variant="destructive" onClick={handleConfirmRemoval} disabled={isRemoving}>
+                {isRemoving ? "Removing…" : "Remove"}
+              </Button>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

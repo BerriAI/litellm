@@ -14,6 +14,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Input } from "@/components/ui/input";
@@ -110,6 +111,7 @@ const DEFAULT_VALUES: SettingsValues = {
 };
 
 const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
+  const anchor = useComboboxAnchor();
   const [loading, setLoading] = useState<boolean>(true);
   const [values, setValues] = useState<SettingsValues>(DEFAULT_VALUES);
   const [isEditing, setIsEditing] = useState<boolean>(false);
@@ -372,7 +374,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                   value={editedValues.team_member_permissions || []}
                   onValueChange={(permissions: string[]) => update("team_member_permissions", permissions)}
                 >
-                  <ComboboxChips>
+                  <ComboboxChips render={<div ref={anchor} />}>
                     <ComboboxValue>
                       {(permissions: string[]) =>
                         permissions.map((permission) => (
@@ -382,13 +384,9 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                         ))
                       }
                     </ComboboxValue>
-                    <ComboboxChipsInput
-                      className="border-0 bg-transparent"
-                      placeholder="Select permissions"
-                      aria-label="Team Member Permissions"
-                    />
+                    <ComboboxChipsInput placeholder="Select permissions" aria-label="Team Member Permissions" />
                   </ComboboxChips>
-                  <ComboboxContent>
+                  <ComboboxContent anchor={anchor}>
                     <ComboboxList>
                       {(permission: string) => (
                         <ComboboxItem key={permission} value={permission}>

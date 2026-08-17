@@ -104,6 +104,17 @@ class RoutingPrismaWrapper:
         return self._reader
 
     @property
+    def read_target(self) -> PrismaWrapper:
+        """The wrapper `_TOP_LEVEL_READ_METHODS` dispatch to right now.
+
+        Callers that need to reason about the engine a read actually ran on
+        (e.g. recovering from prepared statements that went stale on it) must
+        consult this rather than `writer`, and `__getattr__` routes through it
+        so the two cannot drift apart.
+        """
+        return self._writer if self._reader_unavailable else self._reader
+
+    @property
     def reader_unavailable(self) -> bool:
         return self._reader_unavailable
 
@@ -254,8 +265,7 @@ class RoutingPrismaWrapper:
 
     def __getattr__(self, name: str) -> Any:
         if name in _TOP_LEVEL_READ_METHODS:
-            target: Final = self._writer if self._reader_unavailable else self._reader
-            return getattr(target, name)
+            return getattr(self.read_target, name)
         writer_attr: Final = getattr(self._writer, name)
         # Per-model action accessors are non-callable instances that expose
         # both `find_many` and `create`. Methods like execute_raw / batch_ /
