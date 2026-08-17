@@ -30,6 +30,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     pass_through_request,
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
+    websocket_passthrough_request,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -4877,6 +4878,83 @@ async def test_unusable_upstream_cost_records_zero_not_the_flat_estimate():
     assert len(payloads) == 1
     assert payloads[0]["response_cost"] == 0.0
     assert payloads[0]["total_tokens"] == 1874
+
+
+class FakeUpstreamWebSocket:
+    def __init__(self, first_frame: bytes):
+        self._first_frame = first_frame
+        self.close = AsyncMock()
+
+    async def recv(self, decode: bool = True):
+        return self._first_frame
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+class FakeUpstreamConnect:
+    def __init__(self, upstream_ws: FakeUpstreamWebSocket):
+        self._upstream_ws = upstream_ws
+
+    async def __aenter__(self):
+        return self._upstream_ws
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_forwards_non_ascii_first_frame():
+    from starlette.websockets import WebSocketState
+
+    first_frame = json.dumps(
+        {"type": "session.created", "session": {"instructions": "Hablas español, ¿sí?"}},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    upstream_ws = FakeUpstreamWebSocket(first_frame)
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_text = AsyncMock()
+    websocket.send_bytes = AsyncMock()
+    websocket.close = AsyncMock()
+    websocket.receive = AsyncMock(return_value={"type": "websocket.disconnect"})
+    websocket.headers = {}
+    websocket.client_state = WebSocketState.CONNECTED
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+            return_value=FakeUpstreamConnect(upstream_ws),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER"
+        ) as mock_worker,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock()
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: async_coroutine.close()
+        )
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://api.openai.com/v1/realtime?model=gpt-realtime",
+            custom_headers={"Authorization": "Bearer sk-test"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/openai/v1/realtime",
+            accept_websocket=True,
+        )
+
+    websocket.send_text.assert_awaited_once()
+    forwarded = json.loads(websocket.send_text.await_args.args[0])
+    assert forwarded["session"]["instructions"] == "Hablas español, ¿sí?"
+    assert all(call.kwargs.get("code") != 1011 for call in websocket.close.await_args_list)
 
 
 def _passthrough_kwargs_for_reservation(

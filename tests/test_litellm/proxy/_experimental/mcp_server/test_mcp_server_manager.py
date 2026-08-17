@@ -9859,3 +9859,66 @@ class TestToolAuthorizationIsNotConditionalOnLogging:
             )
 
         upstream.assert_awaited_once()
+
+
+class TestSessionResourceScopeIntersect:
+    """LIT-4917: the sealed session scope intersects the admitted subject's resolved server
+    set at the single convergence point every fan-out and tool call reads, covering the
+    exception fallback so a resolver fault never widens a scoped bearer."""
+
+    def _admitted_auth(self, scope):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        auth = UserAPIKeyAuth(user_id="scoped-user")
+        auth.mcp_admitted_user_subject = True
+        auth.mcp_session_resource_server_id = scope
+        return auth
+
+    def test_scope_reader_is_none_for_keys_and_unscoped_subjects(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        assert MCPServerManager._admitted_session_resource_scope(None) is None
+        assert MCPServerManager._admitted_session_resource_scope(UserAPIKeyAuth(user_id="u")) is None
+        assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth(None)) is None
+
+    def test_scope_reader_returns_sealed_scope_for_admitted_subjects(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+        assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth("b")) == "b"
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_scopes_past_operator_open_union(self):
+        """The intersect applies AFTER the operator-open (allow_all_keys) union, so a scoped
+        bearer cannot reach an allow-all server outside its scope, and applies on the
+        exception fallback so a resolver fault yields the scoped subset of allow-all rather
+        than the whole set."""
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+        manager = MCPServerManager()
+        auth = self._admitted_auth("granted-id")
+        with (
+            patch.object(MCPServerManager, "get_allow_all_keys_server_ids", return_value=["open-id", "granted-id"]),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["granted-id", "other-id"],
+            ),
+            patch.object(MCPServerManager, "_get_active_submitted_mcp_server_ids_for_user", new_callable=AsyncMock, return_value=[]),
+        ):
+            allowed = await manager.get_allowed_mcp_servers(auth)
+        assert allowed == ["granted-id"]
+
+        with (
+            patch.object(MCPServerManager, "get_allow_all_keys_server_ids", return_value=["open-id", "granted-id"]),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("resolver down"),
+            ),
+            patch.object(MCPServerManager, "_get_active_submitted_mcp_server_ids_for_user", new_callable=AsyncMock, return_value=[]),
+        ):
+            fallback = await manager.get_allowed_mcp_servers(auth)
+        assert fallback == ["granted-id"]

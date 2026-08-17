@@ -7954,3 +7954,45 @@ def test_ensure_deployment_affinity_callback_is_idempotent():
     finally:
         for cb in router.optional_callbacks or []:
             litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+
+def test_get_router_model_info_does_not_wipe_cached_pricing():
+    """A Deployment's model_info declares the mirrored pricing fields with None defaults;
+    merging it must not write those Nones into the lru_cache'd dict get_model_info() owns,
+    or /model/info loses built-in prices for every model a worker serves."""
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    expected = copy.deepcopy(litellm.get_model_info(model="anthropic/claude-sonnet-4-5"))
+
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1"),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5") == expected
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        assert merged[field] == expected[field]
+
+
+def test_get_router_model_info_keeps_explicit_pricing_overrides():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1", input_cost_per_token=1e-08),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert merged["input_cost_per_token"] == 1e-08
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08

@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-08T22:14:09.01009Z"
+exclude-newer = "2026-08-12T18:09:57.187615Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4585,12 +4585,12 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.55"
+version = "0.1.56"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.85"
+version = "0.4.86"
 source = { editable = "litellm-proxy-extras" }
 
 [[package]]
