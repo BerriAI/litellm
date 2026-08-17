@@ -13363,6 +13363,74 @@ async def test_ghsa_q775_ui_session_token_personal_key_still_capped():
 
 
 @pytest.mark.asyncio
+async def test_ui_session_personal_key_uses_user_budget_as_delegation_ceiling():
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=20)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=1.0,
+        user_max_budget=30.0,
+    )
+    generated_key = {"key": "sk-generated"}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new=AsyncMock(return_value=generated_key),
+        ) as mock_generate_key,
+    ):
+        result = await _common_key_generation_helper(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    assert result.key == "sk-generated"
+    assert mock_generate_key.await_args.kwargs["key_max_budget"] == 20
+
+
+@pytest.mark.asyncio
+async def test_ui_session_personal_key_cannot_exceed_user_budget():
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=31)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=1.0,
+        user_max_budget=30.0,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _common_key_generation_helper(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "own max_budget (30.0)" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption():
     """
     Security regression for GHSA-q775: the team-key exemption must key off the

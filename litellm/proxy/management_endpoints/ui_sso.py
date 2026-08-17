@@ -3592,7 +3592,7 @@ class SSOAuthenticationHandler:
                     user_id=user_defined_values["user_id"],
                     user_role=user_defined_values["user_role"] or user_role,
                     models=[],
-                    max_budget=litellm.max_ui_session_budget,
+                    max_budget=user_defined_values["max_budget"],
                 )
             if _user_info is None:
                 raise HTTPException(
