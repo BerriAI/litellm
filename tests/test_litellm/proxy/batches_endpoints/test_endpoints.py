@@ -758,6 +758,30 @@ async def test_create__model_encoded_beats_loadbalancing(harness):
     harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, missing_param",
+    [
+        ({"endpoint": "/v1/chat/completions", "completion_window": "24h"}, "input_file_id"),
+        ({"input_file_id": "file-abc", "completion_window": "24h"}, "endpoint"),
+        ({"input_file_id": "file-abc", "endpoint": "/v1/chat/completions"}, "completion_window"),
+        ({}, "input_file_id"),
+    ],
+)
+async def test_create__missing_required_param_is_400(harness, body, missing_param):
+    set_body(harness, body)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_create(harness)
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == missing_param
+    assert exc_info.value.message == f"/batches: Missing required parameter: '{missing_param}'."
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
 # =========================================================================== #
 # Team-level batch expiry enforcement (independent of routing).
 # =========================================================================== #
@@ -1138,7 +1162,11 @@ async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
     # DISPATCH - router fired, direct litellm did not.
     assert retrieve_harness.router_aretrieve.call_count == 1
     retrieve_harness.litellm_aretrieve.assert_not_called()
-    retrieve_harness.creds_resolver.assert_not_called()
+
+    # Credentials are resolved for the deployment behind the unified id so the batch's
+    # output file can be read for cost accounting. This id resolves to nothing here, and
+    # the retrieve must still serve the batch rather than fail on the lookup.
+    retrieve_harness.creds_resolver.assert_called_once_with(model_id="gpt-4o-mini")
 
     # router receives the (still-encoded) batch id verbatim - this layer does
     # not decode it for the unified path.
@@ -2406,3 +2434,34 @@ async def test_cancel__unified_batch_id_allowed_when_managed_files_required(canc
         await call_cancel(cancel_harness, _unified_batch_id())
 
     assert cancel_harness.router_acancel.call_count == 1
+
+
+
+
+@pytest.mark.asyncio
+async def test_retrieve__managed_batch_defers_cost_to_the_poller_when_it_is_running(retrieve_harness):
+    with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
+        await call_retrieve(retrieve_harness, _unified_batch_id())
+
+    assert retrieve_harness.router.aretrieve_batch.await_count == 1
+    metadata = retrieve_harness.router.aretrieve_batch.await_args.kwargs.get("litellm_metadata") or {}
+    assert metadata.get("batch_ignore_default_logging") is True
+
+
+@pytest.mark.asyncio
+async def test_retrieve__managed_batch_still_accounts_inline_without_a_poller(retrieve_harness):
+    with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=False)):
+        await call_retrieve(retrieve_harness, _unified_batch_id())
+
+    assert retrieve_harness.router.aretrieve_batch.await_count == 1
+    metadata = retrieve_harness.router.aretrieve_batch.await_args.kwargs.get("litellm_metadata") or {}
+    assert metadata.get("batch_ignore_default_logging") is None
+
+
+@pytest.mark.asyncio
+async def test_retrieve__raw_batch_id_is_untouched_by_the_poller_handoff(retrieve_harness):
+    with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
+        await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    metadata = retrieve_harness.litellm_aretrieve.await_args.kwargs.get("litellm_metadata") or {}
+    assert metadata.get("batch_ignore_default_logging") is None

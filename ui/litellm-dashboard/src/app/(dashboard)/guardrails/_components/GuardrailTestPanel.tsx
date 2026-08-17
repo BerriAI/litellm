@@ -131,7 +131,7 @@ export function GuardrailTestPanel({
       </div>
 
       {/* Input Section */}
-      <div className="flex-1 overflow-auto space-y-4">
+      <div className="flex-1 space-y-4 overflow-auto px-1">
         <div className="space-y-3">
           <div>
             <div className="mb-2 flex items-center justify-between">

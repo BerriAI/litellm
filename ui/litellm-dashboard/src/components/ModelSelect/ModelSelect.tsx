@@ -15,6 +15,7 @@ import {
   ComboboxLabel,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -120,6 +121,7 @@ const filterModels = (
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
+  const anchor = useComboboxAnchor();
   const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
@@ -234,7 +236,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
         isItemEqualToValue={(option: ModelOption, selected: ModelOption) => option.value === selected.value}
         itemToStringLabel={(option: ModelOption) => option.label}
       >
-        <ComboboxChips data-testid={dataTestId} style={style} className="w-full">
+        <ComboboxChips render={<div ref={anchor} />} data-testid={dataTestId} style={style} className="w-full">
           <ComboboxValue>
             {(selected: ModelOption[]) => (
               <>
@@ -254,13 +256,9 @@ export const ModelSelect = (props: ModelSelectProps) => {
               </>
             )}
           </ComboboxValue>
-          <ComboboxChipsInput
-            placeholder="Select Models"
-            aria-label="Select Models"
-            className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
-          />
+          <ComboboxChipsInput placeholder="Select Models" aria-label="Select Models" className="min-w-24" />
         </ComboboxChips>
-        <ComboboxContent>
+        <ComboboxContent anchor={anchor}>
           <ComboboxEmpty>No models found</ComboboxEmpty>
           <ComboboxList>
             {(group: ModelOptionGroup) => (
