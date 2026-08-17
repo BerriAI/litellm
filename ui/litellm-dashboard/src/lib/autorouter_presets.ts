@@ -8,6 +8,7 @@ import {
   ClassifierType,
   ClassifierLLMConfig,
   DEFAULT_SESSION_AFFINITY,
+  DEFAULT_DEPLOYMENT_AFFINITY,
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
@@ -39,10 +40,18 @@ export const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRE
 // bundled config or a caller's actually-built config - the two need to agree, since a preset only
 // prefills once and the config is edited freely after (see AddAutoRouterTab.submitBlockedReason).
 export const getRequiredModels = (
-  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model" | "default_model">,
 ): Set<string> => {
-  const { tiers, classifier_llm_config: classifier, embedding_model: embedding } = config;
-  const models = [...tiers.SIMPLE, ...tiers.MEDIUM, ...tiers.COMPLEX, ...tiers.REASONING, classifier?.model, embedding];
+  const { tiers, classifier_llm_config: classifier, embedding_model: embedding, default_model: pinned } = config;
+  const models = [
+    ...tiers.SIMPLE,
+    ...tiers.MEDIUM,
+    ...tiers.COMPLEX,
+    ...tiers.REASONING,
+    classifier?.model,
+    embedding,
+    pinned,
+  ];
   // Boolean(), not != null: an empty-string placeholder (e.g. classifier_llm_config seeded before a
   // model is chosen) is never a real model reference either.
   return new Set(models.filter((model): model is string => Boolean(model)));
@@ -77,12 +86,30 @@ const normalizeUnderlyingModel = (model: string): string | null => {
   return stripped.toLowerCase() || null;
 };
 
+// A linear glob scan rather than a RegExp: patterns are admin-controlled model_name values, and a
+// backtracking regex built from one ("a*a*a*...") can freeze another admin's dashboard.
+const matchesWildcard = (pattern: string, name: string): boolean => {
+  const parts = pattern.split("*");
+  if (parts.length === 1) return pattern === name;
+  const head = parts[0];
+  const tail = parts[parts.length - 1];
+  if (!name.startsWith(head) || !name.endsWith(tail)) return false;
+  if (name.length < head.length + tail.length) return false;
+  const scanEnd = name.length - tail.length;
+  const scanResult = parts.slice(1, -1).reduce((searchFrom: number, part: string) => {
+    if (searchFrom < 0) return -1;
+    const found = name.indexOf(part, searchFrom);
+    return found === -1 || found + part.length > scanEnd ? -1 : found + part.length;
+  }, head.length);
+  return scanResult >= 0;
+};
+
 export const buildModelAvailability = (
   modelGroups: Iterable<string>,
   deployments: readonly DeploymentModelRef[],
 ): ModelAvailability => {
   const groups = new Set(modelGroups);
-  const entries = deployments
+  const literalEntries = deployments
     .filter((deployment) => groups.has(deployment.modelGroup))
     .flatMap((deployment) =>
       deployment.underlyingModels
@@ -90,6 +117,22 @@ export const buildModelAvailability = (
         .filter((key): key is string => key !== null)
         .map((key) => ({ key, modelGroup: deployment.modelGroup })),
     );
+  // Mirrors get_known_models_from_wildcard: a bare "*" model_name expands via its underlying
+  // wildcard (or not at all), and a wildcard without a "/" expands to nothing.
+  const wildcardPatterns = Array.from(
+    new Set(
+      deployments
+        .flatMap((deployment) =>
+          deployment.modelGroup === "*" ? deployment.underlyingModels : [deployment.modelGroup],
+        )
+        .filter((pattern) => pattern !== "*" && pattern.includes("*") && pattern.includes("/")),
+    ),
+  );
+  const wildcardEntries = Array.from(groups)
+    .filter((group) => !group.includes("*") && wildcardPatterns.some((pattern) => matchesWildcard(pattern, group)))
+    .map((group) => ({ key: normalizeUnderlyingModel(group), modelGroup: group }))
+    .filter((entry): entry is { key: string; modelGroup: string } => entry.key !== null);
+  const entries = [...literalEntries, ...wildcardEntries];
   const grouped = new Map<string, Set<string>>();
   for (const entry of entries) {
     const groupsForKey = grouped.get(entry.key) ?? new Set<string>();
@@ -129,7 +172,7 @@ const resolveAvailableModel = (requiredModel: string, availability: ModelAvailab
 };
 
 export const getMissingModels = (
-  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  config: Parameters<typeof getRequiredModels>[0],
   availability: ModelAvailability,
 ): string[] =>
   [...getRequiredModels(config)].filter((model) => resolveAvailableModel(model, availability) === undefined).sort();
@@ -153,12 +196,14 @@ export const getReferencedModelsError = (
     classifierLlmConfig: ClassifierLLMConfig | undefined;
     semanticMatchingEnabled: boolean;
     embeddingModel: string | undefined;
+    defaultModel?: string;
   },
   availability: ModelAvailability,
 ): string | null => {
   const missing = getMissingModels(
     {
       tiers: params.tiers,
+      default_model: params.defaultModel,
       classifier_llm_config: params.classifierType === "llm" ? params.classifierLlmConfig : undefined,
       embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
     },
@@ -226,6 +271,7 @@ export const buildPresetPrefill = (
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+      deployment_affinity: config.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
       adaptive: config.adaptive,
       adaptive_weights: config.adaptive_weights,
       tier_distance_penalty: config.tier_distance_penalty,

@@ -18,6 +18,7 @@ _PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset] = frozenset(
         "x-goog-api-key",
         "host",
         "content-length",
+        "accept-encoding",
     }
 )
 
@@ -69,6 +70,9 @@ class BasePassthroughUtils:
             # Header We Should NOT forward
             request_headers.pop("content-length", None)
             request_headers.pop("host", None)
+            # accept-encoding must stay client-negotiated: forwarding e.g. "br" when
+            # the brotli package is absent relays undecodable bytes to the caller
+            request_headers.pop("accept-encoding", None)
 
             custom_header_names: Final = {header_name.lower() for header_name in headers}
             for header_name in list(request_headers.keys()):

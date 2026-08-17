@@ -34,7 +34,7 @@ def test_socket_factory_omitted_when_disabled(monkeypatch):
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock
-        ):
+        ), patch.object(http_handler_module, "DummyCookieJar", return_value=MagicMock(name="cookie_jar")):
             _invoke_connector_factory(http_handler_module)
 
     assert mock_tcp_connector.call_count >= 1
@@ -55,7 +55,7 @@ def test_socket_factory_attached_when_enabled(monkeypatch):
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock
-        ):
+        ), patch.object(http_handler_module, "DummyCookieJar", return_value=MagicMock(name="cookie_jar")):
             _invoke_connector_factory(http_handler_module)
 
     assert mock_tcp_connector.call_count >= 1
@@ -77,7 +77,7 @@ def test_socket_factory_skipped_on_old_aiohttp(monkeypatch):
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock
-        ):
+        ), patch.object(http_handler_module, "DummyCookieJar", return_value=MagicMock(name="cookie_jar")):
             _invoke_connector_factory(http_handler_module)
 
     assert mock_tcp_connector.call_count >= 1

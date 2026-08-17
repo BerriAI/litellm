@@ -795,3 +795,247 @@ async def test_manual_delivery_page_renders_the_url_as_data_never_as_a_shell_com
     assert 'curl "' not in body
     assert "curl '" not in body
     assert 'value="' in body
+
+
+def _scoped_mcp_server(name="github", **kw):
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id=f"{name}-id",
+        name=name,
+        server_name=name,
+        alias=name,
+        url="https://upstream.example/mcp",
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+        **kw,
+    )
+
+
+SCOPED_RESOURCE = "https://llm.example.com/mcp/github"
+_MANAGER_PATCH = "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+
+
+def _scoped_authorize(client_id, resource, session_user_id="u1"):
+    return aggregate_authorize(
+        request=_request(query=f"client_id={client_id}"),
+        client_id=client_id,
+        redirect_uri=REDIRECT_URI,
+        state="client-state-123",
+        code_challenge=CODE_CHALLENGE,
+        code_challenge_method="S256",
+        response_type="code",
+        session_user_id=session_user_id,
+        resource=resource,
+    )
+
+
+async def _redeem(code, client_id, cache=None, **overrides):
+    arguments = {
+        "request": _request("/token", method="POST"),
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": REDIRECT_URI,
+        "client_id": client_id,
+        "code_verifier": CODE_VERIFIER,
+        "refresh_token": None,
+        "master_key": MASTER_KEY,
+        "reload_user": _reload_user_active,
+        "cache": cache or DualCache(),
+    }
+    return await aggregate_token(**{**arguments, **overrides})
+
+
+def _opened_principal(payload):
+    keys = session_keys_from_master_key(MASTER_KEY)
+    admitted = resolve_session_bearer(f"Bearer {payload['access_token']}", keys, datetime.now(timezone.utc))
+    assert isinstance(admitted, SessionBearerAdmitted)
+    return admitted.principal
+
+
+async def _finish_connect_page(response):
+    handle, cookies = _flow_cookie_from(response)
+    completed = await complete_connect_flow(
+        request=_request("/authorize/complete", cookies=cookies, method="POST"),
+        flow_handle=handle,
+        session_user_id="u1",
+        cache=DualCache(),
+    )
+    return parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
+
+
+def _sealed_wire_json(sealed, prefix, debug_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+    raw = decrypt_value_helper(sealed.removeprefix(prefix), debug_key, return_original_value=False)
+    assert isinstance(raw, str)
+    return json.loads(raw)
+
+
+@pytest.mark.asyncio
+async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
+    """LIT-4917: a per-server RFC 8707 resource naming a gateway-managed oauth2 server
+    seals that server into the flow. The connect page interlude runs exactly as before
+    (the scope restricts, it never skips consent), and the code minted at the finish step
+    and the session pair it redeems for are both scoped."""
+    from unittest.mock import patch
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = _scoped_mcp_server()
+        response = _scoped_authorize(client_id, SCOPED_RESOURCE)
+    assert response.status_code == 303
+    assert "/ui/connect" in response.headers["location"]
+    _, cookies = _flow_cookie_from(response)
+    assert _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")["resource_server_id"] == "github-id"
+    code = await _finish_connect_page(response)
+    assert _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, "gateway_authorization_code")["resource_server_id"] == "github-id"
+    token_response = await _redeem(code, client_id)
+    assert token_response.status_code == 200
+    principal = _opened_principal(json.loads(token_response.body))
+    assert principal.resource_server_id == "github-id"
+    assert principal.user_id == "u1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resource, resolves",
+    [
+        (None, False),
+        ("https://llm.example.com/mcp", False),
+        ("https://other.example.com/mcp/github", False),
+        ("https://llm.example.com/mcp/github,linear", False),
+        ("https://llm.example.com/mcp/unknown", None),
+        ("not a url", False),
+    ],
+)
+async def test_unscoped_resources_leave_flow_and_token_byte_identical(resource, resolves):
+    """Every resource shape outside 'exactly one gateway-managed server' keeps today's flow:
+    connect page interlude, and NONE of the minted artifacts carry the scope key on the
+    wire, not the flow cookie, not the code, not the session JWT, so an unscoped flow
+    started on a new pod completes on a pod whose strict models predate the claim."""
+    import base64
+    from unittest.mock import patch
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = None if resolves is None else _scoped_mcp_server()
+        response = _scoped_authorize(client_id, resource)
+    assert response.status_code == 303
+    assert "/ui/connect" in response.headers["location"]
+    _, cookies = _flow_cookie_from(response)
+    assert "resource_server_id" not in _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
+    code = await _finish_connect_page(response)
+    assert "resource_server_id" not in _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, "gateway_authorization_code")
+    token_response = await _redeem(code, client_id)
+    payload = json.loads(token_response.body)
+    assert _opened_principal(payload).resource_server_id is None
+    jwt_payload_segment = payload["access_token"].removeprefix("llm_session_").split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(jwt_payload_segment + "=" * (-len(jwt_payload_segment) % 4)))
+    assert "resource_server_id" not in claims
+
+
+@pytest.mark.asyncio
+async def test_scoped_authorize_delegate_server_stays_unscoped():
+    """A delegate-auth oauth2 server is outside the gateway-managed set (its keyless flow is
+    upstream PKCE via the relay), so a resource naming it never scopes the gateway flow."""
+    from unittest.mock import patch
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = _scoped_mcp_server(delegate_auth_to_upstream=True)
+        response = _scoped_authorize(client_id, SCOPED_RESOURCE)
+    assert "/ui/connect" in response.headers["location"]
+    code = await _finish_connect_page(response)
+    token_response = await _redeem(code, client_id)
+    assert _opened_principal(json.loads(token_response.body)).resource_server_id is None
+
+
+@pytest.mark.asyncio
+async def test_token_rejects_resource_conflicting_with_sealed_scope():
+    """RFC 8707 section 2.2: redeeming a scoped code (or rotating a scoped refresh token)
+    for a DIFFERENT resource fails with invalid_target; an absent resource redeems fine and
+    the sealed scope still binds the minted pair, surviving refresh rotation."""
+    from unittest.mock import patch
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    github = _scoped_mcp_server()
+    linear = _scoped_mcp_server(name="linear")
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = github
+        response = _scoped_authorize(client_id, SCOPED_RESOURCE)
+    code = await _finish_connect_page(response)
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = linear
+        mismatched = await _redeem(code, client_id, resource="https://llm.example.com/mcp/linear")
+    assert json.loads(mismatched.body)["error"] == "invalid_target"
+
+    cache = DualCache()
+    token_response = await _redeem(code, client_id, cache=cache)
+    payload = json.loads(token_response.body)
+    assert _opened_principal(payload).resource_server_id == "github-id"
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = linear
+        refresh_mismatch = await _redeem(
+            None,
+            client_id,
+            cache=cache,
+            grant_type="refresh_token",
+            refresh_token=payload["refresh_token"],
+            resource="https://llm.example.com/mcp/linear",
+        )
+    assert json.loads(refresh_mismatch.body)["error"] == "invalid_target"
+
+    rotated = await _redeem(
+        None, client_id, cache=cache, grant_type="refresh_token", refresh_token=payload["refresh_token"]
+    )
+    assert rotated.status_code == 200
+    assert _opened_principal(json.loads(rotated.body)).resource_server_id == "github-id"
+
+
+@pytest.mark.asyncio
+async def test_resolve_scoped_resource_server_matrix():
+    """Unit pin of the resource resolver: both per-server URL spellings resolve; the
+    aggregate resource, foreign hosts, CSV paths, unknown names, and non-gateway-managed
+    modes all return None so nothing outside the served set can enter the scoped flow."""
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import resolve_scoped_resource_server
+
+    request = _request()
+    github = _scoped_mcp_server()
+    for resource, resolved_server, expected in [
+        ("https://llm.example.com/mcp/github", github, "github-id"),
+        ("https://llm.example.com/github/mcp", github, "github-id"),
+        ("https://LLM.example.com/mcp/github/", github, "github-id"),
+        ("https://llm.example.com/mcp", github, None),
+        ("https://other.example.com/mcp/github", github, None),
+        ("https://llm.example.com/mcp/a,b", github, None),
+        ("https://llm.example.com/mcp/github", None, None),
+        ("https://llm.example.com/mcp/github", _scoped_mcp_server(delegate_auth_to_upstream=True), None),
+        (None, github, None),
+    ]:
+        with patch(_MANAGER_PATCH) as manager:
+            manager.get_mcp_server_by_name.return_value = resolved_server
+            result = resolve_scoped_resource_server(request, resource)
+        assert (result.server_id if result is not None else None) == expected, resource
+
+
+@pytest.mark.asyncio
+async def test_resource_resolution_is_identity_not_ip_filtered_access():
+    """The resolver decides which server a resource NAMES; per-IP visibility filtering
+    belongs to the MCP routes and grant intersection. Filtering here would mint an
+    entitlement-wide unscoped bearer exactly when the caller asked to narrow, and IP drift
+    between authorize and token would turn a matching redemption into invalid_target."""
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import resolve_scoped_resource_server
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = _scoped_mcp_server()
+        result = resolve_scoped_resource_server(_request(), SCOPED_RESOURCE)
+    assert result is not None
+    manager.get_mcp_server_by_name.assert_called_once_with("github")
