@@ -465,6 +465,28 @@ async def test_add_litellm_data_to_request_rejects_non_object_metadata(field, va
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_removes_every_invalid_metadata_field_before_raising():
+    """When both fields are invalid, the raise for the first must not leave the
+    second invalid value in data, or failure-logging hooks that inspect the body
+    can crash on it and mask the 400 as a 500."""
+    data = {"input_file_id": "file-abc", "metadata": "abc", "litellm_metadata": "xyz"}
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data=data,
+            request=_batches_request_mock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.param == "metadata"
+    assert "metadata" not in data
+    assert "litellm_metadata" not in data
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_parses_json_object_string_litellm_metadata():
     data = {"input_file_id": "file-abc", "litellm_metadata": json.dumps({"cost_centre": "research"})}
 
