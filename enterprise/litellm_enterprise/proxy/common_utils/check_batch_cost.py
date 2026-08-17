@@ -583,6 +583,7 @@ class CheckBatchCost:
         from litellm.files.main import afile_content
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+        from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
         )
@@ -703,15 +704,20 @@ class CheckBatchCost:
                             f"{_file_attr}={_raw_file_id!r}: {_e}"
                         )
 
-        # Pass deployment model_info so custom batch pricing
-        # (input_cost_per_token_batches etc.) is used for cost calc
-        deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
+        # Pass the deployment's router-registered pricing (litellm_params custom
+        # rates merged with the model's published rates) so custom batch pricing
+        # (input_cost_per_token_batches etc.) is used for cost calc, exactly as
+        # the inline retrieve path does.
+        deployment_model_info = deployment_pricing_model_info(
+            model_id=model_id,
+            deployment_model=litellm_model_name,
+        )
         batch_cost, batch_usage, batch_models = (
             await calculate_batch_cost_and_usage(
                 file_content_dictionary=file_content_as_dict,
                 custom_llm_provider=llm_provider,  # type: ignore
                 model_name=model_name,
-                model_info=deployment_model_info,  # type: ignore[arg-type]
+                model_info=deployment_model_info,
             )
         )
         logging_obj = LiteLLMLogging(

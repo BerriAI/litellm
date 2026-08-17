@@ -450,6 +450,108 @@ class TestCheckBatchCost:
         assert snapshot["s3_bucket_name"] == "configured-batch-bucket"
 
     @pytest.mark.asyncio
+    async def test_poller_prices_with_deployment_registered_batch_rates(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """The cost poller must price with the rates the router registered for the deployment.
+
+        The deployment's raw model_info dict carries no litellm_params pricing, so passing
+        its model_dump() made the poller bill custom-rate batches at the public cost-map
+        price while the inline retrieve path billed the declared rate.
+        """
+        from unittest.mock import patch
+
+        import litellm
+
+        deployment_id = "deploy-poller-registered-rates-1"
+        litellm.model_cost[deployment_id] = {
+            "id": deployment_id,
+            "input_cost_per_token_batches": 2e-06,
+            "output_cost_per_token_batches": 4e-06,
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+        }
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        mock_job = MagicMock()
+        mock_job.id = "job-poller-rates-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "file-output-123"
+        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"custom_llm_provider": "bedrock", "aws_region_name": "us-east-1"}
+        )
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "bedrock"
+        mock_deployment.litellm_params.model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = b'{"recordId":"req-1"}'
+
+        decoded_id = f"llm_model_id,{deployment_id};llm_batch_id,batch-456;"
+
+        try:
+            with (
+                patch(
+                    "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                    side_effect=[decoded_id, None],
+                ),
+                patch(
+                    "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                    return_value=deployment_id,
+                ),
+                patch(
+                    "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                    return_value="batch-456",
+                ),
+                patch(
+                    "litellm.files.main.afile_content",
+                    new_callable=AsyncMock,
+                    return_value=mock_file_content,
+                ),
+                patch(
+                    "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                    return_value=[{"recordId": "req-1"}],
+                ),
+                patch(
+                    "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                    new_callable=AsyncMock,
+                    return_value=(0.0052, {"prompt_tokens": 1400, "completion_tokens": 600}, ["claude-haiku-4-5"]),
+                ) as mock_calculate,
+                patch(
+                    "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                    return_value=("us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock", None, None),
+                ),
+                patch("litellm.litellm_core_utils.litellm_logging.Logging") as mock_logging_cls,
+            ):
+                mock_logging_obj = MagicMock()
+                mock_logging_obj.async_success_handler = AsyncMock()
+                mock_logging_cls.return_value = mock_logging_obj
+
+                await check_batch_cost_instance.check_batch_cost()
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+        mock_calculate.assert_awaited_once()
+        passed_model_info = mock_calculate.await_args.kwargs["model_info"]
+        assert passed_model_info is not None, "poller must pass the deployment's registered pricing"
+        assert passed_model_info["input_cost_per_token_batches"] == 2e-06
+        assert passed_model_info["output_cost_per_token_batches"] == 4e-06
+
+    @pytest.mark.asyncio
     async def test_primary_path_completion_update_includes_batch_processed(
         self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
     ):
