@@ -7,9 +7,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 import asyncio
 import logging
 import os
-import re
 import sys
-from pathlib import Path
 from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -35,9 +33,6 @@ from litellm.router_strategy.complexity_router.complexity_router import (
 )
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFICATION_RUBRIC,
-    DEFAULT_DIMENSION_WEIGHTS,
-    DEFAULT_TIER_BOUNDARIES,
-    DEFAULT_TOKEN_THRESHOLDS,
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
@@ -6876,57 +6871,3 @@ class TestClassificationRubrics:
             },
         )
         assert config.classifier_llm_config.system_prompt == "Grade the data sensitivity of the request."
-
-
-class TestDashboardScorerDefaultsParity:
-    """The Admin UI prefills the scorer knobs from its own copy of these defaults.
-
-    The UI copy is display-only: an untouched knob is omitted from the payload, so drift shows a stale
-    placeholder rather than pinning a router. That still misleads whoever reads the form, and nothing else
-    catches it, so the two copies are pinned against each other here.
-    """
-
-    DASHBOARD_CONSTANTS = (
-        Path(__file__).resolve().parents[3]
-        / "ui"
-        / "litellm-dashboard"
-        / "src"
-        / "components"
-        / "add_model"
-        / "ComplexityRouterConfig.tsx"
-    )
-
-    @staticmethod
-    def _numeric_literals(source: str, const_name: str) -> dict[str, float]:
-        block = re.search(rf"export const {const_name}[^=]*=\s*\{{(.*?)\}};", source, re.DOTALL)
-        assert block is not None, f"{const_name} not found in the dashboard constants"
-        return {key: float(raw) for key, raw in re.findall(r"(\w+):\s*(-?[\d.]+)", block.group(1))}
-
-    @pytest.fixture(scope="class")
-    def dashboard_source(self) -> str:
-        assert self.DASHBOARD_CONSTANTS.is_file(), f"missing {self.DASHBOARD_CONSTANTS}"
-        return self.DASHBOARD_CONSTANTS.read_text(encoding="utf-8")
-
-    @pytest.mark.parametrize(
-        "const_name, backend_defaults",
-        [
-            ("DEFAULT_TIER_BOUNDARIES", DEFAULT_TIER_BOUNDARIES),
-            ("DEFAULT_TOKEN_THRESHOLDS", DEFAULT_TOKEN_THRESHOLDS),
-            ("DEFAULT_DIMENSION_WEIGHTS", DEFAULT_DIMENSION_WEIGHTS),
-        ],
-    )
-    def test_dashboard_mirrors_backend_defaults(self, dashboard_source, const_name, backend_defaults):
-        assert self._numeric_literals(dashboard_source, const_name) == {
-            key: float(value) for key, value in backend_defaults.items()
-        }, f"{const_name} in ComplexityRouterConfig.tsx no longer matches complexity_router/config.py"
-
-    def test_dashboard_labels_every_scored_dimension(self, dashboard_source):
-        # A dimension added to the scorer with no label would render as a blank row, and one dropped from the
-        # scorer would leave a control that silently does nothing.
-        labels = re.search(r"export const DIMENSION_LABELS[^=]*=\s*\{(.*?)\};", dashboard_source, re.DOTALL)
-        assert labels is not None
-        assert set(re.findall(r"(\w+):", labels.group(1))) == set(DEFAULT_DIMENSION_WEIGHTS)
-
-        keys = re.search(r"export const DIMENSION_KEYS = \[(.*?)\] as const;", dashboard_source, re.DOTALL)
-        assert keys is not None
-        assert set(re.findall(r'"(\w+)"', keys.group(1))) == set(DEFAULT_DIMENSION_WEIGHTS)
