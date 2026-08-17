@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any, Final, cast
 
 import orjson
-from fastapi import APIRouter, Depends, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
@@ -57,7 +57,11 @@ def _with_request_format(data: Mapping[str, Any], request: Request) -> Mapping[s
     header_value: Final = request.headers.get(OCR_REQUEST_FORMAT_HEADER)
     if header_value is None or OCR_REQUEST_FORMAT_PARAM in data:
         return data
-    return {**data, OCR_REQUEST_FORMAT_PARAM: parse_ocr_request_format(header_value.strip().lower())}
+    try:
+        request_format: Final = parse_ocr_request_format(header_value.strip().lower())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": f"{e}"})
+    return {**data, OCR_REQUEST_FORMAT_PARAM: request_format}
 
 
 def _native_response(response: object, fastapi_response: Response) -> Response | None:
