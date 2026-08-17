@@ -1,6 +1,7 @@
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { Download } from "lucide-react";
 import React, { useState } from "react";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -20,6 +21,16 @@ import EntityUsageExportModal from "./EntityUsageExportModal";
 import type { EntitySpendData, EntityType } from "./types";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
+export interface UsageFilterSelectProps {
+  onSearchChange: (query: string) => void;
+  onLoadMore: () => void;
+  hasNextPage?: boolean;
+  isLoading?: boolean;
+  isFetchingNextPage?: boolean;
+  emptyText?: string;
+  loadingText?: string;
+}
+
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
   entityType: EntityType;
@@ -32,6 +43,7 @@ interface UsageExportHeaderProps {
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
   filterMode?: "multiple" | "single";
+  filterSelectProps?: UsageFilterSelectProps;
   filterSlot?: React.ReactNode;
   customTitle?: string;
   compactLayout?: boolean;
@@ -49,6 +61,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   onFiltersChange,
   filterOptions = [],
   filterMode = "multiple",
+  filterSelectProps,
   filterSlot,
   customTitle,
   compactLayout = false,
@@ -57,7 +70,8 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-  const hasFilters = filterSlot != null || (showFilters && filterOptions.length > 0);
+  const hasBuiltInFilter = filterOptions.length > 0 || filterSelectProps !== undefined;
+  const hasFilters = filterSlot != null || (showFilters && hasBuiltInFilter);
   const optionValues = filterOptions.map((option) => option.value);
   const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
 
@@ -74,45 +88,59 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
     </ComboboxContent>
   );
 
-  const builtInFilter =
-    filterMode === "single" ? (
-      <Combobox
-        items={optionValues}
-        value={selectedFilters[0] ?? null}
-        onValueChange={(next: string | null) => onFiltersChange?.(next ? [next] : [])}
-        itemToStringLabel={labelOf}
-      >
-        <ComboboxInput
-          className="w-full"
-          placeholder={filterPlaceholder}
-          aria-label={filterPlaceholder}
-          showClear={selectedFilters.length > 0}
-        />
-        {filterList}
-      </Combobox>
-    ) : (
-      <Combobox
-        multiple
-        items={optionValues}
-        value={selectedFilters}
-        onValueChange={(next: string[]) => onFiltersChange?.(next)}
-      >
-        <ComboboxChips render={<div ref={anchor} />} className="w-full">
-          <ComboboxValue>
-            {(selected: string[]) =>
-              selected.map((value) => (
-                <ComboboxChip key={value} aria-label={labelOf(value)}>
-                  {labelOf(value)}
-                </ComboboxChip>
-              ))
-            }
-          </ComboboxValue>
-          <ComboboxChipsInput placeholder={filterPlaceholder} aria-label={filterPlaceholder} />
-          {selectedFilters.length > 0 && <ComboboxClear aria-label={`Clear ${filterLabel ?? "filters"}`} />}
-        </ComboboxChips>
-        {filterList}
-      </Combobox>
-    );
+  const searchableSingleFilter =
+    filterSelectProps !== undefined ? (
+      <PaginatedSearchSelect
+        options={filterOptions}
+        value={selectedFilters[0]}
+        onValueChange={(next) => onFiltersChange?.(next ? [next] : [])}
+        placeholder={filterPlaceholder}
+        {...filterSelectProps}
+      />
+    ) : undefined;
+
+  const singleFilter = searchableSingleFilter ?? (
+    <Combobox
+      items={optionValues}
+      value={selectedFilters[0] ?? null}
+      onValueChange={(next: string | null) => onFiltersChange?.(next ? [next] : [])}
+      itemToStringLabel={labelOf}
+    >
+      <ComboboxInput
+        className="w-full"
+        placeholder={filterPlaceholder}
+        aria-label={filterPlaceholder}
+        showClear={selectedFilters.length > 0}
+      />
+      {filterList}
+    </Combobox>
+  );
+
+  const multiFilter = (
+    <Combobox
+      multiple
+      items={optionValues}
+      value={selectedFilters}
+      onValueChange={(next: string[]) => onFiltersChange?.(next)}
+    >
+      <ComboboxChips render={<div ref={anchor} />} className="w-full">
+        <ComboboxValue>
+          {(selected: string[]) =>
+            selected.map((value) => (
+              <ComboboxChip key={value} aria-label={labelOf(value)}>
+                {labelOf(value)}
+              </ComboboxChip>
+            ))
+          }
+        </ComboboxValue>
+        <ComboboxChipsInput placeholder={filterPlaceholder} aria-label={filterPlaceholder} />
+        {selectedFilters.length > 0 && <ComboboxClear aria-label={`Clear ${filterLabel ?? "filters"}`} />}
+      </ComboboxChips>
+      {filterList}
+    </Combobox>
+  );
+
+  const builtInFilter = filterMode === "single" ? singleFilter : multiFilter;
 
   return (
     <>
