@@ -1303,12 +1303,7 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
 
 
 # =========================================================================== #
-# Bedrock batch usage is parsed by the shape of the payload, not the provider
-#
-# Regression: every bedrock batch line went through the Anthropic usage parser,
-# which reads snake_case input_tokens/output_tokens. A Converse-family model
-# (Nova and friends) reports camelCase inputTokens/outputTokens, so usage read
-# 0/0/0 and the batch billed $0 despite real token consumption.
+# _get_batch_job_usage_from_response_body: bedrock usage shapes
 # =========================================================================== #
 
 
