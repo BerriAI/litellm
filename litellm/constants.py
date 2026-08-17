@@ -1593,6 +1593,13 @@ DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL: Final = 10
 # in a single ``/{name1,name2,...}/mcp`` URL. Bounds the per-request DB / cache
 # fan-out an authenticated caller can trigger by stuffing the path with tokens.
 DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
+# Ceilings on the cached auth registries; larger tables fall back to per-row lookups
+# instead of holding an unbounded id set in every worker.
+TAG_REGISTRY_MAX_SIZE: Final = 5000
+END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
+# How long a failed registry load is remembered as "unusable", so a degraded Postgres
+# is not re-scanned on every request on top of the per-id lookups it falls back to.
+REGISTRY_ERROR_NEGATIVE_CACHE_TTL: Final = 30
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST: Final = [
