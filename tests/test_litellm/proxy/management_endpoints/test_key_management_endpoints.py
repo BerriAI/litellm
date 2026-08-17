@@ -13996,13 +13996,13 @@ async def test_info_key_fn_v2_budget_limits_includes_current_spend(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_attach_budget_limits_usage_json_string_input(monkeypatch):
+async def test_budget_limits_with_usage_json_string_input(monkeypatch):
     """budget_limits stored as a JSON string should be parsed and annotated."""
     import json as json_module
     from unittest.mock import AsyncMock
 
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _attach_budget_limits_usage,
+        _budget_limits_with_usage,
     )
 
     mock_get_current_spend = AsyncMock(return_value=0.5)
@@ -14010,24 +14010,29 @@ async def test_attach_budget_limits_usage_json_string_input(monkeypatch):
         "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
     )
 
-    key_info = {
-        "budget_limits": json_module.dumps(
-            [{"budget_duration": "1h", "max_budget": 2.0, "reset_at": None}]
-        )
-    }
-    await _attach_budget_limits_usage(key_info=key_info, api_key_hash="hash-1")
+    raw = json_module.dumps(
+        [{"budget_duration": "1h", "max_budget": 2.0, "reset_at": None}]
+    )
+    result = await _budget_limits_with_usage(budget_limits=raw, api_key_hash="hash-1")
 
-    assert isinstance(key_info["budget_limits"], list)
-    assert key_info["budget_limits"][0]["current_spend"] == 0.5
+    assert result == [
+        {
+            "budget_duration": "1h",
+            "max_budget": 2.0,
+            "reset_at": None,
+            "current_spend": 0.5,
+        }
+    ]
+    mock_get_current_spend.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_attach_budget_limits_usage_skips_unusable_inputs(monkeypatch):
+async def test_budget_limits_with_usage_skips_unusable_inputs(monkeypatch):
     """Invalid JSON strings, non-list values, and malformed windows are skipped."""
     from unittest.mock import AsyncMock
 
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _attach_budget_limits_usage,
+        _budget_limits_with_usage,
     )
 
     mock_get_current_spend = AsyncMock(return_value=0.0)
@@ -14035,25 +14040,18 @@ async def test_attach_budget_limits_usage_skips_unusable_inputs(monkeypatch):
         "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
     )
 
-    # invalid JSON string
-    key_info = {"budget_limits": "{not json"}
-    await _attach_budget_limits_usage(key_info=key_info, api_key_hash="hash-1")
-    assert key_info["budget_limits"] == "{not json"
-
-    # non-list value
-    key_info = {"budget_limits": {"budget_duration": "1h"}}
-    await _attach_budget_limits_usage(key_info=key_info, api_key_hash="hash-1")
+    # invalid JSON string and non-list values return None: callers keep the original
+    assert await _budget_limits_with_usage(budget_limits="{not json", api_key_hash="hash-1") is None
+    assert await _budget_limits_with_usage(budget_limits={"budget_duration": "1h"}, api_key_hash="hash-1") is None
 
     # windows that are falsy, missing budget_duration, or not dict-like
-    key_info = {
-        "budget_limits": [
-            {},
-            {"max_budget": 2.0},
-            {"budget_duration": "1h", "max_budget": "not-a-number"},
-            42,
-        ]
-    }
-    await _attach_budget_limits_usage(key_info=key_info, api_key_hash="hash-1")
+    windows = [
+        {},
+        {"max_budget": 2.0},
+        {"budget_duration": "1h", "max_budget": "not-a-number"},
+        42,
+    ]
+    result = await _budget_limits_with_usage(budget_limits=windows, api_key_hash="hash-1")
 
     # only the well-formed window (with unparseable max_budget coerced to None)
     # triggers a spend lookup
@@ -14061,17 +14059,22 @@ async def test_attach_budget_limits_usage_skips_unusable_inputs(monkeypatch):
     call_kwargs = mock_get_current_spend.await_args.kwargs
     assert call_kwargs["counter_key"] == "spend:key:hash-1:window:1h"
     assert call_kwargs["max_budget"] is None
-    assert key_info["budget_limits"][2]["current_spend"] == 0.0
-    assert key_info["budget_limits"][3] == 42
+    assert result is not None
+    assert result[0] == {}
+    assert result[1] == {"max_budget": 2.0}
+    assert result[2] == {"budget_duration": "1h", "max_budget": "not-a-number", "current_spend": 0.0}
+    assert result[3] == 42
+    # input is not mutated
+    assert windows[2] == {"budget_duration": "1h", "max_budget": "not-a-number"}
 
 
 @pytest.mark.asyncio
-async def test_attach_budget_limits_usage_pydantic_windows(monkeypatch):
-    """Window objects with model_dump() are converted to dicts in place."""
+async def test_budget_limits_with_usage_pydantic_windows(monkeypatch):
+    """Window objects with model_dump() are converted to dicts; failing windows pass through."""
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _attach_budget_limits_usage,
+        _budget_limits_with_usage,
     )
 
     mock_get_current_spend = AsyncMock(return_value=1.0)
@@ -14088,13 +14091,15 @@ async def test_attach_budget_limits_usage_pydantic_windows(monkeypatch):
     bad_window = MagicMock()
     bad_window.model_dump.side_effect = ValueError("boom")
 
-    key_info = {"budget_limits": [good_window, bad_window]}
-    await _attach_budget_limits_usage(key_info=key_info, api_key_hash="hash-2")
+    result = await _budget_limits_with_usage(
+        budget_limits=[good_window, bad_window], api_key_hash="hash-2"
+    )
 
     # good window converted to dict and annotated; failing window left as-is
-    assert isinstance(key_info["budget_limits"][0], dict)
-    assert key_info["budget_limits"][0]["current_spend"] == 1.0
-    assert key_info["budget_limits"][1] is bad_window
+    assert result is not None
+    assert isinstance(result[0], dict)
+    assert result[0]["current_spend"] == 1.0
+    assert result[1] is bad_window
     mock_get_current_spend.assert_awaited_once()
 
 
