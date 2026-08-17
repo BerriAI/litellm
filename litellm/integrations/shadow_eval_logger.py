@@ -331,7 +331,7 @@ def _failure_detail(e: BaseException) -> str:
     the faulty code path without needing debug logs on the pod."""
     frames: Final = traceback.extract_tb(e.__traceback__)
     location: Final = f" at {frames[-1].filename.rsplit('/', 1)[-1]}:{frames[-1].lineno}" if frames else ""
-    return f"{type(e).__name__}: {e}{location}"
+    return f"{type(e).__name__}{location}: {e}"
 
 
 def _judge_call_cost(response: object) -> float:
