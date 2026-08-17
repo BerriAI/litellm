@@ -41,6 +41,7 @@ import {
 import { cn } from "@/lib/cva.config";
 
 import "./columnMeta";
+import { columnVisibilityStorageKey, readColumnVisibility, writeColumnVisibility } from "./columnVisibilityPersistence";
 import { DataTablePagination, DEFAULT_PAGE_SIZE_OPTIONS } from "./DataTablePagination";
 import type { ColumnPinnedSide, DataTableProps, DataTableSize, FilterMode, PaginationMode, SortingMode } from "./types";
 
@@ -489,6 +490,28 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
   const expandedState = useControllable<ExpandedState>(expanded, onExpandedChange, {});
   const rowSelectionState = useControllable<RowSelectionState>(rowSelection, onRowSelectionChange, {});
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(defaultColumnVisibility ?? {});
+  const visibilityStorageKey = React.useMemo(
+    () => columnVisibilityStorageKey(columns.map(columnDefId).filter((id): id is string => id !== undefined)),
+    [columns],
+  );
+  React.useEffect(() => {
+    if (visibilityStorageKey === undefined) {
+      return;
+    }
+    const persisted = readColumnVisibility(window.localStorage, visibilityStorageKey);
+    if (persisted !== undefined) {
+      setColumnVisibility((current) => ({ ...current, ...persisted }));
+    }
+  }, [visibilityStorageKey]);
+  const onColumnVisibilityChange: OnChangeFn<VisibilityState> = (updater) => {
+    setColumnVisibility((previous) => {
+      const next = typeof updater === "function" ? updater(previous) : updater;
+      if (visibilityStorageKey !== undefined) {
+        writeColumnVisibility(window.localStorage, visibilityStorageKey, next);
+      }
+      return next;
+    });
+  };
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const columnPinning = React.useMemo(() => derivePinning(columns), [columns]);
   const expansionGuard = renderSubComponent !== undefined ? getRowCanExpand : undefined;
@@ -519,7 +542,7 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     onGlobalFilterChange: globalFilterState.onChange,
     onExpandedChange: expandedState.onChange,
     onRowSelectionChange: rowSelectionState.onChange,
-    onColumnVisibilityChange: setColumnVisibility,
+    onColumnVisibilityChange,
     onColumnSizingChange: setColumnSizing,
     getCoreRowModel: getCoreRowModel(),
     ...buildRowModels(sortingMode, paginationMode, filterMode, expansionGuard),
