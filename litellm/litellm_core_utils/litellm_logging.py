@@ -308,6 +308,14 @@ def _get_cached_prometheus_logger():
     return _PrometheusLogger
 
 
+_DEPLOYMENT_PRICING_KEYS: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_token_batches",
+    "output_cost_per_token_batches",
+)
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -602,23 +610,43 @@ class Logging(LiteLLMLoggingBaseClass):
         caller falls back to the global cost map. The raw registration is what
         decides that: the router registers an entry for every deployment, and
         get_model_info fills absent costs with 0, so asking it directly cannot
-        tell "configured as free" apart from "no pricing configured".
+        tell "configured as free" apart from "no pricing configured". A deployment
+        may declare only one side of its pricing, so a rate it leaves unset keeps
+        the model's published value instead of billing as zero.
         """
-        pricing_keys: Final = (
-            "input_cost_per_token",
-            "output_cost_per_token",
-            "input_cost_per_token_batches",
-            "output_cost_per_token_batches",
-        )
         model_id: Final = self.get_router_model_id()
         if model_id is None:
             return None
         registered: Final = litellm.model_cost.get(model_id)
-        if not isinstance(registered, dict) or not any(registered.get(key) is not None for key in pricing_keys):
+        if not isinstance(registered, dict) or not any(
+            registered.get(key) is not None for key in _DEPLOYMENT_PRICING_KEYS
+        ):
             return None
         try:
-            return litellm.get_model_info(model=model_id)
+            merged: Final = litellm.get_model_info(model=model_id)
         except Exception:  # noqa: BLE001  # get_model_info raises for ids it cannot resolve a provider for
+            return None
+        published: Final = self._published_model_info()
+        if published is None:
+            return merged
+        if registered.get("input_cost_per_token") is None:
+            merged["input_cost_per_token"] = published.get("input_cost_per_token")
+        if registered.get("output_cost_per_token") is None:
+            merged["output_cost_per_token"] = published.get("output_cost_per_token")
+        if registered.get("input_cost_per_token_batches") is None:
+            merged["input_cost_per_token_batches"] = published.get("input_cost_per_token_batches")
+        if registered.get("output_cost_per_token_batches") is None:
+            merged["output_cost_per_token_batches"] = published.get("output_cost_per_token_batches")
+        return merged
+
+    def _published_model_info(self) -> ModelInfo | None:
+        """The cost map's own entry for this deployment's model, when it resolves."""
+        deployment_model: Final = self.get_deployment_model_for_cost()
+        if deployment_model is None:
+            return None
+        try:
+            return litellm.get_model_info(model=deployment_model)
+        except Exception:  # noqa: BLE001  # no published entry to layer the declared rates over
             return None
 
     def update_environment_variables(
