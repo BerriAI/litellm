@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import orjson
 import pytest
+from fastapi import HTTPException
 
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
 from litellm.proxy.ocr_endpoints.endpoints import _native_response, _parse_ocr_request
@@ -79,8 +80,11 @@ async def test_should_reject_unknown_req_format_header():
         {"x-req-format": "azure"},
     )
 
-    with pytest.raises(ValueError, match="Invalid `req_format`"):
+    with pytest.raises(HTTPException) as exc_info:
         await _parse_ocr_request(request)
+
+    assert exc_info.value.status_code == 400
+    assert "Invalid `req_format`" in f"{exc_info.value.detail}"
 
 
 def test_should_return_native_payload_with_litellm_response_headers():
