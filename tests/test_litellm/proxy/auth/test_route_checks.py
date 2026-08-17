@@ -62,6 +62,43 @@ def test_non_admin_config_update_route_rejected():
 
 
 @pytest.mark.parametrize(
+    "route",
+    ["/policies/list", "/prompts/list", "/in_product_nudges", "/config/update"],
+)
+def test_admin_only_route_denial_is_forbidden_and_carries_status(route):
+    """A valid non-admin key denied an admin-only route is an authorization
+    failure, so it must surface as 403 and carry the status code the metrics
+    layer reads, not an unlabelled 401.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/37108
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert f"Route={route}" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
     "role",
     [
         LitellmUserRoles.INTERNAL_USER.value,

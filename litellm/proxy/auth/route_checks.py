@@ -226,17 +226,14 @@ class RouteChecks:
             route (str): The route being accessed
 
         Raises:
-            Exception: With user role and masked user_id information
+            HTTPException: 403, with user role and masked user_id information
         """
-        user_role = "unknown"
-        user_id = "unknown"
-        if user_obj is not None:
-            user_role = user_obj.user_role or "unknown"
-            user_id = user_obj.user_id or "unknown"
-
+        user_role: Final = (user_obj.user_role if user_obj is not None else None) or "unknown"
+        user_id: Final = (user_obj.user_id if user_obj is not None else None) or "unknown"
         masked_user_id: Final = RouteChecks._mask_user_id(user_id)
-        raise Exception(
-            f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}",
         )
 
     @staticmethod
