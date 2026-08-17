@@ -1,4 +1,5 @@
 import os
+from typing import Literal
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -31,15 +32,27 @@ def _logging() -> LiteLLMLoggingObj:
     )
 
 
-def _guardrail(**kwargs: object) -> NeuralTrustGuardrail:
-    params: dict[str, object] = {
-        "api_key": "tgk_test",
-        "collector_key": "tgcol_test",
-        "guardrail_name": "neuraltrust",
-        "event_hook": "pre_call",
-    }
-    params.update(kwargs)
-    return NeuralTrustGuardrail(**params)  # type: ignore[arg-type]
+def _guardrail(
+    *,
+    api_key: str = "tgk_test",
+    collector_key: str = "tgcol_test",
+    guardrail_name: str = "neuraltrust",
+    event_hook: str = "pre_call",
+    default_on: bool = False,
+    unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
+    timeout: float | None = None,
+    api_base: str | None = None,
+) -> NeuralTrustGuardrail:
+    return NeuralTrustGuardrail(
+        api_key=api_key,
+        collector_key=collector_key,
+        guardrail_name=guardrail_name,
+        event_hook=event_hook,
+        default_on=default_on,
+        unreachable_fallback=unreachable_fallback,
+        timeout=timeout,
+        api_base=api_base,
+    )
 
 
 class TestNeuralTrustGuardrail:
@@ -238,6 +251,123 @@ class TestNeuralTrustGuardrail:
         assert result["texts"] == ["ssn is [REDACTED]"]
         assert result["structured_messages"] == rewritten
         assert result["structured_messages"] is not rewritten
+
+    @pytest.mark.asyncio
+    async def test_transform_messages_writes_back_tool_calls(self) -> None:
+        guardrail = _guardrail(event_hook="post_call")
+        original_tool_calls = [
+            {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": '{"ssn":"123-45-6789"}'}}
+        ]
+        rewritten_tool_calls = [
+            {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": '{"ssn":"[REDACTED]"}'}}
+        ]
+        rewritten = [{"role": "assistant", "content": None, "tool_calls": rewritten_tool_calls}]
+        mock_post = AsyncMock(
+            return_value=_response(
+                {
+                    "status": "transform",
+                    "transformed_payload": {"messages": rewritten},
+                }
+            )
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={
+                    "texts": [""],
+                    "tool_calls": original_tool_calls,
+                    "structured_messages": [{"role": "assistant", "content": None, "tool_calls": original_tool_calls}],
+                },
+                request_data={},
+                input_type="response",
+                logging_obj=_logging(),
+            )
+        assert result["tool_calls"] == rewritten_tool_calls
+        assert result["tool_calls"] is not original_tool_calls
+        assert result["structured_messages"][0]["tool_calls"] == rewritten_tool_calls
+
+    @pytest.mark.asyncio
+    async def test_transform_messages_keeps_tool_calls_when_omitted(self) -> None:
+        guardrail = _guardrail()
+        original_tool_calls = [
+            {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": '{"q":"hi"}'}}
+        ]
+        rewritten = [{"role": "user", "content": "ssn is [REDACTED]"}]
+        mock_post = AsyncMock(
+            return_value=_response(
+                {
+                    "status": "transform",
+                    "transformed_payload": {"messages": rewritten},
+                }
+            )
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["ssn is 123-45-6789"],
+                    "tool_calls": original_tool_calls,
+                    "structured_messages": [{"role": "user", "content": "ssn is 123-45-6789"}],
+                },
+                request_data={},
+                input_type="request",
+                logging_obj=_logging(),
+            )
+        assert result["tool_calls"] is original_tool_calls
+
+    @pytest.mark.asyncio
+    async def test_transform_messages_tool_call_count_mismatch_fail_closed(self) -> None:
+        guardrail = _guardrail()
+        mock_post = AsyncMock(
+            return_value=_response(
+                {
+                    "status": "transform",
+                    "transformed_payload": {
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [],
+                            }
+                        ]
+                    },
+                }
+            )
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={
+                        "texts": [""],
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    request_data={},
+                    input_type="response",
+                    logging_obj=_logging(),
+                )
+        assert exc_info.value.status_code == 400
+        assert "transform missing payload" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_post_call_attaches_tool_calls_to_last_assistant_message(self) -> None:
+        guardrail = _guardrail(event_hook="post_call")
+        tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": '{"q":"hi"}'}}]
+        mock_post = AsyncMock(return_value=_response({"status": "allow"}))
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["first", "second"], "tool_calls": tool_calls},
+                request_data={},
+                input_type="response",
+                logging_obj=_logging(),
+            )
+        messages = mock_post.call_args.kwargs["json"]["payload"]["messages"]
+        assert [message["content"] for message in messages] == ["first", "second"]
+        assert "tool_calls" not in messages[0]
+        assert messages[1]["tool_calls"] == tool_calls
 
     @pytest.mark.asyncio
     async def test_transform_without_payload_fail_closed(self) -> None:
