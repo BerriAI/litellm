@@ -2013,10 +2013,10 @@ def _exec_guardrail_in_child(
     """
     try:
         result_queue.put("ready")
-        compiled: Any = marshal.loads(compiled_bytes)
+        compiled: Final = marshal.loads(compiled_bytes)
         exec_globals: Final = build_sandbox_globals()
         exec(compiled, exec_globals)  # noqa: S102
-        apply_fn: object = exec_globals.get("apply_guardrail")
+        apply_fn: Final = exec_globals.get("apply_guardrail")
         if not callable(apply_fn):
             result_queue.put(
                 (
@@ -2026,7 +2026,7 @@ def _exec_guardrail_in_child(
                 )
             )
             return
-        result: object = apply_fn(test_inputs, request_data, input_type)
+        result: Final = apply_fn(test_inputs, request_data, input_type)
         result_queue.put(("ok", result))
     except Exception as e:  # noqa: BLE001 — user code may raise anything; surfaced via queue
         result_queue.put(("error", str(e)))
@@ -2164,9 +2164,9 @@ async def test_custom_code_guardrail(
         # an infinite loop cannot be terminated, so repeated submissions
         # would leak CPU-consuming workers and block graceful shutdown.
         # terminate() kills the process at the deadline instead.
-        ctx = multiprocessing.get_context("spawn" if sys.platform == "win32" else "fork")
-        result_queue: Any = ctx.Queue()
-        proc = ctx.Process(
+        ctx: Final = multiprocessing.get_context("spawn" if sys.platform == "win32" else "fork")
+        result_queue: Final = ctx.Queue()
+        proc: Final = ctx.Process(
             target=_exec_guardrail_in_child,
             args=(
                 marshal.dumps(compiled),
@@ -2183,7 +2183,7 @@ async def test_custom_code_guardrail(
         # timeout would reject valid code. Only the user-code window is
         # bounded by EXECUTION_TIMEOUT_SECONDS.
         try:
-            ready = result_queue.get(timeout=30)
+            ready: Final = result_queue.get(timeout=30)
         except queue.Empty:
             proc.terminate()
             proc.join()
@@ -2228,7 +2228,7 @@ async def test_custom_code_guardrail(
                 error=f"Execution error: {payload}",
                 error_type="execution",
             )
-        result: object = payload
+        result: Final = payload
 
         # Step 5: Validate and return result
         if not isinstance(result, dict):
