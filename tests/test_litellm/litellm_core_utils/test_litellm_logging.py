@@ -437,6 +437,47 @@ class TestGetRouterDeploymentModelInfo:
         finally:
             litellm.model_cost.pop(deployment_id, None)
 
+    def test_a_published_batch_rate_never_displaces_a_declared_standard_rate(self) -> None:
+        """Ownership is per token direction, not per field.
+
+        Filling the batch field from the published entry let that rate win, so a
+        deployment configuring only its standard rate had batches billed at the
+        published batch price instead of half the rate it configured.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        model = "ft:gpt-3.5-turbo"
+        published = litellm.get_model_info(model=model)
+        assert published["input_cost_per_token_batches"] is not None
+
+        deployment_id = "deploy-standard-input-only-1"
+        litellm.model_cost[deployment_id] = {
+            "id": deployment_id,
+            "input_cost_per_token": 1e-06,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        }
+        obj = LiteLLMLoggingObj(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="direction-ownership",
+            function_id="f",
+        )
+        obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}, "model": model}
+        obj.model_call_details["model"] = model
+        try:
+            info = obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["input_cost_per_token"] == 1e-06
+            assert info["input_cost_per_token_batches"] is None
+            assert info["output_cost_per_token"] == published["output_cost_per_token"]
+            assert info["output_cost_per_token_batches"] == published["output_cost_per_token_batches"]
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
     def test_keeps_declared_rates_when_no_model_is_resolvable(self, logging_obj) -> None:
         """With no model to look a published entry up by, the declared rates stand alone."""
         deployment_id = "deploy-no-model-at-all-1"
