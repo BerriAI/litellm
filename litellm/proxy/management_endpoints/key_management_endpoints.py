@@ -3599,8 +3599,7 @@ async def _budget_limits_with_usage(budget_limits: object, api_key_hash: str) ->
     if windows is None:
         return None
     return [  # mutable-ok: entries are awaited, so they cannot be built inside a frozen wrapper
-        await _budget_limits_entry_with_usage(window=window, api_key_hash=api_key_hash)
-        for window in windows
+        await _budget_limits_entry_with_usage(window=window, api_key_hash=api_key_hash) for window in windows
     ]
 
 
