@@ -8199,6 +8199,8 @@ class ProviderConfigManager:
             return litellm.VoyageRerankConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXRerankConfig()
+        elif litellm.LlmProviders.XINFERENCE == provider:
+            return litellm.XinferenceRerankConfig()
         elif litellm.LlmProviders.DASHSCOPE == provider:
             from litellm.llms.dashscope.rerank.transformation import (
                 DashScopeRerankConfig,
