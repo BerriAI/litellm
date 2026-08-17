@@ -430,7 +430,8 @@ class ArizePhoenixLogger(OpenTelemetry):
 
         otlp_auth_headers = None
         if api_key is not None:
-            otlp_auth_headers = f"Authorization=Bearer {api_key}"
+            auth_header_key = "authorization" if protocol == "otlp_grpc" else "Authorization"
+            otlp_auth_headers = f"{auth_header_key}=Bearer {api_key}"
         elif "app.phoenix.arize.com" in endpoint:
             raise ValueError("PHOENIX_API_KEY must be set when using Phoenix Cloud (app.phoenix.arize.com).")
 

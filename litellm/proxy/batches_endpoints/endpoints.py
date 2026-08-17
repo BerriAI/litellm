@@ -23,7 +23,9 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    add_internal_model_credentials,
     apply_team_provider_credentials,
+    batch_cost_poller_is_active,
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
@@ -36,7 +38,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_original_file_id,
     prepare_data_with_credentials,
     update_batch_in_database,
+    validate_managed_id_requirement,
 )
+from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
@@ -137,6 +141,8 @@ async def create_batch(
         )
         data["metadata"] = sanitize_openai_provider_metadata(data.get("metadata"))
 
+        raise_if_required_body_param_missing(route_type="acreate_batch", data=data)
+
         ## check if model is a loadbalanced model
         router_model: str | None = None
         is_router_model = False
@@ -176,6 +182,12 @@ async def create_batch(
             }
 
         input_file_id: Final = _create_batch_data.get("input_file_id", None)
+        await validate_managed_id_requirement(
+            resource_id=input_file_id,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         unified_file_id: str | Literal[False] = False
 
         model_from_file_id = None
@@ -264,6 +276,7 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
+            _create_batch_data.update(disable_fallbacks=True)  # pyright: ignore[reportCallIssue]  # router flag
             response = await llm_router.acreate_batch(**_create_batch_data)
             response.input_file_id = input_file_id
             response._hidden_params["unified_file_id"] = unified_file_id
@@ -391,6 +404,12 @@ async def retrieve_batch(
 
     data: dict = {}
     try:
+        await validate_managed_id_requirement(
+            resource_id=batch_id,
+            resource_kind="batch",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         model_from_id: Final = decode_model_from_file_id(batch_id)
         _retrieve_batch_request: Final = RetrieveBatchRequest(
             batch_id=batch_id,
@@ -482,6 +501,14 @@ async def retrieve_batch(
                 "Batch %s is in non-terminal state %s, syncing with provider", batch_id, response.status
             )
 
+        poller_owns_accounting: Final = bool(unified_batch_id) and batch_cost_poller_is_active()
+        if poller_owns_accounting:
+            litellm_metadata = data.get("litellm_metadata")
+            if not isinstance(litellm_metadata, dict):
+                litellm_metadata = {}  # mutable-ok: the suppression flag must live inside litellm_metadata for the success handler to read it, and this request carried no mapping to extend
+                data["litellm_metadata"] = litellm_metadata
+            litellm_metadata["batch_ignore_default_logging"] = True
+
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
@@ -523,6 +550,13 @@ async def retrieve_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
+            if unified_batch_id:
+                add_internal_model_credentials(
+                    data=data,
+                    llm_router=llm_router,
+                    model_id=get_model_id_from_unified_batch_id(unified_batch_id),
+                )
+
             response = await llm_router.aretrieve_batch(**data)
             response._hidden_params["unified_batch_id"] = unified_batch_id
             if unified_batch_id:
@@ -559,6 +593,7 @@ async def retrieve_batch(
             verbose_proxy_logger=verbose_proxy_logger,
             db_batch_object=db_batch_object,
             operation="retrieve",
+            poller_owns_accounting=poller_owns_accounting,
         )
 
         ### CALL HOOKS ### - modify outgoing data
@@ -701,7 +736,7 @@ async def list_batches(
                 operation_context="batch listing",
             )
 
-            data.update(credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials)
 
             response = await litellm.alist_batches(
                 custom_llm_provider=credentials["custom_llm_provider"],
@@ -839,6 +874,13 @@ async def cancel_batch(
 
     data: dict = {}
     try:
+        await validate_managed_id_requirement(
+            resource_id=batch_id,
+            resource_kind="batch",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+
         # Check for encoded batch ID with model info
         model_from_id: Final = decode_model_from_file_id(batch_id)
 
@@ -927,9 +969,10 @@ async def cancel_batch(
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
+            body_custom_llm_provider = data.pop("custom_llm_provider", None)
             custom_llm_provider: Final = (
                 provider
-                or data.pop("custom_llm_provider", None)
+                or body_custom_llm_provider
                 or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
@@ -961,6 +1004,7 @@ async def cancel_batch(
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
             operation="cancel",
+            user_api_key_dict=user_api_key_dict,
         )
 
         ### CALL HOOKS ### - modify outgoing data

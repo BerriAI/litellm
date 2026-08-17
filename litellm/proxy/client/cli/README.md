@@ -36,6 +36,17 @@ The base URL is resolved in this order of precedence:
 3. `base_url` from `~/.litellm/config.json`
 4. `http://localhost:4000`
 
+### Hiding commands from the listings
+
+Deployments that hand `lite` to end users often want to advertise only part of it. Store the commands to keep out of the listings, comma separated:
+
+```bash
+lite config set hidden_commands codex,opencode
+lite config unset hidden_commands   # list everything again
+```
+
+Hidden commands drop out of both `lite --help` and the interactive shell's "Available commands" block, and stay runnable so existing scripts keep working
+
 ## Global Options
 
 - `--version`, `-v`: Print the LiteLLM Proxy client and server version and exit.

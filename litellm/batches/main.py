@@ -22,6 +22,7 @@ from openai.types.batch import BatchRequestCounts
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -527,6 +528,7 @@ def retrieve_batch(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
+        add_trusted_model_credentials_to_litellm_params(litellm_params, kwargs)
         if litellm_logging_obj is not None:
             litellm_logging_obj.update_from_kwargs(
                 kwargs=kwargs,
@@ -824,7 +826,7 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -870,7 +872,7 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] | str = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] | str = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -991,9 +993,14 @@ def cancel_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "bedrock":
+            response = BedrockBatchesHandler.cancel_batch(
+                batch_id=batch_id,
+                **kwargs,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. Only 'openai', 'azure', and 'vertex_ai' are supported.",
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. Only 'openai', 'azure', 'vertex_ai', and 'bedrock' are supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(

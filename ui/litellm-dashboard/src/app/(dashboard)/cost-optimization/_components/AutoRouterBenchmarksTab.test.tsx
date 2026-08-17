@@ -1,10 +1,16 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { ApiError } from "@/lib/http/client";
 
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
+vi.mock("./ShadowEvalSection", () => ({ default: () => <div data-testid="shadow-eval-section" /> }));
+
+import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
 
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import type {
@@ -15,6 +21,10 @@ import type {
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 
 type HookResult = ReturnType<typeof useAutoRouterBenchmarks>;
+
+const mockAutoRouters = (deployments: AutoRouterDeployment[] = []) => {
+  vi.mocked(useAutoRouters).mockReturnValue({ data: deployments } as unknown as ReturnType<typeof useAutoRouters>);
+};
 
 const mockHook = (result: { data?: AutoRouterBenchmarksResponse; isPending?: boolean; error?: Error }) => {
   vi.mocked(useAutoRouterBenchmarks).mockReturnValue({
@@ -56,6 +66,36 @@ const totals = (overrides: Partial<Totals> = {}): Totals => ({
   ...overrides,
 });
 
+const zeroBucket = { turns: 0, hits: 0, hit_rate_pct: 0 };
+
+const zeroCache: AutoRouterCacheStats = {
+  coverage_pct: 0,
+  hit_rate_pct: 0,
+  same_model: zeroBucket,
+  first_visit: zeroBucket,
+  return_to_tier: zeroBucket,
+  unordered_turns: 0,
+  return_misses_expired: 0,
+  return_misses_within_ttl: 0,
+  return_misses_unknown: 0,
+  ttl_5m_turns: 0,
+  ttl_1h_turns: 0,
+};
+
+const zeroTotals: Totals = {
+  sessions: 0,
+  turns: 0,
+  avg_turns_per_session: 0,
+  avg_session_seconds: 0,
+  avg_tokens_per_session: 0,
+  spend: 0,
+  saved_spend: 0,
+  baseline_spend: 0,
+  saved_pct: 0,
+  saved_per_session: 0,
+  cache: zeroCache,
+};
+
 const group = (overrides: Partial<AutoRouterBenchmarkGroup> = {}): AutoRouterBenchmarkGroup => ({
   router_name: "claude-auto",
   router_type: "complexity",
@@ -71,9 +111,20 @@ const response = (groups: AutoRouterBenchmarkGroup[], shared: Totals = totals())
   groups,
 });
 
-const renderTab = () => render(<AutoRouterBenchmarksTab accessToken="sk-test" />);
+const renderTab = () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <AutoRouterBenchmarksTab accessToken="sk-test" />
+    </QueryClientProvider>,
+  );
+};
 
 describe("AutoRouterBenchmarksTab", () => {
+  beforeEach(() => {
+    mockAutoRouters();
+  });
+
   it("leads with total estimated savings, before the three session-shape metrics", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
@@ -97,7 +148,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("-86%")).toBeInTheDocument();
     expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
     expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("Estimated spend at highest-cost model")).toBeInTheDocument();
+    expect(screen.getByText("Estimated spend at highest-tier model")).toBeInTheDocument();
     expect(screen.getByText("$2,534.45")).toBeInTheDocument();
     expect(screen.getByText("32.7")).toBeInTheDocument();
     expect(screen.getByText("2.1h")).toBeInTheDocument();
@@ -108,12 +159,9 @@ describe("AutoRouterBenchmarksTab", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
 
-    expect(screen.getByText("Total sessions")).toBeInTheDocument();
-    expect(screen.getByText("94")).toBeInTheDocument();
-    expect(screen.getByText("Total turns")).toBeInTheDocument();
-    expect(screen.getByText("3,073")).toBeInTheDocument();
     expect(screen.getByText("Avg saved per session")).toBeInTheDocument();
     expect(screen.getByText("$23.13")).toBeInTheDocument();
+    expect(screen.getByText("across 94 sessions")).toBeInTheDocument();
   });
 
   it("shows a cost increase as a positive delta rather than a saving", () => {
@@ -144,6 +192,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("97.7%")).toBeInTheDocument();
     expect(screen.getByText("24.3%")).toBeInTheDocument();
     expect(screen.getByText("81.6%")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Share of turns by bucket" })).not.toHaveClass("bg-muted");
   });
 
   it("summarizes the cache column from the bucketed turns, not the session turns", () => {
@@ -155,19 +204,43 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText(/turns measured/)).toBeInTheDocument();
   });
 
-  it("recomputes the expired-miss share from the miss counts", () => {
+  it("computes the expired-miss share over every measured turn, not just return-to-tier misses", () => {
     mockHook({ data: response([group()]) });
     renderTab();
 
     expect(screen.getByText("Expired-miss")).toBeInTheDocument();
-    expect(screen.getByText("27.1%")).toBeInTheDocument();
+    expect(screen.getByText("2.3%")).toBeInTheDocument();
   });
 
-  it("hides the expired-miss row when every return turn hit", () => {
+  it("exposes the whole expired-miss row as a focusable tooltip trigger", () => {
+    mockHook({ data: response([group()]) });
+    renderTab();
+
+    const trigger = screen.getByRole("button", { name: /Expired-miss/ });
+    expect(trigger).toHaveTextContent("2.3%");
+  });
+
+  it("shows a zero expired-miss share, rather than hiding the row, when every return turn hit", () => {
     const allHits = totals({
       cache: cache({ return_to_tier: { turns: 381, hits: 381, hit_rate_pct: 100 }, return_misses_expired: 0 }),
     });
     mockHook({ data: response([group(allHits)], allHits) });
+    renderTab();
+
+    const trigger = screen.getByRole("button", { name: /Expired-miss/ });
+    expect(trigger).toHaveTextContent("0.0%");
+  });
+
+  it("hides the expired-miss row only when no turns were measured at all", () => {
+    const empty = { turns: 0, hits: 0, hit_rate_pct: 0 };
+    const nothingMeasured = {
+      same_model: empty,
+      first_visit: empty,
+      return_to_tier: empty,
+      return_misses_expired: 0,
+    };
+    const noTurns = totals({ cache: cache(nothingMeasured) });
+    mockHook({ data: response([group(noTurns)], noTurns) });
     renderTab();
 
     expect(screen.queryByText("Expired-miss")).not.toBeInTheDocument();
@@ -210,11 +283,25 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("Auto-router usage is unavailable right now")).toBeInTheDocument();
   });
 
-  it("says so when there are no auto-router sessions at all", () => {
-    mockHook({ data: response([]) });
+  it("renders the full dashboard with zeroed stats when the window has no sessions", () => {
+    mockHook({ data: response([], zeroTotals) });
     renderTab();
 
-    expect(screen.getByText("No auto-router sessions in this window yet")).toBeInTheDocument();
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.getAllByText("$0.00")).toHaveLength(4);
+    expect(screen.getByText("across 0 sessions")).toBeInTheDocument();
+    expect(screen.getByText("0s")).toBeInTheDocument();
+    expect(screen.getByText(/turns measured/)).toBeInTheDocument();
+    expect(screen.getAllByText("0.0%").length).toBeGreaterThan(0);
+    expect(screen.getByRole("img", { name: "Share of turns by bucket" })).toHaveClass("bg-muted");
+  });
+
+  it("shows the savings delta as an unsigned zero when nothing was saved", () => {
+    mockHook({ data: response([], zeroTotals) });
+    renderTab();
+
+    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(screen.queryByText("-0%")).not.toBeInTheDocument();
   });
 
   it("requests the default thirty day window and widens or narrows it from the picker", () => {
@@ -233,8 +320,35 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("Last 24 hours")).toBeInTheDocument();
   });
 
+  it("shows usage by default and mounts shadow evals only when its sub-tab is selected", () => {
+    mockHook({ data: response([group()]) });
+    renderTab();
+
+    expect(screen.getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.queryByTestId("shadow-eval-section")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Shadow Evals" }));
+    expect(screen.getByRole("tab", { name: "Shadow Evals" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
+  });
+
+  it("keeps the shadow evals sub-tab reachable while the usage body is in its error state", () => {
+    mockHook({ error: new ApiError("boom", 500, {}) });
+    renderTab();
+
+    expect(screen.getByText("Auto-router usage is unavailable right now")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Shadow Evals" }));
+    expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
+  });
+
   it("keeps the window picker reachable while a window has no sessions", () => {
-    mockHook({ data: response([]) });
+    mockHook({ data: response([], zeroTotals) });
     renderTab();
 
     expect(screen.getByRole("tab", { name: "30d" })).toBeInTheDocument();
