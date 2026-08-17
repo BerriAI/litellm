@@ -2416,6 +2416,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max request size in MB, if a request is larger than this size it will be rejected",
     )
+    max_file_size_mb: int | None = Field(
+        None,
+        description="max size in MB for file uploads to /v1/files, overriding max_request_size_mb on that route so batch input files are not capped by the global request limit. Falls back to max_request_size_mb when unset",
+    )
     max_response_size_mb: int | None = Field(
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",

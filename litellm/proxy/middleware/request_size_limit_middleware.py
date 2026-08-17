@@ -4,6 +4,11 @@ from typing import Final
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from litellm.proxy.common_utils.request_route_scoping import (
+    is_file_upload_route,
+    strip_root_path,
+)
+
 MaxRequestSizeGetter = Callable[[], int | float | None]
 RequestSizeLimitEnabledGetter = Callable[[], bool]
 
@@ -19,16 +24,22 @@ class RequestSizeLimitMiddleware:
     Content-Length can be rejected without reading any body bytes. Requests
     without Content-Length are counted as the ASGI stream is consumed, limiting
     memory exposure to the configured threshold plus the current chunk.
+
+    File uploads use ``max_file_size_mb`` when it is set: batch input files are
+    routinely orders of magnitude larger than a chat payload, so they cannot
+    share one limit.
     """
 
     def __init__(
         self,
         app: ASGIApp,
         get_max_request_size_mb: MaxRequestSizeGetter,
+        get_max_file_size_mb: MaxRequestSizeGetter,
         is_request_size_limit_enabled: RequestSizeLimitEnabledGetter,
     ) -> None:
         self.app = app
         self.get_max_request_size_mb = get_max_request_size_mb
+        self.get_max_file_size_mb = get_max_file_size_mb
         self.is_request_size_limit_enabled = is_request_size_limit_enabled
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -36,7 +47,15 @@ class RequestSizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        max_request_size_mb: Final = self.get_max_request_size_mb()
+        max_request_size_mb: Final = resolve_max_size_mb(
+            method=str(scope.get("method", "")),
+            route=strip_root_path(
+                path=str(scope.get("path", "")),
+                root_path=str(scope.get("app_root_path", scope.get("root_path", ""))),
+            ),
+            max_request_size_mb=self.get_max_request_size_mb(),
+            max_file_size_mb=self.get_max_file_size_mb(),
+        )
         max_request_size_bytes: Final = _mb_to_bytes(max_request_size_mb)
         if max_request_size_bytes is None or not self.is_request_size_limit_enabled():
             await self.app(scope, receive, send)
@@ -75,6 +94,21 @@ class RequestSizeLimitMiddleware:
             if response_started:
                 raise
             await _send_request_too_large(send=send, max_request_size_mb=max_request_size_mb)
+
+
+def resolve_max_size_mb(
+    method: str,
+    route: str,
+    max_request_size_mb: float | None,
+    max_file_size_mb: float | None,
+) -> float | None:
+    """
+    The size limit that applies to one request. ``max_file_size_mb`` overrides
+    the global limit on file-upload routes; unset falls back to it.
+    """
+    if max_file_size_mb is not None and is_file_upload_route(method=method, route=route):
+        return max_file_size_mb
+    return max_request_size_mb
 
 
 def _mb_to_bytes(max_request_size_mb: float | None) -> int | None:

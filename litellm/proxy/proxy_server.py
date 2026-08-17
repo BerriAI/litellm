@@ -15566,6 +15566,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
         "max_request_size_mb": "Integer",
+        "max_file_size_mb": "Integer",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",
@@ -17196,6 +17197,7 @@ attach_lazy_features(app)
 app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
+    get_max_file_size_mb=lambda: general_settings.get("max_file_size_mb"),
     is_request_size_limit_enabled=lambda: premium_user is True,
 )
 

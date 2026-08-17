@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.url_utils import (
 )
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
+from litellm.proxy.common_utils.request_route_scoping import strip_root_path
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -518,7 +519,13 @@ async def pre_db_read_auth_checks(
     from litellm.proxy.proxy_server import general_settings, llm_router, premium_user
 
     # Check 1. request size
-    await check_if_request_size_is_safe(request=request)
+    await check_if_request_size_is_safe(
+        request=request,
+        route=route,
+        max_request_size_mb=general_settings.get("max_request_size_mb", None),
+        max_file_size_mb=general_settings.get("max_file_size_mb", None),
+        is_premium_user=premium_user is True,
+    )
 
     # Check 2. Request body is safe
     is_request_body_safe(
@@ -624,17 +631,10 @@ def get_request_route(request: Request) -> str:
         if not isinstance(scope, dict):
             return str(request.url.path)
         raw_path: Final[str] = str(scope.get("path", request.url.path))
-        root_path: Final[str] = str(scope.get("app_root_path", scope.get("root_path", ""))).rstrip("/")
+        root_path: Final[str] = str(scope.get("app_root_path", scope.get("root_path", "")))
         if not isinstance(raw_path, str):
             return str(request.url.path)
-        # Strip root_path only when it matches whole path segments — guarding
-        # against sibling paths like "/apifoo" being truncated under
-        # root_path="/api". Trailing slashes on root_path are stripped above,
-        # so bare "/" or "/prefix/" still leave the leading "/" intact.
-        if root_path and (raw_path == root_path or raw_path.startswith(root_path + "/")):
-            stripped: Final = raw_path[len(root_path) :]
-            return stripped or "/"
-        return raw_path
+        return strip_root_path(path=raw_path, root_path=root_path)
     except Exception as e:
         verbose_proxy_logger.debug(
             "error on get_request_route: %s, defaulting to request.url.path=%s", e, request.url.path
@@ -776,63 +776,64 @@ def normalize_request_route(route: str) -> str:
     return route
 
 
-async def check_if_request_size_is_safe(request: Request) -> bool:
+async def check_if_request_size_is_safe(
+    request: Request,
+    route: str,
+    max_request_size_mb: float | None,
+    max_file_size_mb: float | None,
+    is_premium_user: bool,
+) -> bool:
     """
     Enterprise Only:
         - Checks if the request size is within the limit
 
+    File uploads are limited by ``max_file_size_mb`` when it is set, so a global
+    limit tuned for chat payloads does not also cap batch input files.
+
     Args:
-        request (Request): The incoming request.
+        request: The incoming request.
+        route: The request route with ``root_path`` stripped, from ``get_request_route``.
+        max_request_size_mb: ``general_settings["max_request_size_mb"]``.
+        max_file_size_mb: ``general_settings["max_file_size_mb"]``.
+        is_premium_user: Whether the enterprise license is active.
 
     Returns:
         bool: True if the request size is within the limit
 
     Raises:
         ProxyException: If the request size is too large
-
     """
-    from litellm.proxy.proxy_server import general_settings, premium_user
+    from litellm.proxy.middleware.request_size_limit_middleware import resolve_max_size_mb
 
-    max_request_size_mb: Final = general_settings.get("max_request_size_mb", None)
+    max_size_mb: Final = resolve_max_size_mb(
+        method=str(request.scope.get("method", "")),
+        route=route,
+        max_request_size_mb=max_request_size_mb,
+        max_file_size_mb=max_file_size_mb,
+    )
+    if max_size_mb is None or max_size_mb <= 0:
+        return True
 
-    if max_request_size_mb is not None:
-        # Check if premium user
-        if premium_user is not True:
-            verbose_proxy_logger.warning(
-                "using max_request_size_mb - not checking -  this is an enterprise only feature. %s",
-                CommonProxyErrors.not_premium_user.value,
-            )
-            return True
+    if not is_premium_user:
+        verbose_proxy_logger.warning(
+            "using max_request_size_mb / max_file_size_mb - not checking - this is an enterprise only feature. %s",
+            CommonProxyErrors.not_premium_user.value,
+        )
+        return True
 
-        # Get the request body
-        content_length: Final = request.headers.get("content-length")
+    content_length: Final = request.headers.get("content-length")
+    request_size_mb: Final = bytes_to_mb(
+        bytes_value=int(content_length) if content_length else len(await request.body())
+    )
+    verbose_proxy_logger.debug("request size in MB=%s", request_size_mb)
 
-        if content_length:
-            header_size: Final = int(content_length)
-            header_size_mb: Final = bytes_to_mb(bytes_value=header_size)
-            verbose_proxy_logger.debug("content_length request size in MB=%s", header_size_mb)
-
-            if header_size_mb > max_request_size_mb:
-                raise ProxyException(
-                    message=f"Request size is too large. Request size is {header_size_mb} MB. Max size is {max_request_size_mb} MB",
-                    type=ProxyErrorTypes.bad_request_error.value,
-                    code=400,
-                    param="content-length",
-                )
-        else:
-            # If Content-Length is not available, read the body
-            body: Final = await request.body()
-            body_size: Final = len(body)
-            request_size_mb: Final = bytes_to_mb(bytes_value=body_size)
-
-            verbose_proxy_logger.debug("request body request size in MB=%s", request_size_mb)
-            if request_size_mb > max_request_size_mb:
-                raise ProxyException(
-                    message=f"Request size is too large. Request size is {request_size_mb} MB. Max size is {max_request_size_mb} MB",
-                    type=ProxyErrorTypes.bad_request_error.value,
-                    code=400,
-                    param="content-length",
-                )
+    if request_size_mb > max_size_mb:
+        raise ProxyException(
+            message=f"Request size is too large. Request size is {request_size_mb} MB. Max size is {max_size_mb} MB",
+            type=ProxyErrorTypes.bad_request_error.value,
+            code=400,
+            param="content-length",
+        )
 
     return True
 

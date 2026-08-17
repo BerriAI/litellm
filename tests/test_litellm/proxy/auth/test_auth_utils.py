@@ -9,11 +9,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import Request
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
     check_complete_credentials,
+    check_if_request_size_is_safe,
     custom_auth_common_checks_warning,
     warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
@@ -3200,3 +3201,167 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             )
             is True
         )
+
+
+def _sized_request(method: str, path: str, size_mb: float) -> Request:
+    content_length = str(int(size_mb * 1024 * 1024))
+    return Request(
+        scope={
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [(b"content-length", content_length.encode("latin-1"))],
+        }
+    )
+
+
+class TestCheckIfRequestSizeIsSafe:
+    """The auth-layer half of the request size limit. It runs after the ASGI
+    middleware and re-checks, so file uploads must be scoped here too or a
+    raised max_file_size_mb still 400s on /v1/files."""
+
+    @pytest.mark.asyncio
+    async def test_oversized_chat_request_is_rejected(self):
+        with pytest.raises(ProxyException) as exc_info:
+            await check_if_request_size_is_safe(
+                request=_sized_request("POST", "/chat/completions", size_mb=2),
+                route="/chat/completions",
+                max_request_size_mb=1,
+                max_file_size_mb=100,
+                is_premium_user=True,
+            )
+
+        assert "Max size is 1 MB" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route", ["/files", "/v1/files", "/openai/v1/files"])
+    async def test_file_upload_uses_max_file_size_mb(self, route):
+        assert (
+            await check_if_request_size_is_safe(
+                request=_sized_request("POST", route, size_mb=2),
+                route=route,
+                max_request_size_mb=1,
+                max_file_size_mb=100,
+                is_premium_user=True,
+            )
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_file_upload_over_its_own_limit_is_rejected(self):
+        with pytest.raises(ProxyException) as exc_info:
+            await check_if_request_size_is_safe(
+                request=_sized_request("POST", "/v1/files", size_mb=101),
+                route="/v1/files",
+                max_request_size_mb=1,
+                max_file_size_mb=100,
+                is_premium_user=True,
+            )
+
+        assert "Max size is 100 MB" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_file_upload_falls_back_to_max_request_size_mb_when_unset(self):
+        with pytest.raises(ProxyException) as exc_info:
+            await check_if_request_size_is_safe(
+                request=_sized_request("POST", "/v1/files", size_mb=2),
+                route="/v1/files",
+                max_request_size_mb=1,
+                max_file_size_mb=None,
+                is_premium_user=True,
+            )
+
+        assert "Max size is 1 MB" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_non_premium_user_is_not_limited(self):
+        assert (
+            await check_if_request_size_is_safe(
+                request=_sized_request("POST", "/chat/completions", size_mb=2),
+                route="/chat/completions",
+                max_request_size_mb=1,
+                max_file_size_mb=None,
+                is_premium_user=False,
+            )
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_limit_configured_is_not_limited(self):
+        assert (
+            await check_if_request_size_is_safe(
+                request=_sized_request("POST", "/chat/completions", size_mb=2048),
+                route="/chat/completions",
+                max_request_size_mb=None,
+                max_file_size_mb=None,
+                is_premium_user=True,
+            )
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_zero_max_file_size_mb_uncaps_uploads_only(self):
+        assert (
+            await check_if_request_size_is_safe(
+                request=_sized_request("POST", "/v1/files", size_mb=2048),
+                route="/v1/files",
+                max_request_size_mb=1,
+                max_file_size_mb=0,
+                is_premium_user=True,
+            )
+            is True
+        )
+
+        with pytest.raises(ProxyException):
+            await check_if_request_size_is_safe(
+                request=_sized_request("POST", "/chat/completions", size_mb=2),
+                route="/chat/completions",
+                max_request_size_mb=1,
+                max_file_size_mb=0,
+                is_premium_user=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_zero_max_request_size_mb_means_unlimited(self):
+        """Matches the middleware's `<= 0 disables the guard` semantics, which
+        this layer used to contradict by rejecting everything above 0 MB."""
+        assert (
+            await check_if_request_size_is_safe(
+                request=_sized_request("POST", "/chat/completions", size_mb=2048),
+                route="/chat/completions",
+                max_request_size_mb=0,
+                max_file_size_mb=None,
+                is_premium_user=True,
+            )
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_body_is_measured_when_content_length_is_absent(self):
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/chat/completions",
+                "headers": [],
+            },
+            receive=_body_receiver(b"x" * (2 * 1024 * 1024)),
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await check_if_request_size_is_safe(
+                request=request,
+                route="/chat/completions",
+                max_request_size_mb=1,
+                max_file_size_mb=None,
+                is_premium_user=True,
+            )
+
+        assert "Max size is 1 MB" in exc_info.value.message
+
+
+def _body_receiver(body: bytes):
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return receive
