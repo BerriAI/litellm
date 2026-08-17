@@ -1701,7 +1701,7 @@
   },
   "src/components/Navbar/BlogDropdown/BlogDropdown.test.tsx": {
     "max-nested-callbacks": {
-      "count": 12
+      "count": 10
     }
   },
   "src/components/Navbar/UserDropdown/UserDropdown.tsx": {
@@ -1837,9 +1837,6 @@
   "src/components/Teams.test.tsx": {
     "max-nested-callbacks": {
       "count": 4
-    },
-    "prefer-const": {
-      "count": 6
     }
   },
   "src/components/Teams.tsx": {
@@ -2507,11 +2504,6 @@
   },
   "src/components/molecules/notifications_manager.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/navbar.test.tsx": {
-    "prefer-const": {
       "count": 1
     }
   },
