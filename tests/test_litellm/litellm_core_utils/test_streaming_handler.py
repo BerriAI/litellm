@@ -1606,6 +1606,62 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
     assert usage_chunks[-1].usage.cost == 0.00025
 
 
+@pytest.mark.asyncio
+async def test_openai_compatible_usage_on_chunk_with_non_empty_choices(
+    logging_obj: Logging,
+):
+    """Some OpenAI-compatible providers put the final usage on a chunk that still carries a
+    content-free `choices` entry. That usage arrives as openai's CompletionUsage, which does
+    not support the `key in usage` membership checks the aggregators use, so it used to read
+    as empty and prompt_tokens fell back to a local tokenizer estimate with cached_tokens
+    lost."""
+    from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+    from openai.types.completion_usage import CompletionUsage, PromptTokensDetails
+
+    from litellm.utils import ModelResponseListIterator
+
+    def _chunk(choices: list[dict], usage: CompletionUsage | None) -> ChatCompletionChunk:
+        return ChatCompletionChunk(
+            id="chatcmpl-x",
+            created=1742056047,
+            model="kimi",
+            object="chat.completion.chunk",
+            choices=choices,
+            usage=usage,
+        )
+
+    upstream_usage = CompletionUsage(
+        completion_tokens=32,
+        prompt_tokens=39779,
+        total_tokens=39811,
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=39424),
+    )
+    completion_stream = ModelResponseListIterator(
+        model_responses=[
+            _chunk([{"index": 0, "delta": {"role": "assistant", "content": "OK"}}], None),
+            _chunk([{"index": 0, "delta": {}, "finish_reason": "stop"}], None),
+            _chunk([{"index": 0, "delta": {}}], upstream_usage),
+        ]
+    )
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="kimi",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+
+    collected_chunks = [chunk async for chunk in response]
+
+    usage = litellm.stream_chunk_builder(
+        collected_chunks, messages=[{"role": "user", "content": "ciao"}]
+    ).usage
+    assert usage.prompt_tokens == 39779
+    assert usage.completion_tokens == 32
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 39424
+
+
 def test_openrouter_streaming_cost_propagates_to_hidden_params():
     """
     Verify that provider-reported cost from usage.cost flows into
