@@ -135,7 +135,7 @@ describe("LoggingSettings", () => {
     renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
 
     expect(screen.getByText("Custom Callback API Configuration")).toBeInTheDocument();
-    expect(screen.queryByAltText("Custom Callback API logo")).toBeNull();
+    expect(screen.queryByAltText("Custom Callback API logo")).not.toBeInTheDocument();
     expect(screen.getByText("C")).toBeInTheDocument();
   });
 

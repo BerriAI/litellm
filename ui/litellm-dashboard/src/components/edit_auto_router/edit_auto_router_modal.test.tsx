@@ -519,6 +519,7 @@ describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
 
     await user.click(await screen.findByText("Advanced: Classification Method"));
     expect(await screen.findByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
+    // eslint-disable-next-line jest-dom/prefer-checked -- antd sets the checked attribute without the DOM property, so toBeChecked reads false
     expect(screen.getByRole("radio", { name: /Route to the default model/ })).toHaveAttribute("checked");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));

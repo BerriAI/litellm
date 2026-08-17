@@ -46,7 +46,7 @@ describe("CustomTooltip", () => {
       label: "2024-01-15",
     };
     const { container } = render(<CustomTooltip {...props} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should return null when payload is empty", () => {
@@ -56,7 +56,7 @@ describe("CustomTooltip", () => {
       label: "2024-01-15",
     };
     const { container } = render(<CustomTooltip {...props} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should display formatted category names", () => {

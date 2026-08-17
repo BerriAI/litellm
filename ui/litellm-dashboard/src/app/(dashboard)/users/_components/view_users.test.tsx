@@ -273,7 +273,7 @@ describe("ViewUserDashboard", () => {
 
       await user.click(screen.getByTestId("datatable-select-row-user-2"));
       expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (1 selected)");
-      expect(screen.getByTestId("bulk-edit-users")).not.toBeDisabled();
+      expect(screen.getByTestId("bulk-edit-users")).toBeEnabled();
 
       await user.click(screen.getByTestId("datatable-select-all"));
       expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (2 selected)");

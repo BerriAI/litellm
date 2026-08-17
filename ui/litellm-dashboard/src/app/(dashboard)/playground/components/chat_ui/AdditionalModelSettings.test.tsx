@@ -39,13 +39,13 @@ describe("AdditionalModelSettings", () => {
     await waitFor(() => {
       const sliders = screen.getAllByRole("slider");
       expect(sliders.length).toBeGreaterThan(0);
-      expect(sliders[0]).not.toBeDisabled();
+      expect(sliders[0]).toBeEnabled();
     });
 
     const temperatureSlider = screen.getAllByRole("slider")[0];
     const maxTokensSlider = screen.getAllByRole("slider")[1];
-    expect(temperatureSlider).not.toBeDisabled();
-    expect(maxTokensSlider).not.toBeDisabled();
+    expect(temperatureSlider).toBeEnabled();
+    expect(maxTokensSlider).toBeEnabled();
   });
 
   it("should not show Stream responses when onStreamingChange is not provided", () => {

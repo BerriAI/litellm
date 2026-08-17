@@ -124,9 +124,8 @@ test("renders organization view after loading data", async () => {
     />,
   );
 
-  await waitFor(() => {
-    expect(findAllByText("Acme Corp")).toBeTruthy();
-  });
+  const [orgName] = await findAllByText("Acme Corp");
+  expect(orgName).toBeInTheDocument();
 });
 
 test("should display empty state when organization has no members", async () => {
