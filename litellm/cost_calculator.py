@@ -1590,13 +1590,16 @@ def completion_cost(
 
                 # Deployment-specific model_info, for modalities whose pricing is
                 # not token-based and so cannot travel via custom_cost_per_token
-                # (e.g. OCR per-page pricing). Same extraction as the video path.
+                # (e.g. OCR per-page pricing). Same extraction as the video path
+                # above, minus its `or {}` default: truthiness on the value adds
+                # no mutable-collection construction (LIT002) and reads the same.
                 _custom_model_info: ModelInfo | None = None
                 if custom_pricing and litellm_logging_obj is not None:
                     _cm_litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
                     if _cm_litellm_params is not None:
-                        _cm_metadata = _cm_litellm_params.get("metadata", {}) or {}
-                        _custom_model_info = _cm_metadata.get("model_info", None)
+                        _cm_metadata = _cm_litellm_params.get("metadata")
+                        if _cm_metadata:
+                            _custom_model_info = _cm_metadata.get("model_info", None)
 
                 (
                     prompt_tokens_cost_usd_dollar,
