@@ -478,14 +478,14 @@ class TestVertexAIBatchPassthroughHandler:
             }
         ]
 
-        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+        result = calculate_vertex_ai_batch_cost_and_usage(
             vertex_ai_batch_responses, model_name="gemini-2.0-flash-001"
         )
 
-        assert usage.total_tokens == 15
-        assert usage.prompt_tokens == 10
-        assert usage.completion_tokens == 5
-        assert total_cost > 0, "batch_cost_calculator should return a non-zero cost"
+        assert result.usage.total_tokens == 15
+        assert result.usage.prompt_tokens == 10
+        assert result.usage.completion_tokens == 5
+        assert result.cost > 0, "batch_cost_calculator should return a non-zero cost"
 
     def test_batch_response_transformation(self):
         """Test transformation of Vertex AI batch responses to OpenAI format"""
@@ -664,14 +664,14 @@ class TestVertexAIBatchCostCalculation:
             },
         ]
 
-        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+        result = calculate_vertex_ai_batch_cost_and_usage(
             responses, model_name="gemini-2.0-flash-001"
         )
 
-        assert usage.prompt_tokens == 18
-        assert usage.completion_tokens == 8
-        assert usage.total_tokens == 26
-        assert total_cost > 0, "batch_cost_calculator should return a non-zero cost"
+        assert result.usage.prompt_tokens == 18
+        assert result.usage.completion_tokens == 8
+        assert result.usage.total_tokens == 26
+        assert result.cost > 0, "batch_cost_calculator should return a non-zero cost"
 
     def test_should_skip_responses_with_null_response_body(self):
         """Failed lines (response: None) are skipped without error."""
@@ -699,27 +699,29 @@ class TestVertexAIBatchCostCalculation:
             },
         ]
 
-        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+        result = calculate_vertex_ai_batch_cost_and_usage(
             responses, model_name="gemini-2.0-flash-001"
         )
 
-        assert usage.prompt_tokens == 18
-        assert usage.completion_tokens == 8
-        assert usage.total_tokens == 26
-        assert total_cost > 0
+        assert result.usage.prompt_tokens == 18
+        assert result.usage.completion_tokens == 8
+        assert result.usage.total_tokens == 26
+        assert result.cost > 0
+        assert result.successful_requests == 2
+        assert result.failed_requests == 1
 
     def test_should_return_zeros_for_empty_response_list(self):
         """Empty input → zero cost and zero usage."""
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage
 
-        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+        result = calculate_vertex_ai_batch_cost_and_usage(
             [], model_name="gemini-2.0-flash-001"
         )
 
-        assert total_cost == 0.0
-        assert usage.total_tokens == 0
-        assert usage.prompt_tokens == 0
-        assert usage.completion_tokens == 0
+        assert result.cost == 0.0
+        assert result.usage.total_tokens == 0
+        assert result.usage.prompt_tokens == 0
+        assert result.usage.completion_tokens == 0
 
     def test_should_handle_missing_usage_metadata_gracefully(self):
         """Response without usageMetadata → 0 tokens, 0 cost for that line."""
@@ -729,13 +731,13 @@ class TestVertexAIBatchCostCalculation:
             {"response": {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}},
         ]
 
-        total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
+        result = calculate_vertex_ai_batch_cost_and_usage(
             responses, model_name="gemini-2.0-flash-001"
         )
 
-        assert usage.prompt_tokens == 0
-        assert usage.completion_tokens == 0
-        assert usage.total_tokens == 0
+        assert result.usage.prompt_tokens == 0
+        assert result.usage.completion_tokens == 0
+        assert result.usage.total_tokens == 0
 
     @pytest.mark.asyncio
     async def test_openai_shaped_output_records_nonzero_cost_and_usage(self):
@@ -813,7 +815,7 @@ class TestVertexAIBatchCostCalculation:
         try:
             litellm.disable_vertex_batch_output_transformation = False
 
-            cost, usage, _ = await calculate_batch_cost_and_usage(
+            result = await calculate_batch_cost_and_usage(
                 file_content_dictionary=openai_shaped_responses,
                 custom_llm_provider="vertex_ai",
                 model_name="gemini-2.0-flash-001",
@@ -822,17 +824,17 @@ class TestVertexAIBatchCostCalculation:
             litellm.disable_vertex_batch_output_transformation = original_flag
 
         assert (
-            usage.prompt_tokens == 18
-        ), f"expected 18 prompt tokens, got {usage.prompt_tokens}"
+            result.usage.prompt_tokens == 18
+        ), f"expected 18 prompt tokens, got {result.usage.prompt_tokens}"
         assert (
-            usage.completion_tokens == 8
-        ), f"expected 8 completion tokens, got {usage.completion_tokens}"
+            result.usage.completion_tokens == 8
+        ), f"expected 8 completion tokens, got {result.usage.completion_tokens}"
         assert (
-            usage.total_tokens == 26
-        ), f"expected 26 total tokens, got {usage.total_tokens}"
+            result.usage.total_tokens == 26
+        ), f"expected 26 total tokens, got {result.usage.total_tokens}"
         assert (
-            cost > 0
-        ), f"expected non-zero cost for completed Vertex batch, got {cost}"
+            result.cost > 0
+        ), f"expected non-zero cost for completed Vertex batch, got {result.cost}"
 
     @pytest.mark.asyncio
     async def test_raw_vertex_output_still_works_when_transformation_disabled(self):
@@ -865,7 +867,7 @@ class TestVertexAIBatchCostCalculation:
         try:
             litellm.disable_vertex_batch_output_transformation = True
 
-            cost, usage, _ = await calculate_batch_cost_and_usage(
+            result = await calculate_batch_cost_and_usage(
                 file_content_dictionary=raw_vertex_responses,
                 custom_llm_provider="vertex_ai",
                 model_name="gemini-2.0-flash-001",
@@ -873,7 +875,7 @@ class TestVertexAIBatchCostCalculation:
         finally:
             litellm.disable_vertex_batch_output_transformation = original_flag
 
-        assert usage.prompt_tokens == 10
-        assert usage.completion_tokens == 5
-        assert usage.total_tokens == 15
-        assert cost > 0, "raw Vertex shape should also produce non-zero cost"
+        assert result.usage.prompt_tokens == 10
+        assert result.usage.completion_tokens == 5
+        assert result.usage.total_tokens == 15
+        assert result.cost > 0, "raw Vertex shape should also produce non-zero cost"

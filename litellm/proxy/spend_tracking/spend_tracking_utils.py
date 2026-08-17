@@ -74,6 +74,8 @@ def _get_spend_logs_metadata(
     metadata: dict | None,
     applied_guardrails: list[str] | None = None,
     batch_models: list[str] | None = None,
+    batch_successful_requests: int | None = None,
+    batch_failed_requests: int | None = None,
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = None,
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None = None,
     guardrail_information: list[StandardLoggingGuardrailInformation] | None = None,
@@ -102,6 +104,8 @@ def _get_spend_logs_metadata(
             error_information=None,
             proxy_server_request=None,
             batch_models=None,
+            batch_successful_requests=None,
+            batch_failed_requests=None,
             mcp_tool_call_metadata=None,
             vector_store_request_metadata=None,
             model_map_information=None,
@@ -128,6 +132,8 @@ def _get_spend_logs_metadata(
         clean_metadata["user_api_key"] = _hash_api_key_for_spend_log(raw_user_api_key)
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
+    clean_metadata["batch_successful_requests"] = batch_successful_requests
+    clean_metadata["batch_failed_requests"] = batch_failed_requests
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
         vector_store_request_metadata
@@ -307,6 +313,16 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         ),
         batch_models=(
             standard_logging_payload.get("hidden_params", {}).get("batch_models", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        batch_successful_requests=(
+            standard_logging_payload.get("hidden_params", {}).get("batch_successful_requests", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        batch_failed_requests=(
+            standard_logging_payload.get("hidden_params", {}).get("batch_failed_requests", None)
             if standard_logging_payload is not None
             else None
         ),

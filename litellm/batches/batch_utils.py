@@ -12,12 +12,23 @@ from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import token_counter
 
 
+@dataclass(frozen=True, slots=True)
+class BatchCostUsageResult:
+    """Aggregate cost, usage, and per-line pass/fail counts for a completed batch."""
+
+    cost: float
+    usage: Usage
+    models: list[str]
+    successful_requests: int
+    failed_requests: int
+
+
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: list[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
-) -> tuple[float, Usage, list[str]]:
+) -> BatchCostUsageResult:
     """
     Calculate the cost and usage of a batch.
 
@@ -32,8 +43,7 @@ async def calculate_batch_cost_and_usage(
         and model_name
         and getattr(litellm, "disable_vertex_batch_output_transformation", False)
     ):
-        batch_cost, batch_usage = calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name)
-        return batch_cost, batch_usage, [model_name]
+        return calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name)
 
     return _aggregate_batch_cost_usage_models(
         entries=file_content_dictionary,
@@ -48,7 +58,7 @@ async def _handle_completed_batch(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: str | None = None,
     litellm_params: dict | None = None,
-) -> tuple[float, Usage, list[str]]:
+) -> BatchCostUsageResult:
     """Fetch a completed batch's output file and aggregate its cost, usage, and
     models in a single pass over the JSONL lines, so the parsed file content is
     never materialized in memory.
@@ -66,10 +76,7 @@ async def _handle_completed_batch(
         and model_name
         and getattr(litellm, "disable_vertex_batch_output_transformation", False)
     ):
-        batch_cost, batch_usage = calculate_vertex_ai_batch_cost_and_usage(
-            _get_file_content_as_dictionary(file_content), model_name
-        )
-        return batch_cost, batch_usage, [model_name]
+        return calculate_vertex_ai_batch_cost_and_usage(_get_file_content_as_dictionary(file_content), model_name)
 
     return _aggregate_batch_cost_usage_models(
         entries=_iter_batch_input_entries(file_content),
@@ -86,19 +93,24 @@ class _BatchOutputLineStats:
     total_tokens: int
     cache_read_tokens: int
     cache_creation_tokens: int
+    reasoning_tokens: int
     model: str | None
 
 
-def _iter_successful_output_line_stats(
+def _classify_output_line_stats(
     entries: Iterable[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
     model_info: ModelInfo | None,
-) -> Iterator[_BatchOutputLineStats]:
+) -> Iterator[_BatchOutputLineStats | None]:
+    """Classify every output line in a single pass: yields stats for a
+    successful line, ``None`` for a failed one (per ``_batch_response_was_successful``).
+    Counting failures this way avoids a second pass over a potentially huge output file."""
     from litellm.cost_calculator import batch_cost_calculator
 
     for entry in entries:
         if not _batch_response_was_successful(entry, custom_llm_provider):
+            yield None
             continue
         response_body = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
         usage = _get_batch_job_usage_from_response_body(response_body, custom_llm_provider)
@@ -123,6 +135,7 @@ def _iter_successful_output_line_stats(
                 custom_llm_provider=custom_llm_provider,
                 call_type=CallTypes.aretrieve_batch.value,
             )
+        reasoning_tokens = usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
         yield _BatchOutputLineStats(
             cost=line_cost,
             prompt_tokens=usage.prompt_tokens,
@@ -130,6 +143,7 @@ def _iter_successful_output_line_stats(
             total_tokens=usage.total_tokens,
             cache_read_tokens=prompt_details["cache_hit_tokens"],
             cache_creation_tokens=prompt_details["cache_creation_tokens"],
+            reasoning_tokens=reasoning_tokens or 0,
             model=response_model,
         )
 
@@ -139,10 +153,14 @@ def _aggregate_batch_cost_usage_models(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
-) -> tuple[float, Usage, list[str]]:
-    """Aggregate cost, usage, and models from batch output entries in a single
-    pass, holding one small stats record per line instead of the parsed file."""
-    line_stats: Final = tuple(_iter_successful_output_line_stats(entries, custom_llm_provider, model_name, model_info))
+) -> BatchCostUsageResult:
+    """Aggregate cost, usage, models, and pass/fail counts from batch output
+    entries in a single pass, holding one small stats record per line instead
+    of the parsed file."""
+    all_results: Final = tuple(_classify_output_line_stats(entries, custom_llm_provider, model_name, model_info))
+    line_stats: Final = tuple(stats for stats in all_results if stats is not None)
+    successful_requests: Final = len(line_stats)
+    failed_requests: Final = len(all_results) - successful_requests
 
     cache_token_params: Final = {
         key: tokens
@@ -156,18 +174,32 @@ def _aggregate_batch_cost_usage_models(
         total_tokens=sum(stats.total_tokens for stats in line_stats),
         prompt_tokens=sum(stats.prompt_tokens for stats in line_stats),
         completion_tokens=sum(stats.completion_tokens for stats in line_stats),
+        reasoning_tokens=sum(stats.reasoning_tokens for stats in line_stats),
         **cache_token_params,
     )
     batch_models: Final = [model_name] if model_name else [stats.model for stats in line_stats if stats.model]
     total_cost: Final = sum((stats.cost for stats in line_stats), 0.0)
-    verbose_logger.debug("batch output aggregate: cost=%s usage=%s models=%s", total_cost, batch_usage, batch_models)
-    return total_cost, batch_usage, batch_models
+    verbose_logger.debug(
+        "batch output aggregate: cost=%s usage=%s models=%s successful=%d failed=%d",
+        total_cost,
+        batch_usage,
+        batch_models,
+        successful_requests,
+        failed_requests,
+    )
+    return BatchCostUsageResult(
+        cost=total_cost,
+        usage=batch_usage,
+        models=batch_models,
+        successful_requests=successful_requests,
+        failed_requests=failed_requests,
+    )
 
 
 def calculate_vertex_ai_batch_cost_and_usage(
     vertex_ai_batch_responses: list[dict],
     model_name: str | None = None,
-) -> tuple[float, Usage]:
+) -> BatchCostUsageResult:
     """
     Calculate both cost and usage from raw Vertex AI batch responses.
 
@@ -178,6 +210,10 @@ def calculate_vertex_ai_batch_cost_and_usage(
       {"request": ..., "response": {"candidates": [...], "usageMetadata": {...}}}
 
     usageMetadata contains promptTokenCount, candidatesTokenCount, totalTokenCount.
+
+    A row with no ``response`` is counted as failed - the same signal already
+    used to skip it from cost/usage aggregation, since Vertex batch prediction
+    output doesn't establish a distinct error shape in this (non-default) path.
     """
     from litellm.cost_calculator import batch_cost_calculator
 
@@ -185,12 +221,16 @@ def calculate_vertex_ai_batch_cost_and_usage(
     total_tokens = 0
     prompt_tokens = 0
     completion_tokens = 0
+    successful_requests = 0
+    failed_requests = 0
     actual_model_name: Final = model_name or "gemini-2.0-flash-001"
 
     for response in vertex_ai_batch_responses:
         response_body = response.get("response")
         if response_body is None:
+            failed_requests += 1
             continue
+        successful_requests += 1
 
         usage_metadata = response_body.get("usageMetadata", {})
         _prompt = usage_metadata.get("promptTokenCount", 0) or 0
@@ -218,17 +258,25 @@ def calculate_vertex_ai_batch_cost_and_usage(
         total_tokens += _total
 
     verbose_logger.info(
-        "vertex_ai batch cost: cost=%s, prompt=%d, completion=%d, total=%d",
+        "vertex_ai batch cost: cost=%s, prompt=%d, completion=%d, total=%d, successful=%d, failed=%d",
         total_cost,
         prompt_tokens,
         completion_tokens,
         total_tokens,
+        successful_requests,
+        failed_requests,
     )
 
-    return total_cost, Usage(
-        total_tokens=total_tokens,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
+    return BatchCostUsageResult(
+        cost=total_cost,
+        usage=Usage(
+            total_tokens=total_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        ),
+        models=[actual_model_name],
+        successful_requests=successful_requests,
+        failed_requests=failed_requests,
     )
 
 

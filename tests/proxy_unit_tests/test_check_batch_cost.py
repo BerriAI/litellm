@@ -13,6 +13,20 @@ import pytest
 _IS_B64 = "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id"
 
 
+def _batch_cost_result(cost, usage, models, successful_requests=1, failed_requests=0):
+    """Build the BatchCostUsageResult calculate_batch_cost_and_usage now returns,
+    for mocking it in tests that only care about cost/usage/models."""
+    from litellm.batches.batch_utils import BatchCostUsageResult
+
+    return BatchCostUsageResult(
+        cost=cost,
+        usage=usage,
+        models=models,
+        successful_requests=successful_requests,
+        failed_requests=failed_requests,
+    )
+
+
 def _unmanaged_vertex_file_object(
     input_file_id="gs://bucket/litellm-vertex-files/publishers/google/models/gemini-2.5-flash/abc.jsonl",
     status="validating",
@@ -321,7 +335,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -426,7 +440,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["claude-haiku-4-5"]),
+                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["claude-haiku-4-5"]),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -526,7 +540,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -656,7 +670,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -1142,7 +1156,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -1271,7 +1285,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -1529,7 +1543,7 @@ class TestUnmanagedVertexRouting:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gemini-2.5-flash"],
@@ -1759,7 +1773,7 @@ class TestUnmanagedBedrockRouting:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.02,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["claude-sonnet-4"],
@@ -1951,7 +1965,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(0.01, {"prompt_tokens": 10}, ["gpt-5.5"]),
+                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10}, ["gpt-5.5"]),
             ),
             patch("litellm.litellm_core_utils.litellm_logging.Logging") as logging_cls,
         ):

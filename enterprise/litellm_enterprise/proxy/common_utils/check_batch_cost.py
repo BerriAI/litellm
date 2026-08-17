@@ -651,16 +651,14 @@ class CheckBatchCost:
         # Pass deployment model_info so custom batch pricing
         # (input_cost_per_token_batches etc.) is used for cost calc
         deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
-        batch_cost, batch_usage, batch_models = (
-            await calculate_batch_cost_and_usage(
-                file_content_dictionary=file_content_as_dict,
-                custom_llm_provider=llm_provider,  # type: ignore
-                model_name=model_name,
-                model_info=deployment_model_info,  # type: ignore[arg-type]
-            )
+        batch_result = await calculate_batch_cost_and_usage(
+            file_content_dictionary=file_content_as_dict,
+            custom_llm_provider=llm_provider,  # type: ignore
+            model_name=model_name,
+            model_info=deployment_model_info,  # type: ignore[arg-type]
         )
         logging_obj = LiteLLMLogging(
-            model=batch_models[0],
+            model=batch_result.models[0],
             messages=[{"role": "user", "content": "<retrieve_batch>"}],
             stream=False,
             call_type="aretrieve_batch",
@@ -684,9 +682,11 @@ class CheckBatchCost:
 
         await logging_obj.async_success_handler(
             result=response,
-            batch_cost=batch_cost,
-            batch_usage=batch_usage,
-            batch_models=batch_models,
+            batch_cost=batch_result.cost,
+            batch_usage=batch_result.usage,
+            batch_models=batch_result.models,
+            batch_successful_requests=batch_result.successful_requests,
+            batch_failed_requests=batch_result.failed_requests,
         )
 
         # Record batch duration (completed_at - created_at)
