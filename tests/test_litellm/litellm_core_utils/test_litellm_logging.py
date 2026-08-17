@@ -344,7 +344,7 @@ class TestGetRouterModelId:
 class TestGetRouterDeploymentModelInfo:
     """Pricing a deployment registered under its own model_info.id."""
 
-    def test_returns_registered_deployment_pricing(self, logging_obj):
+    def test_returns_registered_deployment_pricing(self, logging_obj) -> None:
         deployment_id = "deploy-zero-cost-1"
         litellm.model_cost[deployment_id] = {
             "input_cost_per_token": 0.0,
@@ -363,11 +363,11 @@ class TestGetRouterDeploymentModelInfo:
         finally:
             litellm.model_cost.pop(deployment_id, None)
 
-    def test_returns_none_for_unregistered_deployment(self, logging_obj):
+    def test_returns_none_for_unregistered_deployment(self, logging_obj) -> None:
         logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": "deploy-never-registered"}}}
         assert logging_obj.get_router_deployment_model_info() is None
 
-    def test_returns_none_when_deployment_registered_without_pricing(self, logging_obj):
+    def test_returns_none_when_deployment_registered_without_pricing(self, logging_obj) -> None:
         """The router registers an entry for EVERY deployment, priced or not.
 
         get_model_info fills absent costs with 0, so consulting it directly would
@@ -385,9 +385,73 @@ class TestGetRouterDeploymentModelInfo:
         finally:
             litellm.model_cost.pop(deployment_id, None)
 
-    def test_returns_none_without_a_deployment_id(self, logging_obj):
+    def test_returns_none_without_a_deployment_id(self, logging_obj) -> None:
         logging_obj.litellm_params = {"api_base": ""}
         assert logging_obj.get_router_deployment_model_info() is None
+
+    @pytest.mark.parametrize(
+        "declared,expected_input,expected_output",
+        [
+            ({"input_cost_per_token": 1e-06}, 1e-06, 1.5e-05),
+            ({"output_cost_per_token": 5e-06}, 3e-06, 5e-06),
+            ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0, 0.0),
+        ],
+        ids=["input-only", "output-only", "both-zero"],
+    )
+    def test_one_sided_override_keeps_the_published_rate_for_the_other_side(
+        self,
+        declared: dict[str, float],
+        expected_input: float,
+        expected_output: float,
+    ) -> None:
+        """A deployment may configure one direction only.
+
+        Substituting its pricing wholesale billed the direction it left unset at
+        zero, because get_model_info fills an absent cost with 0 and that
+        suppressed the global fallback.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        model = "bedrock/global.anthropic.claude-sonnet-4-6"
+        published = litellm.get_model_info(model=model)
+        assert (published["input_cost_per_token"], published["output_cost_per_token"]) == (3e-06, 1.5e-05)
+
+        deployment_id = f"deploy-one-sided-{'-'.join(sorted(declared))}"
+        litellm.model_cost[deployment_id] = {"id": deployment_id, **declared}
+        obj = LiteLLMLoggingObj(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="one-sided",
+            function_id="f",
+        )
+        obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}, "model": model}
+        obj.model_call_details["model"] = model
+        try:
+            info = obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["input_cost_per_token"] == expected_input
+            assert info["output_cost_per_token"] == expected_output
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+    def test_falls_back_to_declared_rates_when_the_model_has_no_published_entry(self, logging_obj) -> None:
+        """With no published entry to layer under, the declared rates still apply."""
+        deployment_id = "deploy-unpublished-model-1"
+        litellm.model_cost[deployment_id] = {"id": deployment_id, "input_cost_per_token": 7e-06}
+        logging_obj.litellm_params = {
+            "litellm_metadata": {"model_info": {"id": deployment_id}},
+            "model": "not-a-real-provider/not-a-real-model-xyz",
+        }
+        logging_obj.model_call_details["model"] = "not-a-real-provider/not-a-real-model-xyz"
+        try:
+            info = logging_obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["input_cost_per_token"] == 7e-06
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
 
 
 class TestRetrieveBatchCostPassesModelIdentity:
@@ -400,7 +464,7 @@ class TestRetrieveBatchCostPassesModelIdentity:
     """
 
     @pytest.mark.asyncio
-    async def test_forwards_deployment_model_and_pricing(self, monkeypatch):
+    async def test_forwards_deployment_model_and_pricing(self, monkeypatch) -> None:
         from litellm.litellm_core_utils import litellm_logging as logging_module
         from litellm.types.utils import LiteLLMBatch, Usage
 
@@ -412,9 +476,9 @@ class TestRetrieveBatchCostPassesModelIdentity:
             "mode": "chat",
         }
 
-        captured: dict = {}
+        captured: dict[str, object] = {}
 
-        async def fake_handle_completed_batch(**kwargs):
+        async def fake_handle_completed_batch(**kwargs: object) -> tuple[float, Usage, list[str]]:
             captured.update(kwargs)
             return 1.25, Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800), ["m"]
 

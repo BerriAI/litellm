@@ -1324,17 +1324,10 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
 
 # =========================================================================== #
 # _handle_completed_batch threads the deployment's model identity + pricing
-#
-# Regression: the retrieve path called _handle_completed_batch with neither
-# model_name nor model_info. For bedrock that left cost_model falling back to
-# the provider's own response model ("claude-sonnet-4-6"), which does not
-# resolve under custom_llm_provider="bedrock", so cost silently became $0 while
-# usage stayed correct. Dropping model_info separately discarded a deployment's
-# configured rates, billing a zero-cost deployment at the public rate.
 # =========================================================================== #
 
 
-def _bedrock_row(model, input_tokens, output_tokens):
+def _bedrock_row(model: str, input_tokens: int, output_tokens: int) -> dict[str, object]:
     return {
         "modelInput": {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]},
         "modelOutput": {
@@ -1356,11 +1349,11 @@ def _bedrock_row(model, input_tokens, output_tokens):
 
 
 @pytest.mark.asyncio
-async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monkeypatch):
+async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monkeypatch) -> None:
     """A bedrock batch must price from the deployment model, not the response model."""
     rows = [_bedrock_row("claude-sonnet-4-6", 18, 10)] * 100
 
-    async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
+    async def fake_fetch(batch: object, custom_llm_provider: str, litellm_params: dict | None = None) -> bytes:
         return _vertex_jsonl(rows)
 
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
@@ -1386,11 +1379,11 @@ async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monke
 
 
 @pytest.mark.asyncio
-async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch):
+async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch) -> None:
     """A deployment's configured rates must win over the global cost map."""
     rows = [_success_row(model="gemini-2.5-flash", usage=_usage(60, 75))]
 
-    async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
+    async def fake_fetch(batch: object, custom_llm_provider: str, litellm_params: dict | None = None) -> bytes:
         return _vertex_jsonl(rows)
 
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
