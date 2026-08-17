@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.types.utils import ProviderSpecificHeader
 
 
@@ -18,8 +20,8 @@ class ProviderSpecificHeaderUtils:
         if provider_specific_header is None or custom_llm_provider is None:
             return {}
 
-        stored_providers = provider_specific_header.get("custom_llm_provider", "")
-        provider_list = [p.strip() for p in stored_providers.split(",")]
+        stored_providers: Final = provider_specific_header.get("custom_llm_provider", "")
+        provider_list: Final = [p.strip() for p in stored_providers.split(",")]
 
         if custom_llm_provider in provider_list:
             return provider_specific_header.get("extra_headers", {})

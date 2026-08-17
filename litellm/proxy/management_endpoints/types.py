@@ -4,7 +4,7 @@ Types for the management endpoints
 Might include fastapi/proxy requirements.txt related imports
 """
 
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from fastapi_sso.sso.base import OpenID
 
@@ -47,7 +47,7 @@ def get_litellm_user_role(role_str) -> LitellmUserRoles | None:
                 return None
             role_str = role_str[0]
         # Use _value2member_map_ for O(1) lookup, case-insensitive
-        result = LitellmUserRoles._value2member_map_.get(role_str.lower())
+        result: Final = LitellmUserRoles._value2member_map_.get(role_str.lower())
         return cast(LitellmUserRoles | None, result)
     except Exception:
         return None

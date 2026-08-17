@@ -2,7 +2,7 @@
 Calls Perplexity's /search endpoint to search the web.
 """
 
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import httpx
 
@@ -107,24 +107,24 @@ class PerplexitySearchConfig(BaseSearchConfig):
         Returns:
             Dict with typed request data following PerplexitySearchRequest spec
         """
-        request_data: PerplexitySearchRequest = {
+        request_data: Final[PerplexitySearchRequest] = {
             "query": query,
         }
 
         # Add optional parameters following Perplexity API spec (only if not None)
-        max_results = optional_params.get("max_results")
+        max_results: Final = optional_params.get("max_results")
         if max_results is not None:
             request_data["max_results"] = max_results
 
-        search_domain_filter = optional_params.get("search_domain_filter")
+        search_domain_filter: Final = optional_params.get("search_domain_filter")
         if search_domain_filter is not None:
             request_data["search_domain_filter"] = search_domain_filter
 
-        max_tokens_per_page = optional_params.get("max_tokens_per_page")
+        max_tokens_per_page: Final = optional_params.get("max_tokens_per_page")
         if max_tokens_per_page is not None:
             request_data["max_tokens_per_page"] = max_tokens_per_page
 
-        country = optional_params.get("country")
+        country: Final = optional_params.get("country")
         if country is not None:
             request_data["country"] = country
 
@@ -146,10 +146,10 @@ class PerplexitySearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
-        results = []
+        results: Final = []
         for result in response_json.get("results", []):
             search_result = SearchResult(
                 title=result.get("title", ""),

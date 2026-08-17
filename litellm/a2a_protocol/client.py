@@ -5,7 +5,7 @@ Provides a class-based interface for A2A agent invocation.
 """
 
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.agents import LiteLLMSendMessageResponse
 
@@ -92,7 +92,7 @@ class A2AClient:
         """Send a message to the A2A agent."""
         from litellm.a2a_protocol.main import asend_message
 
-        a2a_client = await self._get_client()
+        a2a_client: Final = await self._get_client()
         return await asend_message(a2a_client=a2a_client, request=request)
 
     async def send_message_streaming(
@@ -101,6 +101,6 @@ class A2AClient:
         """Send a streaming message to the A2A agent."""
         from litellm.a2a_protocol.main import asend_message_streaming
 
-        a2a_client = await self._get_client()
+        a2a_client: Final = await self._get_client()
         async for chunk in asend_message_streaming(a2a_client=a2a_client, request=request):
             yield chunk

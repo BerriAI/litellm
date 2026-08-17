@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -30,17 +30,17 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
-RoutingArgsTTL = 60
+RoutingArgsTTL: Final = 60
 
-_io_token_rate_limit_request_kwargs: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+_io_token_rate_limit_request_kwargs: Final[contextvars.ContextVar[dict[str, Any] | None]] = contextvars.ContextVar(
     "io_token_rate_limit_request_kwargs",
     default=None,
 )
 
-ITPM_RESERVED_KEY = "_litellm_itpm_reserved"
-OTPM_RESERVED_KEY = "_litellm_otpm_reserved"
-ITPM_CACHE_KEY = "_litellm_itpm_cache_key"
-OTPM_CACHE_KEY = "_litellm_otpm_cache_key"
+ITPM_RESERVED_KEY: Final = "_litellm_itpm_reserved"
+OTPM_RESERVED_KEY: Final = "_litellm_otpm_reserved"
+ITPM_CACHE_KEY: Final = "_litellm_itpm_cache_key"
+OTPM_CACHE_KEY: Final = "_litellm_otpm_cache_key"
 
 
 def set_io_token_rate_limit_request_kwargs(kwargs: dict[str, Any] | None, store_in_context: bool = True) -> None:
@@ -65,7 +65,7 @@ def get_io_token_rate_limit_request_kwargs() -> dict[str, Any] | None:
 
 
 def seconds_until_minute_reset() -> int:
-    dt = get_utc_datetime()
+    dt: Final = get_utc_datetime()
     return max(1, 60 - dt.second)
 
 
@@ -74,8 +74,8 @@ def get_deployment_io_token_limits(
 ) -> tuple[int | None, int | None]:
     itpm = deployment.get("itpm")
     otpm = deployment.get("otpm")
-    litellm_params = deployment.get("litellm_params") or {}
-    model_info = deployment.get("model_info") or {}
+    litellm_params: Final = deployment.get("litellm_params") or {}
+    model_info: Final = deployment.get("model_info") or {}
     if itpm is None:
         itpm = litellm_params.get("itpm")
     if otpm is None:
@@ -93,8 +93,8 @@ def deployment_has_io_token_limits(deployment: dict) -> bool:
 
 
 def _get_cache_keys(deployment: dict, current_minute: str) -> tuple[str, str] | None:
-    model_id = deployment.get("model_info", {}).get("id")
-    deployment_name = deployment.get("litellm_params", {}).get("model")
+    model_id: Final = deployment.get("model_info", {}).get("id")
+    deployment_name: Final = deployment.get("litellm_params", {}).get("model")
     # Without both a deployment id and model name the key would collapse to a
     # shared "None:None" bucket across misconfigured deployments, so bail out.
     if model_id is None or deployment_name is None:
@@ -107,9 +107,9 @@ def _get_cache_keys(deployment: dict, current_minute: str) -> tuple[str, str] | 
 def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "") -> int:
     if not request_kwargs:
         return 0
-    messages = request_kwargs.get("messages")
-    prompt = request_kwargs.get("prompt")
-    input_text = request_kwargs.get("input")
+    messages: Final = request_kwargs.get("messages")
+    prompt: Final = request_kwargs.get("prompt")
+    input_text: Final = request_kwargs.get("input")
     # token_counter can raise from any of its tokenizer backends; this is a
     # best-effort estimate for the ITPM reservation and must never fail the
     # underlying request. Passing the deployment model name uses a model-specific
@@ -124,8 +124,8 @@ def _model_max_output_tokens(model_name: str) -> int | None:
     # litellm.get_model_info raises a bare Exception for an unrecognized model;
     # this lookup is a fallback default and must never fail the request.
     with contextlib.suppress(Exception):
-        info = litellm.get_model_info(model=model_name)
-        model_max = info.get("max_output_tokens") or info.get("max_tokens")
+        info: Final = litellm.get_model_info(model=model_name)
+        model_max: Final = info.get("max_output_tokens") or info.get("max_tokens")
         if model_max is not None:
             return max(0, int(model_max))
     return None
@@ -143,9 +143,9 @@ def _resolve_max_tokens(request_kwargs: dict[str, Any] | None, deployment: dict)
         if explicit is not None:
             return max(0, int(explicit))
 
-    model_name = (deployment.get("litellm_params") or {}).get("model")
+    model_name: Final = (deployment.get("litellm_params") or {}).get("model")
     if model_name:
-        model_max = _model_max_output_tokens(model_name)
+        model_max: Final = _model_max_output_tokens(model_name)
         if model_max is not None:
             return model_max
     return 4096
@@ -192,7 +192,7 @@ def _usage_is_present(usage: Any) -> bool:
     """
     if usage is None:
         return False
-    fields = ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens")
+    fields: Final = ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens")
     if isinstance(usage, dict):
         return any(key in usage for key in fields)
     return any(hasattr(usage, key) for key in fields)
@@ -209,18 +209,18 @@ def _resolve_reconcile_usage_tokens(
     fields. When usage cannot be resolved, return ``usage_resolved=False`` so
     callers keep the pre-call reservation instead of refunding it as zero usage.
     """
-    usage = _extract_response_usage(response_obj)
+    usage: Final = _extract_response_usage(response_obj)
     if _usage_is_present(usage):
         prompt_tokens, completion_tokens, cached_tokens = _get_usage_tokens(usage)
         return max(0, prompt_tokens - cached_tokens), completion_tokens, True
 
     if isinstance(kwargs, dict):
-        standard_logging_object = kwargs.get("standard_logging_object")
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
         if isinstance(standard_logging_object, dict):
             prompt_tokens = int(standard_logging_object.get("prompt_tokens") or 0)
             completion_tokens = int(standard_logging_object.get("completion_tokens") or 0)
             cached_tokens = 0
-            metadata = standard_logging_object.get("metadata")
+            metadata: Final = standard_logging_object.get("metadata")
             if isinstance(metadata, dict):
                 cached_tokens = int(metadata.get("cache_read_input_tokens") or 0)
             # Same rationale as _usage_is_present: a bare total_tokens with no
@@ -242,7 +242,7 @@ def _stash_reservation_in_metadata(
 ) -> None:
     if not request_kwargs:
         return
-    reservation = {
+    reservation: Final = {
         ITPM_RESERVED_KEY: itpm_reserved,
         OTPM_RESERVED_KEY: otpm_reserved,
         ITPM_CACHE_KEY: itpm_cache_key,
@@ -257,8 +257,8 @@ def _stash_reservation_in_metadata(
 
 
 def _extract_reservation(reservation: dict[str, Any]) -> tuple[int, int, str | None, str | None]:
-    itpm_cache_key = reservation.get(ITPM_CACHE_KEY)
-    otpm_cache_key = reservation.get(OTPM_CACHE_KEY)
+    itpm_cache_key: Final = reservation.get(ITPM_CACHE_KEY)
+    otpm_cache_key: Final = reservation.get(OTPM_CACHE_KEY)
     return (
         int(reservation.get(ITPM_RESERVED_KEY, 0) or 0),
         int(reservation.get(OTPM_RESERVED_KEY, 0) or 0),
@@ -275,11 +275,11 @@ def _reservation_channels(kwargs: Any) -> tuple[Any, ...]:
     """
     if not isinstance(kwargs, dict):
         return ()
-    channels = [kwargs.get("metadata"), kwargs.get("litellm_metadata")]
-    litellm_params = kwargs.get("litellm_params")
+    channels: Final = [kwargs.get("metadata"), kwargs.get("litellm_metadata")]
+    litellm_params: Final = kwargs.get("litellm_params")
     if isinstance(litellm_params, dict):
         channels.append(litellm_params.get("metadata"))
-    standard_logging_object = kwargs.get("standard_logging_object")
+    standard_logging_object: Final = kwargs.get("standard_logging_object")
     if isinstance(standard_logging_object, dict):
         channels.append(standard_logging_object.get("metadata"))
     return tuple(channels)
@@ -347,7 +347,7 @@ def _sync_increment_with_rollback(
 ) -> None:
     if value <= 0 or limit is None:
         return
-    current = dual_cache.increment_cache(
+    current: Final = dual_cache.increment_cache(
         key=key,
         value=value,
         ttl=RoutingArgsTTL,
@@ -372,7 +372,7 @@ async def _increment_with_rollback(
 ) -> None:
     if value <= 0 or limit is None:
         return
-    current = await dual_cache.async_increment_cache(
+    current: Final = await dual_cache.async_increment_cache(
         key=key,
         value=value,
         ttl=RoutingArgsTTL,
@@ -396,14 +396,14 @@ def io_token_pre_call_check(
     if itpm_limit is None and otpm_limit is None:
         return deployment
 
-    request_kwargs = get_io_token_rate_limit_request_kwargs()
-    _model = (deployment.get("litellm_params") or {}).get("model") or ""
-    estimated_input = _estimate_input_tokens(request_kwargs, model=_model)
-    max_tokens = _resolve_max_tokens(request_kwargs, deployment)
+    request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
+    _model: Final = (deployment.get("litellm_params") or {}).get("model") or ""
+    estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
+    max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
 
-    dt = get_utc_datetime()
-    current_minute = dt.strftime("%H-%M")
-    cache_keys = _get_cache_keys(deployment, current_minute)
+    dt: Final = get_utc_datetime()
+    current_minute: Final = dt.strftime("%H-%M")
+    cache_keys: Final = _get_cache_keys(deployment, current_minute)
     if cache_keys is None:
         return deployment
     itpm_key, otpm_key = cache_keys
@@ -459,14 +459,14 @@ async def async_io_token_pre_call_check(
     if itpm_limit is None and otpm_limit is None:
         return deployment
 
-    request_kwargs = get_io_token_rate_limit_request_kwargs()
-    _model = (deployment.get("litellm_params") or {}).get("model") or ""
-    estimated_input = _estimate_input_tokens(request_kwargs, model=_model)
-    max_tokens = _resolve_max_tokens(request_kwargs, deployment)
+    request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
+    _model: Final = (deployment.get("litellm_params") or {}).get("model") or ""
+    estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
+    max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
 
-    dt = get_utc_datetime()
-    current_minute = dt.strftime("%H-%M")
-    cache_keys = _get_cache_keys(deployment, current_minute)
+    dt: Final = get_utc_datetime()
+    current_minute: Final = dt.strftime("%H-%M")
+    cache_keys: Final = _get_cache_keys(deployment, current_minute)
     if cache_keys is None:
         return deployment
     itpm_key, otpm_key = cache_keys
@@ -533,7 +533,7 @@ def io_token_reconcile_success(
     try:
         if usage_resolved:
             if itpm_key is not None:
-                itpm_delta = billable_input - itpm_reserved
+                itpm_delta: Final = billable_input - itpm_reserved
                 if itpm_delta != 0:
                     dual_cache.increment_cache(
                         key=itpm_key,
@@ -542,7 +542,7 @@ def io_token_reconcile_success(
                     )
 
             if otpm_key is not None:
-                otpm_delta = completion_tokens - otpm_reserved
+                otpm_delta: Final = completion_tokens - otpm_reserved
                 if otpm_delta != 0:
                     dual_cache.increment_cache(
                         key=otpm_key,
@@ -551,16 +551,20 @@ def io_token_reconcile_success(
                     )
         else:
             verbose_router_logger.debug(
-                "[IO TOKEN LIMIT] usage missing; keeping reservation "
-                f"(itpm_reserved={itpm_reserved}, otpm_reserved={otpm_reserved})"
+                "[IO TOKEN LIMIT] usage missing; keeping reservation (itpm_reserved=%s, otpm_reserved=%s)",
+                itpm_reserved,
+                otpm_reserved,
             )
     finally:
         _clear_reservation_from_kwargs(kwargs)
 
     verbose_router_logger.debug(
-        f"[IO TOKEN LIMIT] reconciled "
-        f"(usage_resolved={usage_resolved}, itpm_reserved={itpm_reserved}, "
-        f"billable_input={billable_input}, otpm_reserved={otpm_reserved}, output={completion_tokens})"
+        "[IO TOKEN LIMIT] reconciled (usage_resolved=%s, itpm_reserved=%s, billable_input=%s, otpm_reserved=%s, output=%s)",
+        usage_resolved,
+        itpm_reserved,
+        billable_input,
+        otpm_reserved,
+        completion_tokens,
     )
 
 
@@ -586,7 +590,7 @@ async def async_io_token_reconcile_success(
     try:
         if usage_resolved:
             if itpm_key is not None:
-                itpm_delta = billable_input - itpm_reserved
+                itpm_delta: Final = billable_input - itpm_reserved
                 if itpm_delta != 0:
                     await dual_cache.async_increment_cache(
                         key=itpm_key,
@@ -596,7 +600,7 @@ async def async_io_token_reconcile_success(
                     )
 
             if otpm_key is not None:
-                otpm_delta = completion_tokens - otpm_reserved
+                otpm_delta: Final = completion_tokens - otpm_reserved
                 if otpm_delta != 0:
                     await dual_cache.async_increment_cache(
                         key=otpm_key,
@@ -606,16 +610,20 @@ async def async_io_token_reconcile_success(
                     )
         else:
             verbose_router_logger.debug(
-                "[IO TOKEN LIMIT] usage missing; keeping reservation "
-                f"(itpm_reserved={itpm_reserved}, otpm_reserved={otpm_reserved})"
+                "[IO TOKEN LIMIT] usage missing; keeping reservation (itpm_reserved=%s, otpm_reserved=%s)",
+                itpm_reserved,
+                otpm_reserved,
             )
     finally:
         _clear_reservation_from_kwargs(kwargs)
 
     verbose_router_logger.debug(
-        f"[IO TOKEN LIMIT] reconciled "
-        f"(usage_resolved={usage_resolved}, itpm_reserved={itpm_reserved}, "
-        f"billable_input={billable_input}, otpm_reserved={otpm_reserved}, output={completion_tokens})"
+        "[IO TOKEN LIMIT] reconciled (usage_resolved=%s, itpm_reserved=%s, billable_input=%s, otpm_reserved=%s, output=%s)",
+        usage_resolved,
+        itpm_reserved,
+        billable_input,
+        otpm_reserved,
+        completion_tokens,
     )
 
 
@@ -639,7 +647,7 @@ def io_token_refund_failure(
             ttl=RoutingArgsTTL,
         )
     _clear_reservation_from_kwargs(kwargs)
-    verbose_router_logger.debug(f"[IO TOKEN LIMIT] refunded ITPM={itpm_reserved} OTPM={otpm_reserved}")
+    verbose_router_logger.debug("[IO TOKEN LIMIT] refunded ITPM=%s OTPM=%s", itpm_reserved, otpm_reserved)
 
 
 def refund_stale_reservation_before_retry(dual_cache: DualCache, kwargs: dict[str, Any] | None) -> None:
@@ -693,7 +701,7 @@ async def async_io_token_refund_failure(
             parent_otel_span=parent_otel_span,
         )
     _clear_reservation_from_kwargs(kwargs)
-    verbose_router_logger.debug(f"[IO TOKEN LIMIT] refunded ITPM={itpm_reserved} OTPM={otpm_reserved}")
+    verbose_router_logger.debug("[IO TOKEN LIMIT] refunded ITPM=%s OTPM=%s", itpm_reserved, otpm_reserved)
 
 
 def build_io_token_rate_limit_headers(
@@ -703,8 +711,8 @@ def build_io_token_rate_limit_headers(
     current_itpm: int | None,
     current_otpm: int | None,
 ) -> dict[str, int]:
-    headers: dict[str, int] = {}
-    reset = seconds_until_minute_reset()
+    headers: Final[dict[str, int]] = {}
+    reset: Final = seconds_until_minute_reset()
     if itpm_limit is not None:
         usage = current_itpm or 0
         headers["x-ratelimit-limit-input-tokens"] = itpm_limit

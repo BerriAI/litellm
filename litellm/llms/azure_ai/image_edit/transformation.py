@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 
 import litellm
@@ -92,6 +94,6 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
             )
 
         # Use the new query_params dictionary
-        final_url = httpx.URL(new_url).copy_with(params={"api-version": api_version})
+        final_url: Final = httpx.URL(new_url).copy_with(params={"api-version": api_version})
 
         return str(final_url)

@@ -1,4 +1,4 @@
-from typing import Any, cast, get_type_hints
+from typing import Any, Final, cast, get_type_hints
 
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.types.vector_stores import (
@@ -24,10 +24,10 @@ class VectorStoreRequestUtils:
         Returns:
             VectorStoreSearchOptionalRequestParams instance with only the valid parameters
         """
-        valid_keys = get_type_hints(VectorStoreSearchOptionalRequestParams).keys()
-        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
+        valid_keys: Final = get_type_hints(VectorStoreSearchOptionalRequestParams).keys()
+        filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
 
-        optional_params = vector_store_provider_config.map_openai_params(
+        optional_params: Final = vector_store_provider_config.map_openai_params(
             non_default_params=params,
             optional_params=filtered_params,
             drop_params=False,
@@ -48,7 +48,7 @@ class VectorStoreRequestUtils:
         Returns:
             VectorStoreCreateOptionalRequestParams instance with only the valid parameters
         """
-        valid_keys = get_type_hints(VectorStoreCreateOptionalRequestParams).keys()
-        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
+        valid_keys: Final = get_type_hints(VectorStoreCreateOptionalRequestParams).keys()
+        filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
 
         return cast(VectorStoreCreateOptionalRequestParams, filtered_params)

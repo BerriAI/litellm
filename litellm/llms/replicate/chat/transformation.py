@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -74,7 +74,7 @@ class ReplicateConfig(BaseConfig):
         seed: int | None = None,
         debug: bool | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -126,7 +126,7 @@ class ReplicateConfig(BaseConfig):
     # Function to extract version ID from model string
     def model_to_version_id(self, model: str) -> str:
         if ":" in model:
-            split_model = model.split(":")
+            split_model: Final = model.split(":")
             return split_model[1]
         return model
 
@@ -162,7 +162,7 @@ class ReplicateConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         ## Load Config
-        config = litellm.ReplicateConfig.get_config()
+        config: Final = litellm.ReplicateConfig.get_config()
         for k, v in config.items():
             if (
                 k not in optional_params
@@ -184,7 +184,7 @@ class ReplicateConfig(BaseConfig):
 
         if model in litellm.custom_prompt_dict:
             # check if the model has a registered custom prompt
-            model_prompt_details = litellm.custom_prompt_dict[model]
+            model_prompt_details: Final = litellm.custom_prompt_dict[model]
             prompt = custom_prompt(
                 role_dict=model_prompt_details.get("roles", {}),
                 initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
@@ -214,10 +214,10 @@ class ReplicateConfig(BaseConfig):
         else:
             input_data = {"prompt": prompt, **optional_params}
 
-        version_id = self.model_to_version_id(model)
-        request_data: dict = {"input": input_data}
+        version_id: Final = self.model_to_version_id(model)
+        request_data: Final[dict] = {"input": input_data}
         if ":" in version_id and len(version_id) > REPLICATE_MODEL_NAME_WITH_ID_LENGTH:
-            model_parts = version_id.split(":")
+            model_parts: Final = version_id.split(":")
             if (
                 len(model_parts) > 1 and len(model_parts[1]) == REPLICATE_MODEL_NAME_WITH_ID_LENGTH
             ):  ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
@@ -245,31 +245,31 @@ class ReplicateConfig(BaseConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        raw_response_json = raw_response.json()
+        raw_response_json: Final = raw_response.json()
         if raw_response_json.get("status") != "succeeded":
             raise ReplicateError(
                 status_code=422,
                 message=f"LiteLLM Error - prediction not succeeded - {raw_response_json}",
                 headers=raw_response.headers,
             )
-        outputs = raw_response_json.get("output", [])
+        outputs: Final = raw_response_json.get("output", [])
         response_str = "".join(outputs)
         if len(response_str) == 0:  # edge case, where result from replicate is empty
             response_str = " "
 
         ## Building RESPONSE OBJECT
         if len(response_str) >= 1:
-            model_response.choices[0].message.content = response_str  # type: ignore
+            model_response.choices[0].message.content = response_str
 
         # Calculate usage
-        prompt_tokens = token_counter(model=model, messages=messages)
-        completion_tokens = token_counter(
+        prompt_tokens: Final = token_counter(model=model, messages=messages)
+        completion_tokens: Final = token_counter(
             model=model,
             text=response_str,
             count_response_tokens=True,
         )
         model_response.model = "replicate/" + model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -285,8 +285,8 @@ class ReplicateConfig(BaseConfig):
         "urls":{"cancel":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4/cancel","get":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4","stream":"https://stream-b.svc.rno2.c.replicate.net/v1/streams/eot4gbydowuin4snhncydwxt57dfwgsc3w3snycx5nid7oef7jga"}
         }
         """
-        response_json = response.json()
-        prediction_url = response_json.get("urls", {}).get("get")
+        response_json: Final = response.json()
+        prediction_url: Final = response_json.get("urls", {}).get("get")
         if prediction_url is None:
             raise ReplicateError(
                 status_code=400,

@@ -1,8 +1,9 @@
 from collections.abc import Coroutine, Iterable
-from typing import Any, Literal
+from typing import Any, Final, Literal, TypedDict
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai.types.shared_params.metadata import Metadata
 from typing_extensions import overload
 
 from ...types.llms.openai import (
@@ -22,6 +23,16 @@ from ...types.llms.openai import (
 from .common_utils import BaseAzureLLM
 
 
+class _RunThreadStreamData(TypedDict):
+    thread_id: str
+    assistant_id: str
+    additional_instructions: str | None
+    instructions: str | None
+    metadata: Metadata | None
+    model: str | None
+    tools: Iterable[AssistantToolParam] | None
+
+
 class AzureAssistantsAPI(BaseAzureLLM):
     def __init__(self) -> None:
         super().__init__()
@@ -38,7 +49,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         litellm_params: dict | None = None,
     ) -> AzureOpenAI:
         if client is None:
-            azure_client_params = self.initialize_azure_sdk_client(
+            azure_client_params: Final = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
                 api_key=api_key,
                 api_base=api_base,
@@ -46,7 +57,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 api_version=api_version,
                 is_async=False,
             )
-            azure_openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
+            azure_openai_client = AzureOpenAI(**azure_client_params)
         else:
             azure_openai_client = client
 
@@ -64,7 +75,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         litellm_params: dict | None = None,
     ) -> AsyncAzureOpenAI:
         if client is None:
-            azure_client_params = self.initialize_azure_sdk_client(
+            azure_client_params: Final = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
                 api_key=api_key,
                 api_base=api_base,
@@ -74,7 +85,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             )
 
             azure_openai_client = AsyncAzureOpenAI(**azure_client_params)
-            # azure_openai_client = AsyncAzureOpenAI(**data)  # type: ignore
+            # azure_openai_client = AsyncAzureOpenAI(**data)
         else:
             azure_openai_client = client
 
@@ -93,7 +104,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         client: AsyncAzureOpenAI | None,
         litellm_params: dict | None = None,
     ) -> AsyncCursorPage[Assistant]:
-        azure_openai_client = self.async_get_azure_client(
+        azure_openai_client: Final = self.async_get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -104,7 +115,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = await azure_openai_client.beta.assistants.list()
+        response: Final = await azure_openai_client.beta.assistants.list()
 
         return response
 
@@ -163,7 +174,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 client=client,
                 litellm_params=litellm_params,
             )
-        azure_openai_client = self.get_azure_client(
+        azure_openai_client: Final = self.get_azure_client(
             api_key=api_key,
             api_base=api_base,
             azure_ad_token=azure_ad_token,
@@ -174,7 +185,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = azure_openai_client.beta.assistants.list()
+        response: Final = azure_openai_client.beta.assistants.list()
 
         return response
 
@@ -193,7 +204,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         client: AsyncAzureOpenAI | None = None,
         litellm_params: dict | None = None,
     ) -> OpenAIMessage:
-        openai_client = self.async_get_azure_client(
+        openai_client: Final = self.async_get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -204,9 +215,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        thread_message: OpenAIMessage = await openai_client.beta.threads.messages.create(  # type: ignore
+        thread_message: Final[OpenAIMessage] = await openai_client.beta.threads.messages.create(
             thread_id,
-            **message_data,  # type: ignore
+            **message_data,
         )
 
         if getattr(thread_message, "status", None) is None:
@@ -278,7 +289,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 client=client,
                 litellm_params=litellm_params,
             )
-        openai_client = self.get_azure_client(
+        openai_client: Final = self.get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -289,9 +300,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(  # type: ignore
+        thread_message: Final[OpenAIMessage] = openai_client.beta.threads.messages.create(
             thread_id,
-            **message_data,  # type: ignore
+            **message_data,
         )
 
         if getattr(thread_message, "status", None) is None:
@@ -310,7 +321,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         client: AsyncAzureOpenAI | None = None,
         litellm_params: dict | None = None,
     ) -> AsyncCursorPage[OpenAIMessage]:
-        openai_client = self.async_get_azure_client(
+        openai_client: Final = self.async_get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -321,7 +332,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = await openai_client.beta.threads.messages.list(thread_id=thread_id)
+        response: Final = await openai_client.beta.threads.messages.list(thread_id=thread_id)
 
         return response
 
@@ -386,7 +397,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 client=client,
                 litellm_params=litellm_params,
             )
-        openai_client = self.get_azure_client(
+        openai_client: Final = self.get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -397,7 +408,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = openai_client.beta.threads.messages.list(thread_id=thread_id)
+        response: Final = openai_client.beta.threads.messages.list(thread_id=thread_id)
 
         return response
 
@@ -416,7 +427,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         litellm_params: dict | None = None,
     ) -> Thread:
-        openai_client = self.async_get_azure_client(
+        openai_client: Final = self.async_get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -427,13 +438,13 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        data = {}
+        data: Final = {}
         if messages is not None:
-            data["messages"] = messages  # type: ignore
+            data["messages"] = messages
         if metadata is not None:
-            data["metadata"] = metadata  # type: ignore
+            data["metadata"] = metadata
 
-        message_thread = await openai_client.beta.threads.create(**data)  # type: ignore
+        message_thread: Final = await openai_client.beta.threads.create(**data)
 
         return Thread.model_validate(message_thread.model_dump())
 
@@ -512,7 +523,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 messages=messages,
                 litellm_params=litellm_params,
             )
-        azure_openai_client = self.get_azure_client(
+        azure_openai_client: Final = self.get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -523,13 +534,13 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        data = {}
+        data: Final = {}
         if messages is not None:
-            data["messages"] = messages  # type: ignore
+            data["messages"] = messages
         if metadata is not None:
-            data["metadata"] = metadata  # type: ignore
+            data["metadata"] = metadata
 
-        message_thread = azure_openai_client.beta.threads.create(**data)  # type: ignore
+        message_thread: Final = azure_openai_client.beta.threads.create(**data)
 
         return Thread.model_validate(message_thread.model_dump())
 
@@ -545,7 +556,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         client: AsyncAzureOpenAI | None,
         litellm_params: dict | None = None,
     ) -> Thread:
-        openai_client = self.async_get_azure_client(
+        openai_client: Final = self.async_get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -556,7 +567,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = await openai_client.beta.threads.retrieve(thread_id=thread_id)
+        response: Final = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
         return Thread.model_validate(response.model_dump())
 
@@ -621,7 +632,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 client=client,
                 litellm_params=litellm_params,
             )
-        openai_client = self.get_azure_client(
+        openai_client: Final = self.get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -632,7 +643,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = openai_client.beta.threads.retrieve(thread_id=thread_id)
+        response: Final = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
         return Thread.model_validate(response.model_dump())
 
@@ -660,7 +671,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         client: AsyncAzureOpenAI | None,
         litellm_params: dict | None = None,
     ) -> Run:
-        openai_client = self.async_get_azure_client(
+        openai_client: Final = self.async_get_azure_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -671,12 +682,12 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = await openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+        response: Final = await openai_client.beta.threads.runs.create_and_poll(
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=additional_instructions,
             instructions=instructions,
-            metadata=metadata,  # type: ignore
+            metadata=metadata,
             model=model,
             tools=tools,
         )
@@ -696,7 +707,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         event_handler: AssistantEventHandler | None,
         litellm_params: dict | None = None,
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
-        data: dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -707,7 +718,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         }
         if event_handler is not None:
             data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)  # type: ignore
+        return client.beta.threads.runs.stream(**data)
 
     def run_thread_stream(
         self,
@@ -722,7 +733,8 @@ class AzureAssistantsAPI(BaseAzureLLM):
         event_handler: AssistantEventHandler | None,
         litellm_params: dict | None = None,
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data: dict[str, Any] = {
+        stream_fn: Final = client.beta.threads.runs.stream
+        base_data: Final[_RunThreadStreamData] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -732,8 +744,8 @@ class AzureAssistantsAPI(BaseAzureLLM):
             "tools": tools,
         }
         if event_handler is not None:
-            data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)  # type: ignore
+            return stream_fn(**base_data, event_handler=event_handler)
+        return stream_fn(**base_data)
 
     # fmt: off
 
@@ -806,7 +818,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
     ):
         if arun_thread is not None and arun_thread is True:
             if stream is not None and stream is True:
-                azure_client = self.async_get_azure_client(
+                azure_client: Final = self.async_get_azure_client(
                     api_key=api_key,
                     api_base=api_base,
                     api_version=api_version,
@@ -833,7 +845,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 assistant_id=assistant_id,
                 additional_instructions=additional_instructions,
                 instructions=instructions,
-                metadata=metadata,  # type: ignore
+                metadata=metadata,
                 model=model,
                 stream=stream,
                 tools=tools,
@@ -846,7 +858,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 client=client,
                 litellm_params=litellm_params,
             )
-        openai_client = self.get_azure_client(
+        openai_client: Final = self.get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -871,12 +883,12 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 litellm_params=litellm_params,
             )
 
-        response = openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+        response: Final = openai_client.beta.threads.runs.create_and_poll(
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=additional_instructions,
             instructions=instructions,
-            metadata=metadata,  # type: ignore
+            metadata=metadata,
             model=model,
             tools=tools,
         )
@@ -896,7 +908,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         create_assistant_data: dict,
         litellm_params: dict | None = None,
     ) -> Assistant:
-        azure_openai_client = self.async_get_azure_client(
+        azure_openai_client: Final = self.async_get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -907,7 +919,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = await azure_openai_client.beta.assistants.create(**create_assistant_data)
+        response: Final = await azure_openai_client.beta.assistants.create(**create_assistant_data)
         return response
 
     def create_assistants(
@@ -935,7 +947,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 create_assistant_data=create_assistant_data,
                 litellm_params=litellm_params,
             )
-        azure_openai_client = self.get_azure_client(
+        azure_openai_client: Final = self.get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -946,7 +958,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = azure_openai_client.beta.assistants.create(**create_assistant_data)
+        response: Final = azure_openai_client.beta.assistants.create(**create_assistant_data)
         return response
 
     # Delete Assistant
@@ -962,7 +974,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         assistant_id: str,
         litellm_params: dict | None = None,
     ):
-        azure_openai_client = self.async_get_azure_client(
+        azure_openai_client: Final = self.async_get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -973,7 +985,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = await azure_openai_client.beta.assistants.delete(assistant_id=assistant_id)
+        response: Final = await azure_openai_client.beta.assistants.delete(assistant_id=assistant_id)
         return response
 
     def delete_assistant(
@@ -1001,7 +1013,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 assistant_id=assistant_id,
                 litellm_params=litellm_params,
             )
-        azure_openai_client = self.get_azure_client(
+        azure_openai_client: Final = self.get_azure_client(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -1012,5 +1024,5 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = azure_openai_client.beta.assistants.delete(assistant_id=assistant_id)
+        response: Final = azure_openai_client.beta.assistants.delete(assistant_id=assistant_id)
         return response

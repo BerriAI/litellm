@@ -23,7 +23,7 @@ Response format:
 }
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -44,10 +44,10 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-DEFAULT_API_BASE = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
 # Maps OpenAI size strings (WxH) to DashScope size strings (W*H)
-OPENAI_TO_DASHSCOPE_SIZE: dict = {
+OPENAI_TO_DASHSCOPE_SIZE: Final[dict] = {
     "256x256": "256*256",
     "512x512": "512*512",
     "1024x1024": "1024*1024",
@@ -72,8 +72,8 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        mapped: dict = {}
+        supported_params: Final = self.get_supported_openai_params(model)
+        mapped: Final[dict] = {}
         for k, v in non_default_params.items():
             if k in optional_params:
                 continue
@@ -107,7 +107,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        final_api_key = api_key or get_secret_str("DASHSCOPE_API_KEY")
+        final_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
         if not final_api_key:
             raise ValueError("DASHSCOPE_API_KEY is not set")
         headers["Authorization"] = f"Bearer {final_api_key}"
@@ -125,7 +125,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         """
         Transform OpenAI-style image generation request to DashScope multimodal-generation format.
         """
-        parameters: dict = {}
+        parameters: Final[dict] = {}
         for k, v in optional_params.items():
             parameters[k] = v
 
@@ -169,7 +169,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse DashScope image generation response: {e}",
@@ -189,7 +189,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
-        choices = response_data.get("output", {}).get("choices", [])
+        choices: Final = response_data.get("output", {}).get("choices", [])
         for choice in choices:
             content_list = choice.get("message", {}).get("content", [])
             for content_item in content_list:

@@ -1,3 +1,5 @@
+from typing import Final
+
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -14,14 +16,14 @@ class VertexAIGPTOSSTransformation(OpenAIGPTConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         base_gpt_series_params = super().get_supported_openai_params(model=model)
-        gpt_oss_only_params = ["reasoning_effort"]
+        gpt_oss_only_params: Final = ["reasoning_effort"]
         base_gpt_series_params.extend(gpt_oss_only_params)
 
         #########################################################
         # VertexAI - GPT-OSS does not support tool calls
         #########################################################
         if litellm.supports_function_calling(model=model) is False:
-            TOOL_CALLING_PARAMS_TO_REMOVE = [
+            TOOL_CALLING_PARAMS_TO_REMOVE: Final = [
                 "tool",
                 "tool_choice",
                 "function_call",
