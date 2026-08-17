@@ -26,6 +26,7 @@ describe("AddGuardrailForm close behavior", () => {
     const { onClose } = renderForm();
     expect(screen.getByText("Create guardrail")).toBeInTheDocument();
 
+    // eslint-disable-next-line local/no-antd-class-selectors -- exercises antd Modal mask dismissal; the mask has no role and is not reachable by an accessible query
     const wrap = document.querySelector(".ant-modal-wrap") as HTMLElement;
     expect(wrap).toBeTruthy();
     fireEvent.mouseDown(wrap);
