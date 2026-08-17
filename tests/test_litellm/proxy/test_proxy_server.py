@@ -4853,6 +4853,61 @@ async def test_add_router_settings_shallow_merge_behavior():
 
 
 @pytest.mark.asyncio
+async def test_get_v1_model_info_allowed_names_includes_inherited_team_access_group_models(monkeypatch):
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a"]
+    router.get_model_access_groups.return_value = {}
+    available_models = AsyncMock(return_value=["model-a"])
+    monkeypatch.setattr("litellm.proxy.utils.get_available_models_for_user", available_models)
+
+    result = await proxy_server_module._get_v1_model_info_allowed_model_names_with_access_groups(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            models=[SpecialModelNames.all_team_models.value],
+            team_id="team-1",
+            team_models=[SpecialModelNames.no_default_models.value],
+        ),
+        llm_router=router,
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert result == {"model-a"}
+    available_models.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_v1_model_info_allowed_names_does_not_broaden_empty_access_group(monkeypatch):
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a"]
+    router.get_model_access_groups.return_value = {}
+    monkeypatch.setattr(
+        "litellm.proxy.utils.get_available_models_for_user",
+        AsyncMock(return_value=[]),
+    )
+
+    result = await proxy_server_module._get_v1_model_info_allowed_model_names_with_access_groups(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            models=[SpecialModelNames.all_team_models.value],
+            team_id="team-1",
+            team_models=[SpecialModelNames.no_default_models.value],
+        ),
+        llm_router=router,
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert result == set()
+
+
+@pytest.mark.asyncio
 async def test_model_info_v1_oci_secrets_not_leaked():
     """
     Test that model_info_v1 endpoint properly masks OCI sensitive parameters and does not leak secrets.

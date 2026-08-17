@@ -13648,6 +13648,42 @@ def _get_v1_model_info_allowed_model_names(
     )
 
 
+async def _get_v1_model_info_allowed_model_names_with_access_groups(
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache | None,
+    proxy_logging_obj: ProxyLogging | None,
+) -> set[str] | None:  # mutable-ok: preserve the existing model-filter helper contract
+    fallback_allowed_models: Final = _get_v1_model_info_allowed_model_names(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    if fallback_allowed_models is None:
+        return None
+
+    from litellm.proxy.utils import get_available_models_for_user
+
+    try:
+        return set(
+            await get_available_models_for_user(
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+                general_settings=general_settings,
+                user_model=user_model,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_cache=user_api_key_cache,
+            )
+        )
+    except Exception:  # noqa: BLE001 -- preserve the legacy listing when access-group enrichment fails
+        verbose_proxy_logger.debug(
+            "Could not resolve access group models for /v1/model/info",
+            exc_info=True,
+        )
+        return fallback_allowed_models
+
+
 def _filter_v1_model_info_deployments(
     all_models: list[dict],
     allowed_model_names: set[str] | None,
@@ -13871,9 +13907,12 @@ async def model_info_v1(
 
     all_models = expand_wildcard_deployments_for_model_info(all_models)
 
-    allowed_model_names: Final = _get_v1_model_info_allowed_model_names(
+    allowed_model_names: Final = await _get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     all_models = _filter_v1_model_info_deployments(
