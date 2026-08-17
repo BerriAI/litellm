@@ -62,6 +62,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
       },
     ],
   }),
+  useOrganization: vi.fn().mockReturnValue({ data: undefined }),
 }));
 
 const mockKey: KeyResponse = {
