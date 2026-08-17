@@ -8,6 +8,7 @@ import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import { SearchResultsDisplay } from "../../chat_ui/SearchResultsDisplay";
 import type { MessageType } from "@/components/chat_ui/types";
+import { useTranslation } from "react-i18next";
 
 interface MessageDisplayProps {
   messages: MessageType[];
@@ -15,6 +16,7 @@ interface MessageDisplayProps {
 }
 
 export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
+  const { t } = useTranslation();
   if (messages.length === 0) {
     return <div className="h-full" />;
   }
@@ -101,7 +103,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
     <div className="flex flex-col gap-6 min-w-0 w-full p-4">
       {conversationBlocks.map((block, blockIndex) => {
         const assistantMessage = block.assistant;
-        const displayModel = assistantMessage?.model || "Assistant";
+        const displayModel = assistantMessage?.model || t("playground.compare.assistant");
         return (
           <div key={blockIndex} className="space-y-4">
             {block.user && (
@@ -110,7 +112,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
                     <UserRound size={16} />
                   </div>
-                  <div className="text-sm font-semibold text-gray-700">You</div>
+                  <div className="text-sm font-semibold text-gray-700">{t("playground.compare.you")}</div>
                 </div>
                 {renderMessageBody(block.user)}
               </div>
@@ -152,10 +154,10 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
             ) : isLoading && blockIndex === conversationBlocks.length - 1 ? (
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <Loader2 size={18} className="animate-spin" />
-                <span>Generating response...</span>
+                <span>{t("playground.compare.generating")}</span>
               </div>
             ) : (
-              <div className="text-sm text-gray-500">Waiting for a response...</div>
+              <div className="text-sm text-gray-500">{t("playground.compare.waiting")}</div>
             )}
           </div>
         );
@@ -163,7 +165,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
       {isLoading && conversationBlocks.length === 0 && (
         <div className="flex items-center gap-2 text-gray-500">
           <Loader2 size={18} className="animate-spin" />
-          <span>Generating response...</span>
+          <span>{t("playground.compare.generating")}</span>
         </div>
       )}
     </div>

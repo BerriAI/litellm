@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { SelectorOption, EndpointConfig, isAgentEndpoint, getComparisonSelection } from "../endpoint_config";
+import { useTranslation } from "react-i18next";
 
 interface ComparisonPanelProps {
   comparison: ComparisonInstance;
@@ -35,6 +36,7 @@ export function ComparisonPanel({
   endpointConfig,
   apiKey,
 }: ComparisonPanelProps) {
+  const { t } = useTranslation();
   const isA2AMode = isAgentEndpoint(endpointConfig.id);
   const currentSelection = getComparisonSelection(comparison, endpointConfig.id);
   const [popoverVisible, setPopoverVisible] = useState(false);
@@ -112,10 +114,10 @@ export function ComparisonPanel({
             id={syncId}
             checked={comparison.applyAcrossModels}
             onCheckedChange={handleSyncChange}
-            aria-label="Sync Settings Across Models"
+            aria-label={t("playground.compare.syncSettings")}
           />
           <label htmlFor={syncId} className="cursor-pointer text-xs font-medium">
-            Sync Settings Across Models
+            {t("playground.compare.syncSettings")}
           </label>
         </div>
 
@@ -123,10 +125,12 @@ export function ComparisonPanel({
 
         {/* General Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">General Settings</h4>
+          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">
+            {t("playground.compare.generalSettings")}
+          </h4>
           <div className="space-y-2">
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Tags</label>
+              <label className="text-xs font-medium text-gray-600 block mb-0.5">{t("playground.compare.tags")}</label>
               <TagSelector
                 value={comparison.tags}
                 onChange={(value) => handleSettingChange("tags", value)}
@@ -134,7 +138,9 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Vector Stores</label>
+              <label className="text-xs font-medium text-gray-600 block mb-0.5">
+                {t("playground.compare.vectorStores")}
+              </label>
               <VectorStoreSelector
                 value={comparison.vectorStores}
                 onChange={(value) => handleSettingChange("vectorStores", value)}
@@ -142,7 +148,9 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Guardrails</label>
+              <label className="text-xs font-medium text-gray-600 block mb-0.5">
+                {t("playground.compare.guardrails")}
+              </label>
               <GuardrailSelector
                 value={comparison.guardrails}
                 onChange={(value) => handleSettingChange("guardrails", value)}
@@ -153,23 +161,27 @@ export function ComparisonPanel({
         </div>
         {/* Advanced Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">Advanced Settings</h4>
+          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">
+            {t("playground.compare.advancedSettings")}
+          </h4>
           <div className="space-y-2">
             <div className="flex items-center gap-2 pb-1">
               <Checkbox
                 id={advancedParamsId}
                 checked={comparison.useAdvancedParams}
                 onCheckedChange={handleAdvancedParamsChange}
-                aria-label="Use Advanced Parameters"
+                aria-label={t("playground.modelSettings.useAdvancedParameters")}
               />
               <label htmlFor={advancedParamsId} className="cursor-pointer text-sm font-medium">
-                Use Advanced Parameters
+                {t("playground.modelSettings.useAdvancedParameters")}
               </label>
             </div>
             <div className="space-y-2 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className={`text-xs font-medium ${disabledTextColor}`}>Temperature</label>
+                  <label className={`text-xs font-medium ${disabledTextColor}`}>
+                    {t("playground.modelSettings.temperature")}
+                  </label>
                   <span className={`text-xs ${disabledTextColor}`}>{comparison.temperature.toFixed(2)}</span>
                 </div>
                 <Slider
@@ -187,7 +199,9 @@ export function ComparisonPanel({
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className={`text-xs font-medium ${disabledTextColor}`}>Max Tokens</label>
+                  <label className={`text-xs font-medium ${disabledTextColor}`}>
+                    {t("playground.modelSettings.maxTokens")}
+                  </label>
                   <span className={`text-xs ${disabledTextColor}`}>{comparison.maxTokens}</span>
                 </div>
                 <Slider

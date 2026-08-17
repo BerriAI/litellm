@@ -25,6 +25,7 @@ import ModelGroupAliasPanel from "@/app/(dashboard)/models-and-endpoints/panels/
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useTranslation } from "react-i18next";
 
 type ModelTabSlug =
   | "add"
@@ -37,17 +38,6 @@ type ModelTabSlug =
   | "price-data";
 
 const BASE_TAB_KEY = "all-models";
-
-const TAB_LABELS: Record<ModelTabSlug, string> = {
-  add: "Add Model",
-  "auto-routers": "Auto-Routers",
-  "llm-credentials": "LLM Credentials",
-  "pass-through": "Pass-Through Endpoints",
-  health: "Health Status",
-  "retry-settings": "Model Retry Settings",
-  "model-group-alias": "Model Group Alias",
-  "price-data": "Price Data Reload",
-};
 
 const renderPanel = (key: string) => {
   switch (key) {
@@ -75,6 +65,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
+  const { t } = useTranslation();
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
@@ -108,17 +99,27 @@ export default function ModelsAndEndpointsPage() {
     [canCreate, isAdmin],
   );
 
-  const allModelsLabel = isAdmin ? "All Models" : "Your Models";
+  const tabLabels: Record<ModelTabSlug, string> = {
+    add: t("models.addModel"),
+    "auto-routers": t("models.autoRouters"),
+    "llm-credentials": t("models.credentials"),
+    "pass-through": t("models.passThrough"),
+    health: t("models.health"),
+    "retry-settings": t("models.retrySettings"),
+    "model-group-alias": t("models.groupAlias"),
+    "price-data": t("models.priceReload"),
+  };
+  const allModelsLabel = isAdmin ? t("models.allModels") : t("models.yourModels");
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
     if (slug === "auto-routers") {
       return (
         <span className="flex items-center gap-2">
-          {TAB_LABELS[slug]} <BetaBadge />
+          {tabLabels[slug]} <BetaBadge />
         </span>
       );
     }
-    return TAB_LABELS[slug];
+    return tabLabels[slug];
   };
 
   const handleRefreshClick = () => {
@@ -151,11 +152,11 @@ export default function ModelsAndEndpointsPage() {
       <div className="mt-2 flex w-full flex-col gap-2 p-8">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold">Model Management</h2>
+            <h2 className="text-lg font-semibold">{t("models.title")}</h2>
             {isAdmin ? (
-              <p className="text-sm text-muted-foreground">Add and manage models for the proxy</p>
+              <p className="text-sm text-muted-foreground">{t("models.adminSubtitle")}</p>
             ) : (
-              <p className="text-sm text-muted-foreground">Add models for teams you are an admin for.</p>
+              <p className="text-sm text-muted-foreground">{t("models.userSubtitle")}</p>
             )}
           </div>
         </div>
@@ -189,9 +190,11 @@ export default function ModelsAndEndpointsPage() {
               </div>
               <div className="flex shrink-0 items-center gap-2 pb-1">
                 {lastRefreshed && (
-                  <span className="text-xs text-muted-foreground">Last Refreshed: {lastRefreshed}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {t("models.lastRefreshed", { time: lastRefreshed })}
+                  </span>
                 )}
-                <Button variant="ghost" size="icon-sm" onClick={handleRefreshClick} aria-label="Refresh models">
+                <Button variant="ghost" size="icon-sm" onClick={handleRefreshClick} aria-label={t("models.refresh")}>
                   <RefreshCw />
                 </Button>
               </div>

@@ -7,7 +7,16 @@ import i18n, { detectInitialLanguage, languageStorageKey, normalizeLanguage } fr
 
 function TranslationProbe() {
   const { t } = useTranslation();
-  return <span>{t("login.title")}</span>;
+  return (
+    <>
+      <span>{t("login.title")}</span>
+      <span>{t("playground.configuration.title")}</span>
+      <span>{t("playground.chat.emptyState")}</span>
+      <span>{t("playground.compare.addComparison")}</span>
+      <span>{t("virtualKeys.subtitle")}</span>
+      <span>{t("dataTable.rowsPerPage")}</span>
+    </>
+  );
 }
 
 describe("UI internationalization", () => {
@@ -42,6 +51,11 @@ describe("UI internationalization", () => {
     );
 
     await waitFor(() => expect(screen.getByText("登录")).toBeInTheDocument());
+    expect(screen.getByText("配置")).toBeInTheDocument();
+    expect(screen.getByText("开始对话、生成图像或处理音频")).toBeInTheDocument();
+    expect(screen.getByText("添加对比项")).toBeInTheDocument();
+    expect(screen.getByText("用于验证网关请求的全部密钥。")).toBeInTheDocument();
+    expect(screen.getByText("每页行数")).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("zh-CN");
 
     fireEvent.click(screen.getByRole("button", { name: "语言" }));
