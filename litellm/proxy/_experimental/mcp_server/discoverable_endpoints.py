@@ -2416,8 +2416,10 @@ def _build_oauth_authorization_server_response(
 
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
+    issuer: Final = f"{request_base_url}/{mcp_server_name}" if explicitly_named else request_base_url
+
     return {
-        "issuer": f"{request_base_url}/{mcp_server_name}" if explicitly_named else request_base_url,
+        "issuer": issuer,
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
