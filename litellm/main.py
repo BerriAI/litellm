@@ -6278,34 +6278,17 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
             )
-        elif custom_llm_provider == "hosted_vllm":
-            api_base = api_base or litellm.api_base or get_secret_str("HOSTED_VLLM_API_BASE")
-
-            # set API KEY
-            if api_key is None:
-                api_key = litellm.api_key or get_secret_str("HOSTED_VLLM_API_KEY")
-
-            response = base_llm_http_handler.embedding(
-                model=model,
-                input=input,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                api_key=api_key,
-                logging_obj=logging,
-                timeout=timeout,
-                model_response=EmbeddingResponse(),
-                optional_params=optional_params,
-                client=client,
-                aembedding=aembedding,
-                litellm_params=litellm_params_dict,
-                headers=headers or {},
+        elif custom_llm_provider in ("hosted_vllm", "gpustack"):
+            provider_env_prefix: Final = custom_llm_provider.upper()
+            api_base = (  # rebind-ok: provider dispatch resolves explicit and environment configuration
+                api_base or litellm.api_base or get_secret_str(f"{provider_env_prefix}_API_BASE")
             )
-        elif custom_llm_provider == "gpustack":
-            api_base = api_base or litellm.api_base or get_secret_str("GPUSTACK_API_BASE")
             if api_key is None:
-                api_key = litellm.api_key or get_secret_str("GPUSTACK_API_KEY")
+                api_key = (  # rebind-ok: provider dispatch resolves explicit and environment configuration
+                    litellm.api_key or get_secret_str(f"{provider_env_prefix}_API_KEY")
+                )
 
-            response = base_llm_http_handler.embedding(
+            response = base_llm_http_handler.embedding(  # rebind-ok: provider dispatch resolves explicit and environment configuration
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -6318,7 +6301,7 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
-                headers=headers or {},
+                headers=headers or {},  # mutable-ok: HTTP handler requires mutable request headers
             )
         elif (
             custom_llm_provider == "openai_like"

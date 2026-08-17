@@ -35,6 +35,7 @@ from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
+from types import MappingProxyType
 
 import dotenv
 import httpx
@@ -8185,10 +8186,12 @@ class ProviderConfigManager:
             litellm.LlmProviders.GPUSTACK,
             litellm.LlmProviders.HOSTED_VLLM,
         ):
-            rerank_configs: Final = {
-                litellm.LlmProviders.GPUSTACK: litellm.GPUStackRerankConfig,
-                litellm.LlmProviders.HOSTED_VLLM: litellm.HostedVLLMRerankConfig,
-            }
+            rerank_configs: Final = MappingProxyType(
+                {
+                    litellm.LlmProviders.GPUSTACK: litellm.GPUStackRerankConfig,
+                    litellm.LlmProviders.HOSTED_VLLM: litellm.HostedVLLMRerankConfig,
+                }
+            )
             return rerank_configs[provider]()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
             return litellm.HuggingFaceRerankConfig()
