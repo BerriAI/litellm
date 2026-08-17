@@ -76,6 +76,24 @@ def redact_secrets(value: str) -> str:
     return _redact_string(value)
 
 
+def _substituted_color_message(record: logging.LogRecord) -> str | None:
+    """Render a record's ``color_message`` against its args, or None if absent.
+
+    uvicorn's colorized formatter re-renders `color_message` against
+    record.args at emit time (see uvicorn.logging.ColourizedFormatter) instead
+    of using the already-formatted record.msg, so it has to be substituted
+    before args are cleared or it is later formatted with no args and prints
+    the raw "%s://%s:%d" placeholders instead of the URL.
+    """
+    color_message: Final = record.__dict__.get("color_message")
+    if not isinstance(color_message, str) or not record.args:
+        return None
+    try:
+        return color_message % record.args
+    except TypeError:
+        return color_message
+
+
 class SecretRedactionFilter(logging.Filter):
     """Scrubs known secret/credential patterns from log records."""
 
@@ -85,19 +103,11 @@ class SecretRedactionFilter(logging.Filter):
         if not _ENABLE_SECRET_REDACTION:
             return True
 
-        original_args = record.args
-
-        # uvicorn's colorized formatter re-renders `color_message` against
-        # record.args at emit time (see uvicorn.logging.ColourizedFormatter),
-        # instead of using the already-formatted record.msg. Substitute it here
-        # too, before args are cleared below, or it's later formatted with no
-        # args and prints the raw "%s://%s:%d" placeholders instead of the URL.
-        color_message = record.__dict__.get("color_message")
-        if isinstance(color_message, str) and original_args:
-            try:
-                record.color_message = color_message % original_args
-            except TypeError:
-                record.color_message = color_message
+        # Runs before args are cleared, and before the extra-field loop below
+        # that redacts the substituted result.
+        substituted_color_message: Final = _substituted_color_message(record)
+        if substituted_color_message is not None:
+            record.color_message = substituted_color_message  # rebind-ok: a Filter scrubs records in place
 
         try:
             record.msg = _redact_string(record.getMessage())

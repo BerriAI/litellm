@@ -190,6 +190,28 @@ def test_filter_preserves_uvicorn_color_message_args():
     assert "http://0.0.0.0:4000" in output
 
 
+def test_filter_redacts_secrets_substituted_into_color_message():
+    """The color_message substitution runs before the extra-field redaction
+    loop, so a secret arriving through record.args lands in color_message and
+    must still be scrubbed. Substituting after that loop would ship the secret
+    to any colorized handler."""
+    record = logging.LogRecord(
+        name="uvicorn.error",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="connecting with %s",
+        args=(SECRET,),
+        exc_info=None,
+    )
+    record.color_message = "connecting with %s"
+
+    _secret_filter.filter(record)
+
+    assert SECRET not in record.color_message
+    assert "REDACTED" in record.color_message
+
+
 def test_disable_redaction_passes_secrets_through():
     """When LITELLM_DISABLE_REDACT_SECRETS=true, secrets pass through."""
     with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):
