@@ -1353,7 +1353,9 @@ class RedisCache(BaseCache):
         self.redis_client.flushall()
 
     async def disconnect(self):
-        await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+        # None in cluster mode: a RedisCluster owns per-node pools, so no shared pool is built
+        if self.async_redis_conn_pool is not None:
+            await self.async_redis_conn_pool.disconnect(inuse_connections=True)
         try:
             self.redis_client.close()
         except Exception as e:
