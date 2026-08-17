@@ -80,6 +80,59 @@ def test_resolves_plain_values_from_metadata():
     assert params.get("langfuse_host") == "https://test.langfuse.com"
 
 
+def test_otel_destinations_not_carried_on_dynamic_params():
+    """OTEL destination routing no longer travels through dynamic params or request
+    data at all (Y6): the admin-resolved destinations are anchored on a server-only
+    ContextVar and the v2 router reads them from there. Even a value under the internal
+    ``litellm_metadata`` key is NOT surfaced on the dynamic params, so the
+    request-carried carrier stays removed. Re-introducing the carrier fails this."""
+    destinations = [
+        {
+            "callback_name": "langfuse_otel",
+            "endpoint": "https://cloud.langfuse.com/api/public/otel",
+            "headers": {"Authorization": "Basic ADMIN"},
+        }
+    ]
+
+    params = initialize_standard_callback_dynamic_params(
+        {"litellm_metadata": {"otel_destinations": destinations}}
+    )
+
+    assert params.get("otel_destinations") is None
+
+
+def test_otel_destinations_top_level_kwarg_is_ignored():
+    """A top-level ``otel_destinations`` kwarg is intentionally NOT read. The proxy
+    stashes admin-resolved destinations under ``litellm_metadata`` to keep unknown
+    keys out of the body forwarded to the provider; reading the top-level key would
+    re-open that surface and is therefore ignored."""
+    params = initialize_standard_callback_dynamic_params(
+        {"otel_destinations": [{"callback_name": "langfuse_otel"}]}
+    )
+    assert params.get("otel_destinations") is None
+
+
+def test_otel_destinations_never_read_from_request_metadata():
+    """A request body/metadata must not be able to inject OTEL destinations:
+    otel_destinations is deliberately absent from the request-read whitelist, so a
+    value nested in metadata is ignored. Guards the trust boundary."""
+    kwargs = {
+        "metadata": {
+            "otel_destinations": [
+                {
+                    "callback_name": "langfuse_otel",
+                    "endpoint": "https://attacker.example/api/public/otel",
+                    "headers": {"Authorization": "Basic ATTACKER"},
+                }
+            ]
+        }
+    }
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("otel_destinations") is None
+
+
 def test_litellm_params_metadata_overrides_metadata():
     kwargs = {
         "metadata": {

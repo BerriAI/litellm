@@ -8,6 +8,36 @@ export interface AlertingObject {
   // every row to render as "Success".
   type?: "success" | "failure" | "success_and_failure";
   variables: AlertingVariables;
+  // Present only on rows backed by a logging credential (an OTEL trace
+  // destination). Config-callback rows leave these unset, which is how the table
+  // tells the two apart.
+  credentialName?: string;
+  destinationLabel?: string;
+  access?: CredentialAccess;
+  // The destination's whole stored credential_info. PATCH replaces
+  // credential_info wholesale, so an access edit has to resend all of it.
+  credentialInfo?: Record<string, unknown>;
+  // The set of identities that route to this destination, resolved at render
+  // time from credential_info.access. Display labels only -- ids are not
+  // surfaced here. global=true bypasses the lists.
+  resolvedScope?: ResolvedScope;
+  // Whether the backend can actually build an exporter from this credential, decided
+  // there by the same function the request-time resolver and the team/org disclosure
+  // use. Read rather than recomputed: a second implementation of the adapter rules
+  // here would drift, and the drift is what let a dead destination look active.
+  resolvesToDestination?: boolean;
+}
+
+export interface CredentialAccess {
+  global?: boolean;
+  teams?: string[];
+  orgs?: string[];
+}
+
+export interface ResolvedScope {
+  global: boolean;
+  teams: string[];
+  orgs: string[];
 }
 
 export interface AlertingVariables {

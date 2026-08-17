@@ -39,6 +39,7 @@ class _AgentOpsSettings(BaseSettings):
 def agentops_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     """Build the AgentOps config without any network I/O.
 
@@ -49,17 +50,26 @@ def agentops_preset(
     """
     settings: Final = _AgentOpsSettings()
     base: Final = config_overrides or OpenTelemetryV2Config()
+    global_exporter: Final = (
+        ()
+        if allow_missing_credentials and not settings.api_key
+        else (
+            ExporterSpec(
+                kind=_AGENTOPS_EXPORTER_KIND,
+                endpoint=_AGENTOPS_ENDPOINT,
+                options=(
+                    {"api_key": settings.api_key} if settings.api_key else None
+                ),  # mutable-ok: ExporterSpec.options is a mutable dict field
+                owner=ExporterOwner.AGENTOPS,
+            ),
+        )
+    )
     return base.model_copy(
         update={
             "exporters": [
                 *base.exporters,
-                ExporterSpec(
-                    kind=_AGENTOPS_EXPORTER_KIND,
-                    endpoint=_AGENTOPS_ENDPOINT,
-                    options=({"api_key": settings.api_key} if settings.api_key else None),
-                    owner=ExporterOwner.AGENTOPS,
-                ),
-            ],
+                *global_exporter,
+            ],  # mutable-ok: model_copy bypasses validation, so the field's declared list/dict type must be built as-is
             "resource_attributes": {
                 **base.resource_attributes,
                 "service.name": settings.service_name,

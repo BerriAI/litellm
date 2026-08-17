@@ -97,6 +97,7 @@ export default function KeyInfoView({
   const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
+
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
   const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});

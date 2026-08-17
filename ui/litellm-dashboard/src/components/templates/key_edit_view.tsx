@@ -810,6 +810,7 @@ export function KeyEditView({
           <Input value={projectDisplay ?? ""} disabled />
         </Form.Item>
       )}
+
       <Form.Item label="Router Settings">
         <RouterSettingsAccordion
           ref={routerSettingsRef}

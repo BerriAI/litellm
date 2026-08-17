@@ -150,6 +150,7 @@ export interface TeamData {
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
+    resolved_logging_exporters?: string[] | null;
     access_group_details?: TeamAccessGroupModelGrant[];
     router_settings?: Record<string, any>;
     guardrails?: string[];
@@ -248,6 +249,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   );
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
+
+  // Destinations that will receive this team's traces, resolved server-side by
+  // /team/info from credential_info.access. Names only, visible to every team viewer.
+  const scopedExportersForTeam = useMemo<string[]>(
+    () => teamData?.team_info?.resolved_logging_exporters ?? [],
+    [teamData?.team_info],
+  );
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
 
@@ -885,6 +893,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                 <LoggingSettingsView
                   loggingConfigs={info.metadata?.logging || []}
+                  scopedExporters={scopedExportersForTeam}
                   disabledCallbacks={[]}
                   variant="card"
                 />
@@ -1718,6 +1727,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <LoggingSettingsView
                       loggingConfigs={info.metadata?.logging || []}
+                      scopedExporters={scopedExportersForTeam}
                       disabledCallbacks={[]}
                       variant="inline"
                       className="pt-4 border-t border-gray-200"

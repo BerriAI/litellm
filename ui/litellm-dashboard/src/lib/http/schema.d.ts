@@ -26968,6 +26968,8 @@ export interface components {
             organization_alias?: string | null;
             /** Organization Id */
             organization_id?: string | null;
+            /** Resolved Logging Exporters */
+            resolved_logging_exporters?: string[] | null;
             /**
              * Spend
              * @default 0

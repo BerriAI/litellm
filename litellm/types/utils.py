@@ -39,7 +39,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -3199,6 +3199,22 @@ OPENAI_RESPONSE_HEADERS: Final = [
     "x-ratelimit-reset-requests",
     "x-ratelimit-reset-tokens",
 ]
+
+
+class OtelDestinationParams(TypedDict, total=False):
+    """A resolved, admin-owned OTLP destination carried server-side only.
+
+    Populated by the proxy from the exporters assigned to a request's identity
+    chain; never read from a request body or metadata. The v2 logger validates and
+    exports through it. ``callback_name`` is the OTEL backend this destination
+    belongs to, so fan-out routes each destination to the right backend's logger.
+    """
+
+    callback_name: ReadOnly[str]
+    endpoint: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, str]]
+    resource_attributes: ReadOnly[Mapping[str, str]]
+    protocol: ReadOnly[str | None]
 
 
 class StandardCallbackDynamicParams(TypedDict, total=False):

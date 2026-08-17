@@ -41,11 +41,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.utils import as_str, to_seconds
 
 if TYPE_CHECKING:
-    from litellm.types.utils import StandardLoggingPayload
+    from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
 
 @dataclass(frozen=True)
@@ -192,9 +193,10 @@ class LLMCallEvent:
     # at ``pre_call``, or when the call closed before any payload materialized (so
     # there is nothing to stamp on the span).
     payload: StandardLoggingPayload | None
+    otel_destinations: tuple[OtelDestination, ...]
     # The ``standard_callback_dynamic_params`` routing the call to a per-tenant
     # tracer (its own exporter/endpoint), or ``None`` when the call isn't scoped.
-    dynamic_params: Any
+    dynamic_params: StandardCallbackDynamicParams | None
     # True for synthetic proxy-gate logs (auth / rate-limit rejections): they fire
     # the ``pre_call`` hook but never made an upstream call, so they get no span.
     is_no_upstream_call: bool
@@ -206,6 +208,12 @@ class LLMCallEvent:
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> LLMCallEvent:
+        # Imported here rather than at module scope: this module is reachable from
+        # ``litellm/__init__`` and ``plumbing.context`` imports opentelemetry eagerly, so a
+        # top-level import makes the whole package a hard dependency of the proxy, which
+        # installs without the optional tracing extras.
+        from litellm.integrations.otel.plumbing.context import request_destinations
+
         raw_payload: Final = kwargs.get("standard_logging_object")
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
         operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
@@ -213,6 +221,7 @@ class LLMCallEvent:
         return cls(
             call_id=_call_id(payload, kwargs),
             payload=payload,
+            otel_destinations=request_destinations(),
             dynamic_params=kwargs.get("standard_callback_dynamic_params"),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             provisional_span_name=f"{operation.value} {model}".strip(),

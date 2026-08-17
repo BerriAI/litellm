@@ -1,5 +1,7 @@
 """Weave (W&B) preset."""
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.integrations.otel.model.config import (
@@ -9,18 +11,39 @@ from litellm.integrations.otel.model.config import (
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.integrations.weave.weave_otel import (
-    _get_weave_authorization_header,
+    _get_weave_authorization_header,  # pyright: ignore[reportPrivateUsage]  # shared v1 header builder
     get_weave_otel_config,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
+def weave_dynamic_headers(params: StandardCallbackDynamicParams) -> Mapping[str, str]:
+    """Per-request Weave OTLP headers from team/key dynamic params."""
+    api_key: Final = params.get("wandb_api_key")
+    project_id: Final = params.get("weave_project_id")
+    return MappingProxyType(
+        dict(
+            (
+                *((("Authorization", _get_weave_authorization_header(api_key=api_key)),) if api_key else ()),
+                *((("project_id", project_id),) if project_id else ()),
+            )
+        )
+    )
+
+
 def weave_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
-    weave_cfg: Final = get_weave_otel_config()
     base: Final = config_overrides or OpenTelemetryV2Config()
+    mappers: Final = ensure_mappers(base.mapper_names, "openinference", "weave")
+    try:
+        weave_cfg: Final = get_weave_otel_config()
+    except Exception:
+        if not allow_missing_credentials:
+            raise
+        return base.model_copy(update=MappingProxyType({"mapper_names": mappers}))
     return base.model_copy(
         update={
             "exporters": [
@@ -32,19 +55,6 @@ def weave_preset(
                     owner=ExporterOwner.WEAVE_OTEL,
                 ),
             ],
-            # Weave consumes OpenInference + a small Weave-specific overlay.
-            "mapper_names": ensure_mappers(base.mapper_names, "openinference", "weave"),
+            "mapper_names": mappers,
         }
     )
-
-
-def weave_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
-    """Per-request Weave OTLP headers from team/key dynamic params."""
-    headers: Final[dict[str, str]] = {}
-    api_key: Final = params.get("wandb_api_key")
-    if api_key:
-        headers["Authorization"] = _get_weave_authorization_header(api_key=api_key)
-    project_id: Final = params.get("weave_project_id")
-    if project_id:
-        headers["project_id"] = project_id
-    return headers

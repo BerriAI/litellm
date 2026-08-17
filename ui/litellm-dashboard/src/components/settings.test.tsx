@@ -1,9 +1,27 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FormProvider, useForm } from "react-hook-form";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall, setCallbacksCall } from "./networking";
 import Settings, { backendCallbackLogoSrc, CallbackSelector } from "./settings";
+
+type SettingsTestProps = {
+  accessToken: string | null;
+  userRole: string | null;
+  userID: string | null;
+  premiumUser: boolean;
+};
+
+// Settings (and its CloudZero cost-tracking child) renders react-query hooks, so
+// every render must sit under a QueryClientProvider. Retries off so a failed
+// query surfaces immediately instead of hanging the test.
+const renderSettings = (props: SettingsTestProps) =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <Settings {...props} />
+    </QueryClientProvider>,
+  );
 
 vi.mock("./networking", () => ({
   getCallbacksCall: vi.fn(),
@@ -40,6 +58,12 @@ vi.mock("./CloudZeroCostTracking/CloudZeroCostTracking", () => ({
   default: () => <div>Mock CloudZero Cost Tracking</div>,
 }));
 
+let credentialsFixture: { credentials: unknown[] } = { credentials: [] };
+
+vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
+  useCredentials: () => ({ data: credentialsFixture, refetch: vi.fn() }),
+}));
+
 // Polyfill ResizeObserver for components relying on it in tests
 if (typeof window !== "undefined" && !window.ResizeObserver) {
   window.ResizeObserver = class ResizeObserver {
@@ -68,7 +92,7 @@ beforeAll(() => {
 describe("Settings", () => {
   const defaultProps = {
     accessToken: "token",
-    userRole: "admin",
+    userRole: "Admin",
     userID: "user-123",
     premiumUser: false,
   };
@@ -78,6 +102,7 @@ describe("Settings", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    credentialsFixture = { credentials: [] };
     mockGetCallbacksCall.mockResolvedValue({
       callbacks: [],
       available_callbacks: [],
@@ -88,7 +113,7 @@ describe("Settings", () => {
   });
 
   it("should render the logging callbacks tab when access token is provided", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -96,7 +121,7 @@ describe("Settings", () => {
   });
 
   it("should display additional settings tabs", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
@@ -107,7 +132,7 @@ describe("Settings", () => {
   });
 
   it("should load callback configs from the backend when access token is provided", async () => {
-    render(<Settings {...defaultProps} />);
+    renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(mockGetCallbackConfigsCall).toHaveBeenCalledWith(defaultProps.accessToken);
@@ -151,7 +176,7 @@ describe("Settings", () => {
     ]);
 
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -232,7 +257,7 @@ describe("Settings", () => {
 
   it("should send the typed webhook url for an alert type when the alerting tab is saved", async () => {
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderSettings(defaultProps);
 
     await user.click(await screen.findByRole("tab", { name: "Alerting Types" }));
 
@@ -253,6 +278,58 @@ describe("Settings", () => {
     });
   });
 
+  it("should render a config-owned OTEL callback (langfuse_otel) as its own row", async () => {
+    // Regression: a proxy-wide langfuse_otel/arize/weave/generic callback configured
+    // via /config/update must stay visible and manageable in the table. It was being
+    // filtered out by backend id, removing config-owned rows (not just duplicates).
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [{ name: "langfuse_otel", variables: { LANGFUSE_PUBLIC_KEY: "pk", LANGFUSE_SECRET_KEY: "sk" } }],
+      available_callbacks: {
+        langfuse_otel: {
+          litellm_callback_name: "langfuse_otel",
+          litellm_callback_params: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"],
+          ui_callback_name: "Langfuse OTEL",
+        },
+      },
+      alerts: [],
+    });
+    mockGetCallbackConfigsCall.mockResolvedValue([
+      { id: "langfuse_otel", displayName: "Langfuse OTEL", dynamic_params: {} },
+    ]);
+
+    const { getByText } = renderSettings(defaultProps);
+
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(getByText("Langfuse OTEL")).toBeInTheDocument();
+    });
+  });
+
+  it("should keep rendering every destination when one stored access scope is not a list", async () => {
+    credentialsFixture = {
+      credentials: [
+        {
+          credential_name: "legacy-shape",
+          credential_info: { credential_type: "logging", description: "langfuse_otel", access: { teams: "team-1" } },
+        },
+        {
+          credential_name: "well-formed",
+          credential_info: { credential_type: "logging", description: "langfuse_otel", access: { teams: ["team-2"] } },
+        },
+      ],
+    };
+
+    const { getByText } = renderSettings(defaultProps);
+
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    expect(getByText("legacy-shape")).toBeInTheDocument();
+    expect(getByText("well-formed")).toBeInTheDocument();
+  });
+
   it("should hold the callbacks table in loading state until the fetch settles", async () => {
     let resolveCallbacks: (value: {
       callbacks: never[];
@@ -265,7 +342,7 @@ describe("Settings", () => {
       }),
     );
 
-    render(<Settings {...defaultProps} />);
+    renderSettings(defaultProps);
 
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
 
@@ -280,7 +357,7 @@ describe("Settings", () => {
   });
 
   it("should resolve loading without fetching when the user id is missing", async () => {
-    render(<Settings {...defaultProps} userID={null as unknown as string} />);
+    renderSettings({ ...defaultProps, userID: null });
 
     await waitFor(() => {
       expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
@@ -290,7 +367,7 @@ describe("Settings", () => {
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = renderSettings(defaultProps);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -347,5 +424,48 @@ describe("CallbackSelector logos", () => {
     expect(screen.getByAltText("Hosted logo")).toHaveAttribute("src", "https://logos.example.com/hosted.png");
     expect(screen.queryByAltText("NoLogo logo")).toBeNull();
     expect(screen.getByText("N")).toBeInTheDocument();
+  });
+});
+
+describe("Add Callback dropdown", () => {
+  // Regression: the four OTEL backend ids were filtered out of the config-owned
+  // callback list and re-added as destinations under the SAME ids, so picking "Arize"
+  // silently switched from creating a proxy-wide callback (/config/update) to creating
+  // a by-default-inert logging credential (/credentials). Both paths must be offered,
+  // and distinguishable, so the pre-existing flow still exists.
+  const defaultProps = {
+    accessToken: "token",
+    userRole: "Admin",
+    userID: "user-123",
+    premiumUser: false,
+  };
+
+  it("offers the config-owned OTEL callback and the scoped destination as separate options", async () => {
+    vi.clearAllMocks();
+    vi.mocked(alertingSettingsCall).mockResolvedValue([]);
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      callbacks: [],
+      available_callbacks: {
+        arize: {
+          litellm_callback_name: "arize",
+          litellm_callback_params: ["ARIZE_SPACE_ID", "ARIZE_API_KEY"],
+          ui_callback_name: "Arize",
+        },
+      },
+      alerts: [],
+    });
+    vi.mocked(getCallbackConfigsCall).mockResolvedValue([{ id: "arize", displayName: "Arize", dynamic_params: {} }]);
+
+    const user = userEvent.setup();
+    const { getByText } = renderSettings(defaultProps);
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+
+    await user.click(getByText("Add Callback"));
+    await user.click(await screen.findByRole("combobox"));
+
+    expect(await screen.findByText("Arize")).toBeInTheDocument();
+    expect(screen.getByText("Arize (scoped destination)")).toBeInTheDocument();
   });
 });
