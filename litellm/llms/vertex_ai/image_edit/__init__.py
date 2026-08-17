@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -11,8 +13,8 @@ from .vertex_imagen_transformation import VertexAIImagenImageEditConfig
 __all__ = [
     "VertexAIGeminiImageEditConfig",
     "VertexAIImagenImageEditConfig",
-    "get_vertex_ai_image_edit_config",
     "cost_calculator",
+    "get_vertex_ai_image_edit_config",
 ]
 
 
@@ -31,7 +33,7 @@ def get_vertex_ai_image_edit_config(model: str) -> BaseImageEditConfig:
         BaseImageEditConfig: The appropriate configuration class
     """
     # Determine the model route
-    model_route = get_vertex_ai_model_route(model)
+    model_route: Final = get_vertex_ai_model_route(model)
 
     if model_route == VertexAIModelRoute.GEMINI:
         # Gemini models use generateContent API

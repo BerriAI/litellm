@@ -4,16 +4,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { teamDetailHref } from "@/utils/entityLinks";
 import { createTeamAliasMap } from "@/utils/teamUtils";
-import type { ColumnsType } from "antd/es/table";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
-import MemberTable from "../common_components/MemberTable";
+import MemberTable, { type MemberTableColumn } from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
@@ -68,7 +68,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         user_id: values.user_id,
         role: values.role,
       };
-      const response = await organizationMemberAddCall(accessToken, organizationId, member);
+      await organizationMemberAddCall(accessToken, organizationId, member);
 
       NotificationsManager.success("Organization member added successfully");
       setIsAddMemberModalVisible(false);
@@ -89,7 +89,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         role: values.role,
       };
 
-      const response = await organizationMemberUpdateCall(accessToken, organizationId, member);
+      await organizationMemberUpdateCall(accessToken, organizationId, member);
       NotificationsManager.success("Organization member updated successfully");
       setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
@@ -121,7 +121,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     return <div className="p-4">Organization not found</div>;
   }
 
-  const orgExtraColumns: ColumnsType<Member> = [
+  const orgExtraColumns: MemberTableColumn[] = [
     {
       title: "Spend (USD)",
       key: "spend",
@@ -220,13 +220,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <p className="text-sm text-muted-foreground">Models</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {orgData.models.length === 0 ? (
-                    <Badge variant="secondary">All proxy models</Badge>
+                    <BadgeLink>All proxy models</BadgeLink>
                   ) : (
-                    orgData.models.map((model, index) => (
-                      <Badge key={index} variant="secondary">
-                        {model}
-                      </Badge>
-                    ))
+                    orgData.models.map((model, index) => <BadgeLink key={index}>{model}</BadgeLink>)
                   )}
                 </div>
               </CardContent>
@@ -237,9 +233,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <p className="text-sm text-muted-foreground">Teams</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {orgData.teams?.map((team, index) => (
-                    <Badge key={index} variant="secondary">
+                    <BadgeLink key={index} href={teamDetailHref(team.team_id)}>
                       {teamAliasMap[team.team_id] || team.team_id}
-                    </Badge>
+                    </BadgeLink>
                   ))}
                 </div>
               </CardContent>
@@ -309,9 +305,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <p className="font-medium text-foreground">Models</p>
                     <div className="mt-1 flex flex-wrap gap-2">
                       {orgData.models.map((model, index) => (
-                        <Badge key={index} variant="secondary">
-                          {model}
-                        </Badge>
+                        <BadgeLink key={index}>{model}</BadgeLink>
                       ))}
                     </div>
                   </div>

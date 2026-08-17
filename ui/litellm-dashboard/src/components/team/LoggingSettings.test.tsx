@@ -1,6 +1,5 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, fireEvent } from "../../../tests/test-utils";
 import LoggingSettings from "./LoggingSettings";
 
@@ -10,7 +9,6 @@ describe("LoggingSettings", () => {
   });
 
   it("passes a number to updateCallbackVar when user inputs a number in NumericalInput", async () => {
-    const user = userEvent.setup();
     const mockOnChange = vi.fn();
 
     // Create initial config with a callback that has number parameters (LangSmith has langsmith_sampling_rate)

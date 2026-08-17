@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
@@ -39,11 +39,21 @@ vi.mock("../EndpointUsage/EndpointUsage", () => ({
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
-  default: () => <div>Top Keys</div>,
+  default: ({ topKeys }: { topKeys: { api_key: string; spend: number }[] }) => (
+    <div>
+      <span>Top Keys</span>
+      <span>{`top-keys:${topKeys.map((row) => `${row.api_key}=${row.spend}`).join("|")}`}</span>
+    </div>
+  ),
 }));
 
 vi.mock("./TopModelView", () => ({
-  default: () => <div>Top Models</div>,
+  default: ({ topModels }: { topModels: { key: string; spend: number }[] }) => (
+    <div>
+      <span>Top Models</span>
+      <span>{`top-models:${topModels.map((row) => `${row.key}=${row.spend}`).join("|")}`}</span>
+    </div>
+  ),
 }));
 
 vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
@@ -490,18 +500,33 @@ describe("EntityUsage", () => {
     expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
   });
 
-  const selectedPanels = (container: HTMLElement) =>
-    Array.from(container.querySelectorAll("div.tremor-TabPanel-root")).filter(
-      (panel) => panel.getAttribute("aria-selected") === "true",
-    );
+  // An inactive tab panel is marked aria-selected="false" by one tab library and hidden by the
+  // other, so treat either as "not on screen" and the assertion holds whichever one is rendering.
+  const isShowing = (element: HTMLElement): boolean => {
+    for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden")) return false;
+      if (node.getAttribute("aria-selected") === "false") return false;
+    }
+    return true;
+  };
 
-  it.each([
+  const showingCount = (marker: string): number => screen.queryAllByText(marker).filter(isShowing).length;
+
+  const showingText = (text: string): HTMLElement => {
+    const [element] = screen.getAllByText(text).filter(isShowing);
+    expect(element).toBeDefined();
+    return element;
+  };
+
+  const NON_TEAM_PANELS: [string, string][] = [
     ["Cost", "Tag Spend Overview"],
-    ["Model Activity", "metrics-source:models"],
+    ["Model Activity", "metrics-source:model_groups"],
     ["Key Activity", "metrics-source:api_keys"],
     ["Endpoint Activity", "Endpoint Usage Panel"],
-  ])("shows only the %s panel for a non-team entity type", async (tabLabel, marker) => {
-    const { container } = render(<EntityUsage {...defaultProps} />);
+  ];
+
+  it.each(NON_TEAM_PANELS)("shows only the %s panel for a non-team entity type", async (tabLabel, marker) => {
+    render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
@@ -511,19 +536,23 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText(tabLabel));
     });
 
-    const selected = selectedPanels(container);
-    expect(selected).toHaveLength(1);
-    expect(selected[0].textContent).toContain(marker);
+    expect(showingCount(marker)).toBeGreaterThan(0);
+    for (const [otherLabel, otherMarker] of NON_TEAM_PANELS) {
+      if (otherLabel === tabLabel) continue;
+      expect(showingCount(otherMarker)).toBe(0);
+    }
   });
 
-  it.each([
+  const TEAM_PANELS: [string, string][] = [
     ["Cost", "Team Spend Overview"],
-    ["Model Activity", "metrics-source:models"],
+    ["Model Activity", "metrics-source:model_groups"],
     ["Agent Activity", "metrics-source:entities"],
     ["Key Activity", "metrics-source:api_keys"],
     ["Endpoint Activity", "Endpoint Usage Panel"],
-  ])("shows only the %s panel for the team entity type", async (tabLabel, marker) => {
-    const { container } = render(<EntityUsage {...defaultProps} entityType="team" />);
+  ];
+
+  it.each(TEAM_PANELS)("shows only the %s panel for the team entity type", async (tabLabel, marker) => {
+    render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
       expect(mockTeamDailyActivityCall).toHaveBeenCalled();
@@ -533,9 +562,11 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText(tabLabel));
     });
 
-    const selected = selectedPanels(container);
-    expect(selected).toHaveLength(1);
-    expect(selected[0].textContent).toContain(marker);
+    expect(showingCount(marker)).toBeGreaterThan(0);
+    for (const [otherLabel, otherMarker] of TEAM_PANELS) {
+      if (otherLabel === tabLabel) continue;
+      expect(showingCount(otherMarker)).toBe(0);
+    }
   });
 
   it("should handle empty data gracefully", async () => {
@@ -584,15 +615,40 @@ describe("EntityUsage", () => {
     expect(screen.getByText("Request / Token Consumption")).toBeInTheDocument();
   });
 
-  it("should display Top Models title for non-agent entity types", async () => {
+  it("should display Top Public Model Names title for non-agent entity types", async () => {
     render(<EntityUsage {...defaultProps} entityType="tag" />);
 
     await waitFor(() => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    const topModelsElements = screen.getAllByText("Top Models");
-    expect(topModelsElements.length).toBeGreaterThan(0);
+    expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+  });
+
+  it("defaults Model Activity to public model names and toggles to litellm models", async () => {
+    const { container } = render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByText("Model Activity"));
+    });
+
+    expect(showingCount("metrics-source:model_groups")).toBeGreaterThan(0);
+
+    act(() => {
+      fireEvent.click(showingText("Litellm Model Name"));
+    });
+
+    expect(showingCount("metrics-source:models")).toBeGreaterThan(0);
+
+    act(() => {
+      fireEvent.click(showingText("Public Model Name"));
+    });
+
+    expect(showingCount("metrics-source:model_groups")).toBeGreaterThan(0);
   });
 
   it("should display Top Agents title for agent entity type", async () => {
@@ -830,6 +886,47 @@ describe("EntityUsage", () => {
     expect(logo.getAttribute("src")).toContain("openai_small");
   });
 
+  describe("capability gating", () => {
+    it.each([
+      ["organization", () => mockOrganizationDailyActivityCall, "Organization Spend Overview"],
+      ["agent", () => mockAgentDailyActivityCall, "Agent Spend Overview"],
+    ] as const)("fetches %s activity for an admin but not for an internal user", async (entityType, call, heading) => {
+      render(<EntityUsage {...defaultProps} entityType={entityType} />);
+      await waitFor(() => {
+        expect(call()).toHaveBeenCalled();
+      });
+
+      cleanup();
+      call().mockClear();
+
+      render(<EntityUsage {...defaultProps} entityType={entityType} userRole="Internal User" />);
+      expect(await screen.findByText(heading)).toBeInTheDocument();
+      expect(call()).not.toHaveBeenCalled();
+    });
+
+    it("keeps the team breakdown but drops its agent sub-fetch for an internal user", async () => {
+      render(<EntityUsage {...defaultProps} entityType="team" userRole="Internal User" />);
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(screen.getByText("Team Spend Overview")).toBeInTheDocument();
+
+      expect(mockAgentDailyActivityCall).not.toHaveBeenCalled();
+      expect(screen.queryByText("Agent Activity")).not.toBeInTheDocument();
+      expect(screen.queryByText("Top Agents Driving Spend")).not.toBeInTheDocument();
+    });
+
+    it("keeps the tag breakdown for an internal user", async () => {
+      render(<EntityUsage {...defaultProps} entityType="tag" userRole="Internal User" />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
+    });
+  });
+
   it("renders a letter avatar instead of an img for an unknown provider slug", async () => {
     const spendDataUnknownProvider = {
       ...mockSpendData,
@@ -854,5 +951,40 @@ describe("EntityUsage", () => {
     });
     expect(screen.queryByAltText("zzz-internal logo")).not.toBeInTheDocument();
     expect(screen.getByText("z")).toBeInTheDocument();
+  });
+
+  it("feeds the key, model and agent tables from their own breakdowns", async () => {
+    const usageMetrics = {
+      spend: 30.75,
+      api_requests: 300,
+      successful_requests: 290,
+      failed_requests: 10,
+      total_tokens: 15000,
+      prompt_tokens: 9000,
+      completion_tokens: 6000,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    };
+    mockTeamDailyActivityCall.mockResolvedValue({
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            model_groups: { "gpt-4o": { metrics: { ...usageMetrics, spend: 70.25 }, metadata: {} } },
+            api_keys: { "sk-abc": { metrics: usageMetrics, metadata: { key_alias: "prod-key", team_id: null } } },
+          },
+        },
+      ],
+    });
+
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("top-keys:sk-abc=30.75")).toBeInTheDocument();
+    });
+    expect(screen.getByText("top-models:gpt-4o=70.25")).toBeInTheDocument();
+    expect(screen.getByText(/^top-models:Code Review Agent=/)).toBeInTheDocument();
   });
 });

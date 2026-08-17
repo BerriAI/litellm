@@ -29,6 +29,26 @@ async function globalSetup() {
   if (!settingsRes.ok()) {
     throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status()}): ${await settingsRes.text()}`);
   }
+
+  for (const { email, password, seedApiRole } of Object.values(users)) {
+    if (!seedApiRole) {
+      continue;
+    }
+    const createRes = await api.post(`${UI_BASE_URL}${rootPath}/user/new`, {
+      headers: { Authorization: `Bearer ${masterKey}` },
+      data: { user_email: email, user_role: seedApiRole, auto_create_key: false },
+    });
+    if (!createRes.ok() && createRes.status() !== 409) {
+      throw new Error(`Seeding user ${email} failed (${createRes.status()}): ${await createRes.text()}`);
+    }
+    const passwordRes = await api.post(`${UI_BASE_URL}${rootPath}/user/update`, {
+      headers: { Authorization: `Bearer ${masterKey}` },
+      data: { user_email: email, password },
+    });
+    if (!passwordRes.ok()) {
+      throw new Error(`Setting password for ${email} failed (${passwordRes.status()}): ${await passwordRes.text()}`);
+    }
+  }
   await api.dispose();
 
   for (const role of Object.values(Role)) {

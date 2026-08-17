@@ -8,7 +8,8 @@
 #   route      : anthropic | azure_foundry | bedrock_converse | bedrock_invoke | vertex
 #   capability : basic | tool_use | vision | thinking | prompt_cache_5m | prompt_cache_1h
 #              | structured_output | pdf_input | long_context_1m
-#              | thinking_with_tool_use | tool_search | count_tokens | web_search
+#              | thinking_with_tool_use | tool_search | tool_search_history | count_tokens
+#              | web_search
 #   streaming  : stream | nonstream
 
 # ---- basic / non-streaming ----
@@ -94,6 +95,7 @@
 - {id: llm.messages.bedrock_converse.tool_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: tool_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "tool_search discovery tool over Bedrock Converse"}
 - {id: llm.messages.bedrock_invoke.tool_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: tool_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "tool_search discovery tool over Bedrock Invoke"}
 - {id: llm.messages.vertex.tool_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: tool_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "tool_search discovery tool over Vertex AI"}
+- {id: llm.messages.bedrock_invoke.tool_search_history.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: tool_search_history, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "A real server_tool_use / tool_search_tool_result pair replayed as history over Bedrock Invoke"}
 
 # ---- count_tokens ----
 - {id: llm.messages.anthropic.count_tokens.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: count_tokens, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "/v1/messages/count_tokens over Anthropic direct"}
@@ -106,5 +108,5 @@
 - {id: llm.messages.anthropic.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: anthropic, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Anthropic direct"}
 - {id: llm.messages.azure_foundry.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: azure_foundry, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Azure AI Foundry"}
 - {id: llm.messages.bedrock_converse.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_converse, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Bedrock Converse"}
-- {id: llm.messages.bedrock_invoke.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Bedrock Invoke"}
+- {id: llm.messages.bedrock_invoke.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: bedrock_invoke, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Claude Code's client-side WebSearch tool over Bedrock Invoke; the Anthropic-managed web_search server tool is covered by llm.messages.bedrock_invoke.web_search_server_tool.nonstream.works"}
 - {id: llm.messages.vertex.web_search.nonstream.works, module: llm, tier: P1, subject_endpoint: messages, route: vertex, capability: web_search, streaming: nonstream, assertions: [works], source: "claude_code compat matrix", rationale: "Web search server tool over Vertex AI"}
