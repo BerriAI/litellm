@@ -175,6 +175,12 @@
     "base_class": "openai_gpt",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "tiyuvta": {
+    "base_url": "https://api.tiyuvta.ai/v1",
+    "api_key_env": "TIYUVTA_API_KEY",
+    "api_base_env": "TIYUVTA_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/completions"]
+  },
   "pinstripes": {
     "base_url": "https://pinstripes.io/v1",
     "api_key_env": "PINSTRIPES_API_KEY",
