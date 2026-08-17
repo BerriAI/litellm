@@ -1244,7 +1244,7 @@ One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
-    created_at: int
+    created_at: Optional[int] = None
     error: Optional[dict] = None
     incomplete_details: Optional[IncompleteDetails] = None
     instructions: Optional[str] = None

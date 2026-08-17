@@ -2,7 +2,7 @@ import asyncio
 import os
 import sys
 from typing import Optional
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -219,13 +219,11 @@ class TestAssistantMessageImageUrlContent:
         # convert to list to consume it — this must not raise ValidationError.
         content_blocks = list(raw_content) if raw_content is not None else []
 
-        assert (
-            len(content_blocks) == 2
-        ), f"Expected 2 content blocks (text + image_url), got {len(content_blocks)}: {content_blocks}"
+        assert len(content_blocks) == 2, (
+            f"Expected 2 content blocks (text + image_url), got {len(content_blocks)}: {content_blocks}"
+        )
         types = [b.get("type") for b in content_blocks if isinstance(b, dict)]
-        assert (
-            "image_url" in types
-        ), f"image_url block was silently dropped; blocks: {content_blocks}"
+        assert "image_url" in types, f"image_url block was silently dropped; blocks: {content_blocks}"
 
     def test_assistant_message_image_url_preserved_in_all_message_values(self):
         """
@@ -257,16 +255,12 @@ class TestAssistantMessageImageUrlContent:
         assert assistant is not None, "Assistant message missing after serialisation"
 
         content = assistant.get("content", [])
-        assert isinstance(
-            content, list
-        ), f"content should be a list, got {type(content)}"
-        assert (
-            len(content) == 2
-        ), f"Expected 2 content blocks (text + image_url), got {len(content)}: {content}"
+        assert isinstance(content, list), f"content should be a list, got {type(content)}"
+        assert len(content) == 2, f"Expected 2 content blocks (text + image_url), got {len(content)}: {content}"
         types = [b.get("type") for b in content if isinstance(b, dict)]
-        assert (
-            "image_url" in types
-        ), f"image_url block was silently dropped during AllMessageValues serialisation; blocks: {content}"
+        assert "image_url" in types, (
+            f"image_url block was silently dropped during AllMessageValues serialisation; blocks: {content}"
+        )
 
 
 class TestResponsesAPIReasoningNullFields:
@@ -298,9 +292,7 @@ class TestResponsesAPIReasoningNullFields:
 
     def test_reasoning_item_null_fields_removed_model_dump(self):
         """Null status/content/encrypted_content should be absent from model_dump."""
-        response = self._make_response(
-            output=[{"id": "rs_abc", "type": "reasoning", "summary": []}]
-        )
+        response = self._make_response(output=[{"id": "rs_abc", "type": "reasoning", "summary": []}])
         dumped = response.model_dump()
         reasoning = dumped["output"][0]
         assert "status" not in reasoning
@@ -309,9 +301,7 @@ class TestResponsesAPIReasoningNullFields:
 
     def test_reasoning_item_null_fields_removed_model_dump_json(self):
         """Null fields should also be absent from model_dump_json."""
-        response = self._make_response(
-            output=[{"id": "rs_abc", "type": "reasoning", "summary": []}]
-        )
+        response = self._make_response(output=[{"id": "rs_abc", "type": "reasoning", "summary": []}])
         parsed = json.loads(response.model_dump_json())
         reasoning = parsed["output"][0]
         assert "status" not in reasoning
@@ -382,16 +372,8 @@ class TestResponsesAPIReasoningNullFields:
             ]
         )
         dumped = response.model_dump()
-        reasoning = [
-            o
-            for o in dumped["output"]
-            if isinstance(o, dict) and o.get("type") == "reasoning"
-        ][0]
-        message = [
-            o
-            for o in dumped["output"]
-            if isinstance(o, dict) and o.get("type") == "message"
-        ][0]
+        reasoning = [o for o in dumped["output"] if isinstance(o, dict) and o.get("type") == "reasoning"][0]
+        message = [o for o in dumped["output"] if isinstance(o, dict) and o.get("type") == "message"][0]
         assert "status" not in reasoning
         assert "content" not in reasoning
         assert message["status"] == "completed"
@@ -399,9 +381,7 @@ class TestResponsesAPIReasoningNullFields:
 
     def test_reasoning_core_fields_preserved(self):
         """id, type, summary should always be present on reasoning items."""
-        response = self._make_response(
-            output=[{"id": "rs_abc", "type": "reasoning", "summary": ["thinking..."]}]
-        )
+        response = self._make_response(output=[{"id": "rs_abc", "type": "reasoning", "summary": ["thinking..."]}])
         dumped = response.model_dump()
         reasoning = dumped["output"][0]
         assert reasoning["id"] == "rs_abc"
@@ -410,9 +390,7 @@ class TestResponsesAPIReasoningNullFields:
 
     def test_top_level_null_fields_unaffected(self):
         """Top-level response fields with None should not be affected."""
-        response = self._make_response(
-            output=[{"id": "rs_abc", "type": "reasoning", "summary": []}]
-        )
+        response = self._make_response(output=[{"id": "rs_abc", "type": "reasoning", "summary": []}])
         dumped = response.model_dump()
         assert "error" in dumped
         assert dumped["error"] is None
@@ -453,3 +431,101 @@ def test_openai_file_object_accepts_pending_status():
         status="pending",
     )
     assert file_obj.status == "pending"
+
+
+class TestResponsesAPICreatedAtOptional:
+    """
+    Regression pin for #37159.
+
+    Azure OpenAI's GET /v1/responses/{id} returns `created_at: null` (along
+    with `id: null` and `output: null`) while a response is still
+    `in_progress` or `queued`. The Responses API spec lets the caller poll
+    for completion, so the proxy must accept the in-progress payload
+    rather than 500'ing on a pydantic ValidationError.
+
+    `created_at` is now `Optional[int] = None` so the model parses the
+    Azure in-progress payload cleanly. The `id` and `output` fields are
+    already nullable at a downstream layer (the transform/normalization
+    step) so they are not changed here.
+    """
+
+    def test_accepts_null_created_at_when_in_progress(self):
+        """The model must accept `created_at: null` from an Azure in-progress poll."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            id="resp_abc",
+            created_at=None,
+            model="gpt-5.1",
+            object="response",
+            status="queued",
+            output=[],
+        )
+        assert response.created_at is None
+        assert response.status == "queued"
+
+    def test_accepts_int_created_at_when_completed(self):
+        """The model must still accept `created_at: int` for completed responses."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            id="resp_abc",
+            created_at=1786954807,
+            model="gpt-5.1",
+            object="response",
+            status="completed",
+            output=[],
+        )
+        assert response.created_at == 1786954807
+        assert isinstance(response.created_at, int)
+
+    def test_omits_created_at_payload(self):
+        """A round-trip without `created_at` should default to None, not raise."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            id="resp_abc",
+            model="gpt-5.1",
+            object="response",
+            status="in_progress",
+            output=[],
+        )
+        assert response.created_at is None
+        # And the dumped payload should serialize None as null, matching
+        # the Azure in-progress wire shape.
+        dumped = response.model_dump()
+        assert dumped["created_at"] is None
+
+    def test_transform_get_response_api_response_accepts_null_created_at(self):
+        """The OpenAI transform path must not raise when `created_at` is null.
+
+        This is the path that surfaces HTTP 500 to the caller when the
+        Azure in-progress payload reaches the proxy. Before the fix,
+        `ResponsesAPIResponse(**payload)` raised pydantic ValidationError,
+        which the transform wrapped as `OpenAIError` / `APIConnectionError`,
+        and the proxy returned 500. After the fix, the transform returns
+        a valid `ResponsesAPIResponse` with `created_at=None`, which the
+        caller can poll.
+        """
+        import httpx
+        from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+        config = OpenAIResponsesAPIConfig()
+        raw_response = httpx.Response(
+            200,
+            json={
+                "id": "resp_abc",
+                "created_at": None,
+                "model": "gpt-5.1",
+                "object": "response",
+                "status": "queued",
+                "output": [],
+            },
+        )
+        logging_obj = MagicMock()  # placeholder — logging is not exercised here
+        transformed = config.transform_get_response_api_response(
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+        assert transformed.created_at is None
+        assert transformed.status == "queued"
