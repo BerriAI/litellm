@@ -1964,11 +1964,18 @@ describe("EntityUsageExport utils", () => {
 
       handleExportCSV(mockSpendData, "daily", "Team", "team", mockTeamAliasMap);
 
-      expect(Papa.unparse).toHaveBeenCalled();
-      expect(createObjectURLSpy).toHaveBeenCalled();
+      const unparsedRows = vi.mocked(Papa.unparse).mock.calls[0][0] as Record<string, unknown>[];
+      expect(unparsedRows).toHaveLength(3);
+      const day1Team1 = unparsedRows.find((r) => r["Date"] === "2025-01-01" && r["Team ID"] === "team-1");
+      expect(day1Team1?.["Cache Read Input Tokens"]).toBe(50);
+
+      const exportedBlob = createObjectURLSpy.mock.calls[0][0] as Blob;
+      expect(exportedBlob.type).toBe("text/csv;charset=utf-8;");
+
       expect(createElementSpy).toHaveBeenCalledWith("a");
-      expect(appendChildSpy).toHaveBeenCalled();
-      expect(removeChildSpy).toHaveBeenCalled();
+      const attached = appendChildSpy.mock.calls[0][0] as HTMLAnchorElement;
+      expect(attached.download).toMatch(/^team_usage_daily_.*\.csv$/);
+      expect(removeChildSpy).toHaveBeenCalledWith(attached);
     });
 
     it("should generate correct filename", () => {
@@ -2028,10 +2035,13 @@ describe("EntityUsageExport utils", () => {
 
       handleExportJSON(mockSpendData, "daily", "Team", "team", mockDateRange, [], mockTeamAliasMap);
 
-      expect(createObjectURLSpy).toHaveBeenCalled();
+      const exportedBlob = createObjectURLSpy.mock.calls[0][0] as Blob;
+      expect(exportedBlob.type).toBe("application/json");
+
       expect(createElementSpy).toHaveBeenCalledWith("a");
-      expect(appendChildSpy).toHaveBeenCalled();
-      expect(removeChildSpy).toHaveBeenCalled();
+      const attached = appendChildSpy.mock.calls[0][0] as HTMLAnchorElement;
+      expect(attached.download).toMatch(/^team_usage_daily_.*\.json$/);
+      expect(removeChildSpy).toHaveBeenCalledWith(attached);
     });
 
     it("should generate correct filename", () => {
