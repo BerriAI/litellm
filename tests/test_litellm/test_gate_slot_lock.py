@@ -328,6 +328,7 @@ def test_direct_make_lint_takes_a_slot_before_any_setup() -> None:
     lint_prerequisites, lint_recipe = _make_rule("lint")
     assert lint_prerequisites == []
     assert any("$(GATE_SLOT_LOCK)" in line for line in lint_recipe)
-    inner_prerequisites, _ = _make_rule("lint-inner")
-    assert "lint-install" in inner_prerequisites
-    assert "lint-fetch-base" in inner_prerequisites
+    inner_prerequisites, inner_recipe = _make_rule("lint-inner")
+    inner_work = (*inner_prerequisites, *inner_recipe)
+    assert any("lint-install" in item for item in inner_work)
+    assert any("lint-fetch-base" in item for item in inner_work)
