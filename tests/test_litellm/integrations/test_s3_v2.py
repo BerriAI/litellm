@@ -1388,3 +1388,375 @@ def test_s3_server_side_encryption_read_from_callback_params():
         assert logger.s3_server_side_encryption == "aws:kms"
     finally:
         litellm.s3_callback_params = original
+
+
+@pytest.mark.asyncio
+async def test_async_upload_sets_sse_kms_key_id_header_when_configured():
+    """
+    When s3_sse_kms_key_id is set alongside aws:kms, the PUT must carry
+    x-amz-server-side-encryption-aws-kms-key-id so objects are encrypted
+    with the customer-managed KMS key instead of the bucket default.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_server_side_encryption="aws:kms",
+        s3_sse_kms_key_id="arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-sse-kms.json",
+        payload={"test": "sse-kms"},
+        s3_object_download_filename="test-sse-kms.json",
+    )
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(test_element)
+
+    headers = logger.async_httpx_client.put.call_args.kwargs["headers"]
+    assert headers["x-amz-server-side-encryption"] == "aws:kms"
+    assert headers["x-amz-server-side-encryption-aws-kms-key-id"] == (
+        "arn:aws:kms:us-east-1:111122223333:key/test-key-id"
+    )
+
+
+def test_sync_upload_sets_sse_kms_key_id_header_when_configured():
+    """The sync upload path must carry the same SSE-KMS headers."""
+    from unittest.mock import MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_server_side_encryption="aws:kms",
+        s3_sse_kms_key_id="arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-sync-sse-kms.json",
+        payload={"test": "sync-sse-kms"},
+        s3_object_download_filename="test-sync-sse-kms.json",
+    )
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    mock_sync_client = MagicMock()
+    mock_sync_client.put.return_value = response
+
+    with patch(
+        "litellm.integrations.s3_v2._get_httpx_client",
+        return_value=mock_sync_client,
+    ):
+        logger.upload_data_to_s3(test_element)
+
+    headers = mock_sync_client.put.call_args.kwargs["headers"]
+    assert headers["x-amz-server-side-encryption"] == "aws:kms"
+    assert headers["x-amz-server-side-encryption-aws-kms-key-id"] == (
+        "arn:aws:kms:us-east-1:111122223333:key/test-key-id"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_upload_omits_kms_key_id_header_when_not_configured():
+    """SSE without a key id must not emit the KMS key id header."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_server_side_encryption="AES256",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-aes256.json",
+        payload={"test": "aes256"},
+        s3_object_download_filename="test-aes256.json",
+    )
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(test_element)
+
+    headers = logger.async_httpx_client.put.call_args.kwargs["headers"]
+    assert headers["x-amz-server-side-encryption"] == "AES256"
+    assert "x-amz-server-side-encryption-aws-kms-key-id" not in headers
+
+
+def test_s3_sse_kms_key_id_read_from_callback_params():
+    """s3_sse_kms_key_id can be configured via s3_callback_params."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "from-global",
+        "s3_server_side_encryption": "aws:kms",
+        "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+    }
+    try:
+        logger = S3Logger()
+        assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/test-key-id")
+    finally:
+        litellm.s3_callback_params = original
+
+
+@pytest.mark.asyncio
+async def test_async_upload_infers_aws_kms_when_only_key_id_set():
+    """
+    Setting only s3_sse_kms_key_id must not produce an invalid request
+    (S3 rejects a key id without an algorithm); aws:kms is inferred.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_sse_kms_key_id="arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-kms-only.json",
+        payload={"test": "kms-only"},
+        s3_object_download_filename="test-kms-only.json",
+    )
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(test_element)
+
+    headers = logger.async_httpx_client.put.call_args.kwargs["headers"]
+    assert headers["x-amz-server-side-encryption"] == "aws:kms"
+    assert headers["x-amz-server-side-encryption-aws-kms-key-id"] == (
+        "arn:aws:kms:us-east-1:111122223333:key/test-key-id"
+    )
+
+
+def test_s3_sse_kms_key_id_read_from_audit_override_params():
+    """The audit-log override path must honor s3_sse_kms_key_id too."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {"s3_bucket_name": "normal-logs-bucket"}
+    try:
+        logger = S3Logger(
+            s3_callback_params_override={
+                "s3_bucket_name": "audit-logs-bucket",
+                "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/audit-key-id",
+            }
+        )
+        assert logger.s3_bucket_name == "audit-logs-bucket"
+        assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/audit-key-id")
+    finally:
+        litellm.s3_callback_params = original
+
+
+def test_kms_key_id_dropped_when_algorithm_is_not_kms():
+    """
+    AES256 plus a KMS key id is an invalid S3 combination; the key id must be
+    dropped at init so uploads keep working instead of silently 400ing.
+    """
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "from-global",
+        "s3_server_side_encryption": "AES256",
+        "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+    }
+    try:
+        logger = S3Logger()
+        assert logger.s3_server_side_encryption == "AES256"
+        assert logger.s3_sse_kms_key_id is None
+    finally:
+        litellm.s3_callback_params = original
+
+
+def test_non_string_algorithm_is_dropped_and_valid_key_id_is_rescued():
+    """
+    A YAML boolean in s3_server_side_encryption must not crash logger init and
+    must not discard the valid key id; aws:kms is inferred from the key id.
+    """
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "from-global",
+        "s3_server_side_encryption": True,
+        "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+    }
+    try:
+        logger = S3Logger()
+        assert logger.s3_server_side_encryption == "aws:kms"
+        assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/test-key-id")
+    finally:
+        litellm.s3_callback_params = original
+
+
+def test_non_string_key_id_is_dropped_and_valid_algorithm_is_kept():
+    """A mistyped key id (unquoted YAML number) must not disable the valid algorithm."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "from-global",
+        "s3_server_side_encryption": "aws:kms",
+        "s3_sse_kms_key_id": 12345,
+    }
+    try:
+        logger = S3Logger()
+        assert logger.s3_server_side_encryption == "aws:kms"
+        assert logger.s3_sse_kms_key_id is None
+    finally:
+        litellm.s3_callback_params = original
+
+
+_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+_SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+_KEY_WITH_SPACE = "LOGS/LLM AI Projects/2026-08-04/time-13-01-00-abc.json"
+
+
+def _signature_for(signer_cls, url: str, method: str, body: bytes | None, headers: dict[str, str]) -> str:
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    sent = {name.lower(): value for name, value in headers.items()}
+    signed_header_names = sent["authorization"].split("SignedHeaders=")[1].split(", ")[0].split(";")
+    request = AWSRequest(
+        method=method,
+        url=url,
+        data=body,
+        headers={name: sent[name] for name in signed_header_names if name in sent},
+    )
+    request.context["timestamp"] = sent["x-amz-date"]
+    signer = signer_cls(Credentials(_ACCESS_KEY, _SECRET_KEY), "s3", "us-east-1")
+    canonical_request = signer.canonical_request(request)
+    return signer.signature(signer.string_to_sign(request, canonical_request), request)
+
+
+def _assert_signed_for_s3_canonicalization(url: str, method: str, body: bytes | None, headers: dict[str, str]) -> None:
+    """
+    S3 rebuilds the canonical request from the wire path with single percent-encoding, which
+    botocore models as S3SigV4Auth; plain SigV4Auth double-encodes it (%2520 for a space) and S3
+    answers 403 SignatureDoesNotMatch. Assert we signed the path the way S3 reads it.
+    """
+    from botocore.auth import S3SigV4Auth, SigV4Auth
+
+    assert "%20" in url
+    sent_signature = headers["Authorization"].split("Signature=")[1].strip()
+    assert sent_signature == _signature_for(S3SigV4Auth, url, method, body, headers)
+    assert sent_signature != _signature_for(SigV4Auth, url, method, body, headers)
+
+
+def _logger_for_signing() -> S3Logger:
+    return S3Logger(
+        s3_bucket_name="logs-bucket",
+        s3_aws_access_key_id=_ACCESS_KEY,
+        s3_aws_secret_access_key=_SECRET_KEY,
+        s3_region_name="us-east-1",
+    )
+
+
+def _element_with_space():
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    return s3BatchLoggingElement(
+        s3_object_key=_KEY_WITH_SPACE,
+        payload={"test": "sigv4"},
+        s3_object_download_filename="log.json",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_upload_signs_object_key_with_space_the_way_s3_does():
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(_element_with_space())
+
+    call = logger.async_httpx_client.put.call_args
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+def test_sync_upload_signs_object_key_with_space_the_way_s3_does():
+    from unittest.mock import MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    mock_sync_client = MagicMock()
+    mock_sync_client.put.return_value = response
+
+    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+        logger.upload_data_to_s3(_element_with_space())
+
+    call = mock_sync_client.put.call_args
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_signs_object_key_with_space_the_way_s3_does():
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.json = MagicMock(return_value={"downloaded": "data"})
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.get.return_value = response
+
+    assert await logger._download_object_from_s3(_KEY_WITH_SPACE) == {"downloaded": "data"}
+
+    call = logger.async_httpx_client.get.call_args
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="GET",
+        body=None,
+        headers=call.kwargs["headers"],
+    )

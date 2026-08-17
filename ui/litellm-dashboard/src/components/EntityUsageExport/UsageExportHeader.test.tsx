@@ -1,4 +1,4 @@
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import UsageExportHeader from "./UsageExportHeader";
@@ -69,5 +69,30 @@ describe("UsageExportHeader", () => {
       />,
     );
     expect(screen.getByText("Team")).toBeInTheDocument();
+  });
+
+  it("should keep a searchable single filter usable when no options match", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        entityType="user"
+        showFilters
+        filterMode="single"
+        filterLabel="User"
+        filterPlaceholder="Select user to filter..."
+        filterOptions={[]}
+        filterSelectProps={{ onSearchChange, onLoadMore: vi.fn() }}
+        onFiltersChange={vi.fn()}
+      />,
+    );
+
+    const userFilter = screen.getByRole("combobox");
+    await user.click(userFilter);
+    await user.type(userFilter, "alice");
+
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("alice"));
   });
 });

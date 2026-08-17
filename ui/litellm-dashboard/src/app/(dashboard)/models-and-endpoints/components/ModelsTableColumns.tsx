@@ -453,8 +453,8 @@ export const getModelsTableColumns = ({
   {
     id: STATUS_COLUMN_ID,
     accessorFn: (row) => row.model_info.db_model,
-    meta: { title: "Status", skeleton: "badge" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Status" />,
+    meta: { title: "Source", skeleton: "badge" },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Source" />,
     enableSorting: true,
     size: 140,
     minSize: 100,

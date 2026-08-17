@@ -113,6 +113,24 @@ describe("OrgSettingsForm", () => {
     expect(patchOrganization).toHaveBeenCalledWith("org-1", { organization_alias: "acme-2" });
   });
 
+  it("saves a sub-cent max budget the browser would veto under a 0.01 step", async () => {
+    const user = userEvent.setup();
+    const { patchOrganization } = renderForm();
+
+    const budget: HTMLInputElement = screen.getByLabelText("Max Budget (USD)");
+    await user.clear(budget);
+    await user.type(budget, "0.001");
+
+    // jsdom never blocks the submit itself, so assert the constraint the real browser
+    // enforces before handleSubmit ever runs
+    expect(budget.checkValidity()).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(patchOrganization).toHaveBeenCalledTimes(1));
+    expect(patchOrganization).toHaveBeenCalledWith("org-1", { max_budget: 0.001 });
+  });
+
   it("sends null when a limit is cleared", async () => {
     const user = userEvent.setup();
     const { patchOrganization } = renderForm();

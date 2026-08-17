@@ -16,7 +16,7 @@ configured). It has no proxy-setup side effects. Returns the resolved
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Final
 
 
 def read_model_list(config_path: str) -> list[dict[str, Any]]:
@@ -24,5 +24,5 @@ def read_model_list(config_path: str) -> list[dict[str, Any]]:
     resolved ``model_list``."""
     from litellm.proxy.proxy_server import ProxyConfig
 
-    config = asyncio.run(ProxyConfig().get_config(config_file_path=config_path))
+    config: Final = asyncio.run(ProxyConfig().get_config(config_file_path=config_path))
     return config.get("model_list") or []

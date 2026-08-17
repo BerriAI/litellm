@@ -2977,6 +2977,125 @@ async def test_oauth_protected_resource_returns_empty_scopes_when_none():
 
 
 @pytest.mark.asyncio
+async def test_oauth_protected_resource_gateway_managed_oauth2_advertises_gateway_as():
+    """LIT-4864: an explicitly named gateway-managed oauth2 server (interactive or M2M)
+    advertises the gateway's own authorization server, so a keyless DCR client that
+    configured the per-server URL completes the same sign-in flow the aggregate /mcp
+    endpoint supports and returns with a gateway session bearer; the resource stays the
+    per-server URL in the requested spelling (RFC 9728 resource match). A delegate-auth
+    oauth2 server keeps the per-server relay authorization server (its keyless flow is
+    upstream PKCE via the relay), and the root-resolved unnamed legacy shape is unchanged."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    def _oauth2_server(name, **kw):
+        return MCPServer(
+            server_id=name,
+            name=name,
+            server_name=name,
+            alias=name,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/oauth/token",
+            scopes=["read"],
+            **kw,
+        )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    interactive = _oauth2_server("github_mcp")
+    m2m = _oauth2_server("m2m_mcp", oauth2_flow="client_credentials", client_id="cid", client_secret="cs")
+    delegated = _oauth2_server("delegated_mcp", delegate_auth_to_upstream=True)
+
+    global_mcp_server_manager.registry.clear()
+    try:
+        for server in (interactive, m2m, delegated):
+            global_mcp_server_manager.registry[server.server_id] = server
+
+        for name in ("github_mcp", "m2m_mcp"):
+            standard = await _build_oauth_protected_resource_response(
+                request=mock_request, mcp_server_name=name, use_standard_pattern=True
+            )
+            assert standard["authorization_servers"] == ["https://litellm.example.com/mcp"], name
+            assert standard["resource"] == f"https://litellm.example.com/mcp/{name}"
+            assert standard["scopes_supported"] == ["read"]
+            legacy = await _build_oauth_protected_resource_response(
+                request=mock_request, mcp_server_name=name, use_standard_pattern=False
+            )
+            assert legacy["authorization_servers"] == ["https://litellm.example.com/mcp"], name
+            assert legacy["resource"] == f"https://litellm.example.com/{name}/mcp"
+
+        delegated_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name="delegated_mcp", use_standard_pattern=True
+        )
+        assert delegated_response["authorization_servers"] == ["https://litellm.example.com/delegated_mcp"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_root_resolved_single_server_keeps_relay_as():
+    """The unnamed (bare-root) legacy shape resolves the single configured oauth2 server and
+    must keep advertising the per-server relay authorization server: only an EXPLICITLY
+    named request opts into the gateway-as-AS flow (LIT-4864), so pre-existing single-server
+    deployments discovering through the root document are byte-identical."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    only_server = MCPServer(
+        server_id="solo_mcp",
+        name="solo_mcp",
+        server_name="solo_mcp",
+        alias="solo_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/oauth/token",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    global_mcp_server_manager.registry.clear()
+    try:
+        global_mcp_server_manager.registry[only_server.server_id] = only_server
+        response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name=None, use_standard_pattern=False
+        )
+        assert response["authorization_servers"] == ["https://litellm.example.com/solo_mcp"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
 async def test_oauth_authorization_server_returns_empty_scopes_when_none():
     """
     When an MCP server exists but has scopes=None (e.g. Atlassian OAuth),
@@ -8044,8 +8163,40 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         )
         # per-server, not aggregate: the single server's name is in the endpoints
         assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
-        assert authorization_response["issuer"] == "https://llm.example.com"
-        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
+        expected_issuer = "https://llm.example.com/test_oauth"
+        assert authorization_response["issuer"] == expected_issuer
+        assert resource_response["authorization_servers"] == [expected_issuer]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_openid_configuration_alias_keeps_origin_issuer_on_root_resolution():
+    """OIDC verifiers derive /.well-known/openid-configuration from their configured issuer
+    (the proxy origin), so the alias must keep the origin issuer even when single-server
+    root resolution scopes the underlying authorization-server metadata."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        openid_configuration,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = await openid_configuration(mock_request)
+        assert isinstance(response, dict)
+        assert response["issuer"] == "https://llm.example.com"
+        assert "/test_oauth/authorize" in response["authorization_endpoint"]
     finally:
         global_mcp_server_manager.registry.clear()
 

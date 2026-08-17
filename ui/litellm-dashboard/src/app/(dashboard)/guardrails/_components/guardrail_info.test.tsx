@@ -1,5 +1,5 @@
 import * as networking from "@/components/networking";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import GuardrailInfoView from "./guardrail_info";
 
@@ -153,7 +153,7 @@ describe("Guardrail Info", () => {
     });
 
     // Find the info icon and hover over it
-    const infoIcon = container.querySelector(".anticon-info-circle");
+    const infoIcon = within(container).getByRole("img", { name: "info-circle" });
     expect(infoIcon).toBeInTheDocument();
 
     if (infoIcon) {
@@ -229,7 +229,7 @@ describe("Guardrail Info", () => {
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
     vi.mocked(networking.updateGuardrailCall).mockResolvedValue({ status: "success" });
 
-    const { getByText, getByRole, getAllByRole, getByLabelText } = render(
+    const { getByText, getByLabelText } = render(
       <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
     );
 

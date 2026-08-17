@@ -149,6 +149,34 @@ describe("DefaultUserSettingsForm", () => {
     expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, max_budget: 250 });
   });
 
+  it("saves a sub-cent budget the browser would veto under a 0.01 step", async () => {
+    const user = userEvent.setup();
+    const { updateSettings } = renderForm();
+
+    await enterEditMode(user);
+    const budget: HTMLInputElement = await screen.findByLabelText("Max Budget (USD)");
+    await user.clear(budget);
+    await user.type(budget, "0.001");
+
+    const teamBudget: HTMLInputElement = screen.getByLabelText("Max Budget in Team (USD)");
+    await user.clear(teamBudget);
+    await user.type(teamBudget, "0.002");
+
+    // jsdom never blocks the submit itself, so assert the constraint the real browser
+    // enforces before handleSubmit ever runs
+    expect(budget.checkValidity()).toBe(true);
+    expect(teamBudget.checkValidity()).toBe(true);
+
+    await user.click(await saveButton());
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(updateSettings).toHaveBeenCalledWith({
+      ...SAVED_BODY,
+      max_budget: 0.001,
+      teams: [{ team_id: "team-alpha", max_budget_in_team: 0.002, user_role: "user" }],
+    });
+  });
+
   it("clears an emptied budget with null", async () => {
     const user = userEvent.setup();
     const { updateSettings } = renderForm();

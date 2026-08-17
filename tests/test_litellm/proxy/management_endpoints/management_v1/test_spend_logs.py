@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,6 +44,7 @@ app.include_router(router)
 client = TestClient(app)
 
 END_USERS_PATH = f"{MANAGEMENT_V1_PREFIX}/spend_logs/end_users"
+USERS_PATH = f"{MANAGEMENT_V1_PREFIX}/spend_logs/users"
 WINDOW = "filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z"
 
 
@@ -65,7 +65,7 @@ def as_proxy_admin():
     app.dependency_overrides.clear()
 
 
-def _mock_rows(mock_prisma_client, end_users: List[str]) -> AsyncMock:
+def _mock_rows(mock_prisma_client, end_users: list[str]) -> AsyncMock:
     query_raw = AsyncMock(return_value=[{"end_user": eu} for eu in end_users])
     mock_prisma_client.db.query_raw = query_raw
     return query_raw
@@ -80,6 +80,11 @@ def _as_role(role: LitellmUserRoles, user_id):
 def _get(query: str = WINDOW):
     suffix = f"?{query}" if query else ""
     return client.get(f"{END_USERS_PATH}{suffix}", headers={"Authorization": "Bearer k"})
+
+
+def _get_users(query: str = WINDOW):
+    suffix = f"?{query}" if query else ""
+    return client.get(f"{USERS_PATH}{suffix}", headers={"Authorization": "Bearer k"})
 
 
 def test_returns_the_control_plane_envelope(mock_prisma_client, as_proxy_admin):
@@ -213,7 +218,7 @@ def test_requires_a_time_window(mock_prisma_client, as_proxy_admin, query):
 def test_rejects_a_malformed_window_as_a_problem_document(mock_prisma_client, as_proxy_admin):
     _mock_rows(mock_prisma_client, [])
 
-    response = _get(f"filter[startTime][gte]=yesterday&filter[startTime][lte]=2026-07-24T00:00:00Z")
+    response = _get("filter[startTime][gte]=yesterday&filter[startTime][lte]=2026-07-24T00:00:00Z")
 
     assert response.status_code == 400
     assert response.headers["content-type"].startswith("application/problem+json")
@@ -400,6 +405,49 @@ def test_q_placeholder_precedes_the_scan_limit_and_offset(mock_prisma_client, as
     assert query_raw.call_args.args[5:] == (11, 0)
 
 
+def test_user_facet_reads_internal_users_from_spend_logs(mock_prisma_client, as_proxy_admin):
+    query_raw = AsyncMock(return_value=[{"user": "alice@example.com"}, {"user": "user-42"}])
+    mock_prisma_client.db.query_raw = query_raw
+
+    response = _get_users()
+
+    assert response.status_code == 200
+    assert response.json()["data"] == ["alice@example.com", "user-42"]
+    sql = query_raw.call_args.args[0]
+    assert 'SELECT DISTINCT "user"' in sql
+    assert '"user" IS NOT NULL' in sql
+    assert "end_user IS NOT NULL" not in sql
+
+
+def test_user_facet_uses_the_same_team_scope_as_request_logs(mock_prisma_client):
+    query_raw = AsyncMock(return_value=[{"user": "member@example.com"}])
+    mock_prisma_client.db.query_raw = query_raw
+    original = _as_role(LitellmUserRoles.INTERNAL_USER, user_id="team-admin-1")
+    try:
+        with patch(
+            "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
+            new=AsyncMock(return_value=["team-a"]),
+        ):
+            response = _get_users()
+    finally:
+        app.dependency_overrides = original
+
+    assert response.status_code == 200
+    assert '("user" = $3 OR team_id = ANY($4::text[]))' in query_raw.call_args.args[0]
+    assert query_raw.call_args.args[3] == "team-admin-1"
+    assert query_raw.call_args.args[4] == ["team-a"]
+
+
+def test_user_facet_searches_the_internal_user_value(mock_prisma_client, as_proxy_admin):
+    query_raw = AsyncMock(return_value=[])
+    mock_prisma_client.db.query_raw = query_raw
+
+    _get_users(f"{WINDOW}&q=alice%40example.com")
+
+    assert '"user" ILIKE $3 ESCAPE' in query_raw.call_args.args[0]
+    assert query_raw.call_args.args[3] == "%alice@example.com%"
+
+
 @pytest.mark.parametrize(
     "role",
     [
@@ -416,18 +464,19 @@ def test_is_reachable_by_every_role_that_can_open_the_logs_page(role):
     """
     from litellm.proxy.auth.route_checks import RouteChecks
 
-    for allowed in (
-        LiteLLMRoutes.internal_user_routes.value,
-        LiteLLMRoutes.internal_user_view_only_routes.value,
-    ):
-        assert ("/spend/logs/ui" in allowed) == (END_USERS_PATH in allowed)
+    for facet_path in (END_USERS_PATH, USERS_PATH):
+        for allowed in (
+            LiteLLMRoutes.internal_user_routes.value,
+            LiteLLMRoutes.internal_user_view_only_routes.value,
+        ):
+            assert ("/spend/logs/ui" in allowed) == (facet_path in allowed)
 
-    if role in (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY):
-        allowed_routes = (
-            LiteLLMRoutes.internal_user_routes.value
-            if role == LitellmUserRoles.INTERNAL_USER
-            else LiteLLMRoutes.internal_user_view_only_routes.value
-        )
-        assert RouteChecks.check_route_access(route=END_USERS_PATH, allowed_routes=allowed_routes)
-    else:
-        assert END_USERS_PATH in LiteLLMRoutes.admin_viewer_routes.value
+        if role in (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY):
+            allowed_routes = (
+                LiteLLMRoutes.internal_user_routes.value
+                if role == LitellmUserRoles.INTERNAL_USER
+                else LiteLLMRoutes.internal_user_view_only_routes.value
+            )
+            assert RouteChecks.check_route_access(route=facet_path, allowed_routes=allowed_routes)
+        else:
+            assert facet_path in LiteLLMRoutes.admin_viewer_routes.value

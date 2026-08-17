@@ -1,4 +1,4 @@
-import type { CustomTooltipProps } from "@tremor/react";
+import type { ChartTooltipProps } from "@/components/shared/charts/chart_tooltip";
 import { SpendMetrics } from "../UsagePage/types";
 
 interface ChartDataPoint {
@@ -16,7 +16,7 @@ const colorNameToHex: { [key: string]: string } = {
   emerald: "#37bc7d",
 };
 
-export const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
+export const CustomTooltip = ({ active, payload, label }: ChartTooltipProps) => {
   if (active && payload && payload.length) {
     const formatCategoryName = (name: string): string => {
       return name
