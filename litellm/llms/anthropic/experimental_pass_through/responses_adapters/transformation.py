@@ -36,6 +36,8 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
+TEXT_BLOCK_TYPES: Final = ("text", "input_text")
+
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
     """
@@ -93,7 +95,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return [  # mutable-ok: API message payload
             {"type": "input_text", "text": text}  # mutable-ok: API message payload
             for block in content
-            if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
+            if isinstance(block, dict) and block.get("type") in TEXT_BLOCK_TYPES and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
         ]
 
     def translate_messages_to_responses_input(
@@ -145,12 +147,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         if not isinstance(block, dict):
                             continue
                         btype = block.get("type")
-                        if btype == "text":
+                        if btype in TEXT_BLOCK_TYPES:
                             user_parts.append({"type": "input_text", "text": block.get("text", "")})
                         elif btype == "image":
                             url = self._translate_anthropic_image_source_to_url(cast(dict, block.get("source", {})))
                             if url:
-                                user_parts.append({"type": "input_image", "image_url": url})
+                                user_parts.append({"type": "input_image", "image_url": url, "detail": "auto"})
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
@@ -160,7 +162,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 output_text = inner
                             elif isinstance(inner, list):
                                 parts = [
-                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
+                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") in TEXT_BLOCK_TYPES
                                 ]
                                 output_text = "\n".join(parts)
                                 image_candidates = tuple(
@@ -176,7 +178,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                         else TOOL_RESULT_IMAGE_PLACEHOLDER
                                     )
                                     tool_image_parts.extend(
-                                        {"type": "input_image", "image_url": url}  # mutable-ok: json content part
+                                        {"type": "input_image", "image_url": url, "detail": "auto"}  # mutable-ok: json content part
                                         for url in image_urls
                                     )
                             else:
@@ -240,7 +242,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "thinking":
                             thinking_text = block.get("thinking", "")
                             if thinking_text:
-                                asst_parts.append({"type": "output_text", "text": thinking_text})
+                                input_items.append({"type": "reasoning", "id": block.get("signature") or f"reasoning_{len(input_items)}", "summary": [{"type": "summary_text", "text": thinking_text}]})
                     if asst_parts:
                         input_items.append(
                             {

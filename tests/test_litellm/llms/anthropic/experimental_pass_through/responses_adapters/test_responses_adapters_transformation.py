@@ -207,6 +207,24 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
 
+    def test_user_input_text_block(self):
+        """Claude Code / Claude Agent SDK send `input_text` blocks; these must
+        translate the same as `text` blocks instead of being silently dropped."""
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "What is 2+2?"}],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "What is 2+2?"}],
+            }
+        ]
+
     def test_user_multiple_text_blocks(self):
         """Multiple text blocks in a user message are all converted."""
         messages = [
@@ -289,6 +307,19 @@ class TestTranslateMessagesToResponsesInput:
             },
         ]
 
+    def test_midturn_system_correction_accepts_input_text_blocks(self):
+        """System content blocks using `input_text` translate the same as `text`."""
+        messages = [
+            {"role": "system", "content": [{"type": "input_text", "text": "Use the corrected result."}]},
+            {"role": "user", "content": "Continue."},
+        ]
+        result = _translate_messages(messages)
+        assert result[0] == {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": "Use the corrected result."}],
+        }
+
     def test_midturn_system_correction_keeps_multiple_text_blocks(self):
         messages = [
             {
@@ -344,7 +375,9 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert len(result) == 1
-        assert result[0]["content"] == [{"type": "input_image", "image_url": "data:image/png;base64,abc123"}]
+        assert result[0]["content"] == [
+            {"type": "input_image", "image_url": "data:image/png;base64,abc123", "detail": "auto"}
+        ]
 
     def test_user_url_image(self):
         """User message with URL image source becomes input_image with the URL."""
@@ -360,7 +393,9 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [{"type": "input_image", "image_url": "https://example.com/img.jpg"}]
+        assert result[0]["content"] == [
+            {"type": "input_image", "image_url": "https://example.com/img.jpg", "detail": "auto"}
+        ]
 
     def test_user_base64_image_empty_data_skipped(self):
         """Base64 image with empty data is skipped (no URL can be formed)."""
@@ -418,6 +453,26 @@ class TestTranslateMessagesToResponsesInput:
                         "content": [
                             {"type": "text", "text": "Line 1"},
                             {"type": "text", "text": "Line 2"},
+                        ],
+                    }
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result[0]["output"] == "Line 1\nLine 2"
+
+    def test_user_tool_result_input_text_list_content(self):
+        """tool_result content blocks using `input_text` are joined the same as `text`."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_xyz",
+                        "content": [
+                            {"type": "input_text", "text": "Line 1"},
+                            {"type": "input_text", "text": "Line 2"},
                         ],
                     }
                 ],
@@ -485,8 +540,9 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
 
-    def test_assistant_thinking_block_becomes_output_text(self):
-        """Assistant thinking block text is included as output_text."""
+    def test_assistant_thinking_block_becomes_reasoning_item(self):
+        """Assistant thinking block becomes a top-level reasoning item, not output_text,
+        so the model can tell its own prior reasoning apart from prior final answers."""
         messages = [
             {
                 "role": "assistant",
@@ -494,7 +550,26 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [{"type": "output_text", "text": "Let me reason step by step."}]
+        assert result == [
+            {
+                "type": "reasoning",
+                "id": "reasoning_0",
+                "summary": [{"type": "summary_text", "text": "Let me reason step by step."}],
+            }
+        ]
+
+    def test_assistant_thinking_block_uses_signature_as_id(self):
+        """A thinking block's signature, when present, becomes the reasoning item id."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Step by step.", "signature": "sig_abc123"}
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result[0]["id"] == "sig_abc123"
 
     def test_assistant_empty_thinking_block_skipped(self):
         """Assistant thinking block with empty thinking text is skipped."""
@@ -561,6 +636,7 @@ class TestTranslateMessagesToResponsesInput:
         assert result[0]["content"][1] == {
             "type": "input_image",
             "image_url": "https://example.com/cat.jpg",
+            "detail": "auto",
         }
 
     def test_unknown_image_source_type_skipped(self):
@@ -1315,7 +1391,7 @@ class TestToolResultImages:
 
         assert self._image_message(items)["content"] == [
             {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
-            {"type": "input_image", "image_url": self.DATA_URI},
+            {"type": "input_image", "image_url": self.DATA_URI, "detail": "auto"},
         ]
 
     def test_sibling_user_blocks_stay_out_of_boundary_message(self):
@@ -1328,7 +1404,7 @@ class TestToolResultImages:
 
         assert self._image_message(items)["content"] == [
             {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
-            {"type": "input_image", "image_url": self.DATA_URI},
+            {"type": "input_image", "image_url": self.DATA_URI, "detail": "auto"},
         ]
         assert any(
             part == {"type": "input_text", "text": "what changed?"}
