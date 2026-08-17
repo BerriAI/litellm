@@ -3330,6 +3330,61 @@ def test_extract_cache_creation_tokens_zero_when_missing():
     )
 
 
+def test_usage_maps_deepseek_cache_hit_and_miss_tokens():
+    usage = Usage(
+        completion_tokens=50,
+        prompt_cache_hit_tokens=75,
+        prompt_cache_miss_tokens=25,
+    )
+
+    assert usage.prompt_tokens == 100
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 75
+    assert usage._cache_read_input_tokens == 75
+
+
+def test_usage_does_not_override_reported_prompt_tokens():
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=50,
+        prompt_cache_hit_tokens=75,
+        prompt_cache_miss_tokens=25,
+    )
+
+    assert usage.prompt_tokens == 120
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 75
+
+
+def test_usage_ignores_malformed_deepseek_cache_bucket_tokens():
+    usage = Usage(
+        completion_tokens=50,
+        prompt_cache_hit_tokens="75",
+        prompt_cache_miss_tokens=True,
+    )
+
+    assert usage.prompt_tokens == 0
+    assert usage.prompt_tokens_details is None
+    assert usage._cache_read_input_tokens == 0
+
+
+def test_usage_preserves_cache_read_and_write_mappings():
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        cache_read_input_tokens=30,
+        cache_creation_input_tokens=10,
+    )
+
+    assert usage.prompt_tokens == 100
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 30
+    assert usage.prompt_tokens_details.cache_write_tokens == 10
+    assert usage.prompt_tokens_details.cache_creation_tokens == 10
+    assert usage._cache_read_input_tokens == 30
+    assert usage._cache_creation_input_tokens == 10
+
+
 def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():
     """
     Anthropic providers report cache tokens at the top level of Usage, and
