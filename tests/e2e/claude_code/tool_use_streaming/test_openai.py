@@ -30,6 +30,7 @@ from typing import Any, Mapping, Sequence
 import pytest
 
 from claude_code._env import require_proxy
+from claude_code._gpt_cells import skip_unless_openai_gpt_cells_enabled
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
@@ -87,6 +88,7 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
 
 
 def test_tool_use_streaming_openai(compat_result):
+    skip_unless_openai_gpt_cells_enabled()
     proxy = require_proxy(compat_result)
 
     outcomes = run_claude_models_parallel(

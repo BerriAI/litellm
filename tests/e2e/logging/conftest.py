@@ -10,24 +10,24 @@ import os
 
 import pytest
 
-from logging_client import LangfuseCreds, LoggingClient, build_logging_client, load_langfuse_creds
+from logging_client import LoggingClient, build_logging_client
 from datadog_reader import DdLogsReader, build_dd_logs_reader
 from otel_client import OtelReader, build_otel_reader
+from proxy_client import ProxyClient
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "covers: registry cell a test covers, e.g. logging.langfuse.success.logs_spend",
+        "covers: registry cell a test covers, e.g. logging.datadog.success.exports_metric",
     )
 
 
 @pytest.fixture(scope="session")
-def client() -> LoggingClient:
-    """The logging suite's client: holds the shared Gateway so `resources` /
-    `scoped_key` clean up keys and teams, and adds `/metrics` scraping plus
-    Langfuse read-back."""
-    return build_logging_client()
+def client(proxy: ProxyClient) -> LoggingClient:
+    """The logging suite's client: holds the shared ProxyClient so `resources` /
+    `scoped_key` clean up keys and teams, and adds `/metrics` scraping."""
+    return build_logging_client(proxy)
 
 
 @pytest.fixture(scope="session")
@@ -50,9 +50,3 @@ def datadog_creds() -> None:
         pytest.fail(
             "Datadog e2e requires DD_API_KEY and DD_SITE; missing credentials is a hard failure, not a skip"
         )
-
-
-@pytest.fixture(scope="session")
-def langfuse_creds() -> LangfuseCreds:
-    """Require real Langfuse cloud credentials for team callback + trace poll."""
-    return load_langfuse_creds()

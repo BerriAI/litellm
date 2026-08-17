@@ -1,8 +1,10 @@
 import React from "react";
-import { Button as TremorButton } from "@tremor/react";
-import { Input, Select } from "antd";
-import { ArrowLeftIcon, SaveIcon, ClockIcon } from "lucide-react";
+import { ArrowLeftIcon, SaveIcon, ClockIcon, LoaderCircleIcon } from "lucide-react";
 import PromptCodeSnippets from "./PromptCodeSnippets";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface PromptEditorHeaderProps {
   promptName: string;
@@ -41,33 +43,32 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
   onEnvironmentChange,
 }) => {
   return (
-    <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+    <div className="bg-background border-b border-border px-6 py-3 flex items-center justify-between">
       <div className="flex items-center space-x-3">
-        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onBack} size="xs">
+        <Button variant="ghost" onClick={onBack} size="sm">
+          <ArrowLeftIcon />
           Back
-        </TremorButton>
+        </Button>
         <Input
+          aria-label="Prompt name"
           value={promptName}
           onChange={(e) => onNameChange(e.target.value)}
           className="text-base font-medium border-none shadow-none"
           style={{ width: "200px" }}
         />
-        {version && (
-          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-sm font-medium">{version}</span>
-        )}
-        <Select
-          value={environment}
-          onChange={onEnvironmentChange}
-          style={{ width: 140 }}
-          size="small"
-          options={[
-            { label: "Development", value: "development" },
-            { label: "Staging", value: "staging" },
-            { label: "Production", value: "production" },
-          ]}
-        />
-        <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-sm">Draft</span>
-        <span className="text-xs text-gray-400">Unsaved changes</span>
+        {version && <Badge>{version}</Badge>}
+        <Select value={environment} onValueChange={(value) => onEnvironmentChange(String(value))}>
+          <SelectTrigger size="sm" className="w-[140px]" aria-label="Environment">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="development">Development</SelectItem>
+            <SelectItem value="staging">Staging</SelectItem>
+            <SelectItem value="production">Production</SelectItem>
+          </SelectContent>
+        </Select>
+        <Badge variant="secondary">Draft</Badge>
+        <span className="text-xs text-muted-foreground">Unsaved changes</span>
       </div>
       <div className="flex items-center space-x-2">
         <PromptCodeSnippets
@@ -79,13 +80,15 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
           proxySettings={proxySettings}
         />
         {editMode && onShowHistory && (
-          <TremorButton icon={ClockIcon} variant="secondary" onClick={onShowHistory}>
+          <Button variant="outline" onClick={onShowHistory}>
+            <ClockIcon />
             History
-          </TremorButton>
+          </Button>
         )}
-        <TremorButton icon={SaveIcon} onClick={onSave} loading={isSaving} disabled={isSaving}>
+        <Button onClick={onSave} disabled={isSaving}>
+          {isSaving ? <LoaderCircleIcon className="animate-spin" /> : <SaveIcon />}
           {editMode ? "Update" : "Save"}
-        </TremorButton>
+        </Button>
       </div>
     </div>
   );

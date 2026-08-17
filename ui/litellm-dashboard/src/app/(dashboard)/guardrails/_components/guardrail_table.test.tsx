@@ -30,6 +30,22 @@ describe("GuardrailTable", () => {
     }
   });
 
+  it("renders the provider logo from the bundled guardrail logo map", () => {
+    render(<GuardrailTable guardrailsList={[makeGuardrail()]} {...baseProps} />);
+    const logo = screen.getByAltText("Presidio PII logo");
+    expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+  });
+
+  it("falls back to a letter avatar for an unknown provider slug", () => {
+    const guardrail = makeGuardrail({
+      litellm_params: { guardrail: "mystery_guard", mode: "pre_call", default_on: false },
+    });
+    render(<GuardrailTable guardrailsList={[guardrail]} {...baseProps} />);
+    expect(screen.getByText("mystery_guard")).toBeInTheDocument();
+    expect(screen.queryByAltText("mystery_guard logo")).not.toBeInTheDocument();
+    expect(screen.getByText("m")).toBeInTheDocument();
+  });
+
   it("deletes a DB guardrail through the actions menu", async () => {
     const user = userEvent.setup();
     const onDeleteClick = vi.fn();

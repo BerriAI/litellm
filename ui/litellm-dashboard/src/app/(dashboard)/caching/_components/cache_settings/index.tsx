@@ -8,7 +8,7 @@ import RedisTypeSelector from "./RedisTypeSelector";
 import CacheFieldSection from "./CacheFieldSection";
 import { EmbeddingModelOption } from "./CacheFormField";
 import { REDIS_TYPES, REDIS_TYPE_DESCRIPTIONS, RedisType } from "./cacheSettingsFields";
-import { buildCachePayload, buildInitialValues, CacheFormValues } from "./cacheSettingsUtils";
+import { buildCachePayload, buildInitialValues, CacheFormValues, configuredSecretFields } from "./cacheSettingsUtils";
 
 interface CacheSettingsProps {
   accessToken: string | null;
@@ -25,6 +25,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModelOption[]>([]);
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [configuredSecrets, setConfiguredSecrets] = useState<ReadonlySet<string>>(new Set());
 
   const loadCacheSettings = useCallback(async () => {
     if (!accessToken) {
@@ -34,6 +35,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
       const data = (await getCacheSettingsCall(accessToken)) as { current_values?: Record<string, unknown> };
       const currentValues = data.current_values ?? {};
       form.setFieldsValue(buildInitialValues(currentValues));
+      setConfiguredSecrets(configuredSecretFields(currentValues));
       setRedisType(toRedisType(currentValues.redis_type));
     } catch (error) {
       console.error("Failed to load cache settings:", error);
@@ -144,6 +146,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
             section="connection"
             redisType={redisType}
             embeddingModels={embeddingModels}
+            configuredSecrets={configuredSecrets}
           />
         </div>
 
@@ -166,6 +169,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
               section="sentinel"
               redisType={redisType}
               embeddingModels={embeddingModels}
+              configuredSecrets={configuredSecrets}
             />
           </div>
         )}

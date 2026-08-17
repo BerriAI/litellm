@@ -5,7 +5,7 @@ import React, { useEffect } from "react";
 import BaseSSOSettingsForm from "./BaseSSOSettingsForm";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { processSSOSettingsPayload } from "../utils";
+import { detectSSOProvider, processSSOSettingsPayload } from "../utils";
 import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
 
@@ -26,22 +26,7 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
       const ssoData = ssoSettings.data;
 
       // Determine which SSO provider is configured
-      let selectedProvider = null;
-      if (ssoData.values.google_client_id) {
-        selectedProvider = "google";
-      } else if (ssoData.values.microsoft_client_id) {
-        selectedProvider = "microsoft";
-      } else if (ssoData.values.generic_client_id) {
-        // Check if it looks like Okta based on endpoints
-        if (
-          ssoData.values.generic_authorization_endpoint?.includes("okta") ||
-          ssoData.values.generic_authorization_endpoint?.includes("auth0")
-        ) {
-          selectedProvider = "okta";
-        } else {
-          selectedProvider = "generic";
-        }
-      }
+      const selectedProvider = detectSSOProvider(ssoData.values);
 
       // Extract role mappings if they exist
       let roleMappingFields = {};
@@ -81,6 +66,9 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
         ...ssoData.values,
         ...roleMappingFields,
         ...teamMappingFields,
+        ...(ssoData.values.saml_allow_unsolicited != null
+          ? { saml_allow_unsolicited: ssoData.values.saml_allow_unsolicited === "true" }
+          : {}),
       };
 
       // Clear form first, then set values with a small delay to ensure proper initialization

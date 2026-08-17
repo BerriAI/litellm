@@ -6,25 +6,6 @@ import { renderWithProviders } from "../../../../../tests/test-utils";
 import AddMarginForm from "./add_margin_form";
 import { MarginConfig } from "./types";
 
-vi.mock("@/components/provider_info_helpers", () => ({
-  Providers: {
-    OpenAI: "OpenAI",
-    Anthropic: "Anthropic",
-  },
-  provider_map: {
-    OpenAI: "openai",
-    Anthropic: "anthropic",
-  },
-  providerLogoMap: {
-    OpenAI: "https://example.com/openai.png",
-    Anthropic: "https://example.com/anthropic.png",
-  },
-}));
-
-vi.mock("./provider_display_helpers", () => ({
-  handleImageError: vi.fn(),
-}));
-
 const DEFAULT_PROPS = {
   marginConfig: {} as MarginConfig,
   selectedProvider: undefined,

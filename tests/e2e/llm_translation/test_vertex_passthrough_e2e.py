@@ -23,11 +23,12 @@ model, spend > 0), correlated by the x-litellm-call-id header.
 """
 
 import os
+import time
 
 import pytest
 from pydantic import BaseModel
 
-from e2e_config import unique_marker
+from e2e_config import settle_propagation, unique_marker
 from e2e_http import NoBody, require_successful_call, unwrap
 from lifecycle import ResourceManager
 from models import SpendLogRow
@@ -90,10 +91,17 @@ class _ModelDeleteBody(BaseModel):
 def _add_vertex_passthrough_model(
     client: PassthroughClient, model_name: str, project: str, credentials: str
 ) -> str:
-    return unwrap(
-        client.gateway.transport.post(
+    """Register the passthrough deployment and settle before the caller uses it.
+
+    This body carries `use_in_pass_through` and a pinned `model_info.id`, so it
+    cannot go through ProxyClient.create_model -- but it needs that helper's
+    propagation settle just the same, or the passthrough call can land on a replica
+    that has not reloaded yet.
+    """
+    model_id = unwrap(
+        client.proxy.transport.post(
             "/model/new",
-            headers=client.gateway.transport.master,
+            headers=client.proxy.transport.master,
             json=_ModelNewBody(
                 model_name=model_name,
                 litellm_params=_VertexDeploymentParams(
@@ -108,12 +116,14 @@ def _add_vertex_passthrough_model(
             response_type=_ModelNewResponse,
         )
     ).model_id
+    settle_propagation(time.monotonic())
+    return model_id
 
 
 def _delete_model(client: PassthroughClient, model_id: str) -> None:
-    _ = client.gateway.transport.post(
+    _ = client.proxy.transport.post(
         "/model/delete",
-        headers=client.gateway.transport.master,
+        headers=client.proxy.transport.master,
         json=_ModelDeleteBody(id=model_id),
         response_type=NoBody,
     )
@@ -126,7 +136,7 @@ def _costed_row(client: PassthroughClient, call_id: str | None) -> SpendLogRow:
     a billed Vertex call that LiteLLM did not track is the exact regression #31689
     guards against."""
     assert call_id, "vertex passthrough response had no x-litellm-call-id header"
-    rows = client.gateway.poll_logs_for_request_id(
+    rows = client.proxy.poll_logs_for_request_id(
         call_id,
         predicate=lambda rs: (rs[0].spend or 0) > 0,
     )

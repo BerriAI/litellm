@@ -60,10 +60,9 @@ def test_opus_4_8_model_pricing_and_capabilities():
             "provider": "vertex_ai-anthropic_models",
             "max_input_tokens": 1000000,
         },
-        # Microsoft Foundry / Azure caps Opus 4.8 at a 200k context window.
         "azure_ai/claude-opus-4-8": {
             "provider": "azure_ai",
-            "max_input_tokens": 200000,
+            "max_input_tokens": 1000000,
         },
     }
 
