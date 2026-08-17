@@ -41,6 +41,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     update_batch_in_database,
     validate_managed_id_requirement,
 )
+from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
@@ -140,6 +141,8 @@ async def create_batch(
             route_type="acreate_batch",
         )
         data["metadata"] = sanitize_openai_provider_metadata(data.get("metadata"))
+
+        raise_if_required_body_param_missing(route_type="acreate_batch", data=data)
 
         ## check if model is a loadbalanced model
         router_model: str | None = None
