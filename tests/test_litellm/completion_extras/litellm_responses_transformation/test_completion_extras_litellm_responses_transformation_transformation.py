@@ -30,6 +30,10 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
             [{"type": "output_text", "text": "ok", "annotations": []}],
         ),
         (
+            [{"type": "input_text", "text": "ok"}],
+            [{"type": "input_text", "text": "ok"}],
+        ),
+        (
             [{"type": "output_text", "text": "ok"}],
             [{"type": "output_text", "text": "ok", "annotations": []}],
         ),
