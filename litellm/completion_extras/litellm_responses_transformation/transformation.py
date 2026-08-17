@@ -808,7 +808,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if role == "user" or role == "system" or role == "tool":
             return {"type": "input_text", "text": content}
         else:
-            return {"type": "output_text", "text": content}
+            return {"type": "output_text", "text": content, "annotations": []}
 
     def _convert_content_to_responses_format_image(
         self, content: "ChatCompletionImageObject", role: str
@@ -903,10 +903,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                         converted[key] = file_data[key]
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
+                        elif item_type == "output_text":
+                            result.append({"annotations": [], **item})
+                            verbose_logger.debug("Chat provider:   passthrough -> %s", item)
                         elif item_type in [
                             "input_text",
                             "input_image",
-                            "output_text",
                             "refusal",
                             "input_file",
                             "computer_screenshot",
