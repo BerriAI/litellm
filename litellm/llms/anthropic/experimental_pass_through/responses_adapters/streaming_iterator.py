@@ -3,7 +3,7 @@
 import json
 import traceback
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final
 
 from litellm import verbose_logger
@@ -68,7 +68,7 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
-    def _open_block(self, item_id: str | None, content_block: dict[str, Any]) -> int:
+    def _open_block(self, item_id: str | None, content_block: Mapping[str, Any]) -> int:
         block_idx = self._next_block_index()
         if item_id:
             self._item_id_to_block_index[item_id] = block_idx
