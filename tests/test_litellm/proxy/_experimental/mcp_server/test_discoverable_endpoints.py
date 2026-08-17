@@ -3161,7 +3161,7 @@ def _create_oauth2_server(
     client_id="test_client_id",
     client_secret="test_client_secret",
     available_on_public_internet=True,
-    delegate_auth_to_upstream=False,
+    delegate_auth_to_upstream: bool = False,
 ):
     """Helper to create a mock OAuth2 MCPServer."""
     from litellm.proxy._types import MCPTransport
