@@ -1,6 +1,7 @@
 import json
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from dataclasses import replace as dataclasses_replace
 from typing import Any, Final, Literal
 
 import litellm
@@ -70,18 +71,28 @@ async def _handle_completed_batch(
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
     """
     file_content = await _fetch_batch_output_file_content(batch, custom_llm_provider, litellm_params=litellm_params)
+    error_file_failed_requests: Final = await _count_error_file_failed_requests(
+        batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
+    )
 
-    if (
-        custom_llm_provider == "vertex_ai"
-        and model_name
-        and getattr(litellm, "disable_vertex_batch_output_transformation", False)
-    ):
-        return calculate_vertex_ai_batch_cost_and_usage(_get_file_content_as_dictionary(file_content), model_name)
+    output_file_result: Final = (
+        calculate_vertex_ai_batch_cost_and_usage(_get_file_content_as_dictionary(file_content), model_name)
+        if (
+            custom_llm_provider == "vertex_ai"
+            and model_name
+            and getattr(litellm, "disable_vertex_batch_output_transformation", False)
+        )
+        else _aggregate_batch_cost_usage_models(
+            entries=_iter_batch_input_entries(file_content),
+            custom_llm_provider=custom_llm_provider,
+            model_name=model_name,
+        )
+    )
 
-    return _aggregate_batch_cost_usage_models(
-        entries=_iter_batch_input_entries(file_content),
-        custom_llm_provider=custom_llm_provider,
-        model_name=model_name,
+    if not error_file_failed_requests:
+        return output_file_result
+    return dataclasses_replace(
+        output_file_result, failed_requests=output_file_result.failed_requests + error_file_failed_requests
     )
 
 
@@ -280,6 +291,50 @@ def calculate_vertex_ai_batch_cost_and_usage(
     )
 
 
+async def _fetch_batch_managed_file_content(
+    file_id: str,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
+    litellm_params: dict | None = None,
+) -> bytes:
+    """
+    Fetch a batch's output or error file and return its raw JSONL bytes.
+
+    Args:
+        file_id: The provider or unified (litellm-managed) file id to fetch
+        custom_llm_provider: The LLM provider
+        litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
+                       Required for Azure and other providers that need authentication
+    """
+    from litellm.files.main import afile_content
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,
+    )
+
+    resolved_file_id = file_id
+    is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(file_id)
+    if is_base64_unified_file_id:
+        try:
+            resolved_file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+            verbose_logger.debug("Extracted LLM output file ID from unified file ID: %s", resolved_file_id)
+        except (IndexError, AttributeError) as e:
+            verbose_logger.error(
+                "Failed to extract LLM output file ID from unified file ID: %s, error: %s", file_id, e
+            )
+
+    # Build kwargs for afile_content with credentials from litellm_params
+    file_content_kwargs: Final = {
+        "file_id": resolved_file_id,
+        "custom_llm_provider": custom_llm_provider,
+    }
+
+    # Extract and add credentials for file access
+    credentials: Final = _extract_file_access_credentials(litellm_params)
+    file_content_kwargs.update(credentials)
+
+    _file_content: Final = await afile_content(**file_content_kwargs)
+    return _file_content.content
+
+
 async def _fetch_batch_output_file_content(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
@@ -294,37 +349,36 @@ async def _fetch_batch_output_file_content(
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
                        Required for Azure and other providers that need authentication
     """
-    from litellm.files.main import afile_content
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
-    )
-
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
 
-    file_id = batch.output_file_id
-    is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(file_id)
-    if is_base64_unified_file_id:
-        try:
-            file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
-            verbose_logger.debug("Extracted LLM output file ID from unified file ID: %s", file_id)
-        except (IndexError, AttributeError) as e:
-            verbose_logger.error(
-                "Failed to extract LLM output file ID from unified file ID: %s, error: %s", batch.output_file_id, e
-            )
+    return await _fetch_batch_managed_file_content(
+        batch.output_file_id, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
+    )
 
-    # Build kwargs for afile_content with credentials from litellm_params
-    file_content_kwargs: Final = {
-        "file_id": file_id,
-        "custom_llm_provider": custom_llm_provider,
-    }
 
-    # Extract and add credentials for file access
-    credentials: Final = _extract_file_access_credentials(litellm_params)
-    file_content_kwargs.update(credentials)
+async def _count_error_file_failed_requests(
+    batch: Batch,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
+    litellm_params: dict | None,
+) -> int:
+    """Count failed requests reported only in the batch's separate error file.
 
-    _file_content: Final = await afile_content(**file_content_kwargs)
-    return _file_content.content
+    OpenAI-shaped batch providers write successful lines to ``output_file_id``
+    and per-request failures (e.g. a rejected param) to a distinct
+    ``error_file_id`` - they never appear in the output file at all, so
+    counting failures from the output file alone silently undercounts them.
+    """
+    if batch.error_file_id is None:
+        return 0
+    try:
+        error_file_content = await _fetch_batch_managed_file_content(
+            batch.error_file_id, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
+        )
+    except Exception as e:  # noqa: BLE001  # a failed/missing error file must not abort cost tracking for the batch
+        verbose_logger.debug("Failed to fetch batch error file %s: %s", batch.error_file_id, e)
+        return 0
+    return sum(1 for _ in _iter_batch_input_lines(error_file_content))
 
 
 def _extract_file_access_credentials(litellm_params: dict | None) -> dict:

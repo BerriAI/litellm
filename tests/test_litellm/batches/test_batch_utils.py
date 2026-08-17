@@ -1049,6 +1049,69 @@ async def test_handle_completed_batch_orchestration(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handle_completed_batch_counts_error_file_failures(monkeypatch):
+    """Regression test: OpenAI writes per-request failures (e.g. a rejected param)
+    to a separate error_file_id, never into the output file - so failed_requests
+    must include them or it silently undercounts real batch failures."""
+    from litellm.types.llms.openai import Batch
+
+    rows = [_success_row(model="gpt-5-mini", usage=_usage(24, 107))]
+    error_rows = [
+        {
+            "id": "batch_req_err1",
+            "custom_id": "req-2-bad",
+            "response": {"status_code": 400, "body": {"error": {"message": "Invalid 'temperature'"}}},
+            "error": None,
+        }
+    ]
+
+    async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
+        return _vertex_jsonl(rows)
+
+    async def fake_afile_content(**kw):
+        return type("R", (), {"content": _vertex_jsonl(error_rows)})()
+
+    import litellm.files.main as files_main
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+    monkeypatch.setattr(litellm, "completion_cost", lambda **kw: 0.0)
+
+    batch = Batch(
+        id="b",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="f",
+        object="batch",
+        status="completed",
+        output_file_id="of",
+        error_file_id="ef",
+    )
+
+    result = await bu._handle_completed_batch(batch, custom_llm_provider="openai")
+
+    assert result.successful_requests == 1
+    assert result.failed_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_batch_no_error_file_id_reports_zero_error_failures(monkeypatch):
+    rows = [_success_row(model="gpt-4o", usage=_usage(10, 5))]
+
+    async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
+        return _vertex_jsonl(rows)
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
+    monkeypatch.setattr(litellm, "completion_cost", lambda **kw: 0.0)
+
+    result = await bu._handle_completed_batch(_batch("of"), custom_llm_provider="openai")
+
+    assert result.successful_requests == 1
+    assert result.failed_requests == 0
+
+
+@pytest.mark.asyncio
 async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch):
     raw_rows = [{"response": {"usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2}}}]
 
