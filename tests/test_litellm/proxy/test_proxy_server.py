@@ -11064,3 +11064,37 @@ async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
 
     assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is None
     assert len(scheduler.get_jobs()) > 0
+
+
+@pytest.mark.asyncio
+async def test_moderations_reraises_proxy_exception_unwrapped():
+    """A 400 ProxyException from request validation must surface as-is,
+    not be re-wrapped into a code-500 ProxyException."""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    exc = ProxyException(
+        message="Invalid type for 'metadata': expected an object, but got a string instead.",
+        type=ProxyErrorTypes.bad_request_error,
+        param="metadata",
+        code=400,
+    )
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi", "metadata": "abc"}')
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as exc_info:
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert exc_info.value is exc
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "metadata"
+    mock_logging.post_call_failure_hook.assert_awaited_once()

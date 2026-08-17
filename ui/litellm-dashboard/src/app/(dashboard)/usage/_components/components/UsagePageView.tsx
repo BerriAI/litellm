@@ -28,7 +28,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
-import EntityUsageExportModal from "@/components/EntityUsageExport";
+import EntityUsageExportModal, { type UsageFilterSelectProps } from "@/components/EntityUsageExport";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
@@ -135,6 +135,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return result;
   }, [usersInfiniteData]);
 
+  const userFilterSelectProps: UsageFilterSelectProps = {
+    onSearchChange: setSettledUserSearch,
+    onLoadMore: () => void fetchNextUsersPage(),
+    hasNextPage: hasNextUsersPage,
+    isLoading: isLoadingUsers,
+    isFetchingNextPage: isFetchingNextUsersPage,
+    emptyText: "No users found",
+  };
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
   const [selectedUserId, setSelectedUserId] = useState<string | null>(isAdmin ? null : userID || null);
@@ -1043,6 +1051,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               userID={userID}
               userRole={userRole}
               entityList={userOptions.length > 0 ? userOptions : null}
+              filterSelectProps={userFilterSelectProps}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />

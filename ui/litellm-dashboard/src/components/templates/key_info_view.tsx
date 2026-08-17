@@ -36,6 +36,7 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
+import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
@@ -460,12 +461,9 @@ export default function KeyInfoView({
   const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
   const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
 
-  const budgetDisplay =
-    currentKeyData.max_budget !== null
-      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
-      : parentTeam?.max_budget != null
-        ? `$${formatNumberWithCommas(parentTeam.max_budget, 2)} (Team: ${parentTeam.team_alias || parentTeam.team_id}${parentTeam.budget_duration ? ` / ${parentTeam.budget_duration}` : ""})`
-        : "Unlimited";
+  const hasOwnBudget = currentKeyData.max_budget !== null;
+  const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -616,7 +614,10 @@ export default function KeyInfoView({
                 <p className="text-sm">Spend</p>
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
-                  <p className="text-sm">of {budgetDisplay}</p>
+                  <p className="text-sm">
+                    of {budgetDisplay}
+                    <InheritedBudgetHint gates={inheritedGates} />
+                  </p>
                   {currentKeyData.budget_reset_at && (
                     <p className="text-sm">Resets {formatTimestamp(currentKeyData.budget_reset_at)}</p>
                   )}
