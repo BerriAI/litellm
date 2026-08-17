@@ -231,13 +231,8 @@ describe("AccessGroupEditDialog", () => {
 
   it("cannot be dismissed while a save is pending, then closes once on success", async () => {
     const user = userEvent.setup();
-    let resolveSave: (value: AccessGroupResponse | undefined) => void = () => {};
-    const patchAccessGroup = vi.fn().mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveSave = resolve;
-        }),
-    );
+    const { promise: pendingSave, resolve: resolveSave } = Promise.withResolvers<AccessGroupResponse | undefined>();
+    const patchAccessGroup = vi.fn().mockReturnValue(pendingSave);
     renderDialog({ patchAccessGroup });
 
     await user.clear(screen.getByLabelText("Description"));
