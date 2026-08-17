@@ -177,7 +177,7 @@ class UsageOverviewRow(BaseModel):
     avgLatency: float | None
     status: str  # healthy | warning | critical
     trend: str  # up | down | stable
-    usageUnits: Mapping[str, int]  # provider counter name -> billable units in range
+    usageUnits: Mapping[str, int]
 
 
 class UsageOverviewResponse(BaseModel):
@@ -209,8 +209,8 @@ class UsageDetailResponse(BaseModel):
     time_series: list[UsageChartPoint]
     usage_units: Mapping[str, int]
     usage_units_daily: Sequence[UsageUnitsDailyPoint]
-    usage_units_by_team: Mapping[str, Mapping[str, int]]  # team_id ("" = no team) -> counter -> units
-    usage_units_by_key: Mapping[str, Mapping[str, int]]  # hashed api key ("" = unknown) -> counter -> units
+    usage_units_by_team: Mapping[str, Mapping[str, int]]
+    usage_units_by_key: Mapping[str, Mapping[str, int]]
 
 
 class UsageLogEntry(BaseModel):
