@@ -1828,8 +1828,7 @@ class CustomStreamWrapper:
         """
         if getattr(model_response, "usage", None) is None:
             return
-        model_response.choices = []
-        self.chunks.append(model_response)
+        self.chunks.append(model_response.model_copy(update={"choices": []}))
 
     @staticmethod
     def _propagate_usage_cost_to_hidden_params(
