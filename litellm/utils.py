@@ -8135,6 +8135,8 @@ class ProviderConfigManager:
             return litellm.CometAPIEmbeddingConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotEmbeddingConfig()
+        elif litellm.LlmProviders.GPUSTACK == provider:
+            return litellm.GPUStackEmbeddingConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             from litellm.llms.openrouter.embedding.transformation import (
                 OpenrouterEmbeddingConfig,
@@ -8179,6 +8181,8 @@ class ProviderConfigManager:
             return litellm.InfinityRerankConfig()
         elif litellm.LlmProviders.JINA_AI == provider:
             return litellm.JinaAIRerankConfig()
+        elif litellm.LlmProviders.GPUSTACK == provider:
+            return litellm.GPUStackRerankConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:

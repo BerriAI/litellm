@@ -3668,6 +3668,7 @@ class LlmProviders(str, Enum):
     DOCKER_MODEL_RUNNER = "docker_model_runner"
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
+    GPUSTACK = "gpustack"
     HOSTED_VLLM = "hosted_vllm"
     TENCENT = "tencent"
     LLAMAFILE = "llamafile"
