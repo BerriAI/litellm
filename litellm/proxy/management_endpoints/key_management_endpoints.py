@@ -3604,6 +3604,11 @@ async def _budget_limits_with_usage(budget_limits: object, api_key_hash: str) ->
     ]
 
 
+# Caps per-request fan-out: each key with budget windows costs one spend-counter
+# read (worst case a SpendLogs aggregation) per window.
+MAX_KEY_INFO_KEYS_PER_REQUEST: Final = 100
+
+
 @router.post(
     "/v2/key/info",
     tags=["key management"],
@@ -3642,6 +3647,17 @@ async def info_key_fn_v2(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"message": "Malformed request. No keys passed in."},
+            )
+        requested_key_count: Final = len(data.keys or []) + len(data.key_aliases or [])
+        if requested_key_count > MAX_KEY_INFO_KEYS_PER_REQUEST:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "message": (
+                        f"Too many keys requested: {requested_key_count}. "
+                        f"At most {MAX_KEY_INFO_KEYS_PER_REQUEST} keys and key_aliases combined per request."
+                    )
+                },
             )
 
         # Resolve key_aliases to tokens so we never pass token=None (unbounded query)

@@ -13996,6 +13996,39 @@ async def test_info_key_fn_v2_budget_limits_includes_current_spend(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_info_key_fn_v2_rejects_oversized_batch(monkeypatch):
+    """/v2/key/info must reject over-cap batches before doing any DB work."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import KeyRequest, ProxyException
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        MAX_KEY_INFO_KEYS_PER_REQUEST,
+        info_key_fn_v2,
+    )
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin-batch-cap",
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await info_key_fn_v2(
+            data=KeyRequest(
+                keys=[f"hash-{i}" for i in range(MAX_KEY_INFO_KEYS_PER_REQUEST)],
+                key_aliases=["alias-over-cap"],
+            ),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert exc_info.value.code == "422"
+    mock_prisma_client.get_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_budget_limits_with_usage_json_string_input(monkeypatch):
     """budget_limits stored as a JSON string should be parsed and annotated."""
     import json as json_module
