@@ -917,37 +917,78 @@ class ResponsesAPIRequestUtils:
         return responses_api_response
 
     @staticmethod
-    def convert_text_format_to_text_param(
-        text_format: type["BaseModel"] | dict | None,
-        text: Optional["ResponseText"] = None,
+    def _convert_response_format_to_text_param(
+        response_format: type["BaseModel"] | dict | None,
     ) -> Optional["ResponseText"]:
         """
-        Convert text_format parameter to text parameter for the responses API.
+        Convert a Chat-Completions style `response_format` (or a Pydantic model) into
+        the Responses API `text` parameter.
 
-        Args:
-            text_format: Pydantic model class or dict to convert to response format
-            text: Existing text parameter (if provided, text_format is ignored)
+        Chat Completions nests the schema under `json_schema`, the Responses API hoists
+        those fields to the top level of `text.format`:
+
+            {"type": "json_schema", "json_schema": {"name": ..., "schema": ...}}
+            -> {"format": {"type": "json_schema", "name": ..., "schema": ...}}
+
+        The schema-less formats (`{"type": "json_object"}`, `{"type": "text"}`) carry no
+        extra fields and map straight across.
 
         Returns:
             ResponseText object with the converted format, or None if conversion fails
         """
-        if text_format is not None and text is None:
-            from litellm.llms.base_llm.base_utils import type_to_response_format_param
+        from litellm.llms.base_llm.base_utils import type_to_response_format_param
 
-            # Convert Pydantic model to response format
-            response_format: Final = type_to_response_format_param(text_format)
-            if response_format is not None:
-                # Create ResponseText object with the format
-                # The responses API expects the format to have name at the top level
-                text = {
-                    "format": {
-                        "type": response_format["type"],
-                        "name": response_format["json_schema"]["name"],
-                        "schema": response_format["json_schema"]["schema"],
-                        "strict": response_format["json_schema"]["strict"],
-                    }
-                }
-                return text
+        # Normalizes a Pydantic model into a response_format dict; passes a dict through.
+        converted = type_to_response_format_param(response_format)
+        if converted is None:
+            return None
+
+        format_type = converted.get("type")
+        if format_type is None:
+            return None
+        if format_type != "json_schema":
+            return {"format": {"type": format_type}}
+
+        json_schema = converted.get("json_schema") or {}
+        text_format_param: dict = {"type": format_type}
+        # `name`/`schema` are required by the API and `strict`/`description` are optional,
+        # so copy whatever was supplied and let the provider reject a malformed schema.
+        for key in ("name", "schema", "strict", "description"):
+            if json_schema.get(key) is not None:
+                text_format_param[key] = json_schema[key]
+        return {"format": text_format_param}
+
+    @staticmethod
+    def convert_text_format_to_text_param(
+        text_format: type["BaseModel"] | dict | None,
+        text: Optional["ResponseText"] = None,
+        response_format: type["BaseModel"] | dict | None = None,
+    ) -> Optional["ResponseText"]:
+        """
+        Convert text_format/response_format parameters to the text parameter for the responses API.
+
+        `response_format` is accepted as a compatibility alias for callers coming from
+        `litellm.completion()`, where it is the spelling for structured output. It was
+        previously discarded without an error, which read as "structured output is
+        unsupported here" when it is supported under a different name.
+
+        Args:
+            text_format: Pydantic model class or dict to convert to response format
+            text: Existing text parameter (if provided, the other two are ignored)
+            response_format: Chat-Completions style response_format (used only if
+                neither text nor text_format was supplied)
+
+        Returns:
+            ResponseText object with the converted format, or None if conversion fails
+        """
+        if text is not None:
+            return text
+        for candidate in (text_format, response_format):
+            if candidate is None:
+                continue
+            converted = ResponsesAPIRequestUtils._convert_response_format_to_text_param(candidate)
+            if converted is not None:
+                return converted
         return text
 
     @staticmethod

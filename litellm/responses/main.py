@@ -433,8 +433,12 @@ async def aresponses(
         loop: Final = asyncio.get_event_loop()
         kwargs["aresponses"] = True
 
-        # Convert text_format to text parameter if provided
-        text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(text_format=text_format, text=text)
+        # Convert text_format/response_format to text parameter if provided
+        text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(
+            text_format=text_format,
+            text=text,
+            response_format=kwargs.pop("response_format", None),
+        )
         if text is not None:
             # Update local_vars to include the converted text parameter
             local_vars["text"] = text
@@ -912,8 +916,12 @@ def responses(
         )
         local_vars["extra_headers"] = extra_headers
 
-        # Convert text_format to text parameter if provided
-        text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(text_format=text_format, text=text)
+        # Convert text_format/response_format to text parameter if provided
+        text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(
+            text_format=text_format,
+            text=text,
+            response_format=kwargs.pop("response_format", None),
+        )
         if text is not None:
             # Update local_vars to include the converted text parameter
             local_vars["text"] = text
