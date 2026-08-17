@@ -741,6 +741,7 @@ describe("ComplexityRouterConfig default model", () => {
     const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} onChange={onChange} />);
 
+    // eslint-disable-next-line local/no-antd-class-selectors -- antd marks the clear affordance aria-hidden, so no accessible query reaches it
     await user.click(document.querySelector(".ant-select-clear") as HTMLElement);
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ default_model: undefined }));
@@ -750,6 +751,7 @@ describe("ComplexityRouterConfig default model", () => {
     const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} />);
     expect(
+      // eslint-disable-next-line local/no-antd-class-selectors -- the tier selects show the same model as a tag, so the assertion has to scope to this select's root, which antd exposes only as a class
       within(getDefaultModelSelect().closest(".ant-select") as HTMLElement).getByTitle("claude-3-opus"),
     ).toBeInTheDocument();
   });
