@@ -27263,6 +27263,18 @@ export interface components {
              * @default false
              */
             use_xai_oauth: boolean | null;
+            /** Valkey Embedding Field */
+            valkey_embedding_field?: string | null;
+            /** Valkey Host */
+            valkey_host?: string | null;
+            /** Valkey Password */
+            valkey_password?: string | null;
+            /** Valkey Port */
+            valkey_port?: number | null;
+            /** Valkey Ssl */
+            valkey_ssl?: boolean | null;
+            /** Valkey Text Field */
+            valkey_text_field?: string | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -36168,6 +36180,18 @@ export interface components {
              * @default false
              */
             use_xai_oauth: boolean | null;
+            /** Valkey Embedding Field */
+            valkey_embedding_field?: string | null;
+            /** Valkey Host */
+            valkey_host?: string | null;
+            /** Valkey Password */
+            valkey_password?: string | null;
+            /** Valkey Port */
+            valkey_port?: number | null;
+            /** Valkey Ssl */
+            valkey_ssl?: boolean | null;
+            /** Valkey Text Field */
+            valkey_text_field?: string | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
