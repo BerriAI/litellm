@@ -397,11 +397,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput
-                    className="border-0 bg-transparent"
-                    placeholder="All User Agents"
-                    aria-label="All User Agents"
-                  />
+                  <ComboboxChipsInput placeholder="All User Agents" aria-label="All User Agents" />
                   {selectedTags.length > 0 && <ComboboxClear aria-label="Clear user agent filter" />}
                 </ComboboxChips>
                 <ComboboxContent anchor={anchor}>

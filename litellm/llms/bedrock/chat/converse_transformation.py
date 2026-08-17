@@ -39,6 +39,12 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.bedrock.request_metadata import (
+    bedrock_request_metadata_headers,
+    bedrock_request_metadata_is_owned,
+    merge_bedrock_invoke_headers,
+    resolve_bedrock_request_metadata,
+)
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1652,6 +1658,13 @@ class AmazonConverseConfig(BaseConfig):
             user_continue_message=litellm_params.pop("user_continue_message", None),
         )
 
+        request_metadata: Final = resolve_bedrock_request_metadata(
+            litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
+        )
+        if bedrock_request_metadata_is_owned():
+            _data.pop("requestMetadata", None)
+            if request_metadata is not None:
+                _data["requestMetadata"] = request_metadata
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
 
         return data
@@ -1705,6 +1718,13 @@ class AmazonConverseConfig(BaseConfig):
             user_continue_message=litellm_params.pop("user_continue_message", None),
         )
 
+        request_metadata: Final = resolve_bedrock_request_metadata(
+            litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
+        )
+        if bedrock_request_metadata_is_owned():
+            _data.pop("requestMetadata", None)
+            if request_metadata is not None:
+                _data["requestMetadata"] = request_metadata
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
 
         return data
@@ -2258,7 +2278,8 @@ class AmazonConverseConfig(BaseConfig):
     ) -> dict:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        return headers
+        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+        return merge_bedrock_invoke_headers(headers, (), metadata_headers, owned_names)
 
     def should_fake_stream(
         self,

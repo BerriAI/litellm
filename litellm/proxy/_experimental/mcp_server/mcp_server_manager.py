@@ -2491,6 +2491,18 @@ class MCPServerManager:
             open_ids.update(submitted_server_ids)
         return open_ids
 
+    @staticmethod
+    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> str | None:
+        """The single server an admitted session subject's bearer was scoped to at authorize
+        time (RFC 8707 resource), or None for every other principal shape and for unscoped
+        sessions. Read at every return path of :meth:`get_allowed_mcp_servers`, including
+        the exception fallback, and applied AFTER every union (grants, operator-open,
+        submitted) because the scope is a ceiling over the whole reachable set; a resolver
+        fault therefore never widens a scoped bearer to the allow-all set."""
+        if user_api_key_auth is None or not _is_mcp_admitted_user_subject(user_api_key_auth):
+            return None
+        return user_api_key_auth.mcp_session_resource_server_id
+
     async def get_allowed_mcp_servers(self, user_api_key_auth: UserAPIKeyAuth | None = None) -> list[str]:
         """
         Get the allowed MCP Servers for the user.
@@ -2600,13 +2612,19 @@ class MCPServerManager:
 
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
-            return list(combined_servers)
+            scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
+            return [server_id for server_id in combined_servers if scope is None or server_id == scope]
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
                 "grants may be dropped. Falling back to global and submitted servers."
             )
-            return list(dict.fromkeys(allow_all_server_ids + submitted_server_ids))
+            scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
+            return [
+                server_id
+                for server_id in dict.fromkeys(allow_all_server_ids + submitted_server_ids)
+                if scope is None or server_id == scope
+            ]
 
     async def resolve_toolset_tool_permissions(
         self,

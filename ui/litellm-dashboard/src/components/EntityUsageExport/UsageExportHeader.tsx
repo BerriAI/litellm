@@ -32,6 +32,7 @@ interface UsageExportHeaderProps {
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
   filterMode?: "multiple" | "single";
+  filterSlot?: React.ReactNode;
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
@@ -48,6 +49,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   onFiltersChange,
   filterOptions = [],
   filterMode = "multiple",
+  filterSlot,
   customTitle,
   compactLayout = false,
   teams = [],
@@ -55,7 +57,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-  const hasFilters = showFilters && filterOptions.length > 0;
+  const hasFilters = filterSlot != null || (showFilters && filterOptions.length > 0);
   const optionValues = filterOptions.map((option) => option.value);
   const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
 
@@ -72,6 +74,46 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
     </ComboboxContent>
   );
 
+  const builtInFilter =
+    filterMode === "single" ? (
+      <Combobox
+        items={optionValues}
+        value={selectedFilters[0] ?? null}
+        onValueChange={(next: string | null) => onFiltersChange?.(next ? [next] : [])}
+        itemToStringLabel={labelOf}
+      >
+        <ComboboxInput
+          className="w-full"
+          placeholder={filterPlaceholder}
+          aria-label={filterPlaceholder}
+          showClear={selectedFilters.length > 0}
+        />
+        {filterList}
+      </Combobox>
+    ) : (
+      <Combobox
+        multiple
+        items={optionValues}
+        value={selectedFilters}
+        onValueChange={(next: string[]) => onFiltersChange?.(next)}
+      >
+        <ComboboxChips render={<div ref={anchor} />} className="w-full">
+          <ComboboxValue>
+            {(selected: string[]) =>
+              selected.map((value) => (
+                <ComboboxChip key={value} aria-label={labelOf(value)}>
+                  {labelOf(value)}
+                </ComboboxChip>
+              ))
+            }
+          </ComboboxValue>
+          <ComboboxChipsInput placeholder={filterPlaceholder} aria-label={filterPlaceholder} />
+          {selectedFilters.length > 0 && <ComboboxClear aria-label={`Clear ${filterLabel ?? "filters"}`} />}
+        </ComboboxChips>
+        {filterList}
+      </Combobox>
+    );
+
   return (
     <>
       <div className="mb-4">
@@ -84,48 +126,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
           {hasFilters && (
             <div>
               {filterLabel && <label className="text-sm font-medium text-gray-700 block mb-2">{filterLabel}</label>}
-              {filterMode === "single" ? (
-                <Combobox
-                  items={optionValues}
-                  value={selectedFilters[0] ?? null}
-                  onValueChange={(next: string | null) => onFiltersChange?.(next ? [next] : [])}
-                  itemToStringLabel={labelOf}
-                >
-                  <ComboboxInput
-                    className="w-full"
-                    placeholder={filterPlaceholder}
-                    aria-label={filterPlaceholder}
-                    showClear={selectedFilters.length > 0}
-                  />
-                  {filterList}
-                </Combobox>
-              ) : (
-                <Combobox
-                  multiple
-                  items={optionValues}
-                  value={selectedFilters}
-                  onValueChange={(next: string[]) => onFiltersChange?.(next)}
-                >
-                  <ComboboxChips render={<div ref={anchor} />} className="w-full">
-                    <ComboboxValue>
-                      {(selected: string[]) =>
-                        selected.map((value) => (
-                          <ComboboxChip key={value} aria-label={labelOf(value)}>
-                            {labelOf(value)}
-                          </ComboboxChip>
-                        ))
-                      }
-                    </ComboboxValue>
-                    <ComboboxChipsInput
-                      className="border-0 bg-transparent"
-                      placeholder={filterPlaceholder}
-                      aria-label={filterPlaceholder}
-                    />
-                    {selectedFilters.length > 0 && <ComboboxClear aria-label={`Clear ${filterLabel ?? "filters"}`} />}
-                  </ComboboxChips>
-                  {filterList}
-                </Combobox>
-              )}
+              {filterSlot ?? builtInFilter}
             </div>
           )}
 

@@ -366,13 +366,27 @@ _EMPTY_MODEL_INFO: Final[Mapping[str, object]] = _NO_PRICING_OVERRIDE
 # (an embedding's output_vector_size, the regional uplift multipliers), and zeroing one of
 # those would destroy the deployment's configuration rather than stop a charge.
 _CUSTOM_PRICING_FIELDS: Final = frozenset(f for f in CustomPricingLiteLLMParams.model_fields if "cost" in f)
+# search_context_cost_per_query holds its rates in a table keyed by context size, and an absent
+# table means the provider's own default rate rather than free (litellm/llms/gemini/cost_calculator
+# falls back to $0.035), so it is zeroed in place rather than emptied like tiered_pricing, and
+# written on every PTU deployment rather than only where a table is already stored.
+_PTU_ZEROED_TABLE_FIELDS: Final = frozenset({"search_context_cost_per_query"})
+_SEARCH_CONTEXT_SIZES: Final = ("search_context_size_low", "search_context_size_medium", "search_context_size_high")
 
 
-def _is_nonzero_price(value: object) -> bool:
+def _is_nonzero_rate(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0
 
 
+def _is_nonzero_price(value: object) -> bool:
+    if isinstance(value, dict):  # an all-zero table is how a rate is expressed as free
+        return any(_is_nonzero_rate(rate) for rate in value.values())
+    return _is_nonzero_rate(value)
+
+
 def _is_zero_price(value: object) -> bool:
+    if isinstance(value, dict):
+        return bool(value) and not _is_nonzero_price(value)
     if isinstance(value, (list, tuple)):
         return not value
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
@@ -411,7 +425,7 @@ def _ptu_zeroed_pricing(
     model_info: Mapping[str, object],
     litellm_params: Mapping[str, object],
     supplied: Mapping[str, object],
-) -> Mapping[str, float | tuple[()]]:
+) -> Mapping[str, float | tuple[()] | Mapping[str, float]]:
     """The pricing a PTU deployment must carry, empty unless one is being stored.
 
     Reserved capacity is already billed by the flat cost the rollup writes, so charging the
@@ -437,9 +451,13 @@ def _ptu_zeroed_pricing(
         for field in _CUSTOM_PRICING_FIELDS
         if _is_nonzero_price(model_info.get(field)) or _is_nonzero_price(litellm_params.get(field))
     )
-    if not stored:
-        return _PTU_ZEROED_PRICING
-    return MappingProxyType({**_PTU_ZEROED_PRICING, **dict.fromkeys(stored, 0.0)})
+    return MappingProxyType(
+        {
+            **_PTU_ZEROED_PRICING,
+            **dict.fromkeys(_PTU_ZEROED_TABLE_FIELDS, dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)),
+            **dict.fromkeys(stored - _PTU_ZEROED_TABLE_FIELDS, 0.0),
+        }
+    )
 
 
 def _ptu_pricing_delta(
@@ -448,7 +466,7 @@ def _ptu_pricing_delta(
     model_info: Mapping[str, object],
     litellm_params: Mapping[str, object],
     patch: updateDeployment,
-) -> tuple[Mapping[str, float | tuple[()]], frozenset[str]]:
+) -> tuple[Mapping[str, float | tuple[()] | Mapping[str, float]], frozenset[str]]:
     """The pricing a patch must write into both blobs, and the pricing it must drop from them.
 
     A patch that takes the deployment off PTU takes the zeroed pricing with it, since the zeros

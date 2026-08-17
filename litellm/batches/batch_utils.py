@@ -5,6 +5,7 @@ from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, ModelInfo, Usage
@@ -58,6 +59,17 @@ async def _handle_completed_batch(
         model_name: Optional model name
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
     """
+    # A completed batch whose request lines all failed has no output file - the
+    # results are written to a separate error_file_id and output_file_id is None.
+    # There is nothing to price or measure, so report an empty result set instead
+    # of calling _fetch_batch_output_file_content, which raises on a missing
+    # output file. Without this guard the logging worker crashes on every
+    # aretrieve_batch poll and the completed batch's zero-cost accounting is lost.
+    # The generic retrieval helper keeps raising for callers that explicitly ask
+    # for a missing output file.
+    if batch.output_file_id is None:
+        return 0.0, Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), []
+
     file_content = await _fetch_batch_output_file_content(batch, custom_llm_provider, litellm_params=litellm_params)
 
     if (
@@ -295,7 +307,7 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
 
     if litellm_params:
         # List of credential keys that should be passed to file operations
-        credential_keys: Final = [
+        credential_keys: Final = (
             "api_key",
             "api_base",
             "api_version",
@@ -309,7 +321,9 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "bucket_name",
             "timeout",
             "max_retries",
-        ]
+            "_litellm_internal_model_credentials",
+            *AWS_CREDENTIAL_KWARGS_KEYS,
+        )
         for key in credential_keys:
             if key in litellm_params:
                 credentials[key] = litellm_params[key]

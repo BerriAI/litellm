@@ -999,7 +999,7 @@ async def _common_key_generation_helper(
         )
         new_budget: Final = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
 
-        _budget: Final = await BudgetRepository(prisma_client).table.create(
+        _budget: Final[LiteLLM_BudgetTable] = await BudgetRepository(prisma_client).table.create(
             data={
                 **new_budget,
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -4874,7 +4874,9 @@ async def _execute_virtual_key_regeneration(
         grace_period=data.grace_period if data else None,
     )
 
-    updated_token: Final[Mapping[str, object] | None] = await VerificationTokenRepository(prisma_client).table.update(
+    updated_token: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
+        VerificationTokenRepository(prisma_client)
+    ).update(
         where={"token": hashed_api_key},
         data=with_settings_updated_at(jsonified_update_data),
     )
@@ -5426,7 +5428,9 @@ async def validate_key_list_check(
 
     if key_hash:
         try:
-            key_info: Final = await VerificationTokenRepository(prisma_client).table.find_unique(
+            key_info: Final[LiteLLM_VerificationToken] = await VerificationTokenRepository(
+                prisma_client
+            ).table.find_unique(
                 where={"token": key_hash},
             )
         except Exception:

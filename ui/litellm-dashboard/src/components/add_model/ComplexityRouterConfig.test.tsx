@@ -706,3 +706,76 @@ describe("ComplexityRouterConfig affinity panel", () => {
     expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).not.toBeChecked();
   });
 });
+
+describe("ComplexityRouterConfig default model", () => {
+  const getDefaultModelSelect = () => screen.getByRole("combobox", { name: "Default model" });
+
+  it("shows what the tiers currently imply, so an untouched router still names its default", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.getByText("Derived from tiers: gpt-3.5-turbo")).toBeInTheDocument();
+  });
+
+  it("asks for a model rather than naming a derived one when no tier holds one", () => {
+    const noTiers: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={noTiers} />);
+    expect(screen.getByText("Add a model to the Simple or Medium tier")).toBeInTheDocument();
+  });
+
+  it("records a pinned model", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+
+    await user.click(getDefaultModelSelect());
+    await user.click((await screen.findAllByTitle("claude-3-opus")).slice(-1)[0]);
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ default_model: "claude-3-opus" }));
+  });
+
+  it("drops the key when the pin is cleared, so an emptied select reads as tier-tracking", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} onChange={onChange} />);
+
+    await user.click(document.querySelector(".ant-select-clear") as HTMLElement);
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ default_model: undefined }));
+  });
+
+  it("shows a pinned model as the selection instead of the tier-derived one", () => {
+    const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} />);
+    expect(
+      within(getDefaultModelSelect().closest(".ant-select") as HTMLElement).getByTitle("claude-3-opus"),
+    ).toBeInTheDocument();
+  });
+
+  it("unlocks the default model fallback on a pin alone, with no tier to derive from", () => {
+    const pinnedNoTiers: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+      tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+      default_model: "claude-3-opus",
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinnedNoTiers} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toBeEnabled();
+  });
+
+  it("names the resolved default on the fallback option, so the destination is not a guess", () => {
+    const pinned: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+      default_model: "claude-3-opus",
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Route to the default model \(claude-3-opus\)/ })).toBeInTheDocument();
+  });
+});
