@@ -50,15 +50,19 @@ def _build_document_from_upload(
 
 def _with_request_format(data: Mapping[str, Any], request: Request) -> Mapping[str, Any]:
     """
-    Resolve the requested response format from the `x-req-format` header.
+    Resolve the requested response format from the body or the `x-req-format` header.
 
     An explicit `req_format` in the body wins over the header.
     """
+    body_value: Final = data.get(OCR_REQUEST_FORMAT_PARAM)
     header_value: Final = request.headers.get(OCR_REQUEST_FORMAT_HEADER)
-    if header_value is None or OCR_REQUEST_FORMAT_PARAM in data:
+    raw_value: Final = body_value if body_value is not None else header_value
+    if raw_value is None:
         return data
     try:
-        request_format: Final = parse_ocr_request_format(header_value.strip().lower())
+        request_format: Final = parse_ocr_request_format(
+            raw_value.strip().lower() if isinstance(raw_value, str) else raw_value
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": f"{e}"})
     return {**data, OCR_REQUEST_FORMAT_PARAM: request_format}

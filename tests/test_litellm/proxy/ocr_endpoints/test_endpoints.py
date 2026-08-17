@@ -74,10 +74,19 @@ async def test_should_omit_req_format_when_header_absent():
 
 
 @pytest.mark.asyncio
-async def test_should_reject_unknown_req_format_header():
+@pytest.mark.parametrize(
+    "body_format, headers",
+    [
+        (None, {"x-req-format": "azure"}),
+        ("azure", {}),
+        ("azure", {"x-req-format": "native"}),
+    ],
+)
+async def test_should_reject_unknown_req_format(body_format, headers):
+    body = {"model": "azure-prebuilt-layout", "document": {"type": "document_url", "document_url": "https://x/y.pdf"}}
     request = _json_request(
-        {"model": "azure-prebuilt-layout", "document": {"type": "document_url", "document_url": "https://x/y.pdf"}},
-        {"x-req-format": "azure"},
+        body if body_format is None else {**body, "req_format": body_format},
+        headers,
     )
 
     with pytest.raises(HTTPException) as exc_info:
