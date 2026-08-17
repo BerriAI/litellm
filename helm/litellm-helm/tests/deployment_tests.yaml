@@ -140,6 +140,16 @@ tests:
           content:
             name: DATABASE_URL_READ_REPLICA
             value: postgresql://ignored
+      # the unused reader-host secret ref must be suppressed so a missing
+      # key can't fail pod creation
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_READER_HOST
+            valueFrom:
+              secretKeyRef:
+                name: postgres
+                key: reader-host
   - it: should work with extraEnvVars
     template: deployment.yaml
     set:
