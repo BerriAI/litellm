@@ -254,7 +254,7 @@ if TYPE_CHECKING:
         ResponsesAPIResponse,
     )
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
     AutoRouter = Any
