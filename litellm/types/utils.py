@@ -39,7 +39,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -3127,11 +3127,11 @@ class StandardAuditLogPayload(TypedDict):
     object_id: str
     before_value: str | None
     updated_values: str | None
-    object_alias: str | None
-    object_team_id: str | None
-    object_team_alias: str | None
-    changed_by_user_email: str | None
-    changed_by_key_alias: str | None
+    object_alias: ReadOnly[str | None]
+    object_team_id: ReadOnly[str | None]
+    object_team_alias: ReadOnly[str | None]
+    changed_by_user_email: ReadOnly[str | None]
+    changed_by_key_alias: ReadOnly[str | None]
 
 
 class StandardLoggingPayload(TypedDict):

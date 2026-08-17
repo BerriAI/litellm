@@ -211,7 +211,7 @@ def _derive_object_alias(table_name: str, updated: _AuditBlobAliasFields, before
 async def _lookup_team_alias(prisma_client: "PrismaClient", team_id: str) -> str | None:
     try:
         row: Final = await prisma_client.db.litellm_teamtable.find_unique(where={"team_id": team_id})
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # audit enrichment must never break the management call
         verbose_proxy_logger.debug("audit log team alias lookup failed: %s", e)
         return None
     alias: Final = None if row is None else row.team_alias
@@ -221,7 +221,7 @@ async def _lookup_team_alias(prisma_client: "PrismaClient", team_id: str) -> str
 async def _lookup_user_email(prisma_client: "PrismaClient", user_id: str) -> str | None:
     try:
         row: Final = await prisma_client.db.litellm_usertable.find_unique(where={"user_id": user_id})
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # audit enrichment must never break the management call
         verbose_proxy_logger.debug("audit log user email lookup failed: %s", e)
         return None
     email: Final = None if row is None else row.user_email
@@ -236,7 +236,7 @@ class _ActorKey(NamedTuple):
 async def _lookup_actor_key(prisma_client: "PrismaClient", token: str) -> _ActorKey:
     try:
         row: Final = await prisma_client.db.litellm_verificationtoken.find_unique(where={"token": token})
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # audit enrichment must never break the management call
         verbose_proxy_logger.debug("audit log key lookup failed: %s", e)
         return _ActorKey(key_alias=None, user_id=None)
     alias: Final = None if row is None else row.key_alias
