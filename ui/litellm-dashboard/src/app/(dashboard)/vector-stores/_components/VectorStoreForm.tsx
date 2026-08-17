@@ -150,7 +150,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
             description={
               <div>
                 <p>LiteLLM provides a server to connect to PG Vector. To use this provider:</p>
-                <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
+                <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                   <li>
                     Deploy the litellm-pgvector server from:{" "}
                     <a href="https://github.com/BerriAI/litellm-pgvector" target="_blank" rel="noopener noreferrer">
@@ -179,7 +179,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   LiteLLM searches documents you have already stored in Valkey. It does not create the index or upload
                   documents for you. Before creating this vector store, make sure:
                 </p>
-                <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
+                <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                   <li>
                     Your Valkey server has vector search enabled (the valkey-search module, included in the
                     valkey-bundle image and in AWS ElastiCache / MemoryDB for Valkey)
@@ -220,7 +220,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   Note: Google Cloud has renamed this to &quot;RAG Engine&quot; in its console — the steps below still
                   apply.
                 </p>
-                <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
+                <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                   <li>
                     Set up your Vertex AI RAG Engine corpus following the guide:{" "}
                     <a
@@ -256,7 +256,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   Note: Google Cloud has renamed this to &quot;Agent Search&quot; in its console — the steps below still
                   apply.
                 </p>
-                <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
+                <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                   <li>
                     Enable the Discovery Engine API on your Google Cloud project and create a data store following the
                     guide:{" "}
