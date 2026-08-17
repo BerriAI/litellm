@@ -1691,7 +1691,7 @@ class MCPServerManager:
     def _reconcile_oauth_discovery_slots_for_servers(self, servers: Iterable[MCPServer]) -> None:
         """Align retry slots after an atomic registry replacement."""
         for server in servers:
-            should_defer = bool(server.url) and _oauth_endpoints_unresolved(server)
+            should_defer = _requires_oauth_discovery(server.url, server.issuer_is_anchored, server)
             has_slot = self._oauth_discovery_slot(server.server_id) is not None
             if should_defer != has_slot:
                 self._set_oauth_discovery_deferred(server.server_id, should_defer)

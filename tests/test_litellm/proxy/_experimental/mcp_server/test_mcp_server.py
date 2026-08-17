@@ -7970,6 +7970,22 @@ class TestPreemptive401ModeAware:
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
+    async def test_stamped_m2m_challenge_skips_deferred_discovery(self):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        manager = server_module.global_mcp_server_manager
+        server = _make_oauth2_server("stamped_m2m", oauth2_flow="client_credentials")
+
+        with patch.object(
+            manager,
+            "ensure_oauth_metadata_discovered",
+            new=AsyncMock(side_effect=HTTPException(status_code=503, detail="discovery down")),
+        ) as discovery:
+            await self._run(server, None, has_stored_token=False)
+
+        discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_gateway_managed_interactive_no_token_challenges_with_x_litellm_api_key(self):
         """No stored token, key in x-litellm-api-key (oauth2_headers empty): 401."""
         with pytest.raises(HTTPException) as exc:

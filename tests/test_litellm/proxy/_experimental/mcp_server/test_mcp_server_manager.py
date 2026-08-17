@@ -695,6 +695,36 @@ class TestMCPServerManager:
         assert resolved.token_url == "https://idp.example.com/token"
         assert manager._oauth_discovery_slot(replacement.server_id) is None
 
+    def test_registry_swap_reconcile_keeps_slot_for_issuer_anchored_server_without_url(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="anchored-no-url-1",
+            name="anchored_no_url",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            issuer="https://idp.example.com",
+            issuer_is_anchored=True,
+        )
+        manager.registry[server.server_id] = server
+        manager._set_oauth_discovery_deferred(server.server_id, True)
+
+        manager._reconcile_oauth_discovery_slots_for_servers([server])
+
+        assert manager._oauth_discovery_slot(server.server_id) is not None
+
+        resolved = server.model_copy(
+            update={
+                "authorization_url": "https://idp.example.com/authorize",
+                "token_url": "https://idp.example.com/token",
+            }
+        )
+        manager.registry[resolved.server_id] = resolved
+        manager._reconcile_oauth_discovery_slots_for_servers([resolved])
+
+        assert manager._oauth_discovery_slot(server.server_id) is None
+
     def _assert_oauth_discovery_state_removed(self, manager, server_id):
         assert manager._oauth_discovery_slot(server_id) is None
 
