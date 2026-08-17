@@ -1303,8 +1303,15 @@ class LiteLLMProxyRequestSetup:
         )
         if user_api_key_dict.budget_reservation is not None:
             data[_metadata_variable_name]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
-        # Add the full UserAPIKeyAuth object for MCP server access control
-        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict
+        # UserAPIKeyAuth for MCP server access control, minus the credential-bearing slots
+        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
+            update={
+                "metadata": strip_callback_config(user_api_key_dict.metadata),
+                "team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+                "project_metadata": strip_callback_config(user_api_key_dict.project_metadata),
+                "organization_metadata": strip_callback_config(user_api_key_dict.organization_metadata),
+            }
+        )
         return data
 
     @staticmethod
@@ -1326,10 +1333,11 @@ class LiteLLMProxyRequestSetup:
         )
 
         # ignore any special fields
-        added_metadata: Final = {}
-        for k, v in management_endpoint_metadata.items():
-            if k not in (LiteLLM_ManagementEndpoint_MetadataFields_Premium + LiteLLM_ManagementEndpoint_MetadataFields):
-                added_metadata[k] = v
+        added_metadata: Final = {
+            k: v
+            for k, v in (strip_callback_config(management_endpoint_metadata) or {}).items()
+            if k not in (LiteLLM_ManagementEndpoint_MetadataFields_Premium + LiteLLM_ManagementEndpoint_MetadataFields)
+        }
         if data[_metadata_variable_name].get("user_api_key_auth_metadata") is None:
             data[_metadata_variable_name]["user_api_key_auth_metadata"] = {}
         data[_metadata_variable_name]["user_api_key_auth_metadata"].update(added_metadata)
