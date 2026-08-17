@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
@@ -208,7 +208,7 @@ describe("Teams - handleCreate organization handling", () => {
     };
 
     // Simulate the handleCreate logic
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -226,7 +226,7 @@ describe("Teams - handleCreate organization handling", () => {
       models: [],
     };
 
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -243,7 +243,7 @@ describe("Teams - handleCreate organization handling", () => {
       models: [],
     };
 
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -260,7 +260,7 @@ describe("Teams - handleCreate organization handling", () => {
       models: [],
     };
 
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -278,7 +278,7 @@ describe("Teams - handleCreate organization handling", () => {
       max_budget: 100,
     };
 
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -308,7 +308,7 @@ describe("Teams - handleCreate organization handling", () => {
       models: [],
     };
 
-    let organizationId = formValues?.organization_id || currentOrg?.organization_id;
+    const organizationId = formValues?.organization_id || currentOrg?.organization_id;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -522,14 +522,13 @@ describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
   });
 
   it("renders the Create Team button inside the tab bar, ahead of the tabs", () => {
-    const { container } = renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     const createButton = screen.getByTestId("create-team-button");
-    const tabNav = container.querySelector(".ant-tabs-nav");
+    const tabBar = screen.getByRole("tablist").parentElement!;
 
     // The CTA lives in the tab bar's left slot, not the standalone page header.
-    expect(tabNav).not.toBeNull();
-    expect(tabNav!.contains(createButton)).toBe(true);
+    expect(tabBar.contains(createButton)).toBe(true);
 
     // It reads as the left end of the cluster: it precedes the first tab in DOM order.
     const firstTab = screen.getByRole("tab", { name: "Your Teams" });
@@ -690,7 +689,7 @@ describe("Teams - Reset Budget in team create", () => {
     });
   };
 
-  const resetBudgetField = () => screen.getByText("Reset Budget").closest(".ant-form-item") as HTMLElement;
+  const resetBudgetSelect = () => screen.getByLabelText("Reset Budget");
 
   const submitCreateModal = async () => {
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
@@ -708,7 +707,7 @@ describe("Teams - Reset Budget in team create", () => {
   it("should send an explicit null budget_duration when Never resets is selected", async () => {
     await openCreateModal();
 
-    await userEvent.click(within(resetBudgetField()).getByRole("combobox"));
+    await userEvent.click(resetBudgetSelect());
     await userEvent.click(await screen.findByText("Never resets"));
 
     const payload = await submitCreateModal();
@@ -729,7 +728,7 @@ describe("Teams - Reset Budget in team create", () => {
   it("should send the picked duration when one is selected", async () => {
     await openCreateModal();
 
-    await userEvent.click(within(resetBudgetField()).getByRole("combobox"));
+    await userEvent.click(resetBudgetSelect());
     await userEvent.click(await screen.findByText("weekly"));
 
     const payload = await submitCreateModal();
@@ -741,7 +740,7 @@ describe("Teams - Reset Budget in team create", () => {
     await openCreateModal();
 
     await waitFor(() => {
-      expect(within(resetBudgetField()).getByText("Default: monthly (30d)")).toBeInTheDocument();
+      expect(screen.getByText("Default: monthly (30d)")).toBeInTheDocument();
     });
   });
 
@@ -751,7 +750,7 @@ describe("Teams - Reset Budget in team create", () => {
     await openCreateModal();
 
     await waitFor(() => {
-      expect(within(resetBudgetField()).getByText("n/a")).toBeInTheDocument();
+      expect(screen.getByText("n/a")).toBeInTheDocument();
     });
   });
 });
