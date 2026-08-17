@@ -939,6 +939,15 @@ class AsyncHTTPHandler:
     # Mirrors LiteLLMAiohttpTransport._background_close_tasks.
     _finalizer_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs for pending closes
 
+    @classmethod
+    def _on_finalizer_close_done(cls, task: "asyncio.Task[None]") -> None:
+        cls._finalizer_close_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc: Final = task.exception()
+        if exc is not None:
+            verbose_logger.debug("Error closing client at finalization: %s", exc)
+
     def _close_aiohttp_session_sync(self) -> None:
         """Dispose the wrapped aiohttp session when no event loop is available.
 
@@ -980,7 +989,7 @@ class AsyncHTTPHandler:
             task: Final = loop.create_task(self._client.aclose())
             cls: Final = type(self)
             cls._finalizer_close_tasks.add(task)
-            task.add_done_callback(cls._finalizer_close_tasks.discard)
+            task.add_done_callback(cls._on_finalizer_close_done)
         except Exception:
             pass
 

@@ -56,9 +56,7 @@ async def test_async_post_streaming_status_error_should_not_wait_forever_for_bod
 
     litellm_handler = AsyncHTTPHandler()
     await litellm_handler.client.aclose()
-    litellm_handler.client = httpx.AsyncClient(
-        transport=httpx.MockTransport(mock_handler)
-    )
+    litellm_handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
     try:
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
             await asyncio.wait_for(
@@ -378,7 +376,8 @@ async def test_get_async_httpx_client_with_shared_session():
 
     # Test with shared session
     client = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC, shared_session=mock_session  # type: ignore
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session,  # type: ignore
     )
 
     # Verify the client was created successfully
@@ -397,9 +396,7 @@ async def test_get_async_httpx_client_without_shared_session():
     from litellm.types.utils import LlmProviders
 
     # Test without shared session
-    client = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC, shared_session=None
-    )
+    client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC, shared_session=None)
 
     # Verify the client was created successfully
     assert client is not None
@@ -476,11 +473,13 @@ async def test_session_reuse_integration():
 
     # Create two clients with the same session
     client1 = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC, shared_session=mock_session  # type: ignore
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session,  # type: ignore
     )
 
     client2 = get_async_httpx_client(
-        llm_provider=LlmProviders.OPENAI, shared_session=mock_session  # type: ignore
+        llm_provider=LlmProviders.OPENAI,
+        shared_session=mock_session,  # type: ignore
     )
 
     # Both clients should be created successfully
@@ -512,9 +511,7 @@ async def test_session_reuse_integration():
         (None, None, None, False),  # None value - skip configuration
     ],
 )
-def test_ssl_ecdh_curve(
-    env_curve, litellm_curve, expected_curve, should_call, monkeypatch
-):
+def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, monkeypatch):
     """Test SSL ECDH curve configuration with valid curves and precedence"""
     from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
 
@@ -1281,3 +1278,25 @@ async def test_sync_close_helper_respects_session_ownership():
     await shared_session.close()
     await shared_handler.close()
     await owned_handler.close()
+
+
+@pytest.mark.asyncio
+async def test_finalizer_close_done_consumes_exception():
+    """A failing finalizer close must have its exception retrieved by the done
+    callback, or asyncio emits "Task exception was never retrieved" at GC —
+    the same log noise the finalizer path exists to eliminate."""
+
+    async def failing_close() -> None:
+        raise RuntimeError("close failed")
+
+    task = asyncio.get_running_loop().create_task(failing_close())
+    AsyncHTTPHandler._finalizer_close_tasks.add(task)
+    await asyncio.sleep(0)
+
+    AsyncHTTPHandler._on_finalizer_close_done(task)
+    assert task not in AsyncHTTPHandler._finalizer_close_tasks
+
+    cancelled = asyncio.get_running_loop().create_task(asyncio.sleep(30))
+    cancelled.cancel()
+    await asyncio.sleep(0)
+    AsyncHTTPHandler._on_finalizer_close_done(cancelled)
