@@ -84,17 +84,20 @@ class OpenAIRealtime(OpenAIChatCompletion):
         """
         Construct the backend websocket URL with all query parameters (including 'model').
         """
-        from httpx import URL
+        from httpx import URL, QueryParams
 
-        api_base = api_base.replace("https://", "wss://")
-        api_base = api_base.replace("http://", "ws://")
-        url = URL(api_base)
-        # Set the correct path
-        url = url.copy_with(path="/v1/realtime")
-        # Include all query parameters including 'model'
-        if query_params:
-            url = url.copy_with(params=query_params)
-        return str(url)
+        api_base_url: Final = URL(api_base)
+        websocket_scheme: Final = {"https": "wss", "http": "ws"}.get(api_base_url.scheme, api_base_url.scheme)
+        base_path: Final = api_base_url.path.rstrip("/")
+        realtime_path: Final = (
+            base_path
+            if base_path.endswith("/v1/realtime")
+            else f"{base_path}/realtime"
+            if base_path.endswith("/v1")
+            else f"{base_path}/v1/realtime"
+        )
+        merged_params: Final = QueryParams(query_params).merge(api_base_url.params)
+        return str(api_base_url.copy_with(scheme=websocket_scheme, path=realtime_path, params=merged_params))
 
     def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:
         """Return a per-session GA event normalizer, or None for passthrough.

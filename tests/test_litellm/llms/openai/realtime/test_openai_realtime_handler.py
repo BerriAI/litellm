@@ -14,9 +14,16 @@ sys.path.insert(
 
 
 @pytest.mark.parametrize(
-    "api_base", ["https://api.openai.com/v1", "https://api.openai.com"]
+    ("api_base", "expected_scheme", "expected_path"),
+    [
+        ("https://api.openai.com", "wss", "/v1/realtime"),
+        ("https://api.openai.com/v1", "wss", "/v1/realtime"),
+        ("https://api.openai.com/v1/realtime", "wss", "/v1/realtime"),
+        ("http://localhost:8000/gateway/openai", "ws", "/gateway/openai/v1/realtime"),
+        ("https://gateway.example.com/tenant/openai/v1/", "wss", "/tenant/openai/v1/realtime"),
+    ],
 )
-def test_openai_realtime_handler_url_construction(api_base):
+def test_openai_realtime_handler_url_construction(api_base, expected_scheme, expected_path):
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
 
     handler = OpenAIRealtime()
@@ -26,9 +33,10 @@ def test_openai_realtime_handler_url_construction(api_base):
             "model": "gpt-4o-realtime-preview-2024-10-01",
         },
     )
-    # Model parameter should be included in the URL
-    assert url.startswith("wss://api.openai.com/v1/realtime?")
-    assert "model=gpt-4o-realtime-preview-2024-10-01" in url
+    parsed_url = httpx.URL(url)
+    assert parsed_url.scheme == expected_scheme
+    assert parsed_url.path == expected_path
+    assert parsed_url.params["model"] == "gpt-4o-realtime-preview-2024-10-01"
 
 
 def test_openai_realtime_handler_url_with_extra_params():
@@ -36,16 +44,21 @@ def test_openai_realtime_handler_url_with_extra_params():
     from litellm.types.realtime import RealtimeQueryParams
 
     handler = OpenAIRealtime()
-    api_base = "https://api.openai.com/v1"
+    api_base = (
+        "https://gateway.example.com/tenant/openai/v1"
+        "?gateway_route=europe&gateway_route=backup"
+        "&model=gateway-model&intent=gateway-intent"
+    )
     query_params: RealtimeQueryParams = {
         "model": "gpt-4o-realtime-preview-2024-10-01",
         "intent": "chat",
     }
     url = handler._construct_url(api_base=api_base, query_params=query_params)
-    # Both 'model' and other params should be included in the query string
-    assert url.startswith("wss://api.openai.com/v1/realtime?")
-    assert "model=gpt-4o-realtime-preview-2024-10-01" in url
-    assert "intent=chat" in url
+    parsed_url = httpx.URL(url)
+    assert parsed_url.path == "/tenant/openai/v1/realtime"
+    assert parsed_url.params.get_list("gateway_route") == ["europe", "backup"]
+    assert parsed_url.params["model"] == "gateway-model"
+    assert parsed_url.params["intent"] == "gateway-intent"
 
 
 def test_openai_realtime_handler_model_parameter_inclusion():
