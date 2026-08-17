@@ -127,7 +127,7 @@ class RealTimeStreaming:
         # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
         self._event_normalizer = event_normalizer
         # Monotonic per-speaker frame counters for the realtime_audio hook.
-        self._audio_frame_seq: dict[str, int] = {"user": 0, "model": 0}
+        self._audio_frame_seq: dict[str, int] = {"user": 0, "model": 0}  # mutable-ok: per-speaker frame counter
         # Audio formats as declared by the client's session config, when it declares them.
         self._client_audio_format: str | None = None
         self._model_audio_format: str | None = None
@@ -152,7 +152,7 @@ class RealTimeStreaming:
     _SESSION_CONFIG_CLIENT_TYPES = frozenset(["session.update", "session.create"])
     # Realtime defaults when the session declares no explicit format: client mics
     # commonly send 16 kHz while model output is 24 kHz.
-    _DEFAULT_AUDIO_SAMPLE_RATE_HZ: ClassVar[dict[str, int]] = {"user": 16000, "model": 24000}
+    _DEFAULT_AUDIO_SAMPLE_RATE_HZ: ClassVar[Mapping[str, int]] = {"user": 16000, "model": 24000}
     _AUDIO_FORMAT_MAP: dict[str, dict[str, str | int]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
         "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
@@ -576,12 +576,12 @@ class RealTimeStreaming:
         """
         if not self._has_realtime_audio_guardrails():
             return False
-        event_obj: dict | None = event if isinstance(event, dict) else self._parse_backend_event(event_str)  # type: ignore[assignment]
+        event_obj: Final = event if isinstance(event, dict) else self._parse_backend_event(event_str)
         if not isinstance(event_obj, dict):
             return False
         if event_obj.get("type") not in self._AUDIO_DELTA_EVENT_TYPES:
             return False
-        delta = event_obj.get("delta")
+        delta: Final = event_obj.get("delta")
         if not isinstance(delta, str) or not delta:
             return False
         return await self.run_realtime_audio_guardrails(delta, speaker="model")
@@ -769,14 +769,13 @@ class RealTimeStreaming:
         seq: Final = self._audio_frame_seq.get(speaker, 0)
         self._audio_frame_seq[speaker] = seq + 1
 
-        if sample_rate_hz is None:
-            sample_rate_hz = self._audio_sample_rate_hz(speaker)
+        resolved_rate: Final = sample_rate_hz if sample_rate_hz is not None else self._audio_sample_rate_hz(speaker)
 
-        frame: GuardrailAudioFrame = {
+        frame: Final[GuardrailAudioFrame] = {
             "speaker": speaker,
             "audio": audio_b64,
             "encoding": encoding,
-            "sample_rate_hz": sample_rate_hz,
+            "sample_rate_hz": resolved_rate,
             "sequence": seq,
         }
         _already_run: Final[set] = set()
@@ -817,14 +816,14 @@ class RealTimeStreaming:
         """
         declared: Final = self._client_audio_format if speaker == "user" else self._model_audio_format
         if declared is not None:
-            rate = self._AUDIO_FORMAT_MAP.get(declared, {}).get("rate")
+            rate: Final = self._AUDIO_FORMAT_MAP.get(declared, {}).get("rate")
             if isinstance(rate, int):
                 return rate
         return self._DEFAULT_AUDIO_SAMPLE_RATE_HZ[speaker]
 
-    def _remember_declared_audio_formats(self, msg_obj: dict) -> None:
+    def _remember_declared_audio_formats(self, msg_obj: Mapping[str, object]) -> None:
         """Record audio formats from a client ``session.update``/``session.create``."""
-        session = msg_obj.get("session")
+        session: Final = msg_obj.get("session")
         if not isinstance(session, dict):
             return
         for key, attr in (
@@ -1474,7 +1473,7 @@ class RealTimeStreaming:
                         and not guardrail_turn_detection_injected
                         and self._has_audio_transcription_guardrails()
                     ):
-                        session = msg_obj.get("session")
+                        session: Final = msg_obj.get("session")
                         if isinstance(session, dict):
                             td_overridden = False
                             flat_td = session.get("turn_detection")
@@ -1524,7 +1523,7 @@ class RealTimeStreaming:
                             message = json.dumps(msg_obj)
 
                     if msg_type == "session.update" and self._event_normalizer:
-                        session = msg_obj.get("session")
+                        session: Final = msg_obj.get("session")
                         if isinstance(session, dict):
                             msg_obj["session"] = self._event_normalizer.patch_outgoing_session(session)
                             message = json.dumps(msg_obj)

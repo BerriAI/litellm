@@ -39,7 +39,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -4084,17 +4084,17 @@ class GuardrailAudioFrame(TypedDict, total=False):
     output), so it cannot be assumed per session.
     """
 
-    speaker: Literal["user", "model"]
-    audio: str  # base64-encoded audio payload, exactly as it appears on the wire
-    encoding: str  # e.g. "pcm16", "g711_ulaw", "g711_alaw"
-    sample_rate_hz: int
-    sequence: int  # monotonic per speaker, so a guardrail can order and dedup frames
+    speaker: ReadOnly[Literal["user", "model"]]
+    audio: ReadOnly[str]  # base64-encoded audio payload, exactly as it appears on the wire
+    encoding: ReadOnly[str]  # e.g. "pcm16", "g711_ulaw", "g711_alaw"
+    sample_rate_hz: ReadOnly[int]
+    sequence: ReadOnly[int]  # monotonic per speaker, so a guardrail can order and dedup frames
 
 
 class GenericGuardrailAPIInputs(TypedDict, total=False):
     texts: list[str]  # extracted text from the LLM response - for basic text guardrails
     images: list[str]  # extracted images from the LLM response - for image guardrails
-    audio: list[GuardrailAudioFrame]  # realtime audio frames - for audio guardrails
+    audio: ReadOnly[Sequence[GuardrailAudioFrame]]  # realtime audio frames - for audio guardrails
     tools: list[ChatCompletionToolParam]  # tools sent to the LLM
     tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall]  # tool calls sent from the LLM
     structured_messages: list[
