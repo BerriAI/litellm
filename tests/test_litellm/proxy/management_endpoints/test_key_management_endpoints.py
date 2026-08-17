@@ -541,6 +541,57 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_key_with_soft_budget_creates_budget_row(monkeypatch):
+    """soft_budget on /key/generate must create a budget table row and link its budget_id to the key."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    mock_prisma_client.db = MagicMock()
+    mock_budget_create = AsyncMock(return_value=MagicMock(budget_id="budget-soft-123"))
+    mock_prisma_client.db.litellm_budgettable = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.create = mock_budget_create
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        if kwargs.get("table_name") == "user":
+            return MagicMock(models=[], spend=0)
+        return MagicMock(
+            token="hashed_token_soft",
+            litellm_budget_table=None,
+            object_permission=None,
+        )
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    await generate_key_fn(
+        data=GenerateKeyRequest(soft_budget=5.0),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin-1",
+        ),
+    )
+
+    mock_budget_create.assert_awaited_once()
+    created_budget = mock_budget_create.call_args.kwargs["data"]
+    assert created_budget["soft_budget"] == 5.0
+    assert created_budget["created_by"] == "admin-1"
+
+    key_insert_calls = [
+        call.kwargs
+        for call in mock_prisma_client.insert_data.call_args_list
+        if call.kwargs.get("table_name") == "key"
+    ]
+    assert len(key_insert_calls) == 1
+    assert key_insert_calls[0]["data"].get("budget_id") == "budget-soft-123"
+
+
+@pytest.mark.asyncio
 async def test_generate_key_debug_log_never_contains_raw_token(monkeypatch, caplog):
     """Regression for LIT-4356: /key/generate must never emit the raw virtual key
     to a logger, even for short keys that bypass the regex-based
@@ -14099,6 +14150,30 @@ async def test_budget_limits_with_usage_skips_unusable_inputs(monkeypatch):
     assert result[3] == 42
     # input is not mutated
     assert windows[2] == {"budget_duration": "1h", "max_budget": "not-a-number"}
+
+
+@pytest.mark.asyncio
+async def test_budget_limits_with_usage_window_without_max_budget(monkeypatch):
+    """A window with only budget_duration still gets current_spend, read without a budget ceiling."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _budget_limits_with_usage,
+    )
+
+    mock_get_current_spend = AsyncMock(return_value=0.75)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+    )
+
+    result = await _budget_limits_with_usage(
+        budget_limits=[{"budget_duration": "2d"}], api_key_hash="hash-no-max"
+    )
+
+    assert result == [{"budget_duration": "2d", "current_spend": 0.75}]
+    call_kwargs = mock_get_current_spend.await_args.kwargs
+    assert call_kwargs["counter_key"] == "spend:key:hash-no-max:window:2d"
+    assert call_kwargs["max_budget"] is None
 
 
 @pytest.mark.asyncio
