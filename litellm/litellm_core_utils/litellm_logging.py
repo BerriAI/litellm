@@ -626,7 +626,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             return None
         try:
-            merged: Final = litellm.get_model_info(model=model_id)
+            merged: Final = litellm.get_model_info(model=model_id).copy()
         except Exception:  # noqa: BLE001  # get_model_info raises for ids it cannot resolve a provider for
             return None
         published: Final = self._published_model_info()
