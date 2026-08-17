@@ -89,6 +89,11 @@ migrationJob:
   securityContext: {}
   # Extra pod labels on the Job pod, merged into the chart's common labels.
   podLabels: {}
+  # Extra annotations on the Job itself, merged over the chart's helm.sh hook
+  # annotations so an override replaces the key. Lets ArgoCD users stamp
+  # argocd.argoproj.io/hook annotations, since ArgoCD ignores helm.sh hooks
+  # when the chart is inflated outside Helm (e.g. Kustomize --enable-helm).
+  annotations: {}
   # Additional volumes on the Job pod and volumeMounts on its container, e.g.
   # the writable scratch space a read-only root filesystem needs.
   volumes: []

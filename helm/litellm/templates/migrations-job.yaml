@@ -14,10 +14,12 @@ metadata:
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: migrations
+  {{- /* Same merge rationale as podLabels below: an override replaces the
+         key, so tools that ignore helm.sh hooks (ArgoCD inflating the chart
+         through Kustomize) can stamp their own hook annotations. */}}
+  {{- $hookAnnotations := dict "helm.sh/hook" "pre-install,pre-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation" "helm.sh/hook-weight" "0" }}
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-delete-policy: before-hook-creation
-    helm.sh/hook-weight: "0"
+    {{- toYaml (merge (deepCopy .Values.migrationJob.annotations) $hookAnnotations) | nindent 4 }}
 spec:
   backoffLimit: {{ .Values.migrationJob.backoffLimit }}
   ttlSecondsAfterFinished: {{ .Values.migrationJob.ttlSecondsAfterFinished }}

@@ -167,3 +167,43 @@ tests:
       - equal:
           path: spec.template.metadata.labels['app.kubernetes.io/component']
           value: batch-migrations
+
+  - it: renders only the helm hook annotations by default
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            helm.sh/hook: pre-install,pre-upgrade
+            helm.sh/hook-delete-policy: before-hook-creation
+            helm.sh/hook-weight: "0"
+
+  - it: merges extra annotations with the helm hook annotations
+    set:
+      migrationJob.annotations:
+        argocd.argoproj.io/hook: PreSync
+        argocd.argoproj.io/sync-wave: "-1"
+    asserts:
+      - equal:
+          path: metadata.annotations['argocd.argoproj.io/hook']
+          value: PreSync
+      - equal:
+          path: metadata.annotations['argocd.argoproj.io/sync-wave']
+          value: "-1"
+      - equal:
+          path: metadata.annotations['helm.sh/hook']
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations['helm.sh/hook-delete-policy']
+          value: before-hook-creation
+
+  - it: lets an annotation override replace a helm hook annotation
+    set:
+      migrationJob.annotations:
+        helm.sh/hook-delete-policy: hook-succeeded
+    asserts:
+      - equal:
+          path: metadata.annotations['helm.sh/hook-delete-policy']
+          value: hook-succeeded
+      - equal:
+          path: metadata.annotations['helm.sh/hook']
+          value: pre-install,pre-upgrade
