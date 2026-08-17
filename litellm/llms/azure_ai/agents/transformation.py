@@ -335,7 +335,18 @@ class AzureAIAgentsConfig(BaseConfig):
         """
         from litellm.llms.azure.common_utils import get_azure_ad_token
         from litellm.llms.azure_ai.agents.handler import azure_ai_agents_handler
+        from litellm.llms.azure_ai.common_utils import is_agents_v2_model
         from litellm.types.router import GenericLiteLLMParams
+
+        if is_agents_v2_model(model):
+            raise AzureAIAgentsError(
+                status_code=400,
+                message=(
+                    f"Azure AI Foundry Agents v2 model '{model}' is served by the Responses API. "
+                    "Call it via /v1/responses (litellm.responses) instead of chat completions. "
+                    "Assistants-based agents use `azure_ai/agents/<agent_id>` without a version."
+                ),
+            )
 
         # If no api_key is provided, try to get Azure AD token
         if api_key is None:

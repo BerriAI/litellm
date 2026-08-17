@@ -5,9 +5,10 @@ Uses the project-level Responses API with agent_reference for Foundry Agents v2.
 Model format: azure_ai/agents/<agent_name>:<version>
 """
 
+from collections.abc import Mapping
 from typing import Final
-from urllib.parse import urlencode
 
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     is_agents_v2_model,
@@ -28,64 +29,81 @@ class AzureAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: signature fixed by BaseResponsesAPIConfig
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
-        litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key: Final = AzureFoundryModelInfo.get_api_key(litellm_params.api_key)
+    ) -> dict:  # mutable-ok: outbound HTTP headers
+        resolved_params: Final = litellm_params or GenericLiteLLMParams()
+        api_key: Final = AzureFoundryModelInfo.get_api_key(resolved_params.api_key)
 
-        headers["Content-Type"] = "application/json"
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
-        return headers
+        return {
+            **headers,
+            "Content-Type": "application/json",
+            **({"Authorization": f"Bearer {api_key}"} if api_key else {}),
+        }
 
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: signature fixed by BaseResponsesAPIConfig
     ) -> str:
-        if api_base is None:
+        resolved_api_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
+        if resolved_api_base is None:
             raise ValueError(
                 "api_base is required for Azure AI Foundry Agents v2. "
                 "Set AZURE_AI_API_BASE or pass api_base (project endpoint)."
             )
 
-        api_version: Final = litellm_params.get("api_version", self.DEFAULT_API_VERSION)
-        normalized_api_base: Final = api_base.rstrip("/")
-        query: Final = urlencode({"api-version": api_version})
-        return f"{normalized_api_base}/openai/responses?{query}"
+        return BaseAzureLLM._get_base_azure_url(  # pyright: ignore[reportPrivateUsage] # shared azure url builder, called this way by every azure config
+            api_base=resolved_api_base,
+            litellm_params=litellm_params,
+            route="/openai/responses",
+            default_api_version=self.DEFAULT_API_VERSION,
+        )
 
     def transform_responses_api_request(
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by BaseResponsesAPIConfig
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
-        if not is_agents_v2_model(model):
-            return super().transform_responses_api_request(
-                model=model,
-                input=input,
-                response_api_optional_request_params=response_api_optional_request_params,
-                litellm_params=litellm_params,
-                headers=headers,
-            )
-
-        agent_name, agent_version = parse_agent_reference(model)
-        request = super().transform_responses_api_request(
+        headers: dict,  # mutable-ok: signature fixed by BaseResponsesAPIConfig
+    ) -> dict:  # mutable-ok: JSON request body
+        request: Final = super().transform_responses_api_request(
             model=model,
             input=input,
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
-        request.pop("model", None)
-        request["agent_reference"] = {
-            "name": agent_name,
-            "version": agent_version,
-            "type": "agent_reference",
+        if not is_agents_v2_model(model):
+            return request
+
+        agent_name, agent_version = parse_agent_reference(model)
+        return {
+            **{key: value for key, value in request.items() if key != "model"},
+            "agent_reference": {
+                "name": agent_name,
+                "version": agent_version,
+                "type": "agent_reference",
+            },
         }
-        return request
+
+    def merge_extra_body(
+        self,
+        data: Mapping[str, object],
+        extra_body: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: JSON request body
+        """Keep the model-derived agent, so `extra_body` cannot invoke a different one."""
+        merged: Final = super().merge_extra_body(data=data, extra_body=extra_body)
+        agent_reference: Final = data.get("agent_reference")
+        if agent_reference is None:
+            return merged
+        return {**merged, "agent_reference": agent_reference}
+
+
+def get_azure_ai_responses_api_config(model: str | None) -> AzureAIResponsesAPIConfig | None:
+    """Azure AI serves the Responses API for Foundry Agents v2 references only."""
+    if model is None or not is_agents_v2_model(model):
+        return None
+    return AzureAIResponsesAPIConfig()

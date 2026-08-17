@@ -1,5 +1,6 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -126,6 +127,18 @@ class BaseResponsesAPIConfig(ABC):
         headers: dict,
     ) -> dict:
         pass
+
+    def merge_extra_body(
+        self,
+        data: Mapping[str, object],
+        extra_body: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: JSON request body
+        """Merge caller-supplied `extra_body` into the transformed request body.
+
+        Providers whose body carries a routing decision derived from the
+        authorized model override this to keep that decision authoritative.
+        """
+        return {**data, **extra_body}
 
     @abstractmethod
     def transform_response_api_response(

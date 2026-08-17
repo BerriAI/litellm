@@ -1532,13 +1532,12 @@ def _complete_azure_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo, is_agents_v2_model
+    from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
     azure_ai_route: Final = AzureFoundryModelInfo.get_azure_ai_route(model)
 
     # Check if this is an agents route - model format: azure_ai/agents/<agent_id>
-    # v2 agents (name:version) use litellm.responses(), not completion
-    if azure_ai_route == "agents" and not is_agents_v2_model(model):
+    if azure_ai_route == "agents":
         from litellm.llms.azure_ai.agents import AzureAIAgentsConfig
 
         api_base = AzureFoundryModelInfo.get_api_base(api_base)

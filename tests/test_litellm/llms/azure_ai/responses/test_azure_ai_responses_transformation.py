@@ -55,6 +55,19 @@ class TestAzureAIResponsesAPIConfig:
         url = config.get_complete_url(api_base=PROJECT_API_BASE, litellm_params={})
         assert url.endswith("/openai/responses?api-version=2025-05-01")
 
+    def test_get_complete_url_falls_back_to_env_api_base(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AI_API_BASE", PROJECT_API_BASE)
+        config = AzureAIResponsesAPIConfig()
+        url = config.get_complete_url(api_base=None, litellm_params={})
+        assert url.startswith(PROJECT_API_BASE)
+
+    def test_get_complete_url_requires_api_base(self, monkeypatch):
+        monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+        monkeypatch.setattr("litellm.api_base", None)
+        config = AzureAIResponsesAPIConfig()
+        with pytest.raises(ValueError, match="api_base is required"):
+            config.get_complete_url(api_base=None, litellm_params={})
+
     def test_validate_environment_bearer_token(self):
         config = AzureAIResponsesAPIConfig()
         headers = config.validate_environment(
@@ -104,6 +117,58 @@ class TestAzureAIResponsesAPIConfig:
         assert "agent_reference" not in request
 
 
+class TestAgentReferenceCannotBeOverridden:
+    def test_extra_body_cannot_replace_model_derived_agent(self):
+        config = AzureAIResponsesAPIConfig()
+        data = config.transform_responses_api_request(
+            model="azure_ai/agents/my-agent:1",
+            input="Hello",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        merged = config.merge_extra_body(
+            data=data,
+            extra_body={
+                "agent_reference": {
+                    "name": "someone-elses-agent",
+                    "version": "9",
+                    "type": "agent_reference",
+                }
+            },
+        )
+
+        assert merged["agent_reference"] == {
+            "name": "my-agent",
+            "version": "1",
+            "type": "agent_reference",
+        }
+
+    def test_extra_body_still_merges_other_keys(self):
+        config = AzureAIResponsesAPIConfig()
+        data = config.transform_responses_api_request(
+            model="azure_ai/agents/my-agent:1",
+            input="Hello",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        merged = config.merge_extra_body(data=data, extra_body={"custom_flag": True})
+
+        assert merged["custom_flag"] is True
+        assert merged["agent_reference"]["name"] == "my-agent"
+
+    def test_extra_body_wins_when_no_agent_reference(self):
+        config = AzureAIResponsesAPIConfig()
+        merged = config.merge_extra_body(
+            data={"model": "azure_ai/gpt-4o"},
+            extra_body={"model": "azure_ai/gpt-4o-mini"},
+        )
+        assert merged["model"] == "azure_ai/gpt-4o-mini"
+
+
 class TestProviderConfigManagerAzureAIResponses:
     def test_agents_v2_model_returns_responses_config(self):
         config = ProviderConfigManager.get_provider_responses_api_config(
@@ -119,6 +184,13 @@ class TestProviderConfigManagerAzureAIResponses:
             model="azure_ai/agents/asst_123",
         )
         assert config is None
+
+    def test_missing_model_returns_none(self):
+        from litellm.llms.azure_ai.responses.transformation import (
+            get_azure_ai_responses_api_config,
+        )
+
+        assert get_azure_ai_responses_api_config(None) is None
 
     def test_default_azure_ai_model_returns_none(self):
         config = ProviderConfigManager.get_provider_responses_api_config(
@@ -136,8 +208,23 @@ class TestV1AgentsCompletionRoutingUnchanged:
             AzureFoundryModelInfo.get_azure_ai_route("azure_ai/agents/asst_123") == "agents"
         )
 
-    def test_v2_agents_not_routed_to_v1_completion(self):
-        from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
+    def test_v2_agents_completion_raises_pointing_at_responses_api(self):
+        from litellm.llms.azure_ai.agents.transformation import (
+            AzureAIAgentsConfig,
+            AzureAIAgentsError,
+        )
+        from litellm.utils import ModelResponse
 
-        assert AzureAIAgentsConfig.is_azure_ai_agents_route("azure_ai/agents/my-agent:1") is True
-        assert is_agents_v2_model("azure_ai/agents/my-agent:1") is True
+        with pytest.raises(AzureAIAgentsError, match="Responses API"):
+            AzureAIAgentsConfig.completion(
+                model="azure_ai/agents/my-agent:1",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_base=PROJECT_API_BASE,
+                api_key="test-azure-ad-token",
+                model_response=ModelResponse(),
+                logging_obj=None,
+                optional_params={},
+                litellm_params={},
+                timeout=60.0,
+                acompletion=False,
+            )
