@@ -183,6 +183,161 @@ func TestJWTKeyMappingCreateDeactivatesWhenNotActive(t *testing.T) {
 	}
 }
 
+func TestJWTKeyMappingCreateDeletesMappingWhenDeactivationFails(t *testing.T) {
+	// Regression test: the create endpoint has no is_active field and always
+	// activates the mapping, so a failed deactivation used to leave that
+	// mapping active and unmanaged indefinitely. It must be deleted instead.
+	calls := make([]jwtKeyMappingCall, 0)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := map[string]interface{}{}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		calls = append(calls, jwtKeyMappingCall{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: body})
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/jwt/key/mapping/new":
+			_ = json.NewEncoder(w).Encode(jwtKeyMappingFixture())
+		case "/jwt/key/mapping/update":
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"detail": "proxy unavailable"})
+		case "/jwt/key/mapping/delete":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+		default:
+			t.Fatalf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+		"is_active":       false,
+	})
+
+	err := resourceLiteLLMJWTKeyMappingCreate(d, client)
+	if err == nil {
+		t.Fatal("expected the failed deactivation to surface as an error")
+	}
+	if !strings.Contains(err.Error(), "deleted instead") {
+		t.Fatalf("expected the error to explain the mapping was deleted, got %v", err)
+	}
+
+	deleteCalls := 0
+	for _, c := range calls {
+		if c.Path == "/jwt/key/mapping/delete" {
+			deleteCalls++
+			if c.Body["id"] != "map-abc-123" {
+				t.Fatalf("delete must target the mapping that could not be deactivated, got %v", c.Body["id"])
+			}
+		}
+	}
+	if deleteCalls != 1 {
+		t.Fatalf("expected exactly one cleanup delete call, got %d", deleteCalls)
+	}
+
+	if d.Id() != "" {
+		t.Fatalf("a successfully deleted mapping must not remain in state, got id %q", d.Id())
+	}
+}
+
+func TestJWTKeyMappingCreateReportsWhenDeactivationAndDeleteBothFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/jwt/key/mapping/new":
+			_ = json.NewEncoder(w).Encode(jwtKeyMappingFixture())
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"detail": "proxy unavailable"})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+		"is_active":       false,
+	})
+
+	err := resourceLiteLLMJWTKeyMappingCreate(d, client)
+	if err == nil {
+		t.Fatal("expected an error when both deactivation and the cleanup delete fail")
+	}
+	if !strings.Contains(err.Error(), "remove it manually") {
+		t.Fatalf("expected the error to demand manual cleanup, got %v", err)
+	}
+
+	// The mapping is still active on the proxy since neither call succeeded, so
+	// the id must stay in state: the next apply taints and retries the delete,
+	// rather than Terraform losing track of a live, active mapping entirely.
+	if d.Id() != "map-abc-123" {
+		t.Fatalf("expected the id to remain in state so a retry can find it, got %q", d.Id())
+	}
+}
+
+func TestJWTKeyMappingUpdateRevertsDescriptionAndIsActiveWhenTheRecoveryReadAlsoFails(t *testing.T) {
+	// Regression test: on a failed update, only `key` was being reverted
+	// before Read ran. If Read itself then failed too (network blip, proxy
+	// hiccup), description/is_active kept the rejected, never-applied values,
+	// and Terraform could persist them as if the update had succeeded.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/jwt/key/mapping/update":
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"detail": "rejected"})
+		case "/jwt/key/mapping/info":
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"detail": "proxy unavailable"})
+		default:
+			t.Fatalf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+
+	d := resourceDataWithChange(t,
+		map[string]string{
+			"id":              "map-abc-123",
+			"jwt_claim_name":  "client_id",
+			"jwt_claim_value": "dev-alice",
+			"key":             "sk-old-key-0000000000",
+			"description":     "old description",
+			"is_active":       "true",
+		},
+		map[string]interface{}{
+			"jwt_claim_name":  "client_id",
+			"jwt_claim_value": "dev-alice",
+			"key":             "sk-old-key-0000000000",
+			"description":     "attempted new description",
+			"is_active":       false,
+		},
+	)
+	d.SetId("map-abc-123")
+
+	err := resourceLiteLLMJWTKeyMappingUpdate(d, client)
+	if err == nil {
+		t.Fatal("expected the update failure to surface as an error")
+	}
+	if !strings.Contains(err.Error(), "failed to refresh state afterward") {
+		t.Fatalf("expected the error to mention the failed recovery read, got %v", err)
+	}
+
+	if d.Get("description").(string) != "old description" {
+		t.Fatalf("a rejected description must not survive when the recovery read also fails, got %q", d.Get("description").(string))
+	}
+	if d.Get("is_active").(bool) != true {
+		t.Fatalf("a rejected is_active must not survive when the recovery read also fails, got %v", d.Get("is_active").(bool))
+	}
+}
+
 func TestJWTKeyMappingReadPopulatesStateAndKeepsKey(t *testing.T) {
 	srv, calls := jwtKeyMappingTestServer(t, jwtKeyMappingFixture())
 	defer srv.Close()

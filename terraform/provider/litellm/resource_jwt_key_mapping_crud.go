@@ -39,9 +39,21 @@ func resourceLiteLLMJWTKeyMappingCreate(d *schema.ResourceData, m interface{}) e
 
 	d.SetId(mapping.ID)
 
+	// The create endpoint has no is_active field and always activates the
+	// mapping, so a JWT client matching this claim can authenticate during
+	// the gap before the deactivation call below runs. If deactivation
+	// itself fails, delete the mapping rather than leaving it active and
+	// unmanaged indefinitely.
 	if !d.Get("is_active").(bool) {
 		if err := updateJWTKeyMapping(d, client); err != nil {
-			return fmt.Errorf("JWT key mapping %s was created but could not be deactivated: %w", mapping.ID, err)
+			if deleteErr := deleteJWTKeyMapping(mapping.ID, client); deleteErr != nil {
+				return fmt.Errorf(
+					"JWT key mapping %s was created active and could not be deactivated (%v); it also could not be deleted and remains active on the proxy, remove it manually via POST /jwt/key/mapping/delete: %v",
+					mapping.ID, err, deleteErr,
+				)
+			}
+			d.SetId("")
+			return fmt.Errorf("JWT key mapping was created active but could not be deactivated, so it was deleted instead: %w", err)
 		}
 	}
 
@@ -83,12 +95,17 @@ func resourceLiteLLMJWTKeyMappingUpdate(d *schema.ResourceData, m interface{}) e
 	client := m.(*Client)
 
 	oldKey, _ := d.GetChange("key")
+	oldDescription, _ := d.GetChange("description")
+	oldIsActive, _ := d.GetChange("is_active")
 
 	if err := updateJWTKeyMapping(d, client); err != nil {
 		// The update is a single atomic API call: on failure nothing changed
-		// server-side. Revert key explicitly since the proxy never returns it,
-		// so Read can't resync it the way it resyncs description/is_active below.
+		// server-side. Revert every field the update could have changed before
+		// attempting to resync, so a failed refresh can't leave the rejected
+		// values persisted into state.
 		d.Set("key", oldKey)
+		d.Set("description", oldDescription)
+		d.Set("is_active", oldIsActive)
 		if readErr := resourceLiteLLMJWTKeyMappingRead(d, m); readErr != nil {
 			return fmt.Errorf("failed to update JWT key mapping: %w (and failed to refresh state afterward: %v)", err, readErr)
 		}
@@ -101,19 +118,27 @@ func resourceLiteLLMJWTKeyMappingUpdate(d *schema.ResourceData, m interface{}) e
 func resourceLiteLLMJWTKeyMappingDelete(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 
-	resp, err := MakeRequest(client, "POST", "/jwt/key/mapping/delete", JWTKeyMappingDeleteRequest{ID: d.Id()})
-	if err != nil {
+	if err := deleteJWTKeyMapping(d.Id(), client); err != nil {
 		return fmt.Errorf("failed to delete JWT key mapping: %w", err)
+	}
+
+	d.SetId("")
+	return nil
+}
+
+func deleteJWTKeyMapping(id string, client *Client) error {
+	resp, err := MakeRequest(client, "POST", "/jwt/key/mapping/delete", JWTKeyMappingDeleteRequest{ID: id})
+	if err != nil {
+		return err
 	}
 	defer resp.Body.Close()
 
 	if err := handleJWTKeyMappingAPIResponse(resp, nil, client); err != nil {
 		if err.Error() != jwtKeyMappingNotFound {
-			return fmt.Errorf("failed to delete JWT key mapping: %w", err)
+			return err
 		}
 	}
 
-	d.SetId("")
 	return nil
 }
 
