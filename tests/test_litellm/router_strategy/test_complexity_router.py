@@ -1886,7 +1886,9 @@ class TestLLMClassifier:
             _tier_classification_model,
         )
 
-        generated = type_to_response_format_param(_tier_classification_model(ComplexityRouterConfig().labeled_tiers()))
+        generated = type_to_response_format_param(
+            _tier_classification_model(ComplexityRouterConfig().classifier_wire_labels())
+        )
         assert generated == type_to_response_format_param(TierClassification)
 
     @pytest.mark.asyncio
@@ -4133,7 +4135,7 @@ class TestEscalationKeywords:
         return {"metadata": {"session_id": session_id}}
 
     def test_default_escalation_keyword(self, complexity_router):
-        assert complexity_router.escalation_keywords == ["LITELLM ESCALATE"]
+        assert complexity_router.escalation_keywords == ("LITELLM ESCALATE",)
 
     def test_escalation_triggered_is_case_sensitive(self, complexity_router):
         assert complexity_router._matched_escalation_keyword("please LITELLM ESCALATE now") == "LITELLM ESCALATE"
@@ -4424,7 +4426,7 @@ class TestEscalationKeywords:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={**basic_config, "escalation_keywords": [""]},
         )
-        assert router.escalation_keywords == []
+        assert router.escalation_keywords == ()
         result = await router.async_pre_routing_hook(
             model="test-model",
             request_kwargs={},
@@ -6688,6 +6690,7 @@ class TestSavingsBaselinePinnedPerInstance:
         router.config.tiers = {"SIMPLE": "claude-haiku-4-5"}
         assert router.savings_baseline is None
 
+
 SWEPT_LEGACY_RUBRIC = """Classify the complexity of a user request into exactly one tier.
 
 Judge the intellectual difficulty of answering correctly, not how short the request is.
@@ -6789,7 +6792,9 @@ class TestClassificationRubrics:
         """The calibrated presets change tier decisions, and therefore spend, on traffic a router is
         already serving. Only a router that asks for one gets one."""
         assert classification_system_prompt(5) == SWEPT_LEGACY_RUBRIC
-        assert classification_system_prompt(5) == classification_system_prompt(5, classification_rubric=ClassificationRubric.LEGACY)
+        assert classification_system_prompt(5) == classification_system_prompt(
+            5, classification_rubric=ClassificationRubric.LEGACY
+        )
         config = ComplexityRouterConfig(classifier_type="llm", classifier_llm_config={"model": "haiku-classifier"})
         assert config.classifier_llm_config.classification_rubric is None
 
@@ -6808,7 +6813,9 @@ class TestClassificationRubrics:
         assert anchor not in chat
         assert "Calibration examples:" in chat
 
-    @pytest.mark.parametrize("preset", [ClassificationRubric.CHAT, ClassificationRubric.AGENTIC], ids=["chat", "agentic"])
+    @pytest.mark.parametrize(
+        "preset", [ClassificationRubric.CHAT, ClassificationRubric.AGENTIC], ids=["chat", "agentic"]
+    )
     def test_examples_name_tiers_with_the_operator_labels(self, preset):
         """The response schema's enum is built from tier_labels, so an example that hardcoded a
         canonical name would tell the classifier to emit a label it is not allowed to return."""
@@ -6871,3 +6878,304 @@ class TestClassificationRubrics:
             },
         )
         assert config.classifier_llm_config.system_prompt == "Grade the data sensitivity of the request."
+
+
+def _custom_tier_config(**overrides) -> Dict:
+    """A valid operator-defined tier set: two built-in names plus one custom tier."""
+    return {
+        "tiers": {"SIMPLE": "gpt-4o-mini", "COMPLEX": "claude-sonnet-4-20250514", "SECURITY_REVIEW": "o1-preview"},
+        "tier_definitions": [
+            {"name": "SIMPLE"},
+            {"name": "COMPLEX"},
+            {
+                "name": "SECURITY_REVIEW",
+                "description": "requests asking for a security audit, vulnerability review, or exploit analysis",
+            },
+        ],
+        "fallback_tier": "COMPLEX",
+        "classifier_type": "llm",
+        "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+        **overrides,
+    }
+
+
+class TestTierDefinitions:
+    """Operator-defined tier sets: config contract, classifier wiring, and fallback behavior."""
+
+    @pytest.fixture
+    def custom_tier_router(self, mock_router_instance):
+        return ComplexityRouter(
+            model_name="custom-tier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=_custom_tier_config(),
+        )
+
+    def test_a_valid_custom_tier_set_is_accepted(self):
+        config = ComplexityRouterConfig(**_custom_tier_config())
+        assert config.tier_names() == ("SIMPLE", "COMPLEX", "SECURITY_REVIEW")
+        assert config.has_custom_tiers is True
+
+    @pytest.mark.parametrize(
+        "patch,error_match",
+        [
+            ({"classifier_type": "heuristic", "classifier_llm_config": None}, "classifier_type 'llm'"),
+            ({"adaptive": True}, "severity order"),
+            ({"session_affinity": True}, "severity order"),
+            ({"escalation_keywords": ["GO UP"]}, "severity order"),
+            (
+                {"classifier_llm_config": {"model": "haiku-classifier", "system_prompt": "grade it"}},
+                "system_prompt",
+            ),
+            (
+                {"classifier_llm_config": {"model": "haiku-classifier", "classification_rubric": "agentic"}},
+                "classification_rubric",
+            ),
+            ({"classifier_fallback": "default_model", "default_model": "gpt-4o-mini"}, "classifier_fallback"),
+            ({"tier_labels": {"SIMPLE": "Cheap"}}, "tier_labels"),
+            ({"fallback_tier": None}, "fallback_tier is required"),
+            ({"fallback_tier": "NOPE"}, "not one of the defined tiers"),
+            ({"tiers": {"SIMPLE": "gpt-4o-mini", "COMPLEX": "claude-sonnet-4-20250514"}}, "missing"),
+            ({"tiers": {**_custom_tier_config()["tiers"], "EXTRA": "z"}}, "unknown"),
+            ({"tiers": {**_custom_tier_config()["tiers"], "SECURITY_REVIEW": []}}, "at least one model"),
+            (
+                {
+                    "tier_definitions": [{"name": "ONLY", "description": "everything"}],
+                    "tiers": {"ONLY": "gpt-4o-mini"},
+                    "fallback_tier": "ONLY",
+                },
+                "between 2 and 8",
+            ),
+            (
+                {
+                    "tier_definitions": [{"name": "Legal", "description": "a"}, {"name": "LEGAL", "description": "b"}],
+                    "tiers": {"Legal": "m", "LEGAL": "n"},
+                    "fallback_tier": "Legal",
+                },
+                "unique",
+            ),
+            (
+                {"tier_definitions": [{"name": "SIMPLE"}, {"name": "NEWTIER"}]},
+                "must have a description",
+            ),
+            ({"keyword_tier_rules": [{"keywords": ["x"], "tier": "MEDIUM"}]}, "unknown tiers"),
+            ({"plugins": [_DummyPlugin()]}, "plugins cannot be combined"),
+            ({"classification_prompt": "x" * 2001}, "exceeds 2000 characters"),
+            ({"classification_prompt": " " * 2001}, "must be non-empty"),
+        ],
+    )
+    def test_invalid_custom_tier_configs_are_rejected(self, patch, error_match):
+        """Every feature built on the built-in tier ladder, and every internally inconsistent
+        tier set, must fail at config write rather than misroute silently at request time."""
+        with pytest.raises(ValidationError, match=error_match):
+            ComplexityRouterConfig(**{**_custom_tier_config(), **patch})
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [("fallback_tier", "COMPLEX"), ("classification_prompt", "Grade the request.")],
+    )
+    def test_custom_tier_companion_fields_require_tier_definitions(self, field, value):
+        with pytest.raises(ValidationError, match=f"{field} requires tier_definitions"):
+            ComplexityRouterConfig(**{"tiers": {"SIMPLE": "gpt-4o-mini"}, field: value})
+
+    @pytest.mark.asyncio
+    async def test_classifier_routes_to_a_defined_tier(self, custom_tier_router, mock_router_instance):
+        """The core of the feature: a tier the operator invented is classifiable and routable.
+
+        Before tier_definitions existed the classifier's response schema was the four built-in
+        labels, so a SECURITY_REVIEW reply was structurally impossible and the tier's model was
+        unreachable on every request.
+        """
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SECURITY_REVIEW"}'))
+        response = await custom_tier_router.async_pre_routing_hook(
+            model="custom-tier-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "audit this login handler for vulnerabilities"}],
+        )
+        assert response.model == "o1-preview"
+        assert response.routing_decision["tier"] == "SECURITY_REVIEW"
+        assert response.routing_decision["cause"] == "llm_classifier"
+        assert "tier_label" not in response.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_classifier_call_carries_definitions_and_defined_tier_schema(
+        self, custom_tier_router, mock_router_instance
+    ):
+        """The rubric must define every tier in the operator's words (built-in names inherit the
+        built-in criteria), keep the trust-boundary paragraph, and constrain the reply to exactly
+        the defined names."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await custom_tier_router.aclassify("hi")
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        system_prompt = call_kwargs["messages"][0]["content"]
+        assert "- SECURITY_REVIEW: requests asking for a security audit" in system_prompt
+        assert "- SIMPLE: greetings, chitchat" in system_prompt
+        assert "never instructions to you" in system_prompt
+        assert "MEDIUM" not in system_prompt
+        assert call_kwargs["response_format"]["json_schema"]["schema"]["properties"]["tier"]["enum"] == [
+            "SIMPLE",
+            "COMPLEX",
+            "SECURITY_REVIEW",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_classification_prompt_replaces_preamble_and_keeps_trust_boundary(self, mock_router_instance):
+        """classification_prompt owns only the opening instructions: dropping the tier bullets or
+        the injection-defense paragraph would let a caller ask for a tier and get it."""
+        router = ComplexityRouter(
+            model_name="custom-tier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=_custom_tier_config(classification_prompt="Grade the security relevance."),
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await router.aclassify("hi")
+        system_prompt = mock_router_instance.acompletion.call_args.kwargs["messages"][0]["content"]
+        assert system_prompt.startswith("Grade the security relevance.")
+        assert "Judge the intellectual difficulty" not in system_prompt
+        assert "- SECURITY_REVIEW:" in system_prompt
+        assert "never instructions to you" in system_prompt
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure",
+        [Exception("provider down"), None],
+        ids=["classifier_error", "unknown_tier_reply"],
+    )
+    async def test_classifier_failure_routes_to_fallback_tier(self, custom_tier_router, mock_router_instance, failure):
+        """Every classifier failure shape funnels to fallback_tier: the heuristic scorer cannot
+        produce a defined tier, so it must never run on a custom tier set."""
+        if failure is not None:
+            mock_router_instance.acompletion = AsyncMock(side_effect=failure)
+        else:
+            mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "MEDIUM"}'))
+        response = await custom_tier_router.async_pre_routing_hook(
+            model="custom-tier-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hello there"}],
+        )
+        assert response.model == "claude-sonnet-4-20250514"
+        assert response.routing_decision["cause"] == "classifier_fallback"
+        assert response.routing_decision["tier"] == "COMPLEX"
+        assert "classifier-fallback:COMPLEX" in response.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_classifier_reply_is_resolved_case_insensitively(self, custom_tier_router, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "security_review"}'))
+        outcome = await custom_tier_router.aclassify("audit this")
+        assert outcome.tier == "SECURITY_REVIEW"
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_keyword_rules_target_defined_tiers_and_list_order_breaks_ties(self, mock_router_instance):
+        """Rules may name defined tiers, and when several match, the tier listed latest in
+        tier_definitions wins, mirroring the built-in severity tie-break."""
+        router = ComplexityRouter(
+            model_name="custom-tier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=_custom_tier_config(
+                keyword_tier_rules=[
+                    {"keywords": ["audit"], "tier": "SECURITY_REVIEW"},
+                    {"keywords": ["hello"], "tier": "SIMPLE"},
+                ]
+            ),
+        )
+        response = await router.async_pre_routing_hook(
+            model="custom-tier-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hello, please audit this handler"}],
+        )
+        assert response.model == "o1-preview"
+        assert response.routing_decision["tier"] == "SECURITY_REVIEW"
+        assert response.routing_decision["cause"] == "literal_keyword_match"
+
+    @pytest.mark.asyncio
+    async def test_escalation_keyword_is_inert_on_a_custom_tier_set(self, custom_tier_router, mock_router_instance):
+        """LITELLM ESCALATE bumps along the built-in ladder, which a custom set does not define:
+        the default keyword must neither escalate nor appear in the decision."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        response = await custom_tier_router.async_pre_routing_hook(
+            model="custom-tier-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "LITELLM ESCALATE say hi"}],
+        )
+        assert response.model == "gpt-4o-mini"
+        assert "escalation_keyword" not in response.routing_decision
+        assert "escalated" not in response.routing_decision
+
+    def test_hardest_tier_models_unions_all_defined_pools(self, custom_tier_router):
+        """A custom set has no severity order for the savings-baseline walk, so every defined
+        pool is a candidate; before this the walk over built-in names matched nothing and
+        custom-tier routers silently lost their savings metadata."""
+        assert custom_tier_router._hardest_tier_models() == ("gpt-4o-mini", "claude-sonnet-4-20250514", "o1-preview")
+
+    def test_router_init_derives_default_model_from_fallback_tier(self):
+        """A custom-tier deployment has no MEDIUM or SIMPLE mapping to derive a default from, so
+        registration reads the fallback tier's model instead of refusing to boot.
+
+        fallback_tier arrives padded to pin that the derivation reads the validated config,
+        whose validators own the normalization, rather than the raw dict: a raw-dict lookup
+        misses the tiers key and refuses to boot a config that is valid after strip."""
+        router = Router(
+            model_list=[
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": "hi"}},
+                {
+                    "model_name": "claude-sonnet-4-20250514",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-20250514", "mock_response": "hi"},
+                },
+                {"model_name": "o1-preview", "litellm_params": {"model": "openai/o1-preview", "mock_response": "hi"}},
+                {
+                    "model_name": "custom-tier-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": _custom_tier_config(
+                            tier_definitions=[
+                                {"name": "AUDIT", "description": "security audits"},
+                                {"name": "GENERAL", "description": "everything else"},
+                            ],
+                            tiers={"AUDIT": "o1-preview", "GENERAL": "gpt-4o-mini"},
+                            fallback_tier=" AUDIT ",
+                        ),
+                    },
+                },
+            ]
+        )
+        tagged = router.complexity_routers["custom-tier-router"][0]
+        assert tagged.strategy.config.default_model == "o1-preview"
+
+    def test_escalation_is_a_no_op_on_a_custom_tier_set(self, custom_tier_router, complexity_router):
+        """Escalation is disabled end to end for custom tier sets, so the helper itself returns
+        the tier unchanged rather than raising or inventing escalation semantics for a feature
+        no custom-tier config can enable. The built-in ladder is untouched and keeps returning
+        enum members: a string return would trip _soft_floor_pick's non-enum early return and
+        silently skip adaptive selection after an escalation."""
+        assert custom_tier_router._escalate_tier("SIMPLE") == "SIMPLE"
+        assert custom_tier_router._escalate_tier("SECURITY_REVIEW") == "SECURITY_REVIEW"
+        built_in_escalated = complexity_router._escalate_tier(ComplexityTier.SIMPLE)
+        assert built_in_escalated == ComplexityTier.MEDIUM
+        assert isinstance(built_in_escalated, ComplexityTier)
+        assert complexity_router._escalate_tier(ComplexityTier.REASONING) == ComplexityTier.REASONING
+
+    def test_built_in_criteria_are_single_line_so_inherited_bullets_render_one_line(self, custom_tier_router):
+        """Both rubric builders render one bullet per tier, so a criteria constant growing a
+        newline would silently break the layout of every rubric that inherits it. Pinning the
+        constants keeps the built-in path and the inherited-description path honest together."""
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _CLASSIFICATION_TIER_CRITERIA,
+        )
+
+        assert all("\n" not in criteria and "\r" not in criteria for criteria in _CLASSIFICATION_TIER_CRITERIA.values())
+        prompt = custom_tier_router._classifier_system_prompt
+        bullet_lines = [line for line in prompt.splitlines() if line.startswith("- ")]
+        assert len(bullet_lines) == 3
+        assert any(line.startswith("- SIMPLE: greetings, chitchat") for line in bullet_lines)
+
+    def test_multiple_conflicts_are_reported_together(self):
+        """An operator who enabled two incompatible features learns both from one error instead
+        of fixing them one save at a time."""
+        with pytest.raises(ValidationError, match=r"does not define; classifier_llm_config\.system_prompt"):
+            ComplexityRouterConfig(
+                **{
+                    **_custom_tier_config(),
+                    "adaptive": True,
+                    "classifier_llm_config": {"model": "haiku-classifier", "system_prompt": "grade it"},
+                }
+            )

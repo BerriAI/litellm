@@ -26047,8 +26047,11 @@ export interface components {
              * @description Keywords/phrases that trigger this rule (lexical or semantic match)
              */
             keywords: string[];
-            /** @description Tier to route to when this rule matches */
-            tier: components["schemas"]["ComplexityTier"];
+            /**
+             * Tier
+             * @description Tier to route to when this rule matches: a built-in tier name, or with tier_definitions set, one of the defined tier names
+             */
+            tier: string;
         };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
@@ -31990,6 +31993,11 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Prompt
+             * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
+             */
+            classification_prompt?: string | null;
+            /**
              * Classifier Context Include Assistant Turns
              * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
              * @default false
@@ -32062,6 +32070,11 @@ export interface components {
              */
             escalation_keywords?: string[] | null;
             /**
+             * Fallback Tier
+             * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
+             */
+            fallback_tier?: string | null;
+            /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
              */
@@ -32128,6 +32141,11 @@ export interface components {
             tier_boundaries?: {
                 [key: string]: number;
             };
+            /**
+             * Tier Definitions
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             */
+            tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
              * Tier Distance Penalty
              * @description Score penalty per tier-step away from the classified tier when adaptive=True
@@ -33041,7 +33059,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -33869,6 +33887,22 @@ export interface components {
             litellm_params: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * TierDefinition
+         * @description An operator-defined tier: the name the LLM classifier must return and its rubric description.
+         */
+        TierDefinition: {
+            /**
+             * Description
+             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which inherits the built-in criteria when omitted
+             */
+            description?: string | null;
+            /**
+             * Name
+             * @description Tier name; becomes a value the LLM classifier can return and a key of `tiers`
+             */
+            name: string;
         };
         /**
          * TokenCountDetailsResponse
