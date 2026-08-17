@@ -6,7 +6,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "./key_info_view";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import type { Organization } from "../networking";
 
 // IMPORTANT: do not mock `@/utils/dataUtils` here. We want to exercise the
@@ -14,12 +14,14 @@ import type { Organization } from "../networking";
 // where the overview "Spend" card formatted `max_budget` with the default 0
 // decimals, truncating sub-dollar budgets (e.g. $0.10) to "$0".
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("./key_edit_view", () => ({
   KeyEditView: () => <div data-testid="key-edit-view-stub" />,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({ default: vi.fn() }));
-vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({ useOrganization: vi.fn() }));
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({ useOrganizations: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
   useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
@@ -28,6 +30,7 @@ vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   useResetKeySpend: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }));
 vi.mock("../networking", () => ({
+  serverRootPath: "",
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({ resolved_guardrails: [] }),
@@ -147,14 +150,14 @@ const makeOrganization = (overrides: Partial<Organization>): Organization =>
     ...overrides,
   }) as Organization;
 
-const mockOrganization = (organization: Organization | undefined) =>
-  vi.mocked(useOrganization).mockReturnValue({ data: organization } as ReturnType<typeof useOrganization>);
+const mockOrganizations = (organizations: Organization[]) =>
+  vi.mocked(useOrganizations).mockReturnValue({ data: organizations } as ReturnType<typeof useOrganizations>);
 
 describe("KeyInfoView overview budget display (LIT-2845)", () => {
   beforeEach(() => {
     vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
     vi.mocked(useAuthorized).mockReturnValue(baseAuthorized);
-    mockOrganization(undefined);
+    mockOrganizations([]);
   });
 
   it("renders a sub-dollar max_budget ($0.10) with 2-decimal precision in the overview Spend card", async () => {
@@ -237,7 +240,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
       teams: [makeTeam({ team_id: "team-456", team_alias: "Org Team", organization_id: "org-1" })],
       setTeams: vi.fn(),
     });
-    mockOrganization(makeOrganization({ litellm_budget_table: { max_budget: 5000, budget_duration: null } }));
+    mockOrganizations([makeOrganization({ litellm_budget_table: { max_budget: 5000, budget_duration: null } })]);
     renderWithProviders(
       <KeyInfoView
         keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-456" } as unknown as KeyResponse}
@@ -250,7 +253,6 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
-    expect(vi.mocked(useOrganization)).toHaveBeenLastCalledWith("org-1");
     await userEvent.setup().hover(screen.getByLabelText("question-circle"));
     expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Organization Acme Org: $5,000.00");
     expect(screen.getByTestId("inherited-budget-hint")).not.toHaveTextContent("Team Org Team");
@@ -301,7 +303,7 @@ describe("KeyInfoView budget reset visibility", () => {
   beforeEach(() => {
     vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
     vi.mocked(useAuthorized).mockReturnValue(baseAuthorized);
-    mockOrganization(undefined);
+    mockOrganizations([]);
   });
 
   const KEY_WITH_RESET = {

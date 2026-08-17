@@ -23,6 +23,8 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
   };
 });
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(() => ({
     accessToken: "test-token",
@@ -62,7 +64,6 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
       },
     ],
   }),
-  useOrganization: vi.fn().mockReturnValue({ data: undefined }),
 }));
 
 const mockKey: KeyResponse = {

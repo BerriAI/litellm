@@ -9,7 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from typing import Any, Final, cast
+from typing import Annotated, Any, Final, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -27,7 +27,7 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_websocket
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -1972,6 +1972,104 @@ async def openai_proxy_route(
     )
 
 
+def _join_url_paths(base_url: httpx.URL, path: str, custom_llm_provider: litellm.LlmProviders) -> str:
+    """
+    Properly joins a base URL with a path, preserving any existing path in the base URL.
+    """
+    # Combine paths via the shared helper so any '..' in the path cannot
+    # climb above the configured base path.
+    joined_path_str = str(
+        base_url.copy_with(path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, path))
+    )
+
+    # Apply OpenAI-specific path handling for both branches
+    if custom_llm_provider == litellm.LlmProviders.OPENAI and "/v1/" not in joined_path_str:
+        # Insert v1 after api.openai.com for OpenAI requests
+        joined_path_str = joined_path_str.replace("api.openai.com/", "api.openai.com/v1/")
+
+    return joined_path_str
+
+
+_OPENAI_WS_ALL_MODEL_ACCESS: Final = frozenset(
+    {
+        SpecialModelNames.all_proxy_models.value,
+        SpecialModelNames.all_team_models.value,
+        "*",
+    }
+)
+
+
+def _key_has_model_restrictions(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    scoped_models: Final = (*user_api_key_dict.models, *user_api_key_dict.team_models)
+    return any(str(model) not in _OPENAI_WS_ALL_MODEL_ACCESS for model in scoped_models)
+
+
+@router.websocket("/openai_passthrough/{endpoint:path}")
+@router.websocket("/openai/{endpoint:path}")
+async def openai_websocket_proxy_route(
+    websocket: WebSocket,
+    endpoint: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
+) -> None:
+    """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
+    if _key_has_model_restrictions(user_api_key_dict):
+        await websocket.close(
+            code=1008,
+            reason="Keys with model restrictions cannot use OpenAI websocket passthrough",
+        )
+        return
+
+    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    openai_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.OPENAI.value,
+        region_name=None,
+    )
+    if openai_api_key is None:
+        await websocket.close(
+            code=1011,
+            reason="Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.",
+        )
+        return
+
+    raw_path: Final = httpx.URL(endpoint).path
+    encoded_endpoint: Final = raw_path if raw_path.startswith("/") else f"/{raw_path}"
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = _join_url_paths(
+        base_url=base_url,
+        path=encoded_endpoint,
+        custom_llm_provider=litellm.LlmProviders.OPENAI,
+    )
+    wss_base: Final = (
+        "wss://" + updated_url[len("https://") :]
+        if updated_url.startswith("https://")
+        else "ws://" + updated_url[len("http://") :]
+        if updated_url.startswith("http://")
+        else updated_url
+    )
+    query_string: Final = websocket.url.query
+    wss_target: Final = f"{wss_base}{'&' if '?' in wss_base else '?'}{query_string}" if query_string else wss_base
+    custom_headers: Final = {  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
+        "Authorization": f"Bearer {openai_api_key}"
+    }
+
+    requested_subprotocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+    await websocket.accept(subprotocol=requested_subprotocols[0] if requested_subprotocols else None)
+
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target=wss_target,
+        custom_headers=custom_headers,
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=websocket.url.path,
+        accept_websocket=False,
+    )
+
+
 class BaseOpenAIPassThroughHandler:
     @staticmethod
     async def _base_openai_pass_through_handler(
@@ -1991,7 +2089,7 @@ class BaseOpenAIPassThroughHandler:
 
         # Construct the full target URL by properly joining the base URL and endpoint path
         base_url: Final = httpx.URL(base_target_url)
-        updated_url: Final = BaseOpenAIPassThroughHandler._join_url_paths(
+        updated_url: Final = _join_url_paths(
             base_url=base_url,
             path=encoded_endpoint,
             custom_llm_provider=custom_llm_provider,
@@ -2049,24 +2147,6 @@ class BaseOpenAIPassThroughHandler:
             headers=base_headers,
             request=request,
         )
-
-    @staticmethod
-    def _join_url_paths(base_url: httpx.URL, path: str, custom_llm_provider: litellm.LlmProviders) -> str:
-        """
-        Properly joins a base URL with a path, preserving any existing path in the base URL.
-        """
-        # Combine paths via the shared helper so any '..' in the path cannot
-        # climb above the configured base path.
-        joined_path_str = str(
-            base_url.copy_with(path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, path))
-        )
-
-        # Apply OpenAI-specific path handling for both branches
-        if custom_llm_provider == litellm.LlmProviders.OPENAI and "/v1/" not in joined_path_str:
-            # Insert v1 after api.openai.com for OpenAI requests
-            joined_path_str = joined_path_str.replace("api.openai.com/", "api.openai.com/v1/")
-
-        return joined_path_str
 
 
 @router.api_route(
