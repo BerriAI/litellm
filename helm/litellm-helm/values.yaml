@@ -281,7 +281,8 @@ db:
     # individual secret components, e.g.
     # postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_READER_HOST):5432/$(DATABASE_NAME)
     # Use this when your secret store holds the bare reader hostname rather
-    # than a full connection URL. Ignored when readReplicaUrlKey is set.
+    # than a full connection URL. Only takes effect when readReplicaUrl is
+    # set; ignored when readReplicaUrlKey is set.
     readReplicaEndpointKey: ""
 
   # Optional read-replica routing. When set, the proxy sends read-only

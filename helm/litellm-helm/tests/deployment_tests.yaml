@@ -114,6 +114,26 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[8].name
           value: DATABASE_URL_READ_REPLICA
+  - it: should omit reader host when readReplicaUrl is unset
+    template: deployment.yaml
+    set:
+      db:
+        deployStandalone: false
+        useExisting: true
+        secret:
+          name: postgres
+          usernameKey: username
+          passwordKey: password
+          readReplicaEndpointKey: reader-host
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_READER_HOST
+            valueFrom:
+              secretKeyRef:
+                name: postgres
+                key: reader-host
   - it: should prefer readReplicaUrlKey over readReplicaEndpointKey composition
     template: deployment.yaml
     set:
