@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import json
 from types import SimpleNamespace
@@ -1545,3 +1546,39 @@ def test_async_sentinel_keeps_the_credential_provider_off_the_monitors(markers, 
     master_kwargs = mock_sentinel_cls.return_value.master_for.call_args[1]
     assert isinstance(master_kwargs["credential_provider"], provider_cls)
     assert "password" not in master_kwargs
+def _make_cluster_cache() -> RedisClusterCache:
+    """Build a RedisClusterCache without hitting a real Redis server."""
+    cache = RedisClusterCache.__new__(RedisClusterCache)
+    cache.async_redis_conn_pool = None
+    cache.redis_async_redis_cluster_client = None
+    cache.redis_client = MagicMock()
+    return cache
+
+
+def test_redis_cluster_cache_disconnect_without_pool():
+    """
+    In cluster mode ``get_redis_connection_pool`` returns ``None`` (the
+    RedisCluster client builds its own per-node pools), so the base-class
+    ``disconnect`` must not dereference the pool. Regression for #37137.
+    """
+    cache = _make_cluster_cache()
+
+    asyncio.run(cache.disconnect())
+
+    cache.redis_client.close.assert_called_once()
+
+
+def test_redis_cluster_cache_disconnect_closes_cluster_client():
+    """
+    When a cluster client was created, ``disconnect`` must tear it down via
+    ``aclose`` (the same primitive ``test_connection`` uses) before delegating
+    to the base class. Regression for #37137.
+    """
+    cache = _make_cluster_cache()
+    cluster_client = AsyncMock()
+    cache.redis_async_redis_cluster_client = cluster_client
+
+    asyncio.run(cache.disconnect())
+
+    cluster_client.aclose.assert_awaited_once()
+    cache.redis_client.close.assert_called_once()
