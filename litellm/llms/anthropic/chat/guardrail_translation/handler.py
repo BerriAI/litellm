@@ -13,7 +13,7 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -498,13 +498,13 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _fold_leading_systems_into_top_level(
-        data: dict,  # mutable-ok: API message payload
-        leading_systems: list,  # mutable-ok: API message payload
+        data: dict[str, object],  # mutable-ok: API message payload
+        leading_systems: Sequence[object],
         include_existing_system: bool,
     ) -> None:
         """Deliver leading system rows through Anthropic's top-level system param, which rejects them in messages."""
         existing: Final = data.get("system") if include_existing_system else None
-        existing_blocks: Final[list] = (  # mutable-ok: API message payload
+        existing_blocks: Final[list[object]] = (  # mutable-ok: API message payload
             [{"type": "text", "text": existing}]
             if isinstance(existing, str) and existing
             else list(existing)
@@ -516,7 +516,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             for message in leading_systems
             if isinstance(message, dict)
         )
-        folded: Final[list] = existing_blocks + [  # mutable-ok: API message payload
+        folded: Final[list[object]] = existing_blocks + [  # mutable-ok: API message payload
             block
             for row in converted_rows
             if row is not None

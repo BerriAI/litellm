@@ -131,7 +131,7 @@ class MockStructuredMaskingGuardrail(CustomGuardrail):
     def _mask(text: str) -> str:
         return text.replace("bob@example.com", "<EMAIL>")
 
-    def _mask_content(self, content: Any) -> Any:
+    def _mask_content(self, content: object) -> object:
         if isinstance(content, str):
             return self._mask(content)
         if not isinstance(content, list):
