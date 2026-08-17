@@ -41,7 +41,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 def assert_proxy_admin_for_vector_store_index_management(
     user_api_key_dict: UserAPIKeyAuth,
     *,
-    operation: Literal["create", "delete", "update"] = "create",
+    operation: Literal["create", "delete", "update", "list"] = "create",
 ) -> None:
     """Raise 403 unless the caller is a proxy admin."""
     if _is_proxy_admin(user_api_key_dict):
@@ -86,7 +86,7 @@ def _is_vector_store_index_lifecycle_request(
             return True
 
     # POST /indexes (create index at service level; no index name in path).
-    normalized: Final = request_path.rstrip("/")
+    normalized: Final = request_path.split("?", 1)[0].rstrip("/")
     if request_method == "POST" and normalized.endswith("/indexes"):
         return True
 
@@ -387,17 +387,19 @@ def is_allowed_to_call_vector_store_endpoint(
         )
         return True
 
-    # Determine the permission type based on the request
+    # Writes are classified before reads so a path matching both patterns
+    # requires the stronger grant (e.g. the azure batch write on an index
+    # named "analyze*" also contains the "/analyze" read fragment)
     permission_type = None
-    for endpoint in provider_vector_store_endpoints["read"]:
+    for endpoint in provider_vector_store_endpoints["write"]:
         if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
-            permission_type = "read"
+            permission_type = "write"
             break
 
     if permission_type is None:
-        for endpoint in provider_vector_store_endpoints["write"]:
+        for endpoint in provider_vector_store_endpoints["read"]:
             if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
-                permission_type = "write"
+                permission_type = "read"
                 break
 
     if permission_type is None:
@@ -454,15 +456,15 @@ def is_allowed_to_call_vector_store_files_endpoint(
     request_route: Final = get_request_route(request)
 
     permission_type: str | None = None
-    for endpoint in provider_vector_store_endpoints.get("read", ()):
+    for endpoint in provider_vector_store_endpoints.get("write", ()):
         if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
-            permission_type = "read"
+            permission_type = "write"
             break
 
     if permission_type is None:
-        for endpoint in provider_vector_store_endpoints.get("write", ()):
+        for endpoint in provider_vector_store_endpoints.get("read", ()):
             if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
-                permission_type = "write"
+                permission_type = "read"
                 break
 
     if permission_type is None:

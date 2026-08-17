@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -8,7 +8,9 @@ from fastapi import HTTPException, status
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
 from litellm.repositories.verification_token_repository import (
@@ -140,6 +142,28 @@ class _GroupingSetsRow(SimpleNamespace):
     failed_requests: int | None
 
 
+def _reported_flat_cost(record: DailySpendRecord | _GroupingSetsRow) -> float:
+    """Flat cost a daily row reports, which is zero unless PTU cost attribution is enabled.
+
+    Both read paths funnel through here: the paginated path reads the ``ptu_flat_cost``
+    column straight off the row, and the aggregated path reads the SUM() alias. Rows an
+    operator accrued during an earlier opt-in stay in the table, so the gate lives on the
+    read rather than on the query that produced the rows.
+
+    The row is checked before the flag because this runs once per metric accumulation, and
+    a record fans out across roughly a dozen breakdowns. The flag reads through the secret
+    manager, uncached, so consulting it for every accumulation put thousands of lookups on
+    a shared endpoint that made none before. Only a row actually carrying flat cost, which
+    is a sentinel row, reaches it now.
+    """
+    raw: Final = getattr(record, "ptu_flat_cost", None) or 0.0
+    if not raw:
+        return 0.0
+    if not is_ptu_cost_attribution_enabled():
+        return 0.0
+    return raw
+
+
 def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> SpendMetrics:
     """Update metrics with new record data.
 
@@ -150,6 +174,7 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     prompt_tokens: Final = record.prompt_tokens or 0
     completion_tokens: Final = record.completion_tokens or 0
     existing_metrics.spend += record.spend or 0.0
+    existing_metrics.flat_cost += _reported_flat_cost(record)
     existing_metrics.prompt_tokens += prompt_tokens
     existing_metrics.completion_tokens += completion_tokens
     existing_metrics.total_tokens += prompt_tokens + completion_tokens
@@ -208,30 +233,43 @@ def update_breakdown_metrics(
     entity_id_field: str | None = None,
     entity_metadata_field: Mapping[str, dict[str, object]] | None = None,
 ) -> BreakdownMetrics:
-    """Updates breakdown metrics for a single record using the existing update_metrics function"""
+    """Updates breakdown metrics for a single record using the existing update_metrics function.
+
+    PTU sentinel rows (api_key == PTU_SENTINEL_API_KEY) add their flat cost to every
+    parent bucket but never appear as an api_key row, and are kept out of the
+    per-request provider breakdown."""
+
+    is_ptu_sentinel: Final = record.api_key == PTU_SENTINEL_API_KEY
+
+    # A PTU sentinel row keys on the deployment id so a rename cannot move it, and carries
+    # the operator-facing name in model_group. The breakdown key is rendered directly as a
+    # label, so display the name; two deployments sharing one name merge here, which is
+    # what the write path used to do by collapsing them into a single row.
+    model_key: Final = (record.model_group or record.model) if is_ptu_sentinel else record.model
 
     # Update model breakdown
-    if record.model and record.model not in breakdown.models:
-        breakdown.models[record.model] = MetricWithMetadata(
+    if model_key and model_key not in breakdown.models:
+        breakdown.models[model_key] = MetricWithMetadata(
             metrics=SpendMetrics(),
-            metadata=model_metadata.get(record.model, {}),  # Add any model-specific metadata here
+            metadata=model_metadata.get(model_key, {}),  # Add any model-specific metadata here
         )
-    if record.model:
-        breakdown.models[record.model].metrics = update_metrics(breakdown.models[record.model].metrics, record)
+    if model_key:
+        breakdown.models[model_key].metrics = update_metrics(breakdown.models[model_key].metrics, record)
 
-        # Update API key breakdown for this model
-        if record.api_key not in breakdown.models[record.model].api_key_breakdown:
-            breakdown.models[record.model].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
-                metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                ),
+        if not is_ptu_sentinel:
+            # Update API key breakdown for this model
+            if record.api_key not in breakdown.models[model_key].api_key_breakdown:
+                breakdown.models[model_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+                    metrics=SpendMetrics(),
+                    metadata=KeyMetadata(
+                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
+                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
+                    ),
+                )
+            breakdown.models[model_key].api_key_breakdown[record.api_key].metrics = update_metrics(
+                breakdown.models[model_key].api_key_breakdown[record.api_key].metrics,
+                record,
             )
-        breakdown.models[record.model].api_key_breakdown[record.api_key].metrics = update_metrics(
-            breakdown.models[record.model].api_key_breakdown[record.api_key].metrics,
-            record,
-        )
 
     # Update model group breakdown
     model_group_key: Final = record.model_group or record.model
@@ -245,19 +283,20 @@ def update_breakdown_metrics(
             breakdown.model_groups[model_group_key].metrics, record
         )
 
-        # Update API key breakdown for this model
-        if record.api_key not in breakdown.model_groups[model_group_key].api_key_breakdown:
-            breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
-                metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                ),
+        if not is_ptu_sentinel:
+            # Update API key breakdown for this model
+            if record.api_key not in breakdown.model_groups[model_group_key].api_key_breakdown:
+                breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+                    metrics=SpendMetrics(),
+                    metadata=KeyMetadata(
+                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
+                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
+                    ),
+                )
+            breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics = update_metrics(
+                breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics,
+                record,
             )
-        breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics = update_metrics(
-            breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics,
-            record,
-        )
 
     if record.mcp_namespaced_tool_name:
         if record.mcp_namespaced_tool_name not in breakdown.mcp_servers:
@@ -288,28 +327,29 @@ def update_breakdown_metrics(
             record,
         )
 
-    # Update provider breakdown
-    provider: Final = record.custom_llm_provider or "unknown"
-    if provider not in breakdown.providers:
-        breakdown.providers[provider] = MetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=provider_metadata.get(provider, {}),  # Add any provider-specific metadata here
-        )
-    breakdown.providers[provider].metrics = update_metrics(breakdown.providers[provider].metrics, record)
+    if not is_ptu_sentinel:
+        # Update provider breakdown
+        provider: Final = record.custom_llm_provider or "unknown"
+        if provider not in breakdown.providers:
+            breakdown.providers[provider] = MetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=provider_metadata.get(provider, {}),  # Add any provider-specific metadata here
+            )
+        breakdown.providers[provider].metrics = update_metrics(breakdown.providers[provider].metrics, record)
 
-    # Update API key breakdown for this provider
-    if record.api_key not in breakdown.providers[provider].api_key_breakdown:
-        breakdown.providers[provider].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=KeyMetadata(
-                key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-            ),
+        # Update API key breakdown for this provider
+        if record.api_key not in breakdown.providers[provider].api_key_breakdown:
+            breakdown.providers[provider].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=KeyMetadata(
+                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
+                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
+                ),
+            )
+        breakdown.providers[provider].api_key_breakdown[record.api_key].metrics = update_metrics(
+            breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
+            record,
         )
-    breakdown.providers[provider].api_key_breakdown[record.api_key].metrics = update_metrics(
-        breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
-        record,
-    )
 
     # Update endpoint breakdown
     if record.endpoint:
@@ -336,16 +376,17 @@ def update_breakdown_metrics(
             record,
         )
 
-    # Update api key breakdown
-    if record.api_key not in breakdown.api_keys:
-        breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=KeyMetadata(
-                key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-            ),  # Add any api_key-specific metadata here
-        )
-    breakdown.api_keys[record.api_key].metrics = update_metrics(breakdown.api_keys[record.api_key].metrics, record)
+    if not is_ptu_sentinel:
+        # Update api key breakdown
+        if record.api_key not in breakdown.api_keys:
+            breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=KeyMetadata(
+                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
+                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
+                ),  # Add any api_key-specific metadata here
+            )
+        breakdown.api_keys[record.api_key].metrics = update_metrics(breakdown.api_keys[record.api_key].metrics, record)
 
     # Update entity-specific metrics if entity_id_field is provided
     if entity_id_field:
@@ -358,19 +399,20 @@ def update_breakdown_metrics(
             )
         breakdown.entities[entity_value].metrics = update_metrics(breakdown.entities[entity_value].metrics, record)
 
-        # Update API key breakdown for this entity
-        if record.api_key not in breakdown.entities[entity_value].api_key_breakdown:
-            breakdown.entities[entity_value].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
-                metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                ),
+        if not is_ptu_sentinel:
+            # Update API key breakdown for this entity
+            if record.api_key not in breakdown.entities[entity_value].api_key_breakdown:
+                breakdown.entities[entity_value].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
+                    metrics=SpendMetrics(),
+                    metadata=KeyMetadata(
+                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
+                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
+                    ),
+                )
+            breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics = update_metrics(
+                breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics,
+                record,
             )
-        breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics = update_metrics(
-            breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics,
-            record,
-        )
 
     return breakdown
 
@@ -422,26 +464,46 @@ def _adjust_dates_for_timezone(
     start_date: str,
     end_date: str,
     timezone_offset_minutes: int | None,
+    include_current_utc_day: bool = False,
+    utc_now: datetime | None = None,
 ) -> tuple[str, str]:
     """
-    Pass-through for the local date range; the timezone offset is intentionally ignored here.
+    Map a caller-local date range onto UTC bucket keys, extending only the live end.
 
     The aggregation table (e.g. LiteLLM_DailyUserSpend) stores spend in whole-UTC-day
-    buckets keyed on date as YYYY-MM-DD. Any conversion from a local date range to a
-    UTC date range using only date arithmetic must round to whole UTC days, allowing up
-    to 24h of slop at each boundary. The previous implementation expanded the SQL range
-    by an extra full UTC day on whichever side the offset pointed, which pulled in 24h
-    of unrelated bucket data per boundary and produced approximately 100% over-counting
-    on single-day queries (e.g. IST May 29 returning UTC May 28 + UTC May 29 in full).
+    buckets keyed on date as YYYY-MM-DD. Any conversion of an interior local-day
+    boundary using only date arithmetic must round to whole UTC days, allowing up to
+    24h of slop at each boundary. A previous implementation expanded the SQL range by
+    an extra full UTC day on whichever side the offset pointed, which pulled in 24h of
+    unrelated bucket data per boundary and produced approximately 100% over-counting on
+    single-day queries (e.g. IST May 29 returning UTC May 28 + UTC May 29 in full).
     Sums of single-day queries then exceeded the equivalent multi-day aggregate, which
-    is mathematically impossible.
+    is mathematically impossible. Historical dates therefore stay a pass-through: the
+    local date is the UTC bucket key, trading boundary slop for monotonic, additive
+    results. Hour-level buckets or pro-rata weighting would fix that properly; both
+    require data the current schema does not store.
 
-    Treating the local date as the UTC date trades a small one-time boundary slop for
-    correct, monotonic, additive results across single-day and multi-day queries. A
-    later fix can introduce hour-level buckets or pro-rata weighting on adjacent UTC
-    days; both require data the current schema does not store.
+    The end boundary is different when the range reaches the caller's current day. A
+    caller west of UTC asking for a range ending "today" is asking for data up to now,
+    but once UTC has rolled past their local midnight, everything they sent since then
+    sits in the next UTC bucket, which the pass-through excludes: a PT dashboard goes
+    stale every evening from 5pm until local midnight, showing $0 for anything that
+    only started accruing that evening. Extending such a range to today's UTC bucket
+    cannot over-count, because the only part of that bucket outside the caller's range
+    is the future, and the future is empty. ``timezone_offset_minutes`` follows the
+    JS ``Date.getTimezoneOffset`` convention: UTC minus local, positive west of UTC.
+
+    The extension is strictly opt-in via ``include_current_utc_day`` so a consumer
+    whose axis or reconciliation expects the range to stop at the requested end date
+    keeps today's byte-for-byte behaviour; the cost optimization dashboard opts in.
     """
-    return start_date, end_date
+    if not include_current_utc_day or timezone_offset_minutes is None:
+        return start_date, end_date
+    now: Final = utc_now if utc_now is not None else datetime.now(timezone.utc)
+    caller_local_today: Final = (now - timedelta(minutes=timezone_offset_minutes)).date().isoformat()
+    if end_date < caller_local_today:
+        return start_date, end_date
+    return start_date, max(end_date, now.date().isoformat())
 
 
 def _build_where_conditions(
@@ -454,10 +516,13 @@ def _build_where_conditions(
     api_key: str | list[str] | None,
     exclude_entity_ids: list[str] | None = None,
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
 ) -> dict[str, "_WhereValue"]:
     """Build prisma where clause for daily activity queries."""
     # Adjust dates for timezone if provided
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
 
     where_conditions: Final[dict[str, _WhereValue]] = {
         "date": {
@@ -576,6 +641,14 @@ def _build_aggregated_sql_query(
     # total_successful_requests metadata they feed) once the admin UI reads SGR
     # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
     # api_requests rollups are still served from here.
+    #
+    # Only LiteLLM_DailyTeamSpend carries ptu_flat_cost; other daily tables emit a
+    # constant zero so the SpendMetrics.flat_cost response shape stays uniform.
+    ptu_flat_cost_select: Final = (
+        "SUM(ptu_flat_cost)::float AS ptu_flat_cost"
+        if table_name == "litellm_dailyteamspend"
+        else "0::float AS ptu_flat_cost"
+    )
     sql_query: Final = f"""
         SELECT
             date,
@@ -589,6 +662,7 @@ def _build_aggregated_sql_query(
                      custom_llm_provider, mcp_namespaced_tool_name,
                      endpoint) AS group_level,
             SUM(spend)::float AS spend,
+            {ptu_flat_cost_select},
             SUM(prompt_tokens)::bigint AS prompt_tokens,
             SUM(completion_tokens)::bigint AS completion_tokens,
             SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
@@ -684,7 +758,9 @@ async def _aggregate_spend_records(
     The per-row loop is offloaded to a worker thread via asyncio.to_thread so
     a large result set doesn't peg the event loop.
     """
-    api_keys: Final[set[str]] = {record.api_key for record in records if record.api_key}
+    api_keys: Final[set[str]] = {
+        record.api_key for record in records if record.api_key and record.api_key != PTU_SENTINEL_API_KEY
+    }
 
     api_key_metadata: dict[str, _KeyMetadataDict] = {}
     if api_keys:
@@ -731,6 +807,7 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
     completion_tokens: Final = record.completion_tokens or 0
     return SpendMetrics(
         spend=record.spend or 0.0,
+        flat_cost=_reported_flat_cost(record),
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
@@ -797,6 +874,7 @@ def _aggregate_grouping_sets_records_sync(
     for record in records:
         level = record.group_level
         metrics = _record_to_spend_metrics(record)
+        is_ptu_sentinel = record.api_key == PTU_SENTINEL_API_KEY
 
         if level == _GROUP_GRAND_TOTAL:
             total_metrics = metrics
@@ -809,7 +887,7 @@ def _aggregate_grouping_sets_records_sync(
         breakdown = ensure_date(record.date)["breakdown"]
 
         if level == _GROUP_DATE_API_KEY:
-            if record.api_key:
+            if record.api_key and not is_ptu_sentinel:
                 breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
                     metrics=metrics,
                     metadata=_key_metadata(api_key_metadata, record.api_key),
@@ -818,13 +896,13 @@ def _aggregate_grouping_sets_records_sync(
             if record.model:
                 assign_metric_with_metadata(breakdown.models, record.model, metrics)
         elif level == _GROUP_DATE_MODEL_API_KEY:
-            if record.model and record.api_key:
+            if record.model and record.api_key and not is_ptu_sentinel:
                 assign_api_key_breakdown(breakdown.models, record.model, record.api_key, metrics)
         elif level == _GROUP_DATE_MODEL_GROUP:
             if record.model_group:
                 assign_metric_with_metadata(breakdown.model_groups, record.model_group, metrics)
         elif level == _GROUP_DATE_MODEL_GROUP_API_KEY:
-            if record.model_group and record.api_key:
+            if record.model_group and record.api_key and not is_ptu_sentinel:
                 assign_api_key_breakdown(
                     breakdown.model_groups,
                     record.model_group,
@@ -832,10 +910,17 @@ def _aggregate_grouping_sets_records_sync(
                     metrics,
                 )
         elif level == _GROUP_DATE_PROVIDER:
+            # Only PTU sentinel rows carry ptu_flat_cost and they have no provider, so at
+            # this level the sentinel's cost would land under "unknown". Withholding the
+            # flat cost matches the per-row path, which skips sentinel rows outright. The
+            # bucket itself is still assigned unconditionally: a legacy row predating the
+            # api_requests column backfills to all zeroes, and skipping those would drop a
+            # provider the base build reported.
+            provider_metrics = metrics.model_copy(update={"flat_cost": 0.0})  # mutable-ok: pydantic update payload
             provider = record.custom_llm_provider or "unknown"
-            assign_metric_with_metadata(breakdown.providers, provider, metrics)
+            assign_metric_with_metadata(breakdown.providers, provider, provider_metrics)
         elif level == _GROUP_DATE_PROVIDER_API_KEY:
-            if record.api_key:
+            if record.api_key and not is_ptu_sentinel:
                 provider = record.custom_llm_provider or "unknown"
                 assign_api_key_breakdown(breakdown.providers, provider, record.api_key, metrics)
         elif level == _GROUP_DATE_MCP:
@@ -875,7 +960,7 @@ async def _aggregate_grouping_sets_records(
     records: Sequence[_GroupingSetsRow],
 ) -> _AggregatedSpendData:
     """Async wrapper: fetch api_key_metadata, then dispatch on a worker thread."""
-    api_keys: Final[set[str]] = {r.api_key for r in records if r.api_key}
+    api_keys: Final[set[str]] = {r.api_key for r in records if r.api_key and r.api_key != PTU_SENTINEL_API_KEY}
 
     api_key_metadata: dict[str, _KeyMetadataDict] = {}
     if api_keys:
@@ -903,6 +988,7 @@ async def get_daily_activity(
     exclude_entity_ids: list[str] | None = None,
     metadata_metrics_func: Callable[[Sequence[DailySpendRecord]], SpendMetrics] | None = None,
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
     resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[dict[str, dict[str, object]]]]
     | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
@@ -936,6 +1022,7 @@ async def get_daily_activity(
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
             timezone_offset_minutes=timezone_offset_minutes,
+            include_current_utc_day=include_current_utc_day,
         )
 
         # Get total count for pagination
@@ -983,6 +1070,7 @@ async def get_daily_activity(
             results=aggregated["results"],
             metadata=DailySpendMetadata(
                 total_spend=metadata_metrics.spend,
+                total_flat_cost=metadata_metrics.flat_cost,
                 total_prompt_tokens=metadata_metrics.prompt_tokens,
                 total_completion_tokens=metadata_metrics.completion_tokens,
                 total_tokens=metadata_metrics.total_tokens,
@@ -1073,6 +1161,7 @@ async def get_daily_activity_aggregated(
             results=aggregated["results"],
             metadata=DailySpendMetadata(
                 total_spend=aggregated["totals"].spend,
+                total_flat_cost=aggregated["totals"].flat_cost,
                 total_prompt_tokens=aggregated["totals"].prompt_tokens,
                 total_completion_tokens=aggregated["totals"].completion_tokens,
                 total_tokens=aggregated["totals"].total_tokens,

@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -84,33 +85,51 @@ def test_node_options_with_heap_appends_after_caller_flags_so_it_wins():
     assert merged == f"--max-old-space-size=4096 --no-warnings {gate.NODE_HEAP_OPTION}"
 
 
-def _stub_basedpyright(tmp_path, monkeypatch, script_body):
-    stub = tmp_path / "basedpyright"
+def _stub_env(tmp_path, script_body):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "basedpyright"
     stub.write_text(f"#!/bin/sh\n{script_body}\n")
     stub.chmod(0o755)
-    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+    return tmp_path
 
 
 def test_run_basedpyright_exports_the_raised_heap_to_the_child(tmp_path, monkeypatch):
     captured = tmp_path / "node_options.txt"
-    _stub_basedpyright(
+    env_dir = _stub_env(
         tmp_path,
-        monkeypatch,
         f'echo "$NODE_OPTIONS" > "{captured}"\necho \'{{"generalDiagnostics": []}}\'',
     )
     monkeypatch.delenv("NODE_OPTIONS", raising=False)
-    assert json.loads(gate.run_basedpyright(cwd=tmp_path)) == {"generalDiagnostics": []}
+    assert json.loads(gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)) == {
+        "generalDiagnostics": []
+    }
     assert captured.read_text().strip() == gate.NODE_HEAP_OPTION
 
 
-def test_run_basedpyright_fails_loudly_on_a_crash_exit_code(tmp_path, monkeypatch):
+def test_run_basedpyright_pins_import_resolution_to_the_owned_env(tmp_path):
+    # basedpyright auto-detects a `.venv` in the project root, and that beats
+    # PATH order and VIRTUAL_ENV; only an explicit --pythonpath keeps the
+    # caller's fatter venv (whose extra typed packages flip diagnostics vs CI)
+    # out of the measurement.
+    captured = tmp_path / "argv.txt"
+    env_dir = _stub_env(
+        tmp_path,
+        f'echo "$@" > "{captured}"\necho \'{{"generalDiagnostics": []}}\'',
+    )
+    gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)
+    argv = captured.read_text().split()
+    assert argv[argv.index("--pythonpath") + 1] == str(env_dir / "bin" / "python")
+
+
+def test_run_basedpyright_fails_loudly_on_a_crash_exit_code(tmp_path):
     import pytest
 
     # 134 is SIGABRT, what node dies with on a heap OOM; it must never read as a
     # clean zero-error run.
-    _stub_basedpyright(tmp_path, monkeypatch, "exit 134")
+    env_dir = _stub_env(tmp_path, "exit 134")
     with pytest.raises(SystemExit):
-        gate.run_basedpyright(cwd=tmp_path)
+        gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)
 
 
 def test_at_or_under_ceiling_passes():
@@ -248,6 +267,89 @@ def test_cache_key_changes_with_base_point_and_each_fingerprint():
     assert gate.cache_key("abc", ("cfg", "lock2")) != key
 
 
+def test_fingerprints_carry_the_dependency_group_set():
+    # Counts measured under one group set must never be compared against
+    # another's: the fingerprint difference re-keys every cache entry and
+    # artifact name, so a changed canonical set falls back to recompute.
+    assert gate.environment_fingerprints() == gate.environment_fingerprints()
+    assert gate.environment_fingerprints(
+        dep_groups=("proxy-dev",)
+    ) != gate.environment_fingerprints(dep_groups=("proxy-dev", "e2e-dev"))
+    assert gate.environment_fingerprints()[-1] == "groups:" + ",".join(
+        gate.TYPECHECK_DEP_GROUPS
+    )
+
+
+def test_fingerprints_cover_the_prisma_schema():
+    schema_hash = hashlib.sha256(gate.PRISMA_SCHEMA.read_bytes()).hexdigest()
+    assert schema_hash in gate.environment_fingerprints()
+
+
+def test_env_commands_sync_the_canonical_groups_then_generate_prisma():
+    sync, generate = gate.typecheck_env_commands(Path("/envdir"))
+    assert sync[:3] == ("uv", "sync", "--frozen")
+    adjacent = list(zip(sync, sync[1:]))
+    for group in gate.TYPECHECK_DEP_GROUPS:
+        assert ("--group", group) in adjacent
+    assert generate == (
+        str(Path("/envdir") / "bin" / "python"),
+        str(gate.PRISMA_GENERATE_SCRIPT),
+    )
+
+
+def test_env_interpreter_pin_tracks_pyrightconfigs_python_version():
+    configured = json.loads((ROOT / "pyrightconfig.json").read_text())[
+        "pythonVersion"
+    ]
+    assert gate.typecheck_python_version() == configured
+    sync = gate.typecheck_env_commands()[0]
+    assert sync[sync.index("--python") + 1] == configured
+
+
+def test_ensure_env_targets_the_owned_dir_and_runs_sync_then_generate(tmp_path):
+    calls = []
+
+    def runner(cmd, env):
+        calls.append((cmd[:2], env["UV_PROJECT_ENVIRONMENT"]))
+        return 0
+
+    assert gate.ensure_typecheck_env(env_dir=tmp_path, run=runner) == tmp_path
+    assert calls == [
+        (("uv", "sync"), str(tmp_path)),
+        ((str(tmp_path / "bin" / "python"), str(gate.PRISMA_GENERATE_SCRIPT)), str(tmp_path)),
+    ]
+
+
+def test_ensure_env_fails_loudly_and_stops_at_the_first_failed_step(tmp_path):
+    import pytest
+
+    calls = []
+
+    def failing(cmd, env):
+        calls.append(cmd)
+        return 2
+
+    with pytest.raises(SystemExit):
+        gate.ensure_typecheck_env(env_dir=tmp_path, run=failing)
+    assert len(calls) == 1
+
+
+def test_ensure_env_announces_a_cold_provision(tmp_path, capsys):
+    def runner(cmd, env):
+        return 0
+
+    gate.ensure_typecheck_env(env_dir=tmp_path / "fresh", run=runner)
+    assert "provisioning" in capsys.readouterr().err
+
+
+def test_ensure_env_is_silent_when_the_env_already_exists(tmp_path, capsys):
+    def runner(cmd, env):
+        return 0
+
+    gate.ensure_typecheck_env(env_dir=tmp_path, run=runner)
+    assert capsys.readouterr().err == ""
+
+
 def test_cached_counts_round_trip(tmp_path):
     path = gate.cache_path(tmp_path, "abc123", ("f1", "f2"))
     gate.store_counts(tmp_path, path, "abc123", {"reportAny": 3, "reportCall": 1})
@@ -286,13 +388,43 @@ def test_store_prune_spares_a_concurrent_runs_in_flight_scratch(tmp_path):
     assert gate.load_cached_counts(mine) == {"reportAny": 1}
 
 
-def test_store_prunes_entries_for_other_branch_points(tmp_path):
+def test_store_keeps_a_concurrent_worktrees_entry_for_another_branch_point(tmp_path):
     old = gate.cache_path(tmp_path, "old", ("f",))
     gate.store_counts(tmp_path, old, "old", {"reportAny": 1})
     new = gate.cache_path(tmp_path, "new", ("f",))
     gate.store_counts(tmp_path, new, "new", {"reportAny": 2})
-    assert not old.exists()
+    assert gate.load_cached_counts(old) == {"reportAny": 1}
     assert gate.load_cached_counts(new) == {"reportAny": 2}
+
+
+def test_store_evicts_only_the_oldest_entries_beyond_the_cap(tmp_path):
+    aged = [
+        gate.cache_path(tmp_path, f"base{i}", ("f",))
+        for i in range(gate.CACHE_KEEP_ENTRIES)
+    ]
+    for age, path in enumerate(aged):
+        gate.store_counts(tmp_path, path, f"base{age}", {"reportAny": age})
+        os.utime(path, (age, age))
+    newest = gate.cache_path(tmp_path, "newest", ("f",))
+    gate.store_counts(tmp_path, newest, "newest", {"reportAny": 99})
+    assert not aged[0].exists()
+    assert all(path.exists() for path in aged[1:])
+    assert gate.load_cached_counts(newest) == {"reportAny": 99}
+
+
+def test_store_never_evicts_the_entry_it_just_wrote_even_on_mtime_ties(tmp_path):
+    others = [
+        gate.cache_path(tmp_path, f"base{i}", ("f",))
+        for i in range(gate.CACHE_KEEP_ENTRIES + 2)
+    ]
+    for path in others:
+        gate.store_counts(tmp_path, path, path.name, {"reportAny": 1})
+        os.utime(path, (9_999_999_999, 9_999_999_999))
+    mine = gate.cache_path(tmp_path, "mine", ("f",))
+    gate.store_counts(tmp_path, mine, "mine", {"reportAny": 2})
+    assert gate.load_cached_counts(mine) == {"reportAny": 2}
+    survivors = list(tmp_path.glob(f"{gate.CACHE_FILE_PREFIX}*.json"))
+    assert len(survivors) == gate.CACHE_KEEP_ENTRIES
 
 
 def _no_fetch(ref):
