@@ -2131,3 +2131,53 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
             messages=None,
             request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyB"}},
         )
+
+
+# ---------------------------------------------------------------------------
+# in-memory cache isolation -- caller-controlled tag buckets must never evict
+# the shared cache's other, authentication-bound counters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_flooding_tag_buckets_does_not_evict_the_shared_cache_authentication_bound_counter(
+    time_controller,
+):
+    """
+    The proxy-wide internal_usage_cache passed into this limiter is also
+    used by the key/team parallel-request limiter for its own,
+    authentication-bound counters, and its default InMemoryCache evicts at
+    200 items. Without a dedicated in-memory layer for this hook's own
+    caller-controlled tag buckets, an attacker sending 200+ distinct tag
+    values could evict an unrelated authentication-bound counter and let
+    some other caller exceed a limit nothing here configured.
+    """
+    shared_cache = DualCache()
+    await shared_cache.async_set_cache(key="authentication_bound_counter", value="do-not-evict")
+
+    limiter = _PROXY_TagRateLimiter(internal_usage_cache=shared_cache, time_provider=time_controller.now)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 1000, "period_seconds": 60}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    for i in range(250):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": [f"end_user_id:flood-{i}"]}},
+        )
+
+    assert await shared_cache.async_get_cache(key="authentication_bound_counter") == "do-not-evict"

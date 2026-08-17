@@ -616,7 +616,16 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         internal_usage_cache: DualCache,
         time_provider: Callable[[], datetime] | None = None,
     ) -> None:
-        self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
+        # A dedicated in-memory layer, not the proxy-wide `internal_usage_cache`
+        # passed in: that instance is shared with the key/team parallel-request
+        # limiter's own authentication-bound counters, and its default
+        # InMemoryCache evicts at 200 items. Without this isolation, a caller
+        # flooding this hook's own caller-controlled tag buckets past that
+        # ceiling could evict an unrelated, authentication-bound counter and
+        # exceed a limit nothing here configured. The real Redis connection
+        # (if any) is still shared, so cross-instance correctness is unaffected.
+        isolated_dual_cache: Final = DualCache(redis_cache=internal_usage_cache.redis_cache)
+        self.internal_usage_cache = InternalUsageCache(dual_cache=isolated_dual_cache)
         self._v3 = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
         self._time_provider = time_provider or datetime.now
         self._index = _TagRateLimitIndex(time_provider=self._time_provider)
