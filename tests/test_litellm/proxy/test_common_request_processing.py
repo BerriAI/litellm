@@ -4564,7 +4564,7 @@ class TestAllmPassthroughStreamingProviderGate:
 
         assert isinstance(result, StreamingResponse)
         assert result.media_type is None
-        assert result.headers.get("content-type") != "application/vnd.amazon.eventstream"
+        assert "content-type" not in result.headers
 
 
 class TestResponseCostHeaderForTypedDictResponses:
