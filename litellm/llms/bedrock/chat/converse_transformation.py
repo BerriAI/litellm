@@ -6,6 +6,7 @@ import copy
 import json
 import time
 import types
+from collections.abc import Mapping
 from typing import Final, Literal, cast, overload
 
 import httpx
@@ -1769,6 +1770,42 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
+
+    @staticmethod
+    def is_converse_usage_shape(usage_object: Mapping[str, object]) -> bool:
+        """Converse-family models report camelCase token counts, not Anthropic's snake_case."""
+        return "inputTokens" in usage_object or "outputTokens" in usage_object
+
+    @staticmethod
+    def _usage_count(usage_object: Mapping[str, object], *keys: str) -> int:
+        for key in keys:
+            value = usage_object.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return int(value)
+        return 0
+
+    def usage_from_batch_output(self, usage_object: Mapping[str, object]) -> Usage:
+        """Read a Converse-shaped usage block out of a batch output line.
+
+        Batch output omits fields the live API always sends, so the block is
+        completed before going through the same transform, keeping a batch and an
+        equivalent non-batch call in agreement on tokens.
+        """
+        input_tokens: Final = self._usage_count(usage_object, "inputTokens")
+        output_tokens: Final = self._usage_count(usage_object, "outputTokens")
+        cache_read: Final = self._usage_count(usage_object, "cacheReadInputTokens", "cacheReadInputTokenCount")
+        cache_write: Final = self._usage_count(usage_object, "cacheWriteInputTokens", "cacheWriteInputTokenCount")
+        return self.transform_usage(
+            ConverseTokenUsageBlock(
+                inputTokens=input_tokens,
+                outputTokens=output_tokens,
+                totalTokens=self._usage_count(usage_object, "totalTokens") or input_tokens + output_tokens,
+                cacheReadInputTokenCount=cache_read,
+                cacheReadInputTokens=cache_read,
+                cacheWriteInputTokenCount=cache_write,
+                cacheWriteInputTokens=cache_write,
+            )
+        )
 
     def transform_usage(
         self,
