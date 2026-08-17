@@ -150,7 +150,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "image":
                             url = self._translate_anthropic_image_source_to_url(cast(dict, block.get("source", {})))
                             if url:
-                                user_parts.append({"type": "input_image", "image_url": url})
+                                user_parts.append({"type": "input_image", "image_url": url, "detail": "auto"})
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
@@ -176,7 +176,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                         else TOOL_RESULT_IMAGE_PLACEHOLDER
                                     )
                                     tool_image_parts.extend(
-                                        {"type": "input_image", "image_url": url}  # mutable-ok: json content part
+                                        {"type": "input_image", "image_url": url, "detail": "auto"}  # mutable-ok: json content part
                                         for url in image_urls
                                     )
                             else:
@@ -240,7 +240,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "thinking":
                             thinking_text = block.get("thinking", "")
                             if thinking_text:
-                                asst_parts.append({"type": "output_text", "text": thinking_text})
+                                input_items.append({"type": "reasoning", "id": block.get("signature") or f"reasoning_{len(input_items)}", "summary": [{"type": "summary_text", "text": thinking_text}]})
                     if asst_parts:
                         input_items.append(
                             {
