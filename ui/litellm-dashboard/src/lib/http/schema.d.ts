@@ -8834,7 +8834,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_3"];
+        get: operations["websocket_realtime_websocket_endpoint_get_4"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11594,7 +11594,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get"];
+        get: operations["websocket_realtime_websocket_endpoint_get_2"];
         put?: never;
         post?: never;
         delete?: never;
@@ -17017,6 +17017,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: realtime_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_realtime_websocket_endpoint_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/access_groups": {
         parameters: {
             query?: never;
@@ -17888,7 +17908,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_2"];
+        get: operations["websocket_realtime_websocket_endpoint_get_3"];
         put?: never;
         post?: never;
         delete?: never;
@@ -47834,7 +47854,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_3: {
+    websocket_realtime_websocket_endpoint_get_4: {
         parameters: {
             query?: never;
             header?: never;
@@ -50629,7 +50649,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get: {
+    websocket_realtime_websocket_endpoint_get_2: {
         parameters: {
             query?: never;
             header?: never;
@@ -57389,6 +57409,24 @@ export interface operations {
             };
         };
     };
+    websocket_realtime_websocket_endpoint_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_mcp_access_groups_v1_mcp_access_groups_get: {
         parameters: {
             query?: never;
@@ -58642,7 +58680,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_2: {
+    websocket_realtime_websocket_endpoint_get_3: {
         parameters: {
             query?: never;
             header?: never;

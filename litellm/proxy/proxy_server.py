@@ -648,7 +648,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
-from litellm.types.realtime import RealtimeQueryParams
+from litellm.types.realtime import RealtimeAPIPath, RealtimeQueryParams
 from litellm.types.router import (
     DeploymentTypedDict,
     RouterGeneralSettings,
@@ -10739,6 +10739,7 @@ def _realtime_query_params_template(model: str | None, intent: str | None) -> tu
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
+@app.websocket("/v1/live")
 async def realtime_websocket_endpoint(
     websocket: WebSocket,
     model: str | None = fastapi.Query(None, description="The model to use for the websocket connection."),
@@ -10749,6 +10750,9 @@ async def realtime_websocket_endpoint(
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
+    realtime_api_path: Final[RealtimeAPIPath] = (
+        "/v1/live" if websocket.url.path.endswith("/v1/live") else "/v1/realtime"
+    )
     requested_protocols: Final = [
         p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
     ]
@@ -10783,6 +10787,7 @@ async def realtime_websocket_endpoint(
         "model": route_model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
+        "realtime_api_path": realtime_api_path,
     }
 
     # Pass guardrails into data so pre-call guardrail processing picks them up
@@ -10794,6 +10799,7 @@ async def realtime_websocket_endpoint(
 
     scope: Final = REALTIME_REQUEST_SCOPE_TEMPLATE.copy()
     scope["headers"] = headers_list
+    scope["path"] = realtime_api_path
 
     request: Final = Request(scope=scope)
 

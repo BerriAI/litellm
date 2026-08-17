@@ -11,6 +11,7 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.realtime import (
+    RealtimeAPIPath,
     RealtimeClientSecretRequest,
     RealtimeExpiresAfter,
     RealtimeQueryParams,
@@ -292,6 +293,7 @@ async def _arealtime(
     client: Any | None = None,
     timeout: float | None = None,
     query_params: RealtimeQueryParams | None = None,
+    realtime_api_path: RealtimeAPIPath = "/v1/realtime",
     **kwargs,
 ):
     """
@@ -316,6 +318,9 @@ async def _arealtime(
         api_base=api_base,
         api_key=api_key,
     )
+
+    if realtime_api_path == "/v1/live" and _custom_llm_provider != "openai":
+        raise ValueError("/v1/live is only supported by the OpenAI realtime provider")
 
     # If the client supplied `model` in the URL, ensure it uses the normalized
     # provider model (no proxy aliases). If they omitted it, preserve that shape
@@ -399,6 +404,7 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
+            realtime_api_path=realtime_api_path,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
         )

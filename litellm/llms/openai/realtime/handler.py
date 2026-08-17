@@ -1,5 +1,5 @@
 """
-This file contains the calling OpenAI's `/v1/realtime` endpoint.
+This file contains the calling OpenAI's `/v1/realtime` and `/v1/live` endpoints.
 
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
@@ -8,7 +8,7 @@ from typing import Any, Final, cast
 
 from litellm._logging import _redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
-from litellm.types.realtime import RealtimeQueryParams
+from litellm.types.realtime import RealtimeAPIPath, RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import (
@@ -80,7 +80,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
 
         return ssl_config
 
-    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
+    def _construct_url(
+        self,
+        api_base: str,
+        query_params: RealtimeQueryParams,
+        realtime_api_path: RealtimeAPIPath = "/v1/realtime",
+    ) -> str:
         """
         Construct the backend websocket URL with all query parameters (including 'model').
         """
@@ -90,7 +95,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_base = api_base.replace("http://", "ws://")
         url = URL(api_base)
         # Set the correct path
-        url = url.copy_with(path="/v1/realtime")
+        url = url.copy_with(path=realtime_api_path)
         # Include all query parameters including 'model'
         if query_params:
             url = url.copy_with(params=query_params)
@@ -114,6 +119,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         client: Any | None = None,
         timeout: float | None = None,
         query_params: RealtimeQueryParams | None = None,
+        realtime_api_path: RealtimeAPIPath = "/v1/realtime",
         user_api_key_dict: Any | None = None,
         litellm_metadata: dict | None = None,
         **kwargs: Any,
@@ -129,7 +135,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         # Use all query params if provided, else fallback to just model
         if query_params is None:
             query_params = {"model": model}
-        url: Final = self._construct_url(api_base, query_params)
+        url: Final = self._construct_url(api_base, query_params, realtime_api_path)
 
         try:
             # Get provider-specific SSL configuration
