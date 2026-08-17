@@ -959,8 +959,8 @@ class ResponsesAPIRequestUtils:
             return {"format": {"type": format_type}}
 
         json_schema: Final = converted.get("json_schema") or {}
-        # `name`/`schema` are required by the API and `strict`/`description` are optional,
-        # so copy whatever was supplied and let the provider reject a malformed schema.
+        # Only `strict`/`description` are optional; a missing `name`/`schema` is the
+        # provider's error to report, not ours to guess at.
         schema_fields: Final = {
             key: json_schema[key]
             for key in ("name", "schema", "strict", "description")
