@@ -52,7 +52,7 @@ def _assert_datadog_configured(client: LoggingClient) -> None:
     """Recorded state: the proxy reports the DataDog callback among its active
     callbacks, so a missing destination config fails here, before any
     delivery-based assertion can time out confusingly."""
-    result = client.gateway.probe("/health/readiness/details", params=NoBody())
+    result = client.proxy.probe("/health/readiness/details", params=NoBody())
     assert result.status_code == 200, (
         f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
     )

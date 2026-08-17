@@ -7,10 +7,11 @@ import shutil
 import signal
 import sys
 import threading
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import IO, Iterator, Mapping
+from typing import IO, Final
 
 import click
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -20,13 +21,13 @@ from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
 from .auth import load_token, login
 
-ENV_KEY = "env"
-API_KEY_HELPER_KEY = "apiKeyHelper"
-ANTHROPIC_BASE_URL_KEY = "ANTHROPIC_BASE_URL"
-ANTHROPIC_API_KEY_KEY = "ANTHROPIC_API_KEY"
+ENV_KEY: Final = "env"
+API_KEY_HELPER_KEY: Final = "apiKeyHelper"
+ANTHROPIC_BASE_URL_KEY: Final = "ANTHROPIC_BASE_URL"
+ANTHROPIC_API_KEY_KEY: Final = "ANTHROPIC_API_KEY"
 
-CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
-BACKUP_PATH = Path.home() / ".litellm" / "claude_settings_backup.json"
+CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
+BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
 
 
 class UpError(Exception):
@@ -41,15 +42,15 @@ class BackupRecord:
     content: dict[str, JsonValue] | None
 
 
-_SETTINGS_ADAPTER = TypeAdapter(dict[str, JsonValue])
-_BACKUP_RECORD_ADAPTER = TypeAdapter(BackupRecord)
+_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
+_BACKUP_RECORD_ADAPTER: Final = TypeAdapter(BackupRecord)
 
 
 def load_json_or_empty(path: Path) -> dict[str, JsonValue]:
     if not path.exists():
         return {}
     with open(path, "r") as f:
-        content = f.read()
+        content: Final = f.read()
     if not content.strip():
         return {}
     try:
@@ -68,9 +69,9 @@ def merge_claude_settings(
     token (same reasoning as build_agent_env in agents.py). Every other key is
     preserved untouched.
     """
-    raw_env = settings.get(ENV_KEY, {})
-    base_env = raw_env if isinstance(raw_env, dict) else {}
-    env = {**base_env, ANTHROPIC_BASE_URL_KEY: base_url.rstrip("/")}
+    raw_env: Final = settings.get(ENV_KEY, {})
+    base_env: Final = raw_env if isinstance(raw_env, dict) else {}
+    env: Final = {**base_env, ANTHROPIC_BASE_URL_KEY: base_url.rstrip("/")}
     env.pop(ANTHROPIC_API_KEY_KEY, None)
     return {**settings, ENV_KEY: env, API_KEY_HELPER_KEY: api_key_helper}
 
@@ -87,9 +88,9 @@ def secure_create(path: Path) -> Iterator[IO[str]]:
     untouched. `os.fchmod` right after opening -- before a single byte of the new content is
     written -- covers both cases.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd: Final = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)
-    f: IO[str] = os.fdopen(fd, "w")
+    f: Final[IO[str]] = os.fdopen(fd, "w")
     try:
         yield f
     finally:
@@ -97,18 +98,18 @@ def secure_create(path: Path) -> Iterator[IO[str]]:
 
 
 def write_backup(record: BackupRecord, backup_path: Path | None = None) -> None:
-    path = backup_path if backup_path is not None else BACKUP_PATH
+    path: Final = backup_path if backup_path is not None else BACKUP_PATH
     path.parent.mkdir(exist_ok=True)
     with secure_create(path) as f:
         json.dump({"existed": record.existed, "content": record.content}, f, indent=2)
 
 
 def read_backup(backup_path: Path | None = None) -> BackupRecord | None:
-    path = backup_path if backup_path is not None else BACKUP_PATH
+    path: Final = backup_path if backup_path is not None else BACKUP_PATH
     if not path.exists():
         return None
     with open(path, "r") as f:
-        content = f.read()
+        content: Final = f.read()
     try:
         return _BACKUP_RECORD_ADAPTER.validate_json(content)
     except ValidationError:
@@ -120,9 +121,9 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
 
     Returns the restored record, or None if there was nothing to restore.
     """
-    resolved_settings_path = settings_path if settings_path is not None else CLAUDE_SETTINGS_PATH
-    resolved_backup_path = backup_path if backup_path is not None else BACKUP_PATH
-    record = read_backup(resolved_backup_path)
+    resolved_settings_path: Final = settings_path if settings_path is not None else CLAUDE_SETTINGS_PATH
+    resolved_backup_path: Final = backup_path if backup_path is not None else BACKUP_PATH
+    record: Final = read_backup(resolved_backup_path)
     if record is None:
         return None
     if record.existed and record.content is not None:
@@ -146,7 +147,7 @@ def resolve_api_key_helper(base_url: str) -> str:
     for a different, previously-logged-into proxy would be handed to
     whichever server `up` currently points at.
     """
-    lite_path = shutil.which("lite")
+    lite_path: Final = shutil.which("lite")
     if lite_path is None:
         raise UpError(
             "Could not find `lite` on your PATH. Claude Code's apiKeyHelper needs "
@@ -156,7 +157,7 @@ def resolve_api_key_helper(base_url: str) -> str:
 
 
 def _ensure_fresh_login(ctx: click.Context) -> None:
-    base_url = ctx.obj["base_url"].rstrip("/")
+    base_url: Final = ctx.obj["base_url"].rstrip("/")
     token_data = load_token()
     if token_data and token_data.get("base_url") == base_url and is_cli_token_fresh(token_data):
         return
@@ -175,7 +176,7 @@ def _ensure_fresh_login(ctx: click.Context) -> None:
 
 
 def _restore_and_report() -> None:
-    record = restore_claude_settings()
+    record: Final = restore_claude_settings()
     if record is None:
         click.echo("Nothing to restore.")
         return
@@ -196,11 +197,11 @@ def up(ctx: click.Context) -> None:
     is already running (this does not start one for you). Cursor is not
     supported: it has no equivalent file-based config to patch.
     """
-    base_url = ctx.obj["base_url"]
+    base_url: Final = ctx.obj["base_url"]
 
     try:
         _ensure_fresh_login(ctx)
-        api_key = resolve_api_key(ctx)
+        api_key: Final = resolve_api_key(ctx)
         verify_proxy_key(base_url, api_key)
 
         if BACKUP_PATH.exists():
@@ -209,9 +210,9 @@ def up(ctx: click.Context) -> None:
                 "running (or crashed without cleanup). Run `lite down` first."
             )
 
-        api_key_helper = resolve_api_key_helper(base_url)
-        original_existed = CLAUDE_SETTINGS_PATH.exists()
-        original_settings = load_json_or_empty(CLAUDE_SETTINGS_PATH)
+        api_key_helper: Final = resolve_api_key_helper(base_url)
+        original_existed: Final = CLAUDE_SETTINGS_PATH.exists()
+        original_settings: Final = load_json_or_empty(CLAUDE_SETTINGS_PATH)
         write_backup(
             BackupRecord(
                 existed=original_existed,
@@ -220,7 +221,7 @@ def up(ctx: click.Context) -> None:
         )
 
         CLAUDE_SETTINGS_PATH.parent.mkdir(exist_ok=True)
-        merged = merge_claude_settings(original_settings, base_url, api_key_helper)
+        merged: Final = merge_claude_settings(original_settings, base_url, api_key_helper)
         with open(CLAUDE_SETTINGS_PATH, "w") as f:
             json.dump(merged, f, indent=2)
     except (AgentRunError, UpError) as e:
@@ -229,8 +230,8 @@ def up(ctx: click.Context) -> None:
     click.echo(f"litellm: routing Claude Code through proxy at {base_url.rstrip('/')}")
     click.echo("Press Ctrl-C to stop and restore your original settings.")
 
-    stop_event = threading.Event()
-    restored = threading.Lock()
+    stop_event: Final = threading.Event()
+    restored: Final = threading.Lock()
 
     def _handle_signal(_signum: int, _frame: FrameType | None) -> None:
         stop_event.set()

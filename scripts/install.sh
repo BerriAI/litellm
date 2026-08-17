@@ -100,11 +100,12 @@ else
 fi
 echo ""
 
-# --python-preference system: reuse a compatible system Python when present,
-# otherwise download a managed one. Either way uv honours litellm's requires-python,
-# so a too-old (3.9) or too-new (3.14+) system Python is skipped, not forced.
-"$UV_BIN" tool install --python-preference system --force "${LITELLM_PACKAGE}" \
-  || die "uv tool install failed. Try manually: $UV_BIN tool install '${LITELLM_PACKAGE}'"
+# --python mirrors requires-python in pyproject.toml (keep in sync): uv selects the
+# interpreter before resolving, so an unconstrained request accepts a too-old system
+# Python (stock macOS ships 3.9) and fails resolution instead of downloading a
+# managed one. --python-preference system still reuses a compatible system Python.
+"$UV_BIN" tool install --python '>=3.10,<3.15' --python-preference system --force "${LITELLM_PACKAGE}" \
+  || die "uv tool install failed. Try manually: $UV_BIN tool install --python '>=3.10,<3.15' '${LITELLM_PACKAGE}'"
 
 # ── find the litellm binary installed by uv tool ───────────────────────────
 SCRIPTS_DIR="$("$UV_BIN" tool dir --bin)"

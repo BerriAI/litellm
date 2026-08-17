@@ -1,5 +1,5 @@
 import React from "react";
-import { Input } from "antd";
+import { Input } from "@/components/ui/input";
 
 interface ReliabilityRetriesSectionProps {
   routerSettings: { [key: string]: any };

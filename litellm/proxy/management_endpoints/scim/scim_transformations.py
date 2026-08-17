@@ -1,4 +1,5 @@
-from typing import Callable, List, TypeVar, Union
+from collections.abc import Callable
+from typing import Final, TypeVar
 
 from pydantic import ValidationError
 
@@ -23,7 +24,7 @@ class ScimTransformations:
 
     @staticmethod
     async def transform_litellm_user_to_scim_user(
-        user: Union[LiteLLM_UserTable, NewUserResponse],
+        user: LiteLLM_UserTable | NewUserResponse,
     ) -> SCIMUser:
         from litellm.proxy.proxy_server import prisma_client
 
@@ -31,37 +32,37 @@ class ScimTransformations:
             raise HTTPException(status_code=500, detail={"error": "No database connected"})
 
         # Get user's teams/groups
-        groups = []
+        groups: Final = []
         for team_id in user.teams or []:
             team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             if team:
                 team_alias = getattr(team, "team_alias", team.team_id)
                 groups.append(SCIMUserGroup(value=team.team_id, display=team_alias))
 
-        user_created_at = user.created_at.isoformat() if user.created_at else None
-        user_updated_at = user.updated_at.isoformat() if user.updated_at else None
+        user_created_at: Final = user.created_at.isoformat() if user.created_at else None
+        user_updated_at: Final = user.updated_at.isoformat() if user.updated_at else None
 
-        emails = []
+        emails: Final = []
         # Only add email if it's a valid email address (contains @)
         # user_email can be a UUID when users are created without an email
         if user.user_email and "@" in user.user_email:
             emails.append(SCIMUserEmail(value=user.user_email, primary=True))
 
-        metadata = user.metadata or {}
-        scim_active = metadata.get("scim_active")
-        active = True if scim_active is None else bool(scim_active)
+        metadata: Final = user.metadata or {}
+        scim_active: Final = metadata.get("scim_active")
+        active: Final = True if scim_active is None else bool(scim_active)
 
-        schemas = ["urn:ietf:params:scim:schemas:core:2.0:User"]
-        enterprise_user = ScimTransformations._parse_directory_metadata(
+        schemas: Final = ["urn:ietf:params:scim:schemas:core:2.0:User"]
+        enterprise_user: Final = ScimTransformations._parse_directory_metadata(
             user, SCIM_ENTERPRISE_METADATA_KEY, SCIMEnterpriseUser.model_validate
         )
         if enterprise_user is not None:
             schemas.append(SCIM_ENTERPRISE_USER_SCHEMA)
 
-        entitlements = ScimTransformations._parse_directory_metadata(
+        entitlements: Final = ScimTransformations._parse_directory_metadata(
             user, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
         )
-        roles = ScimTransformations._parse_directory_metadata(
+        roles: Final = ScimTransformations._parse_directory_metadata(
             user, SCIM_ROLES_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
         )
 
@@ -89,7 +90,7 @@ class ScimTransformations:
 
     @staticmethod
     def _parse_directory_metadata(
-        user: Union[LiteLLM_UserTable, NewUserResponse],
+        user: LiteLLM_UserTable | NewUserResponse,
         key: str,
         validate: Callable[[object], T],
     ) -> T | None:
@@ -98,8 +99,8 @@ class ScimTransformations:
         Metadata is writable outside the SCIM surface, so a malformed value on one user must not
         fail the whole directory response; the attribute is omitted and the corruption logged.
         """
-        metadata = user.metadata or {}
-        raw = metadata.get(key)
+        metadata: Final = user.metadata or {}
+        raw: Final = metadata.get(key)
         if not raw:
             return None
         try:
@@ -113,7 +114,7 @@ class ScimTransformations:
             return None
 
     @staticmethod
-    def _get_scim_user_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+    def _get_scim_user_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a display name with length > 0
 
@@ -124,13 +125,13 @@ class ScimTransformations:
         return ScimTransformations.DEFAULT_SCIM_DISPLAY_NAME
 
     @staticmethod
-    def _get_scim_family_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+    def _get_scim_family_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a family name with length > 0
         """
-        metadata = user.metadata or {}
+        metadata: Final = user.metadata or {}
         if "scim_metadata" in metadata:
-            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
+            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
             if scim_metadata.familyName and len(scim_metadata.familyName) > 0:
                 return scim_metadata.familyName
 
@@ -139,13 +140,13 @@ class ScimTransformations:
         return ScimTransformations.DEFAULT_SCIM_FAMILY_NAME
 
     @staticmethod
-    def _get_scim_given_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+    def _get_scim_given_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a given name with length > 0
         """
-        metadata = user.metadata or {}
+        metadata: Final = user.metadata or {}
         if "scim_metadata" in metadata:
-            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
+            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
             if scim_metadata.givenName and len(scim_metadata.givenName) > 0:
                 return scim_metadata.givenName
 
@@ -155,7 +156,7 @@ class ScimTransformations:
 
     @staticmethod
     async def transform_litellm_team_to_scim_group(
-        team: Union[LiteLLM_TeamTable, dict],
+        team: LiteLLM_TeamTable | dict,
     ) -> SCIMGroup:
         from litellm.proxy.proxy_server import prisma_client
 
@@ -166,7 +167,7 @@ class ScimTransformations:
             team = LiteLLM_TeamTable(**team)
 
         # Get team members with proper display names
-        scim_members: List[SCIMMember] = []
+        scim_members: Final[list[SCIMMember]] = []
         for member in team.members_with_roles or []:
             if isinstance(member, dict):
                 member = Member(**member)
@@ -175,12 +176,13 @@ class ScimTransformations:
                 SCIMMember(
                     value=ScimTransformations._get_scim_member_value(member),
                     display=ScimTransformations._get_scim_member_display(member),
+                    type="User",
                 )
             )
 
-        team_alias = getattr(team, "team_alias", team.team_id)
-        team_created_at = team.created_at.isoformat() if team.created_at else None
-        team_updated_at = team.updated_at.isoformat() if team.updated_at else None
+        team_alias: Final = getattr(team, "team_alias", team.team_id)
+        team_created_at: Final = team.created_at.isoformat() if team.created_at else None
+        team_updated_at: Final = team.updated_at.isoformat() if team.updated_at else None
 
         return SCIMGroup(
             schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],

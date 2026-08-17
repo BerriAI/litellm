@@ -1,7 +1,9 @@
 import asyncio
 import copy
 import datetime
-from typing import AsyncGenerator, Optional
+import json
+from types import SimpleNamespace
+from typing import AsyncGenerator, Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -11,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -27,10 +30,14 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _resolve_per_request_model_group_alias,
+    _should_return_raw_model_name,
     _UpstreamClosingStreamingResponse,
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
+from litellm.proxy._types import ProxyException
+from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -827,6 +834,237 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-margin-amount" not in headers
         assert "x-litellm-response-cost-margin-percent" not in headers
 
+    def test_get_custom_headers_per_component_cost_breakdown(self):
+        """Test per-component cost headers against the stored production breakdown.
+
+        cost_calculator stores full prompt cost (cache pricing included) as input_cost
+        and full completion cost (reasoning included) as output_cost. The input header
+        subtracts the cache components so the emitted contract is additive:
+        input + cache_read + cache_creation + output + tool_usage == total, with
+        reasoning remaining a subset of output.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-components",
+            function_id="test-function",
+        )
+
+        input_cost: Final = 0.00002
+        output_cost: Final = 0.00004
+        cache_read_cost: Final = 0.000005
+        cache_creation_cost: Final = 0.00001
+        reasoning_cost: Final = 0.000015
+        tool_usage_cost: Final = 0.00003
+        total_cost: Final = input_cost + output_cost + tool_usage_cost
+        uncached_input_cost: Final = input_cost - cache_read_cost - cache_creation_cost
+
+        logging_obj.set_cost_breakdown(
+            input_cost=input_cost,
+            output_cost=output_cost,
+            total_cost=total_cost,
+            cost_for_built_in_tools_cost_usd_dollar=tool_usage_cost,
+            cache_read_cost=cache_read_cost,
+            cache_creation_cost=cache_creation_cost,
+            reasoning_cost=reasoning_cost,
+        )
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-components",
+            response_cost=total_cost,
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert "x-litellm-response-cost" in headers
+        assert float(headers["x-litellm-response-cost"]) == pytest.approx(total_cost)
+
+        assert "x-litellm-response-cost-input" in headers
+        assert float(headers["x-litellm-response-cost-input"]) == pytest.approx(uncached_input_cost)
+
+        assert "x-litellm-response-cost-output" in headers
+        assert float(headers["x-litellm-response-cost-output"]) == pytest.approx(output_cost)
+
+        assert "x-litellm-response-cost-cache-read" in headers
+        assert float(headers["x-litellm-response-cost-cache-read"]) == pytest.approx(cache_read_cost)
+
+        assert "x-litellm-response-cost-cache-creation" in headers
+        assert float(headers["x-litellm-response-cost-cache-creation"]) == pytest.approx(cache_creation_cost)
+
+        assert "x-litellm-response-cost-reasoning" in headers
+        assert float(headers["x-litellm-response-cost-reasoning"]) == pytest.approx(reasoning_cost)
+
+        assert "x-litellm-response-cost-tool-usage" in headers
+        assert float(headers["x-litellm-response-cost-tool-usage"]) == pytest.approx(tool_usage_cost)
+
+        component_sum: Final = (
+            float(headers["x-litellm-response-cost-input"])
+            + float(headers["x-litellm-response-cost-cache-read"])
+            + float(headers["x-litellm-response-cost-cache-creation"])
+            + float(headers["x-litellm-response-cost-output"])
+            + float(headers["x-litellm-response-cost-tool-usage"])
+        )
+        assert component_sum == pytest.approx(float(headers["x-litellm-response-cost"]))
+        assert float(headers["x-litellm-response-cost-reasoning"]) <= float(headers["x-litellm-response-cost-output"])
+
+    def test_get_custom_headers_without_cost_breakdown_omits_component_headers(self):
+        """Test that when litellm_logging_obj has no cost_breakdown, component headers are omitted."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-no-breakdown",
+            function_id="test-function",
+        )
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.0001,
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert "x-litellm-response-cost" in headers
+        assert "x-litellm-response-cost-input" not in headers
+        assert "x-litellm-response-cost-output" not in headers
+        assert "x-litellm-response-cost-cache-read" not in headers
+        assert "x-litellm-response-cost-cache-creation" not in headers
+        assert "x-litellm-response-cost-reasoning" not in headers
+        assert "x-litellm-response-cost-tool-usage" not in headers
+
+    def test_get_custom_headers_per_component_with_discount_and_margin(self):
+        """Test that component headers co-exist accurately with discount and margin headers."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-combined",
+            function_id="test-function",
+        )
+
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00006,
+            output_cost=0.00004,
+            total_cost=0.000105,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0001,
+            discount_percent=0.05,
+            discount_amount=0.000005,
+            margin_percent=0.10,
+            margin_total_amount=0.00001,
+        )
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.000105,
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert float(headers["x-litellm-response-cost"]) == pytest.approx(0.000105)
+        assert float(headers["x-litellm-response-cost-original"]) == pytest.approx(0.0001)
+        assert float(headers["x-litellm-response-cost-discount-amount"]) == pytest.approx(0.000005)
+        assert float(headers["x-litellm-response-cost-margin-amount"]) == pytest.approx(0.00001)
+        assert float(headers["x-litellm-response-cost-margin-percent"]) == pytest.approx(0.10)
+        assert float(headers["x-litellm-response-cost-input"]) == pytest.approx(0.00006)
+        assert float(headers["x-litellm-response-cost-output"]) == pytest.approx(0.00004)
+        assert "x-litellm-response-cost-cache-read" not in headers
+        assert "x-litellm-response-cost-cache-creation" not in headers
+        assert "x-litellm-response-cost-reasoning" not in headers
+        assert float(headers["x-litellm-response-cost-tool-usage"]) == pytest.approx(0.0)
+
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    def test_get_custom_headers_classifier_cost_from_routing_decision(self, metadata_key):
+        """The auto-router's LLM classifier cost must surface as its own header.
+
+        x-litellm-response-cost stays the final routed call's cost (it feeds the
+        margin/discount family and chargeback); the classifier's cost is read from the
+        routing_decision the pre-routing hook recorded in the request metadata. The
+        bucket is metadata on chat-style routes and litellm_metadata on messages-style
+        routes, so both must work.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00023,
+            request_data={
+                metadata_key: {
+                    "routing_decision": {"cause": "llm_classifier", "classifier_cost": 8.1e-05},
+                }
+            },
+        )
+
+        assert headers["x-litellm-classifier-cost"] == "8.1e-05"
+        assert float(headers["x-litellm-response-cost"]) == 0.00023
+
+    @pytest.mark.parametrize(
+        "request_data",
+        [
+            None,
+            {},
+            {"metadata": {}},
+            {"metadata": {"routing_decision": {"cause": "heuristic_scorer"}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_cost": "bogus"}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_cost": True}}},
+        ],
+    )
+    def test_get_custom_headers_omits_classifier_cost_without_a_priced_decision(self, request_data):
+        """No routing decision, a decision without a classifier call, or a malformed cost
+        must all omit the header entirely rather than emit 0 or a junk value."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00023,
+            request_data=request_data,
+        )
+
+        assert "x-litellm-classifier-cost" not in headers
+
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
         Test the helper function that extracts cost breakdown information.
@@ -855,16 +1093,14 @@ class TestProxyBaseLLMRequestProcessing:
             discount_amount=0.000005,
         )
 
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(logging_obj)
-        assert original_cost == 0.0001
-        assert discount_amount == 0.000005
-        assert margin_total_amount is None
-        assert margin_percent is None
+        breakdown = _get_cost_breakdown_from_logging_obj(logging_obj)
+        assert breakdown.original_cost == 0.0001
+        assert breakdown.discount_amount == 0.000005
+        assert breakdown.margin_total_amount is None
+        assert breakdown.margin_percent is None
+        assert breakdown.input_cost == 0.00005
+        assert breakdown.output_cost == 0.00005
+        assert breakdown.tool_usage_cost == 0.0
 
         # Test with margin info
         logging_obj_with_margin = LiteLLMLoggingObj(
@@ -886,16 +1122,11 @@ class TestProxyBaseLLMRequestProcessing:
             margin_total_amount=0.00001,
         )
 
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
-        assert original_cost == 0.0001
-        assert discount_amount is None
-        assert margin_total_amount == 0.00001
-        assert margin_percent == 0.10
+        breakdown_with_margin = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
+        assert breakdown_with_margin.original_cost == 0.0001
+        assert breakdown_with_margin.discount_amount is None
+        assert breakdown_with_margin.margin_total_amount == 0.00001
+        assert breakdown_with_margin.margin_percent == 0.10
 
         # Test with no discount or margin info
         logging_obj_no_discount = LiteLLMLoggingObj(
@@ -914,28 +1145,42 @@ class TestProxyBaseLLMRequestProcessing:
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
 
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
-        assert original_cost is None
-        assert discount_amount is None
-        assert margin_total_amount is None
-        assert margin_percent is None
+        breakdown_no_discount = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
+        assert breakdown_no_discount.original_cost is None
+        assert breakdown_no_discount.discount_amount is None
+        assert breakdown_no_discount.margin_total_amount is None
+        assert breakdown_no_discount.margin_percent is None
+        assert breakdown_no_discount.input_cost == 0.00005
+        assert breakdown_no_discount.output_cost == 0.00005
+
+        # Test that cache components stored nested inside input_cost are subtracted out
+        logging_obj_with_cache = LiteLLMLoggingObj(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-cache",
+            function_id="test-function-id-cache",
+        )
+        logging_obj_with_cache.set_cost_breakdown(
+            input_cost=0.00008,
+            output_cost=0.00002,
+            total_cost=0.0001,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            cache_read_cost=0.00003,
+            cache_creation_cost=0.00004,
+        )
+
+        breakdown_with_cache = _get_cost_breakdown_from_logging_obj(logging_obj_with_cache)
+        assert breakdown_with_cache.input_cost == pytest.approx(0.00001)
+        assert breakdown_with_cache.cache_read_cost == 0.00003
+        assert breakdown_with_cache.cache_creation_cost == 0.00004
+        assert breakdown_with_cache.output_cost == 0.00002
 
         # Test with None logging object
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(None)
-        assert original_cost is None
-        assert discount_amount is None
-        assert margin_total_amount is None
-        assert margin_percent is None
+        breakdown_none = _get_cost_breakdown_from_logging_obj(None)
+        assert all(value is None for value in breakdown_none)
 
     def test_get_custom_headers_key_spend_includes_response_cost(self):
         """
@@ -1675,6 +1920,31 @@ class TestExtractErrorFromSSEChunk:
 class TestOverrideOpenAIResponseModel:
     """Tests for _override_openai_response_model function"""
 
+    @pytest.mark.parametrize("return_raw_model_name", [False, True])
+    def test_raw_model_name_toggle(self, return_raw_model_name):
+        response_obj = {"model": "gpt-4o-mini"}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="auto_router/complexity_router",
+            log_context="test_context",
+            return_raw_model_name=return_raw_model_name,
+        )
+
+        expected_model = "gpt-4o-mini" if return_raw_model_name else "auto_router/complexity_router"
+        assert response_obj["model"] == expected_model
+
+    @pytest.mark.parametrize(
+        "request_data, expected",
+        [
+            ({"metadata": {}}, False),
+            ({"metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}}, True),
+            ({"litellm_metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}}, True),
+        ],
+    )
+    def test_raw_model_name_toggle_metadata(self, request_data, expected):
+        assert _should_return_raw_model_name(request_data) is expected
+
     def test_override_model_preserves_fallback_model_when_fallback_occurred_object(
         self,
     ):
@@ -2394,14 +2664,14 @@ class TestHandleLLMApiExceptionDictDetail:
     through ProxyException instead of being str()-mangled into a Python repr.
     """
 
-    async def _invoke(self, exc: Exception):
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
         processor = ProxyBaseLLMRequestProcessing(data={})
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=callback_headers or {})
 
         try:
             await processor._handle_llm_api_exception(
@@ -2921,6 +3191,112 @@ class TestHandleLLMApiExceptionRetryAfter:
         assert proxy_exc.headers["x-custom"] == "1"
 
 
+class TestHandleLLMApiExceptionFramingHeaders:
+    """HTTP-framing headers on the provider exception must be stripped before the
+    proxy builds its own response, or they conflict with the framing the proxy
+    itself sets. Non-framing headers must survive unchanged."""
+
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=callback_headers or {})
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException as raised:
+            return raised
+        raise AssertionError("ProxyException was not raised")
+
+    async def test_strips_framing_headers_preserves_others(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {
+            "content-length": "42",
+            "transfer-encoding": "chunked",
+            "content-encoding": "gzip",
+            "content-type": "application/json",
+            "x-request-id": "abc-123",
+        }
+        proxy_exc = await self._invoke(exc)
+        assert "content-length" not in proxy_exc.headers
+        assert "transfer-encoding" not in proxy_exc.headers
+        assert "content-encoding" not in proxy_exc.headers
+        assert "content-type" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_framing_headers_on_existing_proxy_exception(self):
+        from litellm.proxy._types import ProxyException
+
+        exc = ProxyException(
+            message="Resource exhausted",
+            type="rate_limit_error",
+            param=None,
+            code=429,
+            headers={
+                "content-length": "42",
+                "transfer-encoding": "chunked",
+                "x-request-id": "abc-123",
+            },
+        )
+        proxy_exc = await self._invoke(exc)
+        assert "content-length" not in proxy_exc.headers
+        assert "transfer-encoding" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_browser_security_headers(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {
+            "access-control-allow-origin": "https://evil.example.com",
+            "content-security-policy": "default-src https://evil.example.com",
+            "clear-site-data": '"cache", "cookies", "storage"',
+            "strict-transport-security": "max-age=0",
+            "x-frame-options": "ALLOWALL",
+            "x-request-id": "abc-123",
+        }
+        proxy_exc = await self._invoke(exc)
+        assert "access-control-allow-origin" not in proxy_exc.headers
+        assert "content-security-policy" not in proxy_exc.headers
+        assert "clear-site-data" not in proxy_exc.headers
+        assert "strict-transport-security" not in proxy_exc.headers
+        assert "x-frame-options" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_unsafe_headers_added_by_response_headers_hook(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {"x-request-id": "abc-123"}
+        proxy_exc = await self._invoke(
+            exc,
+            callback_headers={
+                "x-frame-options": "ALLOWALL",
+                "content-length": "42",
+                "x-custom-safe": "1",
+            },
+        )
+        assert "x-frame-options" not in proxy_exc.headers
+        assert "content-length" not in proxy_exc.headers
+        assert proxy_exc.headers["x-custom-safe"] == "1"
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""
 
@@ -3203,8 +3579,6 @@ class TestDisconnectGatherCleanup:
     async def test_base_process_llm_request_preserves_llm_error_after_gather(
         self, monkeypatch
     ):
-        import asyncio
-
         import litellm.proxy.common_request_processing as cpr
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -5141,3 +5515,600 @@ class TestStreamingClientDisconnectBilling:
         )
 
         proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+def _apply_stream_usage_tracking(
+    data: dict,
+    general_settings: dict,
+    route_type: str,
+    supports_stream_options: Callable[[], bool] = lambda: True,
+) -> None:
+    from litellm.proxy.common_request_processing import _stream_usage_tracking_updates
+
+    data.update(
+        _stream_usage_tracking_updates(
+            data=data,
+            general_settings=general_settings,
+            route_type=route_type,
+            supports_stream_options=supports_stream_options,
+        )
+    )
+
+
+class TestApplyStreamUsageTracking:
+    def test_default_injects_usage_and_marks_strip_for_chat_completions(self):
+        data = {"stream": True, "model": "gpt-5.4-nano"}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_default_preserves_other_client_stream_options_keys(self):
+        data = {"stream": True, "stream_options": {"include_obfuscation": True}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_obfuscation": True, "include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_client_requested_usage_is_left_untouched_and_not_stripped(self):
+        data = {"stream": True, "stream_options": {"include_usage": True}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_client_include_usage_false_is_overridden_and_stripped(self):
+        data = {"stream": True, "stream_options": {"include_usage": False}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"]["include_usage"] is True
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_explicit_false_flag_disables_injection_entirely(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": False},
+            route_type="acompletion",
+        )
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_flag_true_injects_without_strip_marker(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_flag_true_respects_client_explicit_include_usage_false(self):
+        data = {"stream": True, "stream_options": {"include_usage": False}}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": False}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_default_does_not_touch_non_chat_completion_routes(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="anthropic_messages")
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_non_streaming_request_is_untouched(self):
+        data = {"model": "gpt-5.4-nano"}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_default_skips_injection_when_provider_lacks_stream_options_support(self):
+        data = {"stream": True, "model": "bytez-model"}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={},
+            route_type="acompletion",
+            supports_stream_options=lambda: False,
+        )
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_client_supplied_strip_marker_is_neutralized(self):
+        data = {
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "_litellm_strip_stream_usage": True,
+        }
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["_litellm_strip_stream_usage"] is False
+        assert data["stream_options"] == {"include_usage": True}
+
+    def test_client_supplied_strip_marker_is_neutralized_with_flag_true(self):
+        data = {
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "_litellm_strip_stream_usage": True,
+        }
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["_litellm_strip_stream_usage"] is False
+
+    def test_client_supplied_strip_marker_is_neutralized_on_non_streaming_request(self):
+        data = {"_litellm_strip_stream_usage": True}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["_litellm_strip_stream_usage"] is False
+
+
+class TestModelDeploymentsSupportStreamOptions:
+    def _support(self, model, llm_router=None, team_id=None) -> bool:
+        from litellm.proxy.common_request_processing import (
+            _model_deployments_support_stream_options,
+        )
+
+        return _model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
+
+    def test_openai_compatible_deployment_supports_stream_options(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "azure-nano",
+                    "litellm_params": {
+                        "model": "azure/gpt-5.4-nano",
+                        "api_key": "fake",
+                        "api_base": "https://example.openai.azure.com",
+                    },
+                }
+            ]
+        )
+
+        assert self._support("azure-nano", router) is True
+
+    def test_deployment_on_provider_rejecting_stream_options_is_not_injected(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "tiny",
+                    "litellm_params": {"model": "bytez/openai-community/gpt2", "api_key": "fake"},
+                }
+            ]
+        )
+
+        assert self._support("tiny", router) is False
+
+    def test_mixed_provider_model_group_is_not_injected(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "mixed",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+                },
+                {
+                    "model_name": "mixed",
+                    "litellm_params": {"model": "oci/cohere.command-r-plus", "api_key": "fake"},
+                },
+            ]
+        )
+
+        assert self._support("mixed", router) is False
+
+    def test_wildcard_route_resolves_provider_support(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                }
+            ]
+        )
+
+        assert self._support("openai/gpt-4o", router) is True
+
+    def test_provider_prefixed_model_without_router_is_resolved_directly(self):
+        assert self._support("openai/gpt-4o", None) is True
+        assert self._support("bytez/openai-community/gpt2", None) is False
+
+    def test_unmapped_model_name_is_not_injected(self):
+        assert self._support("some-unmapped-public-alias", None) is False
+
+    def test_team_alias_model_resolves_with_team_id(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "model_name_team-1_8b6a0b3f",
+                    "litellm_params": {"model": "azure/gpt-5.4-nano", "api_key": "fake"},
+                    "model_info": {
+                        "team_id": "team-1",
+                        "team_public_model_name": "team-gpt",
+                    },
+                }
+            ]
+        )
+
+        assert self._support("team-gpt", router, team_id="team-1") is True
+        assert self._support("team-gpt", router, team_id=None) is False
+
+    def test_non_string_model_is_not_injected(self):
+        assert self._support(None, None) is False
+
+
+class TestPerRequestModelGroupAlias:
+    """``router_settings.model_group_alias`` on a key or team has to be resolved
+    by the proxy: the Router resolves aliases from its own shared instance
+    attribute, which only ever holds the global config map."""
+
+    @staticmethod
+    def _router() -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "group-a",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                },
+                {
+                    "model_name": "group-b",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+                },
+            ]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "alias_map, expected",
+        [
+            ({"group-a": "group-b"}, "group-b"),
+            ({"group-a": {"model": "group-b", "hidden": True}}, "group-b"),
+            ({"group-b": "group-a"}, None),
+            ({"group-a": "group-a"}, None),
+            ({"group-a": {"hidden": True}}, None),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    async def test_resolves_alias_for_the_requested_model_group(self, alias_map, expected):
+        resolved = await _resolve_per_request_model_group_alias(
+            requested_model="group-a",
+            router_settings={"model_group_alias": alias_map},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            llm_router=self._router(),
+        )
+
+        assert resolved == expected
+
+    @pytest.mark.asyncio
+    async def test_alias_target_outside_the_key_allowlist_is_rejected(self):
+        """Access was authorized against the requested group, so a rewrite that
+        the key could not have requested directly must not be served."""
+        with pytest.raises(ProxyException) as exc_info:
+            await _resolve_per_request_model_group_alias(
+                requested_model="group-a",
+                router_settings={"model_group_alias": {"group-a": "group-b"}},
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a"]),
+                llm_router=self._router(),
+            )
+
+        assert exc_info.value.code == "403"
+        assert "group-b" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_alias_target_inside_the_key_allowlist_resolves(self):
+        resolved = await _resolve_per_request_model_group_alias(
+            requested_model="group-a",
+            router_settings={"model_group_alias": {"group-a": "group-b"}},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a", "group-b"]),
+            llm_router=self._router(),
+        )
+
+        assert resolved == "group-b"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("requested_model", [None, ["group-a", "group-b"]])
+    async def test_non_string_requested_model_is_left_alone(self, requested_model):
+        """The routed model is not always a string (a batch request carries a
+        list), and an unhashable one must not blow up the alias lookup."""
+        resolved = await _resolve_per_request_model_group_alias(
+            requested_model=requested_model,
+            router_settings={"model_group_alias": {"group-a": "group-b"}},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            llm_router=self._router(),
+        )
+
+        assert resolved is None
+
+    @pytest.mark.asyncio
+    async def test_pre_call_logic_rewrites_the_requested_model(self, monkeypatch):
+        """End to end through the request path: a key carrying the alias must
+        leave pre-call processing pointing at the alias target, not at the
+        group the caller asked for."""
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "group-a"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
+            return_value={"model_group_alias": {"group-a": "group-b"}}
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router(),
+        )
+
+        assert returned_data["model"] == "group-b"
+        assert returned_data["router_settings_override"] == {"model_group_alias": {"group-a": "group-b"}}
+        # The rewrite has to land before the pre-call hooks: they are where
+        # per-model budgets and rate limits are enforced, so resolving later
+        # applies the requested group's limits to a call the target serves.
+        assert mock_proxy_logging_obj.pre_call_hook.call_args.kwargs["data"]["model"] == "group-b"
+
+    @pytest.mark.asyncio
+    async def test_team_level_alias_rewrites_the_requested_model(self, monkeypatch):
+        """The team path is separate resolution, not a variant of the key path:
+        settings are looked up on the team only when the key carries none. Runs
+        the real hierarchical lookup rather than mocking it, so this covers the
+        team half of the fix end to end."""
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "group-a"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.get_team_object",
+            AsyncMock(return_value=SimpleNamespace(router_settings={"model_group_alias": {"group-a": "group-b"}})),
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[], team_id="team-1"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=RealProxyConfig(),
+            route_type="acompletion",
+            llm_router=self._router(),
+        )
+
+        assert returned_data["model"] == "group-b"
+
+    @pytest.mark.asyncio
+    async def test_model_level_guardrails_resolve_against_the_alias_target(self, monkeypatch):
+        """Model-level guardrails are merged by model group name, so the merge
+        must see the target rather than the group the caller named."""
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "group-a"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+        merged_for: list = []
+
+        def recording_merge(data, llm_router, trust_client_model_info=True):
+            merged_for.append(data.get("model"))
+            return data
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "_check_and_merge_model_level_guardrails",
+            recording_merge,
+        )
+
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
+            return_value={"model_group_alias": {"group-a": "group-b"}}
+        )
+
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router(),
+        )
+
+        assert merged_for == ["group-b"]
+
+
+class TestInjectCostIntoUsageDict:
+    @staticmethod
+    def _expected_cost(model, prompt_tokens, completion_tokens):
+        pricing = litellm.model_cost[model]
+        return prompt_tokens * pricing["input_cost_per_token"] + completion_tokens * pricing["output_cost_per_token"]
+
+    def test_openai_chat_completion_chunk_usage_gets_cost(self):
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 4,
+                "total_tokens": 15,
+                "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini")
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
+        assert result["usage"]["cost"] > 0
+        assert result["usage"]["prompt_tokens"] == 11
+        assert result["id"] == "chatcmpl-1"
+        assert "cost" not in event["usage"]
+
+    def test_anthropic_message_delta_usage_still_gets_cost(self):
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 11, "output_tokens": 4},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "claude-haiku-4-5")
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(self._expected_cost("claude-haiku-4-5", 11, 4))
+        assert result["usage"]["cost"] > 0
+        assert result["usage"]["output_tokens"] == 4
+
+    def test_openai_chunk_with_flex_service_tier_uses_flex_pricing(self):
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "service_tier": "flex",
+            "choices": [],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-5-mini")
+
+        assert result is not None
+        pricing = litellm.model_cost["gpt-5-mini"]
+        expected_flex_cost = 1000 * pricing["input_cost_per_token_flex"] + 100 * pricing["output_cost_per_token_flex"]
+        assert result["usage"]["cost"] == pytest.approx(expected_flex_cost)
+        assert result["usage"]["cost"] < self._expected_cost("gpt-5-mini", 1000, 100)
+
+    def test_openai_chunk_with_null_usage_is_not_modified(self):
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": "Hi"}}],
+            "usage": None,
+        }
+
+        assert ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini") is None
+
+    def test_unrecognized_event_shape_with_usage_is_not_modified(self):
+        event = {"kind": "custom", "usage": {"prompt_tokens": 11, "completion_tokens": 4}}
+
+        assert ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini") is None
+
+    def test_sse_frame_with_coalesced_done_line_injects_into_usage_frame(self):
+        frame = (
+            'data: {"object":"chat.completion.chunk","choices":[],'
+            '"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+            "data: [DONE]\n\n"
+        )
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(frame, "gpt-4o-mini")
+
+        assert result is not None
+        assert "data: [DONE]" in result
+        injected = json.loads(result.split("\n")[0].split("data:", 1)[1].strip())
+        assert injected["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
+
+
+class TestProcessChunkWithCostInjection:
+    def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = (
+            b'data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+        )
+
+        result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini")
+
+        assert result != chunk
+        assert result.endswith(b"\n\n")
+        payload = json.loads(result.decode("utf-8").split("data:", 1)[1].strip())
+        assert payload["usage"]["cost"] > 0
+
+    def test_chunk_ending_in_partial_frame_passes_through_byte_identical(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = (
+            b'data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\ndata: [DO'
+        )
+
+        assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk
+
+    def test_chunk_with_invalid_utf8_passes_through_byte_identical(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = (
+            b'\xa8data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+        )
+
+        assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk

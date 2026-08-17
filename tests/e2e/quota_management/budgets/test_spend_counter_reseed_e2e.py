@@ -46,22 +46,43 @@ COLD_WAIT_SECONDS = 80
 _JSON_FLOAT: TypeAdapter[float] = TypeAdapter(float)
 
 
+def _redis_flag(name: str, default: str) -> bool:
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes")
+
+
 def _redis() -> "redis.Redis[str] | RedisCluster[str]":
-    """The proxy's Redis. The deployed runner sets REDIS_HOST to the serverless
-    ElastiCache, which is always TLS + cluster-mode; without it, fall back to a
-    local standalone redis for docker-compose runs."""
+    """The proxy's Redis. With REDIS_HOST set, TLS and cluster mode default to
+    on (the stage runner's serverless ElastiCache) and are overridable with
+    REDIS_SSL / REDIS_CLUSTER, plus REDIS_PASSWORD when auth is enabled, so the
+    same test runs against a standalone redis like the ephemeral per-SHA
+    stack's bundled one. Without REDIS_HOST, fall back to a local standalone
+    redis for docker-compose runs."""
     import redis
 
     host = os.getenv("REDIS_HOST")
     if not host:
         return redis.Redis(host="localhost", port=6380, decode_responses=True, socket_connect_timeout=2)
 
+    port = int(os.getenv("REDIS_PORT", "6379"))
+    use_ssl = _redis_flag("REDIS_SSL", "true")
+    password = os.getenv("REDIS_PASSWORD") or None
+    if not _redis_flag("REDIS_CLUSTER", "true"):
+        return redis.Redis(
+            host=host,
+            port=port,
+            ssl=use_ssl,
+            password=password,
+            decode_responses=True,
+            socket_connect_timeout=2,
+        )
+
     from redis.cluster import RedisCluster
 
     return RedisCluster(
         host=host,
-        port=int(os.getenv("REDIS_PORT", "6379")),
-        ssl=True,
+        port=port,
+        ssl=use_ssl,
+        password=password,
         decode_responses=True,
         socket_connect_timeout=2,
     )
@@ -141,7 +162,7 @@ def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
         "the spend counter never went cold; default_redis_ttl must be short enough for it "
         "to expire, otherwise the burst reads a warm counter and the reseed is never exercised"
     )
-    db_spend = client.gateway.key_info(key).spend or 0.0
+    db_spend = client.proxy.key_info(key).spend or 0.0
     assert db_spend > 0, f"no DB spend accumulated from real calls: {db_spend}"
 
     burst_results = []

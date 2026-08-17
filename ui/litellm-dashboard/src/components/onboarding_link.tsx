@@ -58,7 +58,7 @@ export default function OnboardingModal({
   invitationLinkData,
   modalType = "invitation",
 }: OnboardingProps) {
-  const { Title, Paragraph } = Typography;
+  const { Paragraph } = Typography;
   const handleInvitationOk = () => {
     setIsInvitationLinkModalVisible(false);
   };

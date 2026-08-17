@@ -2,7 +2,8 @@
 Helper functions for health check calls.
 """
 
-from typing import TYPE_CHECKING, Callable, Dict, Literal, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
@@ -58,8 +59,8 @@ class HealthCheckHelpers:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-        _metadata_variable_name = "litellm_metadata"
-        litellm_metadata = HealthCheckHelpers._get_metadata_for_health_check_call()
+        _metadata_variable_name: Final = "litellm_metadata"
+        litellm_metadata: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
         model_params[_metadata_variable_name] = litellm_metadata
         model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
             data=model_params,
@@ -95,9 +96,9 @@ class HealthCheckHelpers:
         """
         import litellm
 
-        logging_obj = filtered_model_params.get("litellm_logging_obj")
+        logging_obj: Final = filtered_model_params.get("litellm_logging_obj")
         if logging_obj is not None:
-            api_base = filtered_model_params.get("api_base")
+            api_base: Final = filtered_model_params.get("api_base")
             logging_obj.update_from_kwargs(
                 kwargs=filtered_model_params,
                 model=filtered_model_params.get("model"),
@@ -116,9 +117,9 @@ class HealthCheckHelpers:
         model: str,
         custom_llm_provider: str,
         model_params: dict,
-        prompt: Optional[str] = None,
-        input: Optional[list] = None,
-    ) -> Dict[
+        prompt: str | None = None,
+        input: list | None = None,
+    ) -> dict[
         Literal[
             "chat",
             "completion",

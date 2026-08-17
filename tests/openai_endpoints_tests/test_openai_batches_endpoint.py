@@ -414,7 +414,7 @@ async def test_batch_status_sync_from_provider_to_database():
 
     # Verify logger was called with status change message
     mock_logger.info.assert_called()
-    log_message = mock_logger.info.call_args[0][0]
+    log_message = mock_logger.info.call_args[0][0] % mock_logger.info.call_args[0][1:]
     assert "validating" in log_message
     assert "completed" in log_message
 
@@ -450,6 +450,9 @@ async def test_batch_cancel_updates_database():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+        return_value=None
+    )
     mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
 
     # Mock managed_files_obj
@@ -482,7 +485,7 @@ async def test_batch_cancel_updates_database():
 
     # Verify logger was called
     mock_logger.info.assert_called()
-    log_message = mock_logger.info.call_args[0][0]
+    log_message = mock_logger.info.call_args[0][0] % mock_logger.info.call_args[0][1:]
     assert "cancel" in log_message.lower()
     assert "cancelled" in log_message
 

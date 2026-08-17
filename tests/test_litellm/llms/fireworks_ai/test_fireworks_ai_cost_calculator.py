@@ -5,12 +5,15 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import litellm
 from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 MODEL = "accounts/fireworks/models/glm-5p2"
 INPUT_COST = 1.4e-06
-CACHE_READ_COST = 2.6e-07
+# Read the cached rate from the price map so this test tracks the shipped value
+# (glm-5p2 is $0.14/1M) instead of hardcoding a number that breaks when it changes.
+CACHE_READ_COST = litellm.get_model_info(model=MODEL, custom_llm_provider="fireworks_ai")["cache_read_input_token_cost"]
 OUTPUT_COST = 4.4e-06
 
 

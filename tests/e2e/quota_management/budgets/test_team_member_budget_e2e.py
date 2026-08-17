@@ -46,7 +46,7 @@ def member(client: BudgetClient) -> Iterator[_Member]:
     Cleanups register progressively and run LIFO best-effort through ResourceManager,
     so a partial-setup failure still releases what came before and one failed delete
     never strands the rest on the shared proxy."""
-    resources = ResourceManager(client=client.gateway)
+    resources = ResourceManager(client=client.proxy)
     try:
         marker = unique_marker()
         team_id = client.create_team(alias=f"e2e-team-member-{marker}", max_budget=TEAM_BUDGET)
@@ -64,7 +64,7 @@ def member(client: BudgetClient) -> Iterator[_Member]:
 def _send(client: BudgetClient, key: str) -> str | None:
     """One member call; its response id (== the spend-log request_id) if it went
     through, else None."""
-    match client.gateway.chat(
+    match client.proxy.chat(
         key,
         ChatBody(
             model=MODEL,
@@ -83,7 +83,7 @@ class TestTeamMemberBudget:
         sent = frozenset(rid for rid in (_send(client, member.key) for _ in range(BURST)) if rid)
         assert sent, "no member call went through; cannot check attribution"
 
-        rows = client.gateway.poll_logs_for_key(
+        rows = client.proxy.poll_logs_for_key(
             member.key, predicate=lambda rs: bool(sent & {r.request_id for r in rs})
         )
         logged = [row for row in rows if row.request_id in sent]

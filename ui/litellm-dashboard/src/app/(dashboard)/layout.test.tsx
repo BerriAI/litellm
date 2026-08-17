@@ -25,8 +25,16 @@ vi.mock("@/components/DebugWarningBanner", () => ({
   DebugWarningBanner: () => null,
 }));
 
+vi.mock("@/components/NoRedisWarningBanner", () => ({
+  NoRedisWarningBanner: () => null,
+}));
+
 vi.mock("@/components/LicenseExpiryBanner", () => ({
   LicenseExpiryBanner: () => null,
+}));
+
+vi.mock("@/components/UserBanner", () => ({
+  UserBanner: () => null,
 }));
 
 vi.mock("@/contexts/ThemeContext", () => ({
