@@ -4,11 +4,11 @@ from litellm.proxy._types import (
     KeyManagementRoutes,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_VerificationToken,
-    LiteLLMRoutes,
     LitellmUserRoles,
     Member,
     ProxyErrorTypes,
     ProxyException,
+    TeamMemberPermissions,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import get_team_object
@@ -235,12 +235,11 @@ class TeamMemberPermissionChecks:
     @staticmethod
     def get_all_available_team_member_permissions() -> list[str]:
         """
-        Returns all available team member permissions
+        Returns the team member permissions that can be granted: every
+        TeamMemberPermissions value except the always-included baseline pair.
         """
-        all_available_permissions: Final = []
-        for route in LiteLLMRoutes.key_management_routes.value:
-            all_available_permissions.append(route)
-        return all_available_permissions
+        baseline: Final = {route.value for route in BASELINE_TEAM_MEMBER_PERMISSIONS}
+        return [permission.value for permission in TeamMemberPermissions if permission.value not in baseline]
 
     @staticmethod
     def default_team_member_permissions() -> list[str]:

@@ -23,7 +23,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { fetchClient } from "@/lib/http/api";
 
 import { buildBody, settingsToForm, type DefaultTeamParams, type DefaultTeamSettings } from "./mapper";
-import { SELECTABLE_PERMISSIONS, type KeyManagementRoute } from "./permissions";
+import { SELECTABLE_PERMISSIONS, type TeamMemberPermission } from "./permissions";
 import { defaultTeamSettingsSchema, type DefaultTeamSettingsFormValues } from "./schema";
 
 const MODEL_SENTINEL_LABELS: ReadonlyMap<string, string> = new Map(
@@ -54,7 +54,7 @@ const PermissionRow = ({
   granted,
   onToggle,
 }: {
-  route: KeyManagementRoute;
+  route: TeamMemberPermission;
   granted: boolean;
   onToggle: (checked: boolean) => void;
 }) => {

@@ -5540,7 +5540,7 @@ async def update_team_member_permissions(
     # Update the team member permissions
     updated_team: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
-        data={"team_member_permissions": data.team_member_permissions},
+        data={"team_member_permissions": [permission.value for permission in data.team_member_permissions]},
     )
 
     return updated_team
@@ -5594,7 +5594,7 @@ async def bulk_update_team_member_permissions(
             detail={"error": "Cannot set both apply_to_all_teams=true and team_ids"},
         )
 
-    permissions_to_add: Final = set(data.permissions)
+    permissions_to_add: Final = {permission.value for permission in data.permissions}
 
     if data.team_ids:
         teams_updated = await _append_permissions_to_specific_teams(prisma_client, data.team_ids, permissions_to_add)

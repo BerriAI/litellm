@@ -3,11 +3,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm.proxy._types import (
-    KeyManagementRoutes,
     LiteLLM_DeletedTeamTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     Member,
+    TeamMemberPermissions,
 )
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
@@ -42,13 +42,13 @@ class UpdateTeamMemberPermissionsRequest(BaseModel):
     """Request to update the team member permissions for a team"""
 
     team_id: str
-    team_member_permissions: list[str]
+    team_member_permissions: list[TeamMemberPermissions]
 
 
 class BulkUpdateTeamMemberPermissionsRequest(BaseModel):
     """Request to bulk-update team member permissions across teams."""
 
-    permissions: list[KeyManagementRoutes]
+    permissions: list[TeamMemberPermissions]
     """Permissions to append to the target teams (duplicates are skipped)."""
 
     team_ids: list[str] | None = None

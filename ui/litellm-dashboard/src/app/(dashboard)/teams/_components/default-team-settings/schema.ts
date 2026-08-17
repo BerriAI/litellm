@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 
-import { isSelectablePermission, type KeyManagementRoute } from "./permissions";
+import { isSelectablePermission, type TeamMemberPermission } from "./permissions";
 
 const isBlank = (value: string): boolean => value.trim() === "";
 
@@ -18,7 +18,7 @@ const wholeNumberOrEmpty = z
     "Must be a non-negative whole number",
   );
 
-const selectablePermission = z.custom<KeyManagementRoute>(
+const selectablePermission = z.custom<TeamMemberPermission>(
   (value) => typeof value === "string" && isSelectablePermission(value),
   "Unknown permission",
 );

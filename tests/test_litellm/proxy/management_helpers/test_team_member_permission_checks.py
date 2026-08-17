@@ -23,6 +23,21 @@ def _make_team_table(team_member_permissions):
 
 
 class TestGetPermissionsForTeamMember:
+    def test_all_available_permissions_are_the_grantable_set_without_the_baseline(self):
+        available = TeamMemberPermissionChecks.get_all_available_team_member_permissions()
+
+        assert sorted(available) == [
+            "/key/access_group_assignment",
+            "/key/delete",
+            "/key/generate",
+            "/key/list",
+            "/key/regenerate",
+            "/key/service-account/generate",
+            "/key/update",
+            "/spend/logs",
+            "/team/daily/activity",
+        ]
+
     def test_none_permissions_returns_defaults(self):
         """When team_member_permissions is None, return DEFAULT_TEAM_MEMBER_PERMISSIONS."""
         team = _make_team_table(None)

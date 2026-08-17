@@ -293,6 +293,28 @@ class KeyManagementRoutes(str, enum.Enum):
     SPEND_LOGS_V2 = "/spend/logs/v2"
 
 
+class TeamMemberPermissions(str, enum.Enum):
+    """
+    The subset of KeyManagementRoutes accepted as team member permission
+    grants. The remaining KeyManagementRoutes values are admin-gated or
+    enforced under one of these grants, so accepting them would store a
+    grant that silently never takes effect.
+    """
+
+    KEY_GENERATE = KeyManagementRoutes.KEY_GENERATE.value
+    KEY_UPDATE = KeyManagementRoutes.KEY_UPDATE.value
+    KEY_DELETE = KeyManagementRoutes.KEY_DELETE.value
+    KEY_REGENERATE = KeyManagementRoutes.KEY_REGENERATE.value
+    KEY_GENERATE_SERVICE_ACCOUNT = KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT.value
+    KEY_LIST = KeyManagementRoutes.KEY_LIST.value
+    KEY_ACCESS_GROUP_ASSIGNMENT = KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value
+    SPEND_LOGS = KeyManagementRoutes.SPEND_LOGS.value
+    TEAM_DAILY_ACTIVITY = KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value
+
+    KEY_INFO = KeyManagementRoutes.KEY_INFO.value
+    KEY_HEALTH = KeyManagementRoutes.KEY_HEALTH.value
+
+
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
         "chat_completion",
