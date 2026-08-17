@@ -106,11 +106,7 @@ else:
     StreamingChoices = Any
 
 
-# Google's rolling aliases, which always resolve to the newest release of each
-# tier and today serve Gemini 3.x. They carry no version number, so they must be
-# listed explicitly for Gemini 3 feature detection to see them.
-# https://ai.google.dev/gemini-api/docs/models
-GEMINI_ROLLING_LATEST_ALIASES = frozenset(
+GEMINI_ROLLING_LATEST_ALIASES: Final[frozenset[str]] = frozenset(
     {
         "gemini-flash-latest",
         "gemini-flash-lite-latest",
@@ -279,20 +275,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview
         - gemini-3.5-flash
         - Any future Gemini 3.x models
-        - The rolling `-latest` aliases, which Google keeps pointed at the
-          newest release of each tier and which currently serve Gemini 3.x.
-
-        The `-latest` aliases are matched by exact name rather than by an
-        `endswith("-latest")` suffix check, because versioned names such as
-        `gemini-2.5-flash-native-audio-latest` also end in `-latest` and are
-        not Gemini 3.
+        - GEMINI_ROLLING_LATEST_ALIASES, which resolve to Gemini 3.x and carry
+          no version number of their own. Matched by exact name, since
+          versioned names such as `gemini-2.5-flash-native-audio-latest` also
+          end in `-latest` yet are not Gemini 3
         """
         # Check for Gemini 3 models
         if "gemini-3" in model:
             return True
-        # Rolling aliases carry no version in the name, so the substring check
-        # above cannot see them. Strip any provider prefix (`gemini/`,
-        # `vertex_ai/`) before comparing.
         return model.split("/")[-1] in GEMINI_ROLLING_LATEST_ALIASES
 
     @staticmethod

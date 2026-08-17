@@ -2275,8 +2275,6 @@ def test_is_gemini_3_or_newer():
     # Edge cases
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
 
-    # Rolling `-latest` aliases resolve to Gemini 3.x and carry no version in
-    # the name, so they must be detected explicitly.
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash-latest") == True
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash-lite-latest") == True
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro-latest") == True
@@ -2287,7 +2285,6 @@ def test_is_gemini_3_or_newer():
         VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-pro-latest") == True
     )
 
-    # A versioned name that merely ends in `-latest` is not Gemini 3.
     assert (
         VertexGeminiConfig._is_gemini_3_or_newer(
             "gemini-2.5-flash-native-audio-latest"
@@ -2339,7 +2336,6 @@ def test_thought_signature_fallback_for_rolling_latest_alias():
             "thoughtSignature" in part for part in parts
         ), f"expected a thought signature for {model}"
 
-    # Pre-Gemini-3 models must not gain a signature they never needed.
     parts = convert_to_gemini_tool_call_invoke(message, model="gemini-2.5-flash")
     assert not any("thoughtSignature" in part for part in parts)
 
