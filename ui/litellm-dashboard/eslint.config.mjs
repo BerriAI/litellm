@@ -84,6 +84,12 @@ const eslintConfig = [
       "no-restricted-syntax": "off",
     },
   },
+  {
+    files: ["src/**/*.test.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+    rules: {
+      "local/no-antd-class-selectors": "error",
+    },
+  },
 ];
 
 export default eslintConfig;

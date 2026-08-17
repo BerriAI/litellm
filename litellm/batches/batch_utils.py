@@ -446,11 +446,23 @@ def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_prov
     """
     if custom_llm_provider in ("anthropic", "bedrock"):
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
-        return AnthropicConfig().calculate_usage(
-            usage_object=response_body.get("usage", None) or {},
+        usage_object: Final = response_body.get("usage", None) or {}
+        if custom_llm_provider == "bedrock" and AmazonConverseConfig.is_converse_usage_shape(usage_object):
+            return AmazonConverseConfig().usage_from_batch_output(usage_object)
+        anthropic_usage: Final = AnthropicConfig().calculate_usage(
+            usage_object=usage_object,
             reasoning_content=None,
         )
+        if usage_object and anthropic_usage.total_tokens == 0:
+            verbose_logger.warning(
+                "batch output line reported usage this parser does not understand, so it will be billed at $0. "
+                "provider=%s usage_keys=%s",
+                custom_llm_provider,
+                sorted(usage_object.keys()),
+            )
+        return anthropic_usage
     from litellm.responses.utils import ResponseAPILoggingUtils
 
     _usage_dict: Final = response_body.get("usage", None) or {}
