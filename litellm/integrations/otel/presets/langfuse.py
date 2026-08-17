@@ -1,5 +1,7 @@
 """Langfuse-OTEL preset."""
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.integrations.langfuse.langfuse_otel import (
@@ -14,7 +16,7 @@ from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
-def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
+def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> Mapping[str, str]:
     """Per-request Langfuse OTLP headers from team/key dynamic params."""
     public_key: Final = params.get("langfuse_public_key")
     secret_key: Final = params.get("langfuse_secret_key")
@@ -24,7 +26,7 @@ def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str,
                 public_key=public_key, secret_key=secret_key
             )
         )
-    return {}
+    return MappingProxyType({})
 
 
 def langfuse_preset(
@@ -39,7 +41,7 @@ def langfuse_preset(
     except Exception:
         if not allow_missing_credentials:
             raise
-        return base.model_copy(update={"mapper_names": mappers})
+        return base.model_copy(update=MappingProxyType({"mapper_names": mappers}))
     kind: Final = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
     return base.model_copy(
         update={

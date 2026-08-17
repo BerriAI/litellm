@@ -743,6 +743,17 @@ async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     return getattr(team_obj, "organization_id", None)
 
 
+def _destination_params(backend: str, destination: "OtelDestination") -> "OtelDestinationParams":
+    params: Final[OtelDestinationParams] = {
+        "callback_name": backend,
+        "endpoint": destination.endpoint,
+        "headers": destination.headers,
+        "resource_attributes": destination.resource_attributes,
+        "protocol": destination.protocol,
+    }
+    return params
+
+
 async def _resolve_logging_exporters(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> "tuple[tuple[OtelDestinationParams, ...], tuple[str, ...]]":
@@ -795,26 +806,21 @@ async def _resolve_logging_exporters(
         if access_grants(info.access, team_ids, org_ids)
         if (result := destination_for_credential(credential)) is not None
     )
-    deduped: Final = {
-        (
-            destination.endpoint,
-            tuple(sorted(destination.headers.items())),
-            tuple(sorted(destination.resource_attributes.items())),
-        ): (
-            backend,
-            destination,
-        )
-        for backend, destination in built
-    }
-    destinations: Final[tuple[OtelDestinationParams, ...]] = tuple(
+    deduped: Final = MappingProxyType(
         {
-            "callback_name": backend,
-            "endpoint": destination.endpoint,
-            "headers": destination.headers,
-            "resource_attributes": destination.resource_attributes,
-            "protocol": destination.protocol,
+            (
+                destination.endpoint,
+                tuple(sorted(destination.headers.items())),
+                tuple(sorted(destination.resource_attributes.items())),
+            ): (
+                backend,
+                destination,
+            )
+            for backend, destination in built
         }
-        for backend, destination in deduped.values()
+    )
+    destinations: Final[tuple[OtelDestinationParams, ...]] = tuple(
+        _destination_params(backend, destination) for backend, destination in deduped.values()
     )
     backends: Final = tuple(dict.fromkeys(backend for backend, _ in deduped.values()))
     return destinations, backends

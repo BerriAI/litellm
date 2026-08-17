@@ -6,6 +6,8 @@
 
 import threading
 from collections import OrderedDict
+from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from opentelemetry.context import Context
@@ -178,11 +180,15 @@ class TenantTracerCache:
         )
         if not owns_exporter:
             return self._config.model_copy(
-                update={"exporters": [*self._config.exporters, *self._synthesized_exporter(header_str, dynamic_params)]}
+                update=MappingProxyType(
+                    {
+                        "exporters": [*self._config.exporters, *self._synthesized_exporter(header_str, dynamic_params)]
+                    }  # mutable-ok: model_copy bypasses validation, so the field's declared list/dict type must be built as-is
+                )
             )
         exporters: Final = [
             (
-                spec.model_copy(update={"headers": header_str})
+                spec.model_copy(update=MappingProxyType({"headers": header_str}))
                 if spec.owner == self._callback_name and spec.kind.lower() not in _NON_OTLP_KINDS
                 else spec
             )
@@ -228,13 +234,14 @@ class TenantTracerCache:
             destination_resource_attrs,
         )
 
-        groups: OrderedDict[tuple[tuple[str, str], ...], list[OtelDestination]] = (
-            OrderedDict()
-        )  # mutable-ok: insertion-order grouping accumulator, frozen before return
-        for destination in destinations:
-            key = tuple(sorted(destination_resource_attrs(destination).items()))
-            groups.setdefault(key, []).append(destination)
-        return tuple((key, tuple(group)) for key, group in sorted(groups.items()))
+        keyed: Final = tuple(
+            (tuple(sorted(destination_resource_attrs(destination).items())), destination)
+            for destination in destinations
+        )
+        return tuple(
+            (key, tuple(destination for other_key, destination in keyed if other_key == key))
+            for key in sorted(frozenset(key for key, _ in keyed))
+        )
 
     def _tracer_for_group(
         self,
@@ -300,15 +307,24 @@ class TenantTracerCache:
             for d in destinations
         )
         base_exporters: Final = (*self._config.exporters,) if include_base_exporters else ()
-        merged_resource_attrs: Final = {
-            **self._config.resource_attributes,
-            **{key: value for d in destinations for key, value in destination_resource_attrs(d).items()},
-        }
+        merged_resource_attrs: Final = (
+            dict(  # mutable-ok: model_copy bypasses validation, so the declared dict field must be built as-is
+                chain(
+                    self._config.resource_attributes.items(),
+                    ((key, value) for d in destinations for key, value in destination_resource_attrs(d).items()),
+                )
+            )
+        )
         return self._config.model_copy(
-            update={
-                "exporters": [*base_exporters, *appended],
-                "resource_attributes": merged_resource_attrs,
-            }
+            update=MappingProxyType(
+                {
+                    "exporters": [
+                        *base_exporters,
+                        *appended,
+                    ],  # mutable-ok: model_copy bypasses validation, so the field's declared list/dict type must be built as-is
+                    "resource_attributes": merged_resource_attrs,
+                }
+            )
         )
 
 
@@ -322,8 +338,7 @@ def _processor_key(destination: OtelDestination) -> "tuple[str, tuple[tuple[str,
 
 
 def _is_genai_span(span: ReadableSpan) -> bool:
-    attributes: Final = span.attributes or {}
-    return _GENAI_SPAN_ATTR in attributes
+    return span.attributes is not None and _GENAI_SPAN_ATTR in span.attributes
 
 
 def _with_destination_resource(span: ReadableSpan, destination: OtelDestination) -> ReadableSpan:
@@ -336,7 +351,7 @@ def _with_destination_resource(span: ReadableSpan, destination: OtelDestination)
     extra: Final = destination_resource_attrs(destination)
     if not extra:
         return span
-    merged: Final = Resource.create({**dict(span.resource.attributes), **extra})
+    merged: Final = Resource.create(MappingProxyType(dict(chain(span.resource.attributes.items(), extra.items()))))
     return _ResourceWrappedReadableSpan(span, merged)
 
 

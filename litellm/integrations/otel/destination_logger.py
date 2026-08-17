@@ -13,6 +13,7 @@ owning logger, and including it here would export the same call twice.
 from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from opentelemetry.trace import Span
@@ -41,7 +42,7 @@ def _vocabulary_config(backend: str) -> OpenTelemetryV2Config:
         config: Final = preset_fn(allow_missing_credentials=True)
     except Exception:  # noqa: BLE001  # an unbuildable preset still has a usable default vocabulary
         return OpenTelemetryV2Config()
-    return config.model_copy(update={"exporters": ()})
+    return config.model_copy(update=MappingProxyType({"exporters": ()}))
 
 
 class _DestinationOnlyOtel(OpenTelemetryV2):
@@ -133,7 +134,8 @@ class AdminDestinationLogger(CustomLogger):
         end_time: "datetime | float | None",
     ) -> None:
         owned: Final = otel_v2_owned_backends()
-        for backend in sorted({d.callback_name for d in request_destinations() if d.callback_name} - owned):
+        requested: Final = frozenset(d.callback_name for d in request_destinations() if d.callback_name)
+        for backend in sorted(requested - owned):
             try:
                 self._emitter_for(backend).export_to_destinations(kwargs, start_time, end_time)
             except Exception as exc:  # noqa: BLE001  # one destination's failure must not break the request or the others

@@ -44,7 +44,10 @@ def phoenix_preset(
     )
     return base.model_copy(
         update={
-            "exporters": [*base.exporters, *global_exporter],
+            "exporters": [
+                *base.exporters,
+                *global_exporter,
+            ],  # mutable-ok: model_copy bypasses validation, so the field's declared list/dict type must be built as-is
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),
             "resource_attributes": {
                 **base.resource_attributes,

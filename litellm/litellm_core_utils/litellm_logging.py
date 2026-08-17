@@ -4036,7 +4036,12 @@ def _init_custom_logger_compatible_class(
                 config: Final = (
                     initial_config
                     if initial_config.exporters
-                    else OpenTelemetryV2Config(**{**settings, "exporter": initial_config.exporter})
+                    else OpenTelemetryV2Config(
+                        **{
+                            **settings,
+                            "exporter": initial_config.exporter,
+                        }  # mutable-ok: keyword expansion needs a dict
+                    )
                 )
                 otel_logger_v2: Final = OpenTelemetryV2(config=config)
                 _in_memory_loggers.append(otel_logger_v2)

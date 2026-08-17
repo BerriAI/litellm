@@ -1,6 +1,7 @@
 """Provider / exporter factory + the Baggage span processor."""
 
 from collections.abc import Callable, Iterable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from opentelemetry import _logs, baggage, metrics
@@ -133,7 +134,7 @@ def destination_resource_attrs(destination: "OtelDestination") -> Mapping[str, s
     ``model_id`` / ``arize.project.name``; empty for header-routed backends), read
     by both export paths so the gen-AI span and its parents share one Resource.
     """
-    return dict(destination.resource_attributes)
+    return MappingProxyType(dict(destination.resource_attributes))
 
 
 def parse_headers(raw: str | None) -> dict[str, str]:

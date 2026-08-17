@@ -1,5 +1,7 @@
 """Weave (W&B) preset."""
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.integrations.otel.model.config import (
@@ -15,16 +17,18 @@ from litellm.integrations.weave.weave_otel import (
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
-def weave_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
+def weave_dynamic_headers(params: StandardCallbackDynamicParams) -> Mapping[str, str]:
     """Per-request Weave OTLP headers from team/key dynamic params."""
-    headers: Final[dict[str, str]] = {}
     api_key: Final = params.get("wandb_api_key")
-    if api_key:
-        headers["Authorization"] = _get_weave_authorization_header(api_key=api_key)
     project_id: Final = params.get("weave_project_id")
-    if project_id:
-        headers["project_id"] = project_id
-    return headers
+    return MappingProxyType(
+        dict(
+            (
+                *((("Authorization", _get_weave_authorization_header(api_key=api_key)),) if api_key else ()),
+                *((("project_id", project_id),) if project_id else ()),
+            )
+        )
+    )
 
 
 def weave_preset(
@@ -39,7 +43,7 @@ def weave_preset(
     except Exception:
         if not allow_missing_credentials:
             raise
-        return base.model_copy(update={"mapper_names": mappers})
+        return base.model_copy(update=MappingProxyType({"mapper_names": mappers}))
     return base.model_copy(
         update={
             "exporters": [

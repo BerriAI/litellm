@@ -24,23 +24,29 @@ def validate_credential_access(credential_info: Mapping[str, object] | None) -> 
     if not isinstance(access, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "credential_info.access must be an object"},
+            detail={
+                "error": "credential_info.access must be an object"
+            },  # mutable-ok: FastAPI serializes the detail dict
         )
     if "global" in access and not isinstance(access["global"], bool):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "access.global must be a boolean"},
+            detail={"error": "access.global must be a boolean"},  # mutable-ok: FastAPI serializes the detail dict
         )
     for field in ("teams", "orgs"):
         bucket = access.get(field)
         if bucket is not None and not (isinstance(bucket, list) and all(isinstance(item, str) for item in bucket)):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": f"access.{field} must be a list of strings"},
+                detail={
+                    "error": f"access.{field} must be a list of strings"
+                },  # mutable-ok: FastAPI serializes the detail dict
             )
-    unknown: Final = set(access) - {"global", "teams", "orgs"}
+    unknown: Final = frozenset(access) - frozenset(("global", "teams", "orgs"))
     if unknown:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": f"access contains unknown field(s): {sorted(unknown)}"},
+            detail={
+                "error": f"access contains unknown field(s): {sorted(unknown)}"
+            },  # mutable-ok: FastAPI serializes the detail dict
         )

@@ -2,6 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -138,9 +139,9 @@ async def get_credentials(
                 "credential_values": _get_masked_values(credential.credential_values),
                 "credential_info": credential.credential_info,
                 **(
-                    {"resolves_to_destination": destination_for_credential(credential) is not None}
+                    MappingProxyType({"resolves_to_destination": destination_for_credential(credential) is not None})
                     if is_logging_credential(credential.credential_info)
-                    else {}
+                    else MappingProxyType({})
                 ),
             }
             for credential in litellm.credential_list

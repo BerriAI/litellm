@@ -57,14 +57,19 @@ def agentops_preset(
             ExporterSpec(
                 kind=_AGENTOPS_EXPORTER_KIND,
                 endpoint=_AGENTOPS_ENDPOINT,
-                options=({"api_key": settings.api_key} if settings.api_key else None),
+                options=(
+                    {"api_key": settings.api_key} if settings.api_key else None
+                ),  # mutable-ok: ExporterSpec.options is a mutable dict field
                 owner=ExporterOwner.AGENTOPS,
             ),
         )
     )
     return base.model_copy(
         update={
-            "exporters": [*base.exporters, *global_exporter],
+            "exporters": [
+                *base.exporters,
+                *global_exporter,
+            ],  # mutable-ok: model_copy bypasses validation, so the field's declared list/dict type must be built as-is
             "resource_attributes": {
                 **base.resource_attributes,
                 "service.name": settings.service_name,

@@ -15,7 +15,8 @@ tracer for the integrations that support it; ``dynamic_otlp_headers`` below buil
 those per-request headers.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm.integrations.otel.presets.agentops import agentops_preset
@@ -39,17 +40,21 @@ if TYPE_CHECKING:
 #: routing). Only integrations that support dynamic credentials appear here —
 #: Arize-Phoenix/Langtrace/Levo/AgentOps/generic don't, so they use the logger's
 #: default tracer.
-DYNAMIC_HEADERS_BY_CALLBACK: Final[dict[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]]] = {
-    "arize": arize_dynamic_headers,
-    "langfuse_otel": langfuse_dynamic_headers,
-    "weave_otel": weave_dynamic_headers,
-}
+DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], Mapping[str, str]]]] = (
+    MappingProxyType(
+        {
+            "arize": arize_dynamic_headers,
+            "langfuse_otel": langfuse_dynamic_headers,
+            "weave_otel": weave_dynamic_headers,
+        }
+    )
+)
 
 
 def dynamic_otlp_headers(
     callback_name: str | None,
     dynamic_params: "StandardCallbackDynamicParams | None",
-) -> dict[str, str] | None:
+) -> Mapping[str, str] | None:
     """Per-request OTLP headers for ``callback_name``, or ``None`` if N/A.
 
     ``None`` means "no per-request routing" — the caller uses its default tracer.
@@ -76,22 +81,26 @@ def dynamic_otlp_destination(
 
     if callback_name not in DYNAMIC_HEADERS_BY_CALLBACK or not dynamic_params:
         return None
-    values: Final = {str(key): str(value) for key, value in dynamic_params.items() if isinstance(value, str)}
+    values: Final = MappingProxyType(
+        {str(key): str(value) for key, value in dynamic_params.items() if isinstance(value, str)}
+    )
     return build_destination(callback_name or "", values)
 
 
 #: Callback name → preset. The ``Preset`` annotation makes mypy verify every
 #: registered value matches the preset interface.
-PRESET_BY_CALLBACK: Final[dict[str, Preset]] = {
-    "agentops": agentops_preset,
-    "arize": arize_preset,
-    "arize_phoenix": phoenix_preset,
-    "generic": generic_preset,
-    "langfuse_otel": langfuse_preset,
-    "langtrace": langtrace_preset,
-    "levo": levo_preset,
-    "weave_otel": weave_preset,
-}
+PRESET_BY_CALLBACK: Final[Mapping[str, Preset]] = MappingProxyType(
+    {
+        "agentops": agentops_preset,
+        "arize": arize_preset,
+        "arize_phoenix": phoenix_preset,
+        "generic": generic_preset,
+        "langfuse_otel": langfuse_preset,
+        "langtrace": langtrace_preset,
+        "levo": levo_preset,
+        "weave_otel": weave_preset,
+    }
+)
 
 
 __all__ = [

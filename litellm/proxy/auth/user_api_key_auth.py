@@ -13,6 +13,7 @@ import re
 import secrets
 from contextlib import suppress
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Final, NamedTuple, Protocol, Union, cast
 
 import fastapi
@@ -1039,8 +1040,8 @@ async def _hoist_request_destinations(request: Request, user_api_key_dict: UserA
             OtelDestination(
                 callback_name=item.get("callback_name"),
                 endpoint=item.get("endpoint", ""),
-                headers=item.get("headers") or {},
-                resource_attributes=item.get("resource_attributes") or {},
+                headers=item.get("headers") or MappingProxyType({}),
+                resource_attributes=item.get("resource_attributes") or MappingProxyType({}),
                 protocol=item.get("protocol"),
             )
             for item in destinations_raw
