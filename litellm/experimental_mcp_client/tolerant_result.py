@@ -15,17 +15,19 @@ import base64
 import json
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
+from types import MappingProxyType
 from typing import Any, Final, Literal, TypedDict  # noqa: TID251  # matches ClientSession.call_tool's real signature
 
 from mcp import ClientSession, types
 from mcp.shared.session import ProgressFnT
 from mcp.types import CallToolResult as MCPCallToolResult
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from typing_extensions import ReadOnly
 
 
 def _block_is_valid(block: object) -> bool:
     try:
-        MCPCallToolResult.model_validate({"content": [block]})
+        MCPCallToolResult.model_validate(MappingProxyType({"content": (block,)}))
     except ValidationError:
         return False
     return True
@@ -43,8 +45,8 @@ class _ResourcePayload(BaseModel):
 
 
 class _TextContentBlock(TypedDict):
-    type: Literal["text"]
-    text: str
+    type: ReadOnly[Literal["text"]]
+    text: ReadOnly[str]
 
 
 def _resource_text(resource: _ResourcePayload) -> str | None:
@@ -73,8 +75,8 @@ def _as_text_block(block: object) -> _TextContentBlock:
             if resource is not None:
                 text: Final = _resource_text(resource)
                 if text is not None:
-                    return {"type": "text", "text": text}
-    return {"type": "text", "text": json.dumps(block, default=str)}
+                    return _TextContentBlock(type="text", text=text)
+    return _TextContentBlock(type="text", text=json.dumps(block, default=str))
 
 
 class TolerantCallToolResult(MCPCallToolResult):
@@ -90,10 +92,14 @@ class TolerantCallToolResult(MCPCallToolResult):
             return data
         if all(_block_is_valid(block) for block in content):
             return data
-        return {
-            **data,
-            "content": [block if _block_is_valid(block) else _as_text_block(block) for block in content],
-        }
+        return MappingProxyType(
+            {
+                **data,
+                "content": tuple(
+                    block if _block_is_valid(block) else _as_text_block(block) for block in content
+                ),
+            }
+        )
 
 
 class TolerantClientSession(ClientSession):
