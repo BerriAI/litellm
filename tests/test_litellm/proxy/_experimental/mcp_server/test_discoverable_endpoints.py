@@ -3161,6 +3161,7 @@ def _create_oauth2_server(
     client_id="test_client_id",
     client_secret="test_client_secret",
     available_on_public_internet=True,
+    delegate_auth_to_upstream=False,
 ):
     """Helper to create a mock OAuth2 MCPServer."""
     from litellm.proxy._types import MCPTransport
@@ -3180,6 +3181,7 @@ def _create_oauth2_server(
         token_url="https://provider.com/oauth/token",
         scopes=["read", "write"],
         available_on_public_internet=available_on_public_internet,
+        delegate_auth_to_upstream=delegate_auth_to_upstream,
     )
 
 
@@ -8163,9 +8165,71 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         )
         # per-server, not aggregate: the single server's name is in the endpoints
         assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
-        expected_issuer = "https://llm.example.com/test_oauth"
-        assert authorization_response["issuer"] == expected_issuer
-        assert resource_response["authorization_servers"] == [expected_issuer]
+        assert authorization_response["issuer"] == "https://llm.example.com"
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_named_discovery_issuer_matches_protected_resource_authorization_servers():
+    """RFC 8414 requires the issuer to equal the authorization server identifier the client
+    resolved the metadata from, which is the protected-resource authorization_servers entry."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    server = _create_oauth2_server(delegate_auth_to_upstream=True)
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        resource_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name="test_oauth", use_standard_pattern=True
+        )
+        authorization_response = _build_oauth_authorization_server_response(
+            request=mock_request, mcp_server_name="test_oauth"
+        )
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
+        assert authorization_response["issuer"] == resource_response["authorization_servers"][0]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_openid_configuration_issuer_stays_bare_origin_for_single_oauth2_server():
+    """The OIDC discovery document is served from the bare origin, so its issuer must stay the
+    bare origin even when root discovery resolves the one configured OAuth2 server."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        openid_configuration,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    server = _create_oauth2_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = await openid_configuration(mock_request)
+        assert response["issuer"] == "https://llm.example.com"
     finally:
         global_mcp_server_manager.registry.clear()
 

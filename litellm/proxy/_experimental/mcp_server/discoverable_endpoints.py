@@ -2397,6 +2397,7 @@ def _build_oauth_authorization_server_response(
 
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
+    explicitly_named: Final = mcp_server_name is not None
 
     # When no server name provided, try to resolve the single OAuth2 server
     if mcp_server_name is None:
@@ -2416,8 +2417,7 @@ def _build_oauth_authorization_server_response(
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
     return {
-        # Match the per-server identifier advertised in protected-resource metadata.
-        "issuer": f"{request_base_url}/{mcp_server_name}" if mcp_server_name else request_base_url,
+        "issuer": f"{request_base_url}/{mcp_server_name}" if explicitly_named else request_base_url,
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
