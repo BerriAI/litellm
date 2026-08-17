@@ -73,6 +73,17 @@ class TestGetLitellmParamsKwargsExtraction:
         for key in _OPTIONAL_KWARGS_KEYS:
             assert result[key] == f"val_{key}"
 
+    def test_s3_bucket_name_survives_extraction(self):
+        """s3_bucket_name reaches litellm_params, like its gcs_bucket_name counterpart.
+
+        Bedrock file retrieval resolves the bucket from litellm_params or the
+        AWS_S3_BUCKET_NAME environment variable. Dropping the key here left the
+        environment variable as the only way to configure it.
+        """
+        result = get_litellm_params(s3_bucket_name="my-bucket", gcs_bucket_name="my-gcs-bucket")
+        assert result["s3_bucket_name"] == "my-bucket"
+        assert result["gcs_bucket_name"] == "my-gcs-bucket"
+
 
 class TestGetLitellmParamsBaseModel:
     """Verify base_model resolution precedence."""
