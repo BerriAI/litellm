@@ -212,7 +212,7 @@ def get_image_dimensions(
     Returns:
         Tuple[int, int]: The width and height of the image.
     """
-    img_data = None
+    img_data: bytes | None = None
     if data.startswith(("http://", "https://")):
         try:
             client: Final = _get_httpx_client()
@@ -233,8 +233,11 @@ def get_image_dimensions(
         img_data = _decode_base64_image(data)
 
     # A URL that could not be fetched (or base64 that could not be decoded)
-    # leaves img_data unset — fall through to the default dimensions below.
-    img_type: Final = get_image_type(img_data) if img_data is not None else None
+    # leaves img_data unset — return the default dimensions.
+    if img_data is None:
+        return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
+
+    img_type: Final = get_image_type(img_data)
 
     if img_type == "png":
         w, h = struct.unpack(">LL", img_data[16:24])
