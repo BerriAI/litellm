@@ -47,16 +47,9 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
 }));
 
 vi.mock("./EntityUsage/EntityUsage", () => ({
-  default: ({
-    entityType,
-    filterSelectProps,
-  }: {
-    entityType?: string;
-    filterSelectProps?: { onSearchChange?: (query: string) => void };
-  }) => (
-    <div>
+  default: ({ entityType, entityList }: { entityType: string; entityList: unknown }) => (
+    <div data-testid="entity-usage" data-entity-type={entityType} data-entity-list={JSON.stringify(entityList ?? null)}>
       Entity Usage
-      {entityType === "user" && filterSelectProps !== undefined && <span>Searchable user filter</span>}
     </div>
   ),
   EntityList: [],
@@ -154,6 +147,7 @@ vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
   useInfiniteUsers: vi.fn(),
+  useUserLookup: vi.fn(() => ({ data: null })),
 }));
 
 describe("UsagePage", () => {
@@ -725,7 +719,7 @@ describe("UsagePage", () => {
       });
 
       expect(userSelectCombobox()).toBeInTheDocument();
-      expect(promptsWith("Select user to filter...")).toBe(true);
+      expect(promptsWith("Search users by email…")).toBe(true);
     });
 
     it("should format user options with alias when available", async () => {
@@ -754,18 +748,6 @@ describe("UsagePage", () => {
 
       // useInfiniteUsers should be called with default page size
       expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, undefined);
-    });
-
-    it("should reuse the searchable user filter in the user usage view", async () => {
-      renderWithProviders(<UsagePage {...defaultProps} />);
-
-      await waitFor(() => {
-        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-      });
-
-      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "user" } });
-
-      expect(await screen.findByText("Searchable user filter")).toBeInTheDocument();
     });
 
     it("should deduplicate users across pages", async () => {
@@ -825,6 +807,46 @@ describe("UsagePage", () => {
         expect.any(Date),
         null,
       );
+    });
+  });
+
+  describe("user usage view", () => {
+    it("should hand EntityUsage no user list so its own filter can search every user", async () => {
+      mockUseInfiniteUsers.mockReturnValue({
+        data: {
+          pages: [
+            {
+              users: Array.from({ length: 50 }, (_, index) => ({
+                user_id: `user-${index}`,
+                user_alias: null,
+                user_email: `user${index}@example.com`,
+              })),
+              page: 1,
+              total_pages: 4,
+              total_count: 200,
+            },
+          ],
+          pageParams: [1],
+        },
+        fetchNextPage: vi.fn(),
+        hasNextPage: true,
+        isFetchingNextPage: false,
+        isLoading: false,
+      } as unknown as ReturnType<typeof useInfiniteUsers>);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "user" } });
+      });
+
+      const entityUsage = await screen.findByTestId("entity-usage");
+      expect(entityUsage).toHaveAttribute("data-entity-type", "user");
+      expect(entityUsage).toHaveAttribute("data-entity-list", "null");
     });
   });
 

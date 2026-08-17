@@ -1,5 +1,8 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
 
@@ -61,7 +64,18 @@ vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
 }));
 
 vi.mock("@/components/EntityUsageExport", () => ({
-  UsageExportHeader: () => <div>Usage Export Header</div>,
+  UsageExportHeader: ({ filterLabel, filterSlot }: { filterLabel?: string; filterSlot?: ReactNode }) => (
+    <div>
+      <span>Usage Export Header</span>
+      <span>{filterLabel}</span>
+      {filterSlot}
+    </div>
+  ),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
+  useInfiniteUsers: vi.fn(),
+  useUserLookup: vi.fn(() => ({ data: null })),
 }));
 
 vi.mock("@/components/common_components/team_multi_select", () => ({
@@ -83,6 +97,16 @@ describe("EntityUsage", () => {
   const mockCustomerDailyActivityCall = vi.mocked(networking.customerDailyActivityCall);
   const mockAgentDailyActivityCall = vi.mocked(networking.agentDailyActivityCall);
   const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
+  const mockUseInfiniteUsers = vi.mocked(useInfiniteUsers);
+
+  const infiniteUsersResult = (users: { user_id: string; user_alias: string | null; user_email: string | null }[]) =>
+    ({
+      data: { pages: [{ users, page: 1, total_pages: 1, total_count: users.length }], pageParams: [1] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isLoading: false,
+    }) as unknown as ReturnType<typeof useInfiniteUsers>;
 
   const mockSpendData = {
     results: [
@@ -380,6 +404,13 @@ describe("EntityUsage", () => {
     mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
     mockAgentDailyActivityCall.mockResolvedValue(mockAgentSpendData);
     mockUserDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockUseInfiniteUsers.mockClear();
+    mockUseInfiniteUsers.mockReturnValue(
+      infiniteUsersResult([
+        { user_id: "user-001", user_alias: "Alice", user_email: "alice@example.com" },
+        { user_id: "user-002", user_alias: null, user_email: "bob@example.com" },
+      ]),
+    );
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -986,5 +1017,69 @@ describe("EntityUsage", () => {
     });
     expect(screen.getByText("top-models:gpt-4o=70.25")).toBeInTheDocument();
     expect(screen.getByText(/^top-models:Code Review Agent=/)).toBeInTheDocument();
+  });
+
+  describe("user filter (LIT-5654)", () => {
+    const userDropdown = (): HTMLElement => screen.getByTestId("user-dropdown");
+    const userCombobox = (): HTMLElement => within(userDropdown()).getByRole("combobox");
+
+    const renderUserUsage = async () => {
+      render(<EntityUsage {...defaultProps} entityType="user" entityList={null} />);
+      await waitFor(() => {
+        expect(mockUserDailyActivityCall).toHaveBeenCalled();
+      });
+    };
+
+    it("offers a user filter even when the caller preloaded no user page", async () => {
+      await renderUserUsage();
+
+      expect(userCombobox()).toHaveAttribute("placeholder", "Search users by email…");
+    });
+
+    it("searches every user on the server rather than a preloaded page", async () => {
+      const user = userEvent.setup();
+      await renderUserUsage();
+
+      expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, undefined);
+
+      await user.type(userCombobox(), "alice");
+
+      await waitFor(() => {
+        expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, "alice");
+      });
+    });
+
+    it("refetches daily activity for the picked user and drops the filter when cleared", async () => {
+      const user = userEvent.setup();
+      await renderUserUsage();
+
+      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 1, null);
+
+      await user.click(userCombobox());
+      await user.click(await screen.findByText("Alice (user-001)"));
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          1,
+          "user-001",
+        );
+      });
+
+      mockUserDailyActivityCall.mockClear();
+      await user.click(userDropdown().querySelector('[data-slot="combobox-clear"]') as HTMLElement);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          1,
+          null,
+        );
+      });
+    });
   });
 });
