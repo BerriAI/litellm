@@ -1,6 +1,7 @@
 #### OCR Endpoints #####
 
 import json
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 import orjson
@@ -8,6 +9,12 @@ from fastapi import APIRouter, Depends, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.base_llm.ocr.transformation import (
+    OCR_REQUEST_FORMAT_HEADER,
+    OCR_REQUEST_FORMAT_PARAM,
+    OCRResponse,
+    parse_ocr_request_format,
+)
 from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -38,6 +45,40 @@ def _build_document_from_upload(
             "file": file_content,
             "mime_type": mime_type or "application/octet-stream",
         }
+    )
+
+
+def _with_request_format(data: Mapping[str, Any], request: Request) -> Mapping[str, Any]:
+    """
+    Resolve the requested response format from the `x-req-format` header.
+
+    An explicit `req_format` in the body wins over the header.
+    """
+    header_value: Final = request.headers.get(OCR_REQUEST_FORMAT_HEADER)
+    if header_value is None or OCR_REQUEST_FORMAT_PARAM in data:
+        return data
+    return {**data, OCR_REQUEST_FORMAT_PARAM: parse_ocr_request_format(header_value.strip().lower())}
+
+
+def _native_response(response: object, fastapi_response: Response) -> Response | None:
+    """
+    Return the provider's native payload when the caller asked for
+    `req_format=native` and the provider config captured it, carrying over the
+    LiteLLM response headers (cost, call id, etc.) built for the normalized response.
+    """
+    if not isinstance(response, OCRResponse):
+        return None
+    native_payload: Final = response.get_provider_native_response()
+    if native_payload is None:
+        return None
+    return Response(
+        content=orjson.dumps(native_payload),
+        media_type="application/json",
+        headers={
+            key: value
+            for key, value in fastapi_response.headers.items()
+            if key.lower() not in ("content-length", "content-type")
+        },
     )
 
 
@@ -106,6 +147,11 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
 
 
 async def _parse_ocr_request(request: Request) -> dict[str, Any]:
+    """Parse an OCR request and apply the `x-req-format` header, if any."""
+    return {**_with_request_format(await _parse_ocr_request_body(request), request)}
+
+
+async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
     """
     Parse an OCR request, supporting both JSON and multipart form data.
 
@@ -238,6 +284,11 @@ async def ocr(
         -F "model=mistral-ocr" \
         -F "file=@document.pdf"
     ```
+
+    Response format is normalized to the LiteLLM OCR schema by default. Providers
+    that support it (Azure Document Intelligence) can return their own payload
+    instead, with cost tracking unchanged, via `x-req-format: native` (or
+    `"req_format": "native"` in the body).
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -261,7 +312,7 @@ async def ocr(
         # Process request using ProxyBaseLLMRequestProcessing
         processor = ProxyBaseLLMRequestProcessing(data=data)
 
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -279,6 +330,8 @@ async def ocr(
             user_api_base=user_api_base,
             version=version,
         )
+
+        return _native_response(response, fastapi_response) or response
     except Exception as e:
         processor = ProxyBaseLLMRequestProcessing(data=data)
         raise await processor._handle_llm_api_exception(

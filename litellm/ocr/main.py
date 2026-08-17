@@ -21,7 +21,11 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.azure_ai.ocr.common_utils import (
     is_azure_document_intelligence_model,
 )
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
+from litellm.llms.base_llm.ocr.transformation import (
+    OCR_REQUEST_FORMAT_PARAM,
+    BaseOCRConfig,
+    OCRResponse,
+)
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.types.router import GenericLiteLLMParams
@@ -124,6 +128,12 @@ def _prepare_ocr_request(
     litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
     supported_params: Final = ocr_provider_config.get_supported_ocr_params(model=model)
+    if OCR_REQUEST_FORMAT_PARAM not in supported_params and kwargs.get(OCR_REQUEST_FORMAT_PARAM) == "native":
+        raise ValueError(
+            f"`{OCR_REQUEST_FORMAT_PARAM}='native'` is not supported for provider: {custom_llm_provider}, "
+            f"model: {model}"
+        )
+
     non_default_params: Final = {}
     for param in supported_params:
         if param in kwargs:
@@ -166,6 +176,8 @@ def _prepare_ocr_request(
 
 
 def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
+    if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native":
+        return False
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
 
 
