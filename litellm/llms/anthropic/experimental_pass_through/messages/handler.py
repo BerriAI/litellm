@@ -42,13 +42,20 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 
 
-def _should_route_to_responses_api(custom_llm_provider: str | None) -> bool:
+def _should_route_to_responses_api(custom_llm_provider: str | None, stop_sequences: list[str] | None = None) -> bool:
     """Return True when the provider should use the Responses API path.
 
     Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
     opt out and route OpenAI/Azure requests through chat/completions instead.
+
+    The Responses API has no ``stop`` equivalent, so ``translate_request``
+    silently drops ``stop_sequences``. Route those requests through
+    chat/completions instead, which already maps ``stop_sequences`` to
+    ``stop`` (see ``LiteLLMAnthropicMessagesAdapter._translate_stop_sequences_to_openai``).
     """
     if litellm.use_chat_completions_url_for_anthropic_messages:
+        return False
+    if stop_sequences:
         return False
     return custom_llm_provider in _RESPONSES_API_PROVIDERS
 
@@ -551,7 +558,7 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider):
+        if _should_route_to_responses_api(custom_llm_provider, stop_sequences=stop_sequences):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
 
         # The in-gateway context_management polyfill runs inside

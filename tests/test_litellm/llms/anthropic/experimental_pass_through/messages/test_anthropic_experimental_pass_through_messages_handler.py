@@ -39,6 +39,36 @@ def test_anthropic_experimental_pass_through_messages_handler():
         assert mock_responses.call_args.kwargs["api_key"] == "test-api-key"
 
 
+def test_openai_model_with_stop_sequences_routes_to_chat_completions():
+    """
+    Regression test for #37118. The Responses API has no `stop` equivalent, so
+    OpenAI models with `stop_sequences` set must route through chat/completions
+    (which maps `stop_sequences` -> `stop`) instead of being silently dropped
+    on the default Responses API path.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with (
+        patch("litellm.responses", return_value="test-response") as mock_responses,
+        patch("litellm.completion", return_value=MagicMock()) as mock_completion,
+    ):
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="openai/gpt-4o-mini",
+                api_key="test-api-key",
+                stop_sequences=["STOPPROBE"],
+            )
+        except (ValueError, TypeError, AttributeError) as e:
+            print(f"Error: {e}")
+        mock_responses.assert_not_called()
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs["stop"] == ["STOPPROBE"]
+
+
 @pytest.mark.asyncio
 async def test_openai_model_does_not_forward_stream_options_to_responses_api():
     """
