@@ -5,7 +5,7 @@ Functions to create audit logs for LiteLLM Proxy
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 from pydantic import BaseModel, ValidationError
 
@@ -48,6 +48,32 @@ def get_audit_log_changed_by(
     if litellm_changed_by and _allows_litellm_changed_by_header(user_api_key_dict):
         return litellm_changed_by
     return user_api_key_dict.user_id or litellm_proxy_admin_name
+
+
+class AuditLogActorFields(NamedTuple):
+    changed_by_user_email: str | None
+    changed_by_key_alias: str | None
+
+
+def get_audit_log_actor_fields(
+    *,
+    litellm_changed_by: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str | None,
+) -> AuditLogActorFields:
+    """Actor fields from the authenticated credential. The email is only attributed when the
+    resolved changed_by IS the credential's user, so a litellm-changed-by header value is
+    never decorated with a real user's email."""
+    changed_by: Final = get_audit_log_changed_by(
+        litellm_changed_by=litellm_changed_by,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
+    is_credential_user: Final = user_api_key_dict.user_id is not None and changed_by == user_api_key_dict.user_id
+    return AuditLogActorFields(
+        changed_by_user_email=(user_api_key_dict.user_email or None) if is_credential_user else None,
+        changed_by_key_alias=user_api_key_dict.key_alias or None,
+    )
 
 
 def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
@@ -110,6 +136,11 @@ def _build_audit_log_payload(
         object_id=request_data.object_id,
         before_value=request_data.before_value,
         updated_values=request_data.updated_values,
+        object_alias=request_data.object_alias,
+        object_team_id=request_data.object_team_id,
+        object_team_alias=request_data.object_team_alias,
+        changed_by_user_email=request_data.changed_by_user_email,
+        changed_by_key_alias=request_data.changed_by_key_alias,
     )
 
 
@@ -152,7 +183,6 @@ class _AuditBlobAliasFields(BaseModel):
     team_alias: str | None = None
     user_alias: str | None = None
     user_email: str | None = None
-    organization_alias: str | None = None
     model_name: str | None = None
     team_id: str | None = None
 
@@ -173,8 +203,6 @@ def _derive_object_alias(table_name: str, updated: _AuditBlobAliasFields, before
         return updated.team_alias or before.team_alias or None
     if table_name == LitellmTableNames.USER_TABLE_NAME.value:
         return updated.user_alias or updated.user_email or before.user_alias or before.user_email or None
-    if table_name == "LiteLLM_OrganizationTable":
-        return updated.organization_alias or before.organization_alias or None
     if table_name == LitellmTableNames.PROXY_MODEL_TABLE_NAME.value:
         return updated.model_name or before.model_name or None
     return None
@@ -200,14 +228,28 @@ async def _lookup_user_email(prisma_client: "PrismaClient", user_id: str) -> str
     return email if isinstance(email, str) and email else None
 
 
-async def _lookup_key_alias(prisma_client: "PrismaClient", token: str) -> str | None:
+class _ActorKey(NamedTuple):
+    key_alias: str | None
+    user_id: str | None
+
+
+async def _lookup_actor_key(prisma_client: "PrismaClient", token: str) -> _ActorKey:
     try:
         row: Final = await prisma_client.db.litellm_verificationtoken.find_unique(where={"token": token})
     except Exception as e:
-        verbose_proxy_logger.debug("audit log key alias lookup failed: %s", e)
-        return None
+        verbose_proxy_logger.debug("audit log key lookup failed: %s", e)
+        return _ActorKey(key_alias=None, user_id=None)
     alias: Final = None if row is None else row.key_alias
-    return alias if isinstance(alias, str) and alias else None
+    user_id: Final = None if row is None else row.user_id
+    return _ActorKey(
+        key_alias=alias if isinstance(alias, str) and alias else None,
+        user_id=user_id if isinstance(user_id, str) and user_id else None,
+    )
+
+
+async def _lookup_key_alias(prisma_client: "PrismaClient", token: str) -> str | None:
+    actor_key: Final = await _lookup_actor_key(prisma_client, token)
+    return actor_key.key_alias
 
 
 def _serialized_blob(value: object) -> object:
@@ -226,11 +268,16 @@ async def _with_denormalized_aliases(
     )
     is_team_row: Final = table_name == LitellmTableNames.TEAM_TABLE_NAME.value
     is_key_row: Final = table_name == LitellmTableNames.KEY_TABLE_NAME.value
+    fields_set: Final = request_data.model_fields_set
     changed_by: Final = request_data.changed_by if isinstance(request_data.changed_by, str) else None
-    object_alias: Final = request_data.object_alias or (
-        await _lookup_key_alias(prisma_client, request_data.object_id)
-        if is_key_row and prisma_client is not None
-        else _derive_object_alias(table_name, updated, before)
+    object_alias: Final = (
+        request_data.object_alias
+        if "object_alias" in fields_set
+        else (
+            await _lookup_key_alias(prisma_client, request_data.object_id)
+            if is_key_row and prisma_client is not None
+            else _derive_object_alias(table_name, updated, before)
+        )
     )
     object_team_id: Final = (
         request_data.object_team_id
@@ -243,19 +290,34 @@ async def _with_denormalized_aliases(
         request_data.object_team_alias
         or updated.team_alias
         or before.team_alias
+        or (object_alias if is_team_row else None)
         or (
             await _lookup_team_alias(prisma_client, object_team_id)
             if prisma_client is not None and object_team_id
             else None
         )
     )
-    changed_by_user_email: Final = request_data.changed_by_user_email or (
-        await _lookup_user_email(prisma_client, changed_by) if prisma_client is not None and changed_by else None
+    need_actor_key: Final = (
+        prisma_client is not None
+        and bool(request_data.changed_by_api_key)
+        and ("changed_by_key_alias" not in fields_set or "changed_by_user_email" not in fields_set)
     )
-    changed_by_key_alias: Final = request_data.changed_by_key_alias or (
-        await _lookup_key_alias(prisma_client, request_data.changed_by_api_key)
-        if prisma_client is not None and request_data.changed_by_api_key
-        else None
+    actor_key: Final = (
+        await _lookup_actor_key(prisma_client, request_data.changed_by_api_key)
+        if need_actor_key and prisma_client is not None and request_data.changed_by_api_key
+        else _ActorKey(key_alias=None, user_id=None)
+    )
+    changed_by_key_alias: Final = (
+        request_data.changed_by_key_alias if "changed_by_key_alias" in fields_set else actor_key.key_alias
+    )
+    changed_by_user_email: Final = (
+        request_data.changed_by_user_email
+        if "changed_by_user_email" in fields_set
+        else (
+            await _lookup_user_email(prisma_client, changed_by)
+            if prisma_client is not None and changed_by is not None and actor_key.user_id == changed_by
+            else None
+        )
     )
     return request_data.model_copy(
         update={
@@ -279,6 +341,7 @@ async def create_object_audit_log(
     table_name: LitellmTableNames,
     before_value: str | None = None,
     after_value: str | None = None,
+    object_alias: str | None = None,
 ):
     """
     Create an audit log for an internal user.
@@ -290,6 +353,7 @@ async def create_object_audit_log(
     - litellm_changed_by: Optional[str] - The user id of the user who is changing the user.
     - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
     - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
+    - object_alias: Optional[str] - Alias of the audited object when the caller already holds it.
     """
     from litellm.secret_managers.main import get_secret_bool
 
@@ -303,22 +367,30 @@ async def create_object_audit_log(
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
-
-    await create_audit_log_for_update(
-        request_data=LiteLLM_AuditLogs(
-            id=str(uuid.uuid4()),
-            updated_at=datetime.now(timezone.utc),
-            changed_by=_changed_by,
-            changed_by_api_key=user_api_key_dict.api_key,
-            table_name=table_name,
-            object_id=object_id,
-            action=action,
-            updated_values=after_value,
-            before_value=before_value,
-            changed_by_user_email=(user_api_key_dict.user_email if _changed_by == user_api_key_dict.user_id else None),
-            changed_by_key_alias=user_api_key_dict.key_alias,
-        )
+    _actor: Final = get_audit_log_actor_fields(
+        litellm_changed_by=litellm_changed_by,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
+
+    base_request: Final = LiteLLM_AuditLogs(
+        id=str(uuid.uuid4()),
+        updated_at=datetime.now(timezone.utc),
+        changed_by=_changed_by,
+        changed_by_api_key=user_api_key_dict.api_key,
+        table_name=table_name,
+        object_id=object_id,
+        action=action,
+        updated_values=after_value,
+        before_value=before_value,
+        changed_by_user_email=_actor.changed_by_user_email,
+        changed_by_key_alias=_actor.changed_by_key_alias,
+    )
+    request: Final = (
+        base_request.model_copy(update={"object_alias": object_alias}) if object_alias is not None else base_request
+    )
+
+    await create_audit_log_for_update(request_data=request)
 
 
 async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
@@ -357,4 +429,10 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
         )
     except Exception as e:
         # [Non-Blocking Exception. Do not allow blocking LLM API call]
-        verbose_proxy_logger.error("Failed Creating audit log %s", e)
+        verbose_proxy_logger.error(
+            "Failed creating audit log row %s (audit logs are NOT being stored; "
+            "an unmigrated DB missing the alias columns causes this): %s",
+            enriched.id,
+            e,
+            exc_info=e,
+        )

@@ -12,10 +12,20 @@ from litellm_enterprise.proxy.audit_logging_endpoints import (
     _build_object_team_condition,
 )
 from litellm_enterprise.proxy.audit_logging_endpoints import router as audit_router
-from litellm_enterprise.types.proxy.audit_logging_endpoints import AuditLogResponse
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+
+class FakeDbRow:
+    """Mimics a prisma model instance: attribute-free, only model_dump() like the endpoint uses."""
+
+    def __init__(self, values):
+        self._values = dict(values)
+        self.id = self._values["id"]
+
+    def model_dump(self):
+        return dict(self._values)
 
 
 class FakeAuditLogTable:
@@ -44,7 +54,7 @@ class FakePrismaClient:
         self.db = db
 
 
-def make_log(**overrides) -> AuditLogResponse:
+def make_row(**overrides) -> FakeDbRow:
     defaults = {
         "id": "log-1",
         "updated_at": datetime(2026, 8, 1, tzinfo=timezone.utc),
@@ -55,8 +65,13 @@ def make_log(**overrides) -> AuditLogResponse:
         "object_id": "obj-1",
         "before_value": None,
         "updated_values": None,
+        "object_alias": None,
+        "object_team_id": None,
+        "object_team_alias": None,
+        "changed_by_user_email": None,
+        "changed_by_key_alias": None,
     }
-    return AuditLogResponse(**{**defaults, **overrides})
+    return FakeDbRow({**defaults, **overrides})
 
 
 def _client_for(db: FakeDb) -> TestClient:
@@ -78,7 +93,7 @@ def test_build_object_team_condition_matches_id_and_alias_columns():
 
 def test_get_audit_logs_returns_denormalized_columns_verbatim():
     """GET /audit passes the alias columns straight through from the DB row."""
-    audit_row = make_log(
+    audit_row = make_row(
         id="l1",
         action="deleted",
         object_id="team-1",
@@ -145,7 +160,7 @@ def test_get_audit_logs_object_team_id_filter_unchanged():
 
 def test_get_audit_log_by_id_returns_denormalized_columns():
     """GET /audit/{id} carries the same alias columns as the list endpoint."""
-    audit_row = make_log(
+    audit_row = make_row(
         id="l1",
         table_name="LiteLLM_VerificationToken",
         object_id="gone-hash",
@@ -166,13 +181,25 @@ def test_get_audit_log_by_id_returns_denormalized_columns():
     assert body["changed_by_key_alias"] == "admin-key"
 
 
-def test_alias_columns_default_to_none_for_legacy_rows():
-    """Rows written before the migration serialize with null alias columns, not errors."""
-    db = FakeDb(audit_logs=[make_log(id="l1")])
+def test_rows_without_alias_columns_serialize_as_null():
+    """A row dict lacking the five columns entirely (pre-migration DB) serializes as nulls, not errors."""
+    legacy_values = {
+        "id": "l1",
+        "updated_at": datetime(2026, 8, 1, tzinfo=timezone.utc),
+        "changed_by": "",
+        "changed_by_api_key": "",
+        "action": "updated",
+        "table_name": "LiteLLM_TeamTable",
+        "object_id": "obj-1",
+        "before_value": None,
+        "updated_values": None,
+    }
+    db = FakeDb(audit_logs=[FakeDbRow(legacy_values)])
 
     with patch("litellm.proxy.proxy_server.prisma_client", FakePrismaClient(db)):
         response = _client_for(db).get("/audit")
 
+    assert response.status_code == 200
     log = response.json()["audit_logs"][0]
     assert log["object_alias"] is None
     assert log["object_team_id"] is None

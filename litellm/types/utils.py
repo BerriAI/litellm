@@ -3127,6 +3127,11 @@ class StandardAuditLogPayload(TypedDict):
     object_id: str
     before_value: str | None
     updated_values: str | None
+    object_alias: str | None
+    object_team_id: str | None
+    object_team_alias: str | None
+    changed_by_user_email: str | None
+    changed_by_key_alias: str | None
 
 
 class StandardLoggingPayload(TypedDict):

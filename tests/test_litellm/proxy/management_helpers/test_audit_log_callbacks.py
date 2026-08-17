@@ -66,6 +66,26 @@ class TestBuildAuditLogPayload:
         assert payload["updated_values"] == json.dumps({"name": "new-team"})
         assert payload["before_value"] == json.dumps({"name": "old-team"})
 
+    def test_includes_denormalized_alias_keys(self):
+        """Callback payloads carry the five alias keys so S3/Datadog/custom sinks receive them."""
+        audit_log = _make_audit_log().model_copy(
+            update={
+                "object_alias": "ml-team",
+                "object_team_id": "team-1",
+                "object_team_alias": "ml-team",
+                "changed_by_user_email": "admin@example.com",
+                "changed_by_key_alias": "admin-key",
+            }
+        )
+
+        payload = _build_audit_log_payload(audit_log)
+
+        assert payload["object_alias"] == "ml-team"
+        assert payload["object_team_id"] == "team-1"
+        assert payload["object_team_alias"] == "ml-team"
+        assert payload["changed_by_user_email"] == "admin@example.com"
+        assert payload["changed_by_key_alias"] == "admin-key"
+
     def test_handles_none_values(self):
         audit_log = LiteLLM_AuditLogs(
             id="test-id",
@@ -507,7 +527,7 @@ class TestAuditLogAliasDenormalization:
         """A team delete row gets object_alias/object_team_id/object_team_alias straight from its blob."""
         db = _FakeDb(
             user_row=SimpleNamespace(user_email="admin@example.com"),
-            key_row=SimpleNamespace(key_alias="admin-key"),
+            key_row=SimpleNamespace(key_alias="admin-key", user_id="admin-user"),
         )
         p1, p2, p3 = _gates(_FakePrismaClient(db))
         with p1, p2, p3:
@@ -540,7 +560,7 @@ class TestAuditLogAliasDenormalization:
         and resolve object_team_alias through the team table from the blob's team_id."""
         db = _FakeDb(
             team_row=SimpleNamespace(team_alias="team-nine"),
-            key_row=SimpleNamespace(key_alias="prod-key"),
+            key_row=SimpleNamespace(key_alias="prod-key", user_id=None),
         )
         p1, p2, p3 = _gates(_FakePrismaClient(db))
         with p1, p2, p3:
@@ -564,24 +584,63 @@ class TestAuditLogAliasDenormalization:
         assert db.litellm_teamtable.where_calls == [{"team_id": "team-9"}]
 
     @pytest.mark.asyncio
-    async def test_deleted_key_object_alias_absent_never_masked_junk(self):
-        """A key delete whose row is already gone leaves object_alias unset instead of writing the masked blob value."""
-        db = _FakeDb()
+    async def test_service_account_without_aliases_triggers_no_lookups(self):
+        """Explicitly supplied None actor fields (service keys with no alias or email) skip the
+        guaranteed-miss lookups instead of querying on every audit row."""
+        db = _FakeDb(
+            user_row=SimpleNamespace(user_email="someone@example.com"),
+            key_row=SimpleNamespace(key_alias="some-key", user_id="someone"),
+        )
         p1, p2, p3 = _gates(_FakePrismaClient(db))
         with p1, p2, p3:
             await create_audit_log_for_update(
                 LiteLLM_AuditLogs(
                     id="a2b",
                     updated_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
-                    action="deleted",
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id="gone-hash",
-                    before_value=json.dumps({"key_alias": "prod-key"}),
+                    changed_by="service-account",
+                    changed_by_api_key="hash-service",
+                    action="updated",
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id="team-1",
+                    updated_values=json.dumps({"team_alias": "ml-team"}),
+                    changed_by_user_email=None,
+                    changed_by_key_alias=None,
                 )
             )
 
         data = db.litellm_auditlog.created[0]
-        assert "object_alias" not in data
+        assert "changed_by_user_email" not in data
+        assert "changed_by_key_alias" not in data
+        assert db.litellm_usertable.where_calls == []
+        assert db.litellm_verificationtoken.where_calls == []
+
+    @pytest.mark.asyncio
+    async def test_spoofed_changed_by_is_not_resolved_to_an_email(self):
+        """A changed_by that is not the credential's own user (litellm-changed-by header) is never
+        decorated with a real user's email."""
+        db = _FakeDb(
+            user_row=SimpleNamespace(user_email="victim@example.com"),
+            key_row=SimpleNamespace(key_alias="attacker-key", user_id="attacker-user"),
+        )
+        p1, p2, p3 = _gates(_FakePrismaClient(db))
+        with p1, p2, p3:
+            await create_audit_log_for_update(
+                LiteLLM_AuditLogs(
+                    id="a2c",
+                    updated_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+                    changed_by="victim-user",
+                    changed_by_api_key="hash-attacker",
+                    action="updated",
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id="team-1",
+                    updated_values=json.dumps({"team_alias": "ml-team"}),
+                )
+            )
+
+        data = db.litellm_auditlog.created[0]
+        assert "changed_by_user_email" not in data
+        assert data["changed_by_key_alias"] == "attacker-key"
+        assert db.litellm_usertable.where_calls == []
 
     @pytest.mark.asyncio
     async def test_user_row_prefers_alias_then_email_updated_blob_first(self):
@@ -608,7 +667,7 @@ class TestAuditLogAliasDenormalization:
         """Actor email and key alias passed by the caller are kept verbatim with no DB lookups."""
         db = _FakeDb(
             user_row=SimpleNamespace(user_email="wrong@example.com"),
-            key_row=SimpleNamespace(key_alias="wrong-key"),
+            key_row=SimpleNamespace(key_alias="wrong-key", user_id="admin-user"),
         )
         p1, p2, p3 = _gates(_FakePrismaClient(db))
         with p1, p2, p3:

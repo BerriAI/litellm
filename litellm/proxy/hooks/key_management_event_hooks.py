@@ -42,6 +42,7 @@ class KeyManagementEventHooks:
         """
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
+            get_audit_log_actor_fields,
             get_audit_log_changed_by,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
@@ -56,6 +57,11 @@ class KeyManagementEventHooks:
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
             _updated_values: Final = response.model_dump_json(exclude_none=True)
+            _actor: Final = get_audit_log_actor_fields(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            )
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -72,6 +78,9 @@ class KeyManagementEventHooks:
                         action="created",
                         updated_values=_updated_values,
                         before_value=None,
+                        object_alias=response.key_alias,
+                        changed_by_user_email=_actor.changed_by_user_email,
+                        changed_by_key_alias=_actor.changed_by_key_alias,
                     )
                 )
             )
@@ -102,6 +111,7 @@ class KeyManagementEventHooks:
         """
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
+            get_audit_log_actor_fields,
             get_audit_log_changed_by,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
@@ -113,6 +123,11 @@ class KeyManagementEventHooks:
             _before_value = existing_key_row.json(exclude_none=True)
             _before_value = json.dumps(_before_value, default=str)
 
+            _actor: Final = get_audit_log_actor_fields(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            )
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -129,6 +144,9 @@ class KeyManagementEventHooks:
                         action="updated",
                         updated_values=_updated_values,
                         before_value=_before_value,
+                        object_alias=data.key_alias or existing_key_row.key_alias,
+                        changed_by_user_email=_actor.changed_by_user_email,
+                        changed_by_key_alias=_actor.changed_by_key_alias,
                     )
                 )
             )
@@ -143,6 +161,7 @@ class KeyManagementEventHooks:
     ):
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
+            get_audit_log_actor_fields,
             get_audit_log_changed_by,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
@@ -181,6 +200,11 @@ class KeyManagementEventHooks:
 
         # store the audit log
         if litellm.store_audit_logs is True and existing_key_row.token is not None:
+            _actor: Final = get_audit_log_actor_fields(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            )
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -197,6 +221,9 @@ class KeyManagementEventHooks:
                         action="rotated",
                         updated_values=response.model_dump_json(exclude_none=True),
                         before_value=existing_key_row.model_dump_json(exclude_none=True),
+                        object_alias=response.key_alias or existing_key_row.key_alias,
+                        changed_by_user_email=_actor.changed_by_user_email,
+                        changed_by_key_alias=_actor.changed_by_key_alias,
                     )
                 )
             )
@@ -217,6 +244,7 @@ class KeyManagementEventHooks:
         """
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
+            get_audit_log_actor_fields,
             get_audit_log_changed_by,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
@@ -224,6 +252,11 @@ class KeyManagementEventHooks:
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
         if litellm.store_audit_logs is True and data.keys is not None:
+            _actor: Final = get_audit_log_actor_fields(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            )
             # make an audit log for each key deleted
             for key in keys_being_deleted:
                 if key.token is None:
@@ -246,6 +279,9 @@ class KeyManagementEventHooks:
                             action="deleted",
                             updated_values="{}",
                             before_value=_key_row,
+                            object_alias=key.key_alias,
+                            changed_by_user_email=_actor.changed_by_user_email,
+                            changed_by_key_alias=_actor.changed_by_key_alias,
                         )
                     )
                 )
