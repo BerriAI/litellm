@@ -939,24 +939,25 @@ class ResponsesAPIRequestUtils:
         from litellm.llms.base_llm.base_utils import type_to_response_format_param
 
         # Normalizes a Pydantic model into a response_format dict; passes a dict through.
-        converted = type_to_response_format_param(response_format)
+        converted: Final = type_to_response_format_param(response_format)
         if converted is None:
             return None
 
-        format_type = converted.get("type")
+        format_type: Final = converted.get("type")
         if format_type is None:
             return None
         if format_type != "json_schema":
             return {"format": {"type": format_type}}
 
-        json_schema = converted.get("json_schema") or {}
-        text_format_param: dict = {"type": format_type}
+        json_schema: Final = converted.get("json_schema") or {}
         # `name`/`schema` are required by the API and `strict`/`description` are optional,
         # so copy whatever was supplied and let the provider reject a malformed schema.
-        for key in ("name", "schema", "strict", "description"):
-            if json_schema.get(key) is not None:
-                text_format_param[key] = json_schema[key]
-        return {"format": text_format_param}
+        schema_fields: Final = {
+            key: json_schema[key]
+            for key in ("name", "schema", "strict", "description")
+            if json_schema.get(key) is not None
+        }
+        return {"format": {"type": format_type, **schema_fields}}
 
     @staticmethod
     def convert_text_format_to_text_param(
