@@ -12,8 +12,11 @@ import { Alert, Button, Card, Form, Input, Popover, Select, Space, Typography } 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useWorker } from "@/hooks/useWorker";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { Trans, useTranslation } from "react-i18next";
 
 function LoginPageContent() {
+  const { t } = useTranslation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -147,6 +150,9 @@ function LoginPageContent() {
   if (uiConfig && uiConfig.admin_ui_disabled) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="fixed right-4 top-4">
+          <LanguageSwitcher />
+        </div>
         <Card className="w-full max-w-lg shadow-md">
           <Space direction="vertical" size="middle" className="w-full">
             <div className="text-center">
@@ -154,13 +160,10 @@ function LoginPageContent() {
             </div>
 
             <Alert
-              message="Admin UI Disabled"
+              message={t("login.disabled.title")}
               description={
                 <>
-                  <Paragraph className="text-sm">
-                    The Admin UI has been disabled by the administrator. To re-enable it, please update the following
-                    environment variable:
-                  </Paragraph>
+                  <Paragraph className="text-sm">{t("login.disabled.description")}</Paragraph>
                   <Paragraph className="text-sm">
                     <code className="bg-gray-100 px-1 py-0.5 rounded-sm text-xs">DISABLE_ADMIN_UI=False</code>
                   </Paragraph>
@@ -177,6 +180,9 @@ function LoginPageContent() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="fixed right-4 top-4">
+        <LanguageSwitcher />
+      </div>
       <Card className="w-full max-w-lg shadow-md">
         <Space direction="vertical" size="middle" className="w-full">
           <div className="text-center">
@@ -184,26 +190,33 @@ function LoginPageContent() {
           </div>
 
           <div className="text-center">
-            <Title level={3}>Login</Title>
-            <Text type="secondary">Access your LiteLLM Admin UI.</Text>
+            <Title level={3}>{t("login.title")}</Title>
+            <Text type="secondary">{t("login.subtitle")}</Text>
           </div>
 
           {!uiConfig?.hide_default_credentials_hint && (
             <Alert
-              message="Default Credentials"
+              message={t("login.defaultCredentials.title")}
               description={
                 <>
                   <Paragraph className="text-sm">
-                    By default, Username is <code className="bg-gray-100 px-1 py-0.5 rounded-sm text-xs">admin</code>{" "}
-                    and Password is your set LiteLLM Proxy
-                    <code className="bg-gray-100 px-1 py-0.5 rounded-sm text-xs">MASTER_KEY</code>.
+                    <Trans
+                      i18nKey="login.defaultCredentials.description"
+                      components={{
+                        username: <code className="bg-gray-100 px-1 py-0.5 rounded-sm text-xs" />,
+                        masterKey: <code className="bg-gray-100 px-1 py-0.5 rounded-sm text-xs" />,
+                      }}
+                    />
                   </Paragraph>
                   <Paragraph className="text-sm">
-                    Need to set UI credentials or SSO?{" "}
-                    <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank" rel="noopener noreferrer">
-                      Check the documentation
-                    </a>
-                    .
+                    <Trans
+                      i18nKey="login.defaultCredentials.help"
+                      components={{
+                        docs: (
+                          <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank" rel="noopener noreferrer" />
+                        ),
+                      }}
+                    />
                   </Paragraph>
                 </>
               }
@@ -217,11 +230,11 @@ function LoginPageContent() {
 
           <Form onFinish={handleSubmit} layout="vertical" requiredMark={false}>
             {uiConfig?.is_control_plane && workers.length > 0 && (
-              <Form.Item label="Worker" style={{ marginBottom: 16 }}>
+              <Form.Item label={t("login.worker")} style={{ marginBottom: 16 }}>
                 <Select
                   value={selectedWorkerId || undefined}
                   onChange={(value) => setSelectedWorkerId(value)}
-                  placeholder="Choose a worker to connect to"
+                  placeholder={t("login.workerPlaceholder")}
                   size="large"
                   suffixIcon={<CloudServerOutlined />}
                   options={workers.map((w) => ({
@@ -233,12 +246,12 @@ function LoginPageContent() {
             )}
 
             <Form.Item
-              label="Username"
+              label={t("login.username")}
               name="username"
-              rules={[{ required: true, message: "Please enter your username" }]}
+              rules={[{ required: true, message: t("login.usernameRequired") }]}
             >
               <Input
-                placeholder="Enter your username"
+                placeholder={t("login.usernamePlaceholder")}
                 autoComplete="username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -249,12 +262,12 @@ function LoginPageContent() {
             </Form.Item>
 
             <Form.Item
-              label="Password"
+              label={t("login.password")}
               name="password"
-              rules={[{ required: true, message: "Please enter your password" }]}
+              rules={[{ required: true, message: t("login.passwordRequired") }]}
             >
               <Input.Password
-                placeholder="Enter your password"
+                placeholder={t("login.passwordPlaceholder")}
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -272,14 +285,14 @@ function LoginPageContent() {
                 block
                 size="large"
               >
-                {isLoginLoading ? "Logging in..." : "Login"}
+                {isLoginLoading ? t("login.submitting") : t("login.submit")}
               </Button>
             </Form.Item>
             <Form.Item>
               {!uiConfig?.sso_configured ? (
-                <Popover content="Please configure SSO to log in with SSO." trigger="hover">
+                <Popover content={t("login.ssoNotConfigured")} trigger="hover">
                   <Button disabled block size="large">
-                    Login with SSO
+                    {t("login.sso")}
                   </Button>
                 </Popover>
               ) : (
@@ -301,7 +314,7 @@ function LoginPageContent() {
                   block
                   size="large"
                 >
-                  Login with SSO
+                  {t("login.sso")}
                 </Button>
               )}
             </Form.Item>
@@ -314,9 +327,7 @@ function LoginPageContent() {
             closable
             message={
               <Text>
-                Single Sign-On (SSO) is enabled. LiteLLM no longer automatically redirects to the SSO login flow upon
-                loading this page. To re-enable auto-redirect-to-SSO, set{" "}
-                <Text code>AUTO_REDIRECT_UI_LOGIN_TO_SSO=true</Text> in your environment configuration.
+                <Trans i18nKey="login.ssoEnabled" components={{ setting: <Text code /> }} />
               </Text>
             }
           />

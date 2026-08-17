@@ -10,6 +10,7 @@ import { Check, ChevronsUpDown, LayoutGrid } from "lucide-react";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { migratedHref } from "@/utils/migratedPages";
+import { useTranslation } from "react-i18next";
 
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
@@ -22,6 +23,7 @@ interface ViewSwitcherItem {
 }
 
 export default function ViewSwitcher() {
+  const { t } = useTranslation();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
@@ -32,10 +34,12 @@ export default function ViewSwitcher() {
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
   const isChatRoute = chatEnabled && (normalizedPathname === chatHref || normalizedPathname.startsWith(`${chatHref}/`));
 
-  const activeLabel = isChatRoute ? "Chat" : plugins.find((p) => p.name === mode)?.display_name ?? "AI Gateway";
+  const activeLabel = isChatRoute
+    ? t("viewSwitcher.chat")
+    : plugins.find((p) => p.name === mode)?.display_name ?? t("viewSwitcher.aiGateway");
 
   const modeEntries = [
-    { key: GATEWAY, label: "AI Gateway" },
+    { key: GATEWAY, label: t("viewSwitcher.aiGateway") },
     ...plugins.map((p) => ({ key: p.name, label: p.display_name })),
   ];
 
@@ -53,7 +57,7 @@ export default function ViewSwitcher() {
         key: CHAT,
         label: (
           <div className="flex items-center justify-between gap-6 py-0.5">
-            <span className="font-medium">Chat</span>
+            <span className="font-medium">{t("viewSwitcher.chat")}</span>
             {isChatRoute && <Check className="size-4 text-blue-600" />}
           </div>
         ),
@@ -64,9 +68,9 @@ export default function ViewSwitcher() {
         disabled: true,
         label: (
           <div className="flex max-w-[220px] flex-col py-0.5">
-            <span className="font-medium">Chat</span>
+            <span className="font-medium">{t("viewSwitcher.chat")}</span>
             <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
-              Admins can enable in Settings
+              {t("viewSwitcher.enableChatHint")}
             </span>
           </div>
         ),
