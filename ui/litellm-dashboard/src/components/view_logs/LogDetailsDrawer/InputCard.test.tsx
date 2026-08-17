@@ -42,7 +42,7 @@ describe("InputCard", () => {
 
   it("should return null when messages array is empty", () => {
     const { container } = render(<InputCard messages={[]} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should display system message when present", () => {

@@ -23,7 +23,7 @@ const ALL_FAMILY_MODELS: ModelGroup[] = [
 const ANTHROPIC_ONLY_MODEL = ANTHROPIC_TIERS.COMPLEX[0];
 
 const openTemplateDropdown = (): void => {
-  fireEvent.mouseDown(screen.getByTestId("template-selector").querySelector(".ant-select-selector")!);
+  fireEvent.mouseDown(within(screen.getByTestId("template-selector")).getByRole("combobox"));
 };
 
 // Detailed Configuration is collapsed by default, so any test reaching into it (a tier select, an
@@ -32,13 +32,14 @@ const expandDetailedConfiguration = (): void => {
   fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
 };
 
-// The rendered antd option whose text starts with a preset label. Matching on text (not role +
-// accessible name) sidesteps antd's list re-rendering options in place on every state change.
-const optionByLabel = (label: string): HTMLElement | undefined =>
-  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).find((el) =>
-    el.textContent?.startsWith(label),
-  );
+const visibleOptions = (): HTMLElement[] =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd puts role="option" only on a hidden mirror list of raw values; the visible options carry no role, no aria-disabled, and only a tooltip in title
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option"));
 
+const optionByLabel = (label: string): HTMLElement | undefined =>
+  visibleOptions().find((el) => el.textContent?.startsWith(label));
+
+// eslint-disable-next-line local/no-antd-class-selectors -- antd signals option disabled state only through this class
 const isOptionDisabled = (option: HTMLElement): boolean => option.classList.contains("ant-select-item-option-disabled");
 
 const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(() => ({
@@ -349,9 +350,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
     openTemplateDropdown();
 
-    const labels = Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).map(
-      (option) => option.querySelector(".font-medium")?.textContent,
-    );
+    const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
 
     expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
   });
@@ -456,7 +455,7 @@ describe("AddAutoRouterTab", () => {
 
       const anthropicOption = optionByLabel("Anthropic Family")!;
       expect(isOptionDisabled(anthropicOption)).toBe(true);
-      expect(anthropicOption.textContent).toContain("Checking model availability");
+      expect(anthropicOption).toHaveTextContent(/Checking model availability/);
 
       // The dropdown is already open from above; polling re-reads its options in place rather than
       // reopening (openTemplateDropdown toggles, so a second call here would close it instead).
@@ -475,7 +474,7 @@ describe("AddAutoRouterTab", () => {
       openTemplateDropdown();
       const anthropicOption = optionByLabel("Anthropic Family")!;
       expect(isOptionDisabled(anthropicOption)).toBe(true);
-      expect(anthropicOption.textContent).toContain("Cannot verify these models are available");
+      expect(anthropicOption).toHaveTextContent(/Cannot verify these models are available/);
     });
 
     it("keeps group-name presets selectable when only the deployment fetch fails", async () => {
@@ -497,7 +496,7 @@ describe("AddAutoRouterTab", () => {
       openTemplateDropdown();
 
       await waitFor(() => {
-        expect(optionByLabel("Anthropic Family")!.textContent).toContain(`Missing: ${ANTHROPIC_ONLY_MODEL}`);
+        expect(optionByLabel("Anthropic Family")!).toHaveTextContent(new RegExp(`Missing: ${ANTHROPIC_ONLY_MODEL}`));
       });
       expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
     });
@@ -616,12 +615,12 @@ describe("AddAutoRouterTab", () => {
 
       // Applying a preset collapses Detailed Configuration, so the default model row is behind it.
       expandDetailedConfiguration();
-      const defaultModelSelect = screen.getByRole("combobox", { name: "Default model" });
-      await user.click(defaultModelSelect);
-      // The picker is a virtualized antd Select that only renders the visible slice of its options, and the
-      // pinned model sits after every model the presets contribute. Searching for it keeps this independent
-      // of how long that list grows.
-      await user.type(defaultModelSelect, PINNED_MODEL);
+      const defaultModel = screen.getByRole("combobox", { name: "Default model" });
+      await user.click(defaultModel);
+      // antd virtualizes the option list and jsdom gives every row zero height, so options past
+      // the first window never render. Typing filters the list down to the pin instead of relying
+      // on its index, which adding a preset to the bundled JSON shifts.
+      await user.type(defaultModel, PINNED_MODEL);
       await user.click((await screen.findAllByTitle(PINNED_MODEL)).slice(-1)[0]);
     };
 
@@ -696,7 +695,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      expect(optionByLabel("Anthropic Family")!.textContent).toContain("Matches your deployments");
+      expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Matches your deployments/);
     });
 
     it("keeps detailed configuration open and prefills the admin's group names on apply", async () => {
@@ -740,9 +739,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      const labels = Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).map(
-        (option) => option.querySelector(".font-medium")?.textContent,
-      );
+      const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
       expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
     });
 
@@ -758,7 +755,7 @@ describe("AddAutoRouterTab", () => {
       openTemplateDropdown();
 
       await waitFor(() => {
-        expect(optionByLabel("OpenAI Family")!.textContent).toContain("Missing:");
+        expect(optionByLabel("OpenAI Family")!).toHaveTextContent(/Missing:/);
       });
       expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
     });
@@ -787,7 +784,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      expect(optionByLabel("Anthropic Family")!.textContent).toContain("Matches your deployments");
+      expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Matches your deployments/);
     });
 
     it("prefills the expanded group names and submits them", async () => {

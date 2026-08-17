@@ -314,3 +314,31 @@ tests:
               operator: Equal
               value: litellm-e2e
               effect: NoSchedule
+
+  - it: bounds the Job with a deadline by default, so a blocked migration cannot stall the release forever
+    set:
+      migrationJob:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 1800
+
+  - it: honours an operator-supplied deadline
+    set:
+      migrationJob:
+        enabled: true
+        activeDeadlineSeconds: 600
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 600
+
+  - it: omits the deadline entirely when it is nulled out, restoring the unbounded behaviour
+    set:
+      migrationJob:
+        enabled: true
+        activeDeadlineSeconds: null
+    asserts:
+      - notExists:
+          path: spec.activeDeadlineSeconds

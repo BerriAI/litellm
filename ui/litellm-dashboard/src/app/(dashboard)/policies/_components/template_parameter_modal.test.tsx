@@ -95,7 +95,7 @@ describe("TemplateParameterModal", () => {
 
     await user.type(screen.getByPlaceholderText("e.g. Contoso"), "Contoso");
 
-    expect(screen.getByRole("button", { name: "Continue" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
   });
 
   it("hands the entered parameters back to the caller", async () => {
@@ -181,7 +181,7 @@ describe("TemplateParameterModal", () => {
     expect(await screen.findByText("Northwind")).toBeInTheDocument();
     expect(screen.getByText("Fabrikam")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Continue" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
     });
   });
 

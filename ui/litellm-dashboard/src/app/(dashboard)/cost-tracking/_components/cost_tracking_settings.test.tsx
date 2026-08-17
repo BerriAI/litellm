@@ -73,7 +73,7 @@ describe("CostTrackingSettings", () => {
     const { container } = renderWithProviders(
       <CostTrackingSettings userID="user-1" userRole="proxy_admin" accessToken={null} />,
     );
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render the page title", () => {
