@@ -116,9 +116,9 @@ class GPUStackRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: object,
         api_key: str | None = None,
-        request_data: dict[str, object] = {},
-        optional_params: dict[str, object] = {},
-        litellm_params: dict[str, object] = {},
+        request_data: dict[str, object] | None = None,
+        optional_params: dict[str, object] | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> RerankResponse:
         response_json: Final = TypeAdapter(GPUStackRerankResponsePayload).validate_json(raw_response.content)
         total_tokens: Final = response_json.usage.total_tokens or 0
