@@ -42,6 +42,10 @@ else:
 
 _LimitUnit: TypeAlias = Literal["tokens", "requests", "dollars", "concurrency"]
 _LIMIT_UNITS: Final[tuple[_LimitUnit, ...]] = ("tokens", "requests", "dollars", "concurrency")
+# (tag_id, name, limit, period_seconds, scope_by_key_hash) -- the fields that
+# decide whether two deployments' entries are the same rate limit for dedup
+# purposes; see _build_group_limits.
+_DedupSignature: TypeAlias = tuple[str, str, float, int, bool]
 # Units whose admission must be atomic (check-and-increment in one Redis
 # round trip) because the increment amount is known upfront (always 1).
 # tokens/dollars can't be: real usage is only known after the response, so
@@ -268,7 +272,7 @@ def _build_group_limits(deployments: Sequence[Mapping[str, object]], unit: _Limi
     # seen first for a given signature supplies those fields for the whole
     # group -- an arbitrary but deterministic tie-break, consistent with the
     # first-seen-order precedent already established above.
-    representative_entry_by_signature: Final[dict[tuple[str, str, float, int, bool], TagRateLimitEntry]] = {}  # mutable-ok: see comment above
+    representative_entry_by_signature: Final[dict[_DedupSignature, TagRateLimitEntry]] = {}  # mutable-ok: see above
     for deployment in deployments:
         dep_id = _deployment_id(deployment)
         if dep_id is None:
@@ -469,7 +473,7 @@ class _PendingConcurrencyKeys:
     __slots__ = ("keys",)
 
     def __init__(self) -> None:
-        self.keys: list[tuple[str, "_PartitionKey"]] = []  # mutable-ok: shared across asyncio.create_task forks by design; see class docstring
+        self.keys: list[tuple[str, "_PartitionKey"]] = []  # mutable-ok: shared across forks by design; see docstring
 
 
 _pending_concurrency_keys: Final[contextvars.ContextVar[_PendingConcurrencyKeys | None]] = contextvars.ContextVar(
@@ -664,7 +668,14 @@ _PartitionKey: TypeAlias = tuple[str, str, float, int, bool, int] | None
 def _partition_key(entry: TagRateLimitEntry) -> _PartitionKey:
     if entry.max_in_memory_cache_size is None:
         return None
-    return (entry.tag_id, entry.name, entry.limit, entry.period_seconds, entry.scope_by_key_hash, entry.max_in_memory_cache_size)
+    return (
+        entry.tag_id,
+        entry.name,
+        entry.limit,
+        entry.period_seconds,
+        entry.scope_by_key_hash,
+        entry.max_in_memory_cache_size,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -700,7 +711,7 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # litellm.tag_rate_limiter_max_in_memory_cache_size (200 if that's
         # also unset), matching today's behavior for every entry that doesn't
         # opt into its own partition.
-        self._partitions: dict[_PartitionKey, _CachePartition] = {}  # mutable-ok: lazily memoized per distinct partition key, guarded by _partitions_lock; see _partition_for
+        self._partitions: dict[_PartitionKey, _CachePartition] = {}  # mutable-ok: lazily memoized; see _partition_for
         self._partitions_lock = asyncio.Lock()
         default_partition: Final = self._build_partition(_resolve_max_in_memory_cache_size())
         self._partitions[None] = default_partition
@@ -741,7 +752,9 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
                 return existing_after_lock
             cache_size_override: Final = partition_key[-1] if partition_key is not None else None
             built: Final = self._build_partition(cache_size_override)
-            self._partitions[partition_key] = built  # mutable-ok: lazily memoized per distinct partition key, guarded by _partitions_lock above
+            self._partitions[partition_key] = (
+                built  # mutable-ok: lazily memoized per distinct partition key, guarded by _partitions_lock above
+            )
             return built
 
     async def _check_and_increment_one(
@@ -879,11 +892,19 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         if atomic_checks:
             atomic_partitions_list: Final = []  # mutable-ok: sequential async lookups, one per atomic_checks entry (a genexpr can't `await` here); zipped with atomic_checks immediately below
             for configured_limit, _tag_value, _key in atomic_checks:
-                atomic_partitions_list.append(await self._partition_for(_partition_key(configured_limit.entry)))  # mutable-ok: see comment above
+                atomic_partitions_list.append(
+                    await self._partition_for(_partition_key(configured_limit.entry))
+                )  # mutable-ok: see comment above
             atomic_partitions: Final = tuple(atomic_partitions_list)
             failing_index, values = await self._atomic_check_and_increment(
                 tuple(
-                    (partition.internal_usage_cache, key, configured_limit.entry.limit, 1.0, self._ttl_for(configured_limit))
+                    (
+                        partition.internal_usage_cache,
+                        key,
+                        configured_limit.entry.limit,
+                        1.0,
+                        self._ttl_for(configured_limit),
+                    )
                     for partition, (configured_limit, _tag_value, key) in zip(atomic_partitions, atomic_checks)
                 )
             )
@@ -930,16 +951,20 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # dollar_limits entry alongside a dedicated-partition request_limits
         # entry), and _raise_if_over_limit below zips this result positionally
         # against read_only_checks, so order must be preserved exactly.
-        indices_by_partition: Final[dict[_PartitionKey, list[int]]] = {}  # mutable-ok: groups positions sharing a cache partition; reassembled into original order below
+        indices_by_partition: Final[dict[_PartitionKey, list[int]]] = {}  # mutable-ok: grouped, reassembled below
         for index, (configured_limit, _tag_value, _key) in enumerate(read_only_checks):
-            indices_by_partition.setdefault(_partition_key(configured_limit.entry), []).append(index)  # mutable-ok: see comment above
+            indices_by_partition.setdefault(_partition_key(configured_limit.entry), []).append(
+                index
+            )  # mutable-ok: see comment above
 
         values_by_index: Final[dict[int, float | None]] = {}  # mutable-ok: see comment above
         for partition_key, indices in indices_by_partition.items():
             # not `Final`: rebound each loop iteration, which basedpyright's
             # LIT010/Final-in-loop check forbids
             partition = await self._partition_for(partition_key)
-            keys = [read_only_checks[i][2] for i in indices]  # mutable-ok: async_batch_get_cache requires a real list; converted only at this boundary
+            keys = [
+                read_only_checks[i][2] for i in indices
+            ]  # mutable-ok: async_batch_get_cache requires a real list; converted only at this boundary
             current_values = await partition.internal_usage_cache.async_batch_get_cache(
                 keys=keys,
                 parent_otel_span=parent_otel_span,
@@ -1120,9 +1145,12 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # more than one partition, and each partition owns its own v3
         # handler (see _build_partition), so each group's operations are
         # pipelined through that partition's own handler.
-        operations_by_partition: Final[dict[_PartitionKey, list[RedisPipelineIncrementOperation]]] = {}  # mutable-ok: groups operations by cache partition before dispatching each group's pipeline call
+        # mutable-ok: groups operations by cache partition before dispatching each group's pipeline call
+        operations_by_partition: Final[dict[_PartitionKey, list[RedisPipelineIncrementOperation]]] = {}
         for configured_limit, operation in operation_by_limit:
-            operations_by_partition.setdefault(_partition_key(configured_limit.entry), []).append(operation)  # mutable-ok: see comment above
+            operations_by_partition.setdefault(_partition_key(configured_limit.entry), []).append(
+                operation
+            )  # mutable-ok: see comment above
 
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
         for partition_key, group_operations in operations_by_partition.items():
