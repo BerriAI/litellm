@@ -3,13 +3,28 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
-import {
-  ClassifierFallback,
-  ClassifierType,
-  ComplexityRouterConfigValue,
-  DEFAULT_DIMENSION_WEIGHTS,
-  DIMENSION_LABELS,
-} from "./ComplexityRouterConfig";
+import { ClassifierFallback, ClassifierType, ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+import { DIMENSION_LABELS } from "./heuristic_scoring_knobs";
+
+// The shipped defaults come from the proxy, so the panel's prefill is pinned to this fixture rather than
+// to a copy of the numbers in the dashboard.
+const SHIPPED = {
+  tier_boundaries: { simple_medium: 0.15, medium_complex: 0.35, complex_reasoning: 0.6 },
+  token_thresholds: { simple: 15, complex: 400 },
+  dimension_weights: {
+    codePresence: 0.3,
+    reasoningMarkers: 0.25,
+    technicalTerms: 0.25,
+    tokenCount: 0.1,
+    simpleIndicators: 0.05,
+    multiStepPatterns: 0.03,
+    questionComplexity: 0.02,
+  },
+};
+
+vi.mock("@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults", () => ({
+  useComplexityScorerDefaults: () => ({ data: SHIPPED }),
+}));
 
 const BASE: ComplexityRouterConfigValue = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o"], COMPLEX: ["o3"], REASONING: ["o3"] },
@@ -137,8 +152,8 @@ describe("ClassificationMethodConfig scorer gating", () => {
   it("renders a row for every scored dimension", async () => {
     await render(BASE);
 
-    for (const key of Object.keys(DEFAULT_DIMENSION_WEIGHTS)) {
-      expect(screen.getByLabelText(DIMENSION_LABELS[key as keyof typeof DIMENSION_LABELS])).toBeInTheDocument();
+    for (const key of Object.keys(SHIPPED.dimension_weights)) {
+      expect(screen.getByLabelText(DIMENSION_LABELS[key])).toBeInTheDocument();
     }
   });
 });

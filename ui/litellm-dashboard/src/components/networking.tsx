@@ -372,6 +372,21 @@ export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]>
   return jsonData;
 };
 
+export interface ComplexityScorerDefaults {
+  tier_boundaries: Record<string, number>;
+  token_thresholds: Record<string, number>;
+  dimension_weights: Record<string, number>;
+}
+
+export const getComplexityScorerDefaults = async (): Promise<ComplexityScorerDefaults> => {
+  /**
+   * Fetch the complexity router's shipped heuristic scorer defaults from the proxy's public endpoint.
+   * The Advanced scoring controls prefill from these rather than from a copy in the dashboard, so a
+   * recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+   */
+  return await apiClient.get(`/public/complexity_router/scorer_defaults`);
+};
+
 export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
   /**
    * Fetch agent type metadata from the proxy's public endpoint.

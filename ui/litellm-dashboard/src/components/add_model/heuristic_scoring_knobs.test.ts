@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_DIMENSION_WEIGHTS, DEFAULT_TIER_BOUNDARIES, heuristicScoringRoleFor } from "./ComplexityRouterConfig";
+import { heuristicScoringRoleFor } from "./ComplexityRouterConfig";
 import {
+  dimensionLabel,
   hydrateDimensionWeights,
   hydrateTierBoundaries,
   hydrateTokenThresholds,
@@ -9,39 +10,45 @@ import {
 } from "./heuristic_scoring_knobs";
 
 describe("hydrating the scorer knobs", () => {
-  // The tri-state rests on this: hydrating an absent knob to the defaults would make an untouched save
-  // write them out and pin the router to today's numbers forever.
+  // The tri-state rests on this: hydrating an absent knob to the shipped defaults would make an untouched
+  // save write them out and pin the router to whatever they were when the modal was opened.
   it.each([[undefined], [null], ["0.15"], [[0.15]]])("hydrates %s to undefined, not to the defaults", (raw) => {
     expect(hydrateTierBoundaries(raw)).toBeUndefined();
     expect(hydrateDimensionWeights(raw)).toBeUndefined();
   });
 
-  it("round-trips explicit values, including negatives and zero", () => {
-    expect(hydrateTierBoundaries({ simple_medium: -1, medium_complex: -0.9, complex_reasoning: 0 })).toEqual({
+  it("keeps a stored dict exactly as stored, including negatives and zero", () => {
+    expect(hydrateTierBoundaries({ simple_medium: -1, medium_complex: 0, complex_reasoning: 0.6 })).toEqual({
       simple_medium: -1,
-      medium_complex: -0.9,
-      complex_reasoning: 0,
+      medium_complex: 0,
+      complex_reasoning: 0.6,
     });
   });
 
-  it("fills only missing keys, matching the backend's own defaulted reads, and drops junk", () => {
-    expect(hydrateTokenThresholds({ complex: 900, simple: "25" })).toEqual({ simple: 15, complex: 900 });
-    expect(hydrateTierBoundaries({ medium_complex: 0.44 })).toEqual({
-      ...DEFAULT_TIER_BOUNDARIES,
-      medium_complex: 0.44,
+  it("leaves a partial dict partial, since the backend fills the rest at scoring time", () => {
+    expect(hydrateTokenThresholds({ complex: 900 })).toEqual({ complex: 900 });
+  });
+
+  it("drops non-numeric and non-finite entries", () => {
+    expect(hydrateTokenThresholds({ simple: "25", complex: Number.NaN, other: 900 })).toEqual({ other: 900 });
+  });
+
+  it("preserves a key it does not recognise rather than deleting an operator's config", () => {
+    // The dimension set is the proxy's, not the dashboard's, so an unknown key may be a newer backend
+    // rather than a typo. It is kept, and simply has no control rendered for it.
+    expect(hydrateDimensionWeights({ codePresence: 0.3, somethingNew: 0.4 })).toEqual({
+      codePresence: 0.3,
+      somethingNew: 0.4,
     });
   });
 
-  it("ignores an unknown key, so a typo cannot reach the payload", () => {
-    // weights.get(name, 0) on the backend silently gives an unknown dimension weight 0.
-    expect(hydrateDimensionWeights({ ...DEFAULT_DIMENSION_WEIGHTS, codePresense: 0.9 })).toEqual(
-      DEFAULT_DIMENSION_WEIGHTS,
-    );
+  it("totals weights and rounds away float drift", () => {
+    expect(weightTotal({ a: 0.1, b: 0.2 })).toBe(0.3);
   });
 
-  it("totals the shipped weights to 1 and rounds away float drift", () => {
-    expect(weightTotal(DEFAULT_DIMENSION_WEIGHTS)).toBe(1);
-    expect(weightTotal({ ...DEFAULT_DIMENSION_WEIGHTS, codePresence: 0.5 })).toBe(1.2);
+  it("falls back to the raw key when a dimension has no label yet", () => {
+    expect(dimensionLabel("codePresence")).toBe("Code presence");
+    expect(dimensionLabel("somethingNew")).toBe("somethingNew");
   });
 });
 

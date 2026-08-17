@@ -3,6 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
+// The classification card states its score ranges from the proxy's shipped defaults rather than a copy in
+// the dashboard, so the tree needs those defaults to render them.
+vi.mock("@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults", () => ({
+  useComplexityScorerDefaults: () => ({
+    data: {
+      tier_boundaries: { simple_medium: 0.15, medium_complex: 0.35, complex_reasoning: 0.6 },
+      token_thresholds: { simple: 15, complex: 400 },
+      dimension_weights: { codePresence: 0.3, tokenCount: 0.1 },
+    },
+  }),
+}));
+
 const mockModelInfo = [
   { model_group: "gpt-4", mode: "chat" },
   { model_group: "gpt-3.5-turbo", mode: "chat" },

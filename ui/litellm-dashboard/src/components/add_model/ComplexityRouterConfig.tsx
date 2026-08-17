@@ -8,26 +8,9 @@ import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
-import {
-  DEFAULT_DIMENSION_WEIGHTS,
-  DEFAULT_TIER_BOUNDARIES,
-  DEFAULT_TOKEN_THRESHOLDS,
-  DIMENSION_KEYS,
-  DIMENSION_LABELS,
-  type DimensionKey,
-  type DimensionWeights,
-  type TierBoundaries,
-  type TokenThresholds,
-} from "./heuristic_scoring_knobs";
+import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
 
-export {
-  DEFAULT_DIMENSION_WEIGHTS,
-  DEFAULT_TIER_BOUNDARIES,
-  DEFAULT_TOKEN_THRESHOLDS,
-  DIMENSION_KEYS,
-  DIMENSION_LABELS,
-};
-export type { DimensionKey, DimensionWeights, TierBoundaries, TokenThresholds };
+export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
 const { Text } = Typography;
 
