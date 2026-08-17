@@ -155,6 +155,55 @@ def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_value
     assert token_data["team_alias"] == "test-team"
 
 
+def test_get_cli_jwt_auth_token_carries_team_grants_not_user_allowlist(
+    valid_sso_user_defined_values,
+):
+    """A team-bound `lite login` session token must snapshot the team's grants.
+
+    Without team_models the /v1/models bail-out (`not key_models and not team_models`)
+    treats the session as unrestricted and lists the whole proxy; without
+    team_model_aliases a team alias never resolves on /chat/completions. The user's
+    personal allowlist must stay out of the key `models` slot, since a team-bound
+    credential is governed by the team grant, not by a per-user list.
+    """
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values,
+        team_id="team-123",
+        team_alias="test-team",
+        team_models=("claude-sonnet-4-5", "gpt-4.1"),
+        team_model_aliases={"team-fast": "gpt-4.1-mini"},
+    )
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["team_id"] == "team-123"
+    assert token_data["team_models"] == ["claude-sonnet-4-5", "gpt-4.1"]
+    assert token_data["team_model_aliases"] == {"team-fast": "gpt-4.1-mini"}
+    assert valid_sso_user_defined_values.models == ["gpt-3.5-turbo"]
+    assert token_data["models"] == []
+
+
+def test_get_cli_jwt_auth_token_keeps_user_allowlist_when_no_team(
+    valid_sso_user_defined_values,
+):
+    """A session token with no team bound still carries the user's own allowlist."""
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data.get("team_id") is None
+    assert token_data["models"] == ["gpt-3.5-turbo"]
+    assert token_data["team_models"] == []
+
+
 def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
     valid_sso_user_defined_values,
 ):

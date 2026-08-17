@@ -182,19 +182,6 @@ vi.mock("@heroicons/react/outline", async () => {
   return { ArrowLeftIcon, TrashIcon, RefreshIcon };
 });
 
-vi.mock("lucide-react", async () => {
-  const React = await import("react");
-  function CopyIcon() {
-    return React.createElement("span");
-  }
-  (CopyIcon as any).displayName = "CopyIcon";
-  function CheckIcon() {
-    return React.createElement("span");
-  }
-  (CheckIcon as any).displayName = "CheckIcon";
-  return { CopyIcon, CheckIcon };
-});
-
 // Heavy children -> async factories & local React
 vi.mock("../organisms/RegenerateKeyModal", () => {
   function RegenerateKeyModal() {
@@ -253,6 +240,15 @@ vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
 // Mock useUISettings hook
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: vi.fn().mockReturnValue({ data: { values: {} }, isLoading: false }),
+}));
+
+// Mock useMCPServers hook (requires QueryClientProvider which is not available in this test)
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
+  useMCPServers: vi.fn().mockReturnValue({ data: [] }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
+  useMCPToolsets: vi.fn().mockReturnValue({ data: [] }),
 }));
 
 // Mock useResetKeySpend hook (requires QueryClientProvider which is not available in this test)

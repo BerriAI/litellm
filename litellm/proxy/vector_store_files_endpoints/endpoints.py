@@ -30,10 +30,12 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 
-def _update_request_data_with_managed_file_id(
+async def _update_request_data_with_managed_file_id(
     data: dict,
     file_id: str,
     request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    managed_files_obj: object | None,
     llm_router: Optional["Router"] = None,
 ) -> tuple[dict, str | None]:
     """
@@ -64,6 +66,16 @@ def _update_request_data_with_managed_file_id(
     from litellm.llms.base_llm.managed_resources.utils import (
         is_base64_encoded_unified_id,
         parse_unified_id,
+    )
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        validate_managed_id_requirement,
+    )
+
+    await validate_managed_id_requirement(
+        resource_id=file_id,
+        resource_kind="file",
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=managed_files_obj,
     )
 
     # First, check if this is a unified managed file ID (base64 encoded)
@@ -509,8 +521,13 @@ async def vector_store_file_create(
     # Handle managed file IDs if present in request body
     original_managed_file_id = None
     if "file_id" in data:
-        data, original_managed_file_id = _update_request_data_with_managed_file_id(
-            data=data, file_id=data["file_id"], request=request, llm_router=llm_router
+        data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+            data=data,
+            file_id=data["file_id"],
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+            llm_router=llm_router,
         )
 
     # Then handle managed vector store IDs
@@ -707,8 +724,13 @@ async def vector_store_file_retrieve(
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -809,8 +831,13 @@ async def vector_store_file_content(
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -911,8 +938,13 @@ async def vector_store_file_update(
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -1013,8 +1045,13 @@ async def vector_store_file_delete(
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs

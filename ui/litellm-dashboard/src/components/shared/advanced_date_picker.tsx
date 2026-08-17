@@ -1,5 +1,6 @@
 import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
-import { Button, DateRangePickerValue, Text } from "@tremor/react";
+import { Button, Text } from "@tremor/react";
+import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 

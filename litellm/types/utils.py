@@ -152,6 +152,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: bool | None
     supports_reasoning: bool | None
     supports_adaptive_thinking: bool | None
+    supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
     supports_none_reasoning_effort: bool | None
@@ -2781,11 +2782,13 @@ RoutingDecisionCause = Literal[
 ]
 
 
-InternalCallOrigin = Literal["autorouter_classifier"]
+InternalCallOrigin = Literal["autorouter_classifier", "shadow_eval_router", "shadow_eval_judge"]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
 
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
+SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
+SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
@@ -3129,6 +3132,7 @@ class StandardAuditLogPayload(TypedDict):
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
     litellm_call_id: str | None  # UUID returned in x-litellm-call-id response header
     call_type: str
     stream: bool | None
@@ -3245,10 +3249,24 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     litellm_disabled_callbacks: list[str] | None
 
 
-class CustomPricingLiteLLMParams(BaseModel):
-    ## CUSTOM PRICING ##
+class MirroredPricingParams(BaseModel):
+    """Pricing overrides that ``Deployment.__init__`` mirrors from ``litellm_params``
+    onto ``model_info``, so both blobs hold the same rate.
+
+    Declared once and inherited by both sides of that mirror, so the two can't drift.
+    """
+
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    input_cost_per_character: float | None = None
+    output_cost_per_character: float | None = None
+    cache_read_input_token_cost: float | None = None
+    cache_creation_input_token_cost: float | None = None
+    tiered_pricing: list[dict[str, Any]] | None = None
+
+
+class CustomPricingLiteLLMParams(MirroredPricingParams):
+    ## CUSTOM PRICING ##
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
@@ -3259,7 +3277,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: float | None = None
     input_cost_per_token_priority: float | None = None
-    cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens: float | None = None
@@ -3268,7 +3285,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_creation_input_token_cost_flex: float | None = None
     cache_creation_input_token_cost_priority: float | None = None
     cache_creation_input_audio_token_cost: float | None = None
-    cache_read_input_token_cost: float | None = None
     cache_read_input_token_cost_flex: float | None = None
     cache_read_input_token_cost_priority: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
@@ -3276,7 +3292,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_read_input_audio_token_cost: float | None = None
-    input_cost_per_character: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
@@ -3298,7 +3313,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token_batches: float | None = None
     output_cost_per_token_flex: float | None = None
     output_cost_per_token_priority: float | None = None
-    output_cost_per_character: float | None = None
     output_cost_per_audio_token: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
@@ -3316,7 +3330,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
     citation_cost_per_token: float | None = None
-    tiered_pricing: list[dict[str, Any]] | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
     input_cost_per_image_token: float | None = None
@@ -3375,6 +3388,8 @@ agentic_loop_internal_litellm_params: Final = [
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
+    "_websearch_interception_emit_native_blocks",
+    "_websearch_interception_converted_stream",
 ]
 
 # Proxy-owned callback credentials, stamped from admin-configured team/key callback
@@ -3383,12 +3398,26 @@ agentic_loop_internal_litellm_params: Final = [
 # the provider.
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 
+# Bedrock managed-batch deployment config, read from litellm_params by the batch and
+# files transformations. Listed for the same reason as the fields above: these sit on
+# a deployment that also serves chat, so leaking them into extra_body makes Bedrock
+# reject every non-batch request to that deployment.
+bedrock_batch_litellm_params: Final = (
+    "aws_batch_role_arn",
+    "s3_bucket_name",
+    "s3_region_name",
+    "s3_output_bucket_name",
+    "bedrock_tags",
+)
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD]
+    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params]
     + [
         "metadata",
         "litellm_metadata",
+        "keepalive_seconds",
+        "allow_client_keepalive_override",
         "litellm_trace_id",
         "litellm_request_debug",
         "guardrails",
@@ -3453,6 +3482,7 @@ all_litellm_params = (
         "caching_groups",
         "ttl",
         "cache",
+        "enable_prompt_caching",
         "no-log",
         "base_model",
         "stream_timeout",
@@ -3740,6 +3770,7 @@ class SearchProviders(str, Enum):
     YOU_COM = "you_com"
     APISERPENT = "apiserpent"
     TINYFISH = "tinyfish"
+    NIMBLE = "nimble"
 
 
 # Create a set of all search provider values for quick lookup

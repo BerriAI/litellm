@@ -7,6 +7,7 @@ environment so the same tests run against localhost or a deployed proxy.
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -75,6 +76,18 @@ POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
 
+# How long a control-plane write (/model/new, /guardrails, /v1/agents) may take to
+# reach EVERY replica. Distinct from POLL_TIMEOUT, which is sized for spend-row
+# flush; this one is sized for the proxy's config reload
+# (`proxy_config_reload_interval_seconds`, 30s by default and 7s on the e2e stack)
+# plus margin.
+#
+# The barriers below wait this out instead of returning on first sight, because a
+# single successful read only proves ONE replica converged: every request opens a
+# fresh connection, so a load-balanced Service routes each one independently and
+# the next call re-rolls. See ProxyClient._await_model_servable.
+PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
+
 EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
 
 # Deliberately modest concurrency. The suite shares its proxy with every other
@@ -137,3 +150,16 @@ def unique_marker() -> str:
     """A short unique token per call/run, so concurrent runs and the shared
     response cache never collide on prompts, tags, or customer ids."""
     return uuid.uuid4().hex[:12]
+
+
+def settle_propagation(written_at: float) -> None:
+    """Block until PROPAGATION_TIMEOUT has elapsed since `written_at`, a
+    `time.monotonic()` stamp taken the moment a control-plane write returned.
+
+    Callers that already polled for the object still need this: the poll proves one
+    replica has it, not all of them. Waiting out the config-reload budget is what
+    makes the object safe to use on whichever replica the next request lands on.
+    """
+    remaining = PROPAGATION_TIMEOUT - (time.monotonic() - written_at)
+    if remaining > 0:
+        time.sleep(remaining)
