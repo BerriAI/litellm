@@ -23,6 +23,7 @@ from litellm.proxy.hooks.tag_rate_limiter import (
     _extract_key_hash,
     _extract_team_id,
     _inflight_key,
+    _partition_key,
     _pending_concurrency_holder,
     _PROXY_TagRateLimiter,
 )
@@ -2021,6 +2022,96 @@ async def test_request_limit_scope_by_key_hash_gives_independent_counters_per_ke
             messages=None,
             request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyB"}},
         )
+
+
+def test_partition_key_distinguishes_entries_that_differ_only_by_scope_by_key_hash():
+    """
+    scope_by_key_hash is part of the partition-key signature: two entries
+    identical in every other field but differing only on this flag are
+    different rate limits (different bucket keys per _hash_tag) and must
+    never be routed to the same cache partition.
+    """
+    unscoped = TagRateLimitEntry(
+        name="per_minute", tag_id="end_user_id", limit=5, period_seconds=60, max_in_memory_cache_size=100
+    )
+    scoped = TagRateLimitEntry(
+        name="per_minute",
+        tag_id="end_user_id",
+        limit=5,
+        period_seconds=60,
+        scope_by_key_hash=True,
+        max_in_memory_cache_size=100,
+    )
+    assert _partition_key(unscoped) != _partition_key(scoped)
+
+
+@pytest.mark.asyncio
+async def test_scope_by_key_hash_composes_with_max_in_memory_cache_size_and_key_ttl_seconds_overrides(time_controller):
+    """
+    scope_by_key_hash must keep working when combined with the two other
+    per-entry overrides, going through the real _build_limits_index path
+    (not a hand-built _ConfiguredLimit) -- this is exactly the path the
+    signature-reconstruction bug silently broke key_ttl_seconds and
+    max_in_memory_cache_size on, so it's worth covering in combination
+    rather than trusting the fields compose correctly in isolation.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [
+                            {
+                                "name": "per_minute",
+                                "tag_id": "end_user_id",
+                                "limit": 1,
+                                "period_seconds": 60,
+                                "scope_by_key_hash": True,
+                                "max_in_memory_cache_size": 5,
+                                "key_ttl_seconds": 120,
+                            }
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    configured = limiter._index.get(router).resolve("grp", team_id=None)
+    assert configured[0].entry.max_in_memory_cache_size == 5
+    assert configured[0].entry.key_ttl_seconds == 120
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
+    )
+    assert result == healthy
+
+    # keyA is now at its per-key limit of 1.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"}},
+        )
+
+    # keyB, identical tag value, still gets its own independent bucket on
+    # the same (overridden) cache partition.
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyB"}},
+    )
+    assert result == healthy
 
 
 @pytest.mark.asyncio
