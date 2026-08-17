@@ -50,15 +50,20 @@ const routerMatchedOrBeatPct = (
     ? 100 - results.overall_shadow_win_rate_pct
     : results.overall_shadow_win_rate_pct + results.overall_tie_rate_pct;
 
+export const shadowedKeyLabel = (job: ShadowEvalJob): string =>
+  job.key_alias || job.key_name || `${job.api_key_id.slice(0, 10)}…`;
+
 const jobHeadline = (job: ShadowEvalJob): React.ReactNode =>
   job.direction === "reverse" ? (
     <>
       Comparing <span className="font-mono text-xs">{job.router_name}</span> to{" "}
-      <span className="font-mono text-xs">{job.baseline_model}</span> on {job.shadow_percentage}% of its traffic
+      <span className="font-mono text-xs">{job.baseline_model}</span> on {job.shadow_percentage}% of{" "}
+      <span className="font-mono text-xs">{shadowedKeyLabel(job)}</span> traffic
     </>
   ) : (
     <>
-      Shadowing {job.shadow_percentage}% via <span className="font-mono text-xs">{job.router_name}</span>
+      Shadowing {job.shadow_percentage}% of <span className="font-mono text-xs">{shadowedKeyLabel(job)}</span> traffic
+      via <span className="font-mono text-xs">{job.router_name}</span>
     </>
   );
 
