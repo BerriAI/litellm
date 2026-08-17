@@ -22,6 +22,7 @@ from litellm._logging import (
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     CallTypes,
+    CredentialItem,
     Delta,
     LlmProviders,
     ModelResponseStream,
@@ -43,6 +44,7 @@ from litellm.utils import (
     get_prompt_cache_min_tokens,
     is_cached_message,
     is_prompt_caching_valid_prompt,
+    load_credentials_from_list,
 )
 
 # Adds the parent directory to the system path
@@ -4841,3 +4843,45 @@ def test_completion_does_not_leak_rust_flag_into_provider_request_body():
     create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
     assert "rust" not in create_kwargs
     assert "rust" not in (create_kwargs.get("extra_body") or {})
+
+
+def _relay_credential():
+    return CredentialItem(
+        credential_name="relay",
+        credential_info={"provider": "openai"},
+        credential_values={
+            "api_base": "https://relay.test/v1",
+            "api_key": "sk-from-credential",
+        },
+    )
+
+
+@pytest.mark.parametrize("unset_value", ["", "   ", None])
+def test_load_credentials_from_list_fills_unset_deployment_params(unset_value):
+    """A blank api_base on the deployment must not shadow the credential's endpoint.
+
+    The dashboard's model edit form writes blank inputs into litellm_params verbatim, so a
+    stored "" counted as configured. The credential's api_base was then never applied and the
+    empty value fell through to the provider default, which silently misrouted every request.
+    """
+    litellm.credential_list = [_relay_credential()]
+    kwargs = {"litellm_credential_name": "relay", "api_base": unset_value}
+
+    load_credentials_from_list(kwargs)
+
+    assert kwargs["api_base"] == "https://relay.test/v1"
+    assert kwargs["api_key"] == "sk-from-credential"
+
+
+def test_load_credentials_from_list_keeps_configured_deployment_params():
+    """A credential only fills in what the deployment left unset; a real value still wins."""
+    litellm.credential_list = [_relay_credential()]
+    kwargs = {
+        "litellm_credential_name": "relay",
+        "api_base": "https://deployment.test/v1",
+    }
+
+    load_credentials_from_list(kwargs)
+
+    assert kwargs["api_base"] == "https://deployment.test/v1"
+    assert kwargs["api_key"] == "sk-from-credential"
