@@ -437,6 +437,28 @@ class TestGetRouterDeploymentModelInfo:
         finally:
             litellm.model_cost.pop(deployment_id, None)
 
+    def test_keeps_declared_rates_when_no_model_is_resolvable(self, logging_obj) -> None:
+        """With no model to look a published entry up by, the declared rates stand alone."""
+        deployment_id = "deploy-no-model-at-all-1"
+        litellm.model_cost[deployment_id] = {
+            "id": deployment_id,
+            "input_cost_per_token": 9e-06,
+            "output_cost_per_token": 2e-05,
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+        }
+        logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}}
+        logging_obj.model_call_details["model"] = None
+        logging_obj.model = None
+        try:
+            assert logging_obj.get_deployment_model_for_cost() is None
+            info = logging_obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["input_cost_per_token"] == 9e-06
+            assert info["output_cost_per_token"] == 2e-05
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
     def test_returns_none_when_the_deployment_id_resolves_no_provider(self, logging_obj) -> None:
         """A registration whose id get_model_info cannot resolve yields no pricing."""
         deployment_id = "deploy-unresolvable-provider-1"
