@@ -186,6 +186,20 @@ def get_image_type(image_data: bytes) -> str | None:
     return None
 
 
+def _decode_base64_image(data: str) -> "bytes | None":
+    """Decode base64 image data, accepting both data-URL and bare base64 forms.
+
+    Returns None (and logs at debug) for input that does not decode, so callers
+    can fall back to default dimensions instead of failing the call.
+    """
+    encoded = data.partition(",")[2] if data.startswith("data:") else data
+    try:
+        return base64.b64decode(encoded)
+    except ValueError:
+        verbose_logger.debug("Failed to decode base64 image data; using default dimensions")
+        return None
+
+
 def get_image_dimensions(
     data: str,
 ) -> tuple[int, int]:
@@ -214,14 +228,9 @@ def get_image_dimensions(
         except Exception:
             pass
     if img_data is None and not data.startswith(("http://", "https://")):
-        # Not a URL — assume base64. Accept both data-URL form
-        # ('data:<mime>;base64,<payload>') and bare base64; on a decode
-        # error, leave img_data unset so the default dimensions are used.
-        encoded = data.partition(",")[2] if data.startswith("data:") else data
-        try:
-            img_data = base64.b64decode(encoded)
-        except ValueError:
-            verbose_logger.debug("Failed to decode base64 image data; using default dimensions")
+        # Not a URL or fetch failed — assume base64, keeping None on decode
+        # errors so the default dimensions are used below.
+        img_data = _decode_base64_image(data)
 
     # A URL that could not be fetched (or base64 that could not be decoded)
     # leaves img_data unset — fall through to the default dimensions below.
