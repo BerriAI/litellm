@@ -12,10 +12,9 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { BadgeLink } from "@/components/shared/BadgeLink";
-import type { ColumnsType } from "antd/es/table";
 import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
-import MemberTable from "../common_components/MemberTable";
+import MemberTable, { type MemberTableColumn } from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
@@ -75,7 +74,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         user_id: values.user_id,
         role: values.role,
       };
-      const response = await organizationMemberAddCall(accessToken, organizationId, member);
+      await organizationMemberAddCall(accessToken, organizationId, member);
 
       NotificationsManager.success("Organization member added successfully");
       setIsAddMemberModalVisible(false);
@@ -96,7 +95,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         role: values.role,
       };
 
-      const response = await organizationMemberUpdateCall(accessToken, organizationId, member);
+      await organizationMemberUpdateCall(accessToken, organizationId, member);
       NotificationsManager.success("Organization member updated successfully");
       setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
@@ -128,7 +127,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     return <div className="p-4">Organization not found</div>;
   }
 
-  const orgExtraColumns: ColumnsType<Member> = [
+  const orgExtraColumns: MemberTableColumn[] = [
     {
       title: "Spend (USD)",
       key: "spend",

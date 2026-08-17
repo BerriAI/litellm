@@ -1,13 +1,13 @@
-import { Form, Select, Switch } from "antd";
 import React from "react";
 
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { Field, FieldDescription, FieldLabel } from "@/components/shared/form/field";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { Switch } from "@/components/ui/switch";
 import { CredentialAccess } from "../Settings/LoggingAndAlerts/LoggingCallbacks/types";
 
 interface AccessControlFieldsProps {
-  // value/onChange are optional so the component can be driven either directly
-  // (the Add modal) or injected by an antd Form.Item (the Edit modal).
   value?: CredentialAccess;
   onChange?: (next: CredentialAccess) => void;
 }
@@ -18,6 +18,7 @@ interface AccessControlFieldsProps {
 const AccessControlFields: React.FC<AccessControlFieldsProps> = ({ value = {}, onChange = () => {} }) => {
   const { data: teams } = useTeams();
   const { data: orgs } = useOrganizations();
+  const globalSwitchId = React.useId();
   const isGlobal = value.global === true;
 
   const teamOptions = (teams ?? []).map((t) => ({ value: t.team_id, label: t.team_alias || t.team_id }));
@@ -28,35 +29,33 @@ const AccessControlFields: React.FC<AccessControlFieldsProps> = ({ value = {}, o
 
   return (
     <>
-      <Form.Item label="Global" tooltip="Routing scope: traces from every team and org export to this destination.">
-        <Switch checked={isGlobal} onChange={(global) => onChange({ ...value, global })} />
-      </Form.Item>
-      <Form.Item label="Teams" tooltip="Routing scope: only these teams' traffic exports to this destination.">
-        <Select
-          mode="multiple"
-          allowClear
-          disabled={isGlobal}
-          placeholder="Select teams"
-          value={value.teams ?? []}
-          onChange={(teamIds) => onChange({ ...value, teams: teamIds })}
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor={globalSwitchId}>Global</FieldLabel>
+        <Switch id={globalSwitchId} checked={isGlobal} onCheckedChange={(global) => onChange({ ...value, global })} />
+        <FieldDescription>Traces from every team and org export to this destination</FieldDescription>
+      </Field>
+      <Field>
+        <FieldLabel>Teams</FieldLabel>
+        <MultiSelect
           options={teamOptions}
-          optionFilterProp="label"
-          style={{ width: "100%" }}
-        />
-      </Form.Item>
-      <Form.Item label="Organizations" tooltip="Routing scope: only these orgs' traffic exports to this destination.">
-        <Select
-          mode="multiple"
-          allowClear
+          value={value.teams ?? []}
+          onValueChange={(teamIds) => onChange({ ...value, teams: teamIds })}
+          placeholder="Select teams"
           disabled={isGlobal}
-          placeholder="Select organizations"
-          value={value.orgs ?? []}
-          onChange={(orgIds) => onChange({ ...value, orgs: orgIds })}
-          options={orgOptions}
-          optionFilterProp="label"
-          style={{ width: "100%" }}
         />
-      </Form.Item>
+        <FieldDescription>Only these teams&apos; traffic exports to this destination</FieldDescription>
+      </Field>
+      <Field>
+        <FieldLabel>Organizations</FieldLabel>
+        <MultiSelect
+          options={orgOptions}
+          value={value.orgs ?? []}
+          onValueChange={(orgIds) => onChange({ ...value, orgs: orgIds })}
+          placeholder="Select organizations"
+          disabled={isGlobal}
+        />
+        <FieldDescription>Only these orgs&apos; traffic exports to this destination</FieldDescription>
+      </Field>
     </>
   );
 };

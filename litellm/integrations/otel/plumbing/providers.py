@@ -1,7 +1,7 @@
 """Provider / exporter factory + the Baggage span processor."""
 
 from collections.abc import Callable, Iterable, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from opentelemetry import _logs, baggage, metrics
 from opentelemetry._events import EventLogger
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.otel.model.destination import OtelDestination
 
-_SPAN_KIND_BY_ROLE_KIND: dict[LiteLLMSpanKind, SpanKind] = {
+_SPAN_KIND_BY_ROLE_KIND: Final[dict[LiteLLMSpanKind, SpanKind]] = {
     LiteLLMSpanKind.SERVER: SpanKind.SERVER,
     LiteLLMSpanKind.CLIENT: SpanKind.CLIENT,
     LiteLLMSpanKind.INTERNAL: SpanKind.INTERNAL,
@@ -62,7 +62,7 @@ def to_otel_span_kind(kind: LiteLLMSpanKind) -> SpanKind:
 # first export (off the event loop) instead of blocking at config-build time.
 # Keeping the registry here lets this module stay vendor-agnostic: the factory
 # lives with the integration that needs it.
-_EXPORTER_FACTORIES: dict[str, Callable[[ExporterSpec], SpanExporter]] = {}
+_EXPORTER_FACTORIES: Final[dict[str, Callable[[ExporterSpec], SpanExporter]]] = {}
 
 
 def register_exporter_factory(kind: str, factory: Callable[[ExporterSpec], SpanExporter]) -> None:
@@ -112,7 +112,7 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
         return endpoint
     endpoint = endpoint.rstrip("/")
     # Splunk Observability uses ``/v2/trace/otlp``; never rewrite it.
-    if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint or endpoint.endswith("/api/trace"):
+    if endpoint.endswith(("/v1/traces", "/api/trace")) or "/v2/trace/otlp" in endpoint:
         return endpoint
     for other_signal in ("/v1/logs", "/v1/metrics"):
         if endpoint.endswith(other_signal):
@@ -120,7 +120,7 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
     return endpoint + "/v1/traces"
 
 
-_GRPC_BACKENDS = frozenset({"arize"})
+_GRPC_BACKENDS: Final = frozenset({"arize"})
 
 
 def default_otlp_kind_for_backend(callback_name: "str | None") -> str:
@@ -154,8 +154,8 @@ def parse_headers(raw: str | None) -> dict[str, str]:
 
 
 def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
-    kind = (spec.kind or "console").lower()
-    factory = _EXPORTER_FACTORIES.get(kind)
+    kind: Final = (spec.kind or "console").lower()
+    factory: Final = _EXPORTER_FACTORIES.get(kind)
     if factory is not None:
         return factory(spec)
     if kind in ("in_memory", "inmemory", "memory"):
@@ -238,7 +238,7 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
         PeriodicExportingMetricReader,
     )
 
-    kind = (config.exporter or "console").lower()
+    kind: Final = (config.exporter or "console").lower()
     if kind in ("otlp_http", "http", "http/protobuf", "http/json"):
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
             OTLPMetricExporter as HTTPMetricExporter,
@@ -296,7 +296,7 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
     ``in_memory`` buffers for tests. Like GenAI metrics, events ride the
     single-destination shorthand fields, not the multi-exporter ``exporters`` list.
     """
-    kind = (config.exporter or "console").lower()
+    kind: Final = (config.exporter or "console").lower()
     if kind in ("in_memory", "inmemory", "memory"):
         return InMemoryLogExporter()
     if kind in ("otlp_http", "http", "http/protobuf", "http/json"):
@@ -335,9 +335,9 @@ def build_logger_provider(
     get a Simple processor (synchronous export, which tests rely on), everything
     else a Batch processor — the same split as span processing.
     """
-    exporter = log_exporter if log_exporter is not None else build_log_exporter(config)
-    provider = SDKLoggerProvider(resource=build_resource(config))
-    use_simple = isinstance(exporter, (ConsoleLogExporter, InMemoryLogExporter))
+    exporter: Final = log_exporter if log_exporter is not None else build_log_exporter(config)
+    provider: Final = SDKLoggerProvider(resource=build_resource(config))
+    use_simple: Final = isinstance(exporter, (ConsoleLogExporter, InMemoryLogExporter))
     provider.add_log_record_processor(
         SimpleLogRecordProcessor(exporter) if use_simple else BatchLogRecordProcessor(exporter)
     )
@@ -360,13 +360,13 @@ def resolve_logger_provider(
     if logger_provider is not None:
         return logger_provider
 
-    existing: LoggerProvider = _logs.get_logger_provider()
+    existing: Final[LoggerProvider] = _logs.get_logger_provider()
     if isinstance(existing, SDKLoggerProvider):
         return existing
     if isinstance(existing, NoOpLoggerProvider):
         return None
 
-    provider = build_logger_provider(config)
+    provider: Final = build_logger_provider(config)
     _logs.set_logger_provider(provider)
     return provider
 
@@ -385,7 +385,7 @@ def build_meter_provider(
     ``InMemoryMetricReader``); otherwise the reader is selected from the config's
     exporter kind via :func:`build_metric_reader`.
     """
-    reader = metric_reader if metric_reader is not None else build_metric_reader(config)
+    reader: Final = metric_reader if metric_reader is not None else build_metric_reader(config)
     return SDKMeterProvider(metric_readers=[reader], resource=build_resource(config))
 
 
@@ -407,11 +407,11 @@ def resolve_meter_provider(
     if meter_provider is not None:
         return meter_provider
 
-    existing = metrics.get_meter_provider()
+    existing: Final = metrics.get_meter_provider()
     if isinstance(existing, (SDKMeterProvider, NoOpMeterProvider)):
         return existing
 
-    provider = build_meter_provider(config)
+    provider: Final = build_meter_provider(config)
     metrics.set_meter_provider(provider)
     return provider
 
@@ -421,7 +421,7 @@ def get_meter(provider: MeterProvider, name: str = "litellm") -> "Meter":
 
 
 def build_resource(config: OpenTelemetryV2Config) -> Resource:
-    attributes: dict[str, str] = {"service.name": config.service_name}
+    attributes: Final[dict[str, str]] = {"service.name": config.service_name}
     if config.deployment_environment:
         attributes["deployment.environment"] = config.deployment_environment
     attributes.update(config.resource_attributes)
@@ -441,7 +441,7 @@ def build_tracer_provider(
     ``attach_tenant_fan_out``/``tenant_fan_out_owner`` add a ``TenantFanOutSpanProcessor``
     forwarding proxy-internal spans to the request's destinations.
     """
-    provider = TracerProvider(resource=build_resource(config))
+    provider: Final = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
         baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
     provider.add_span_processor(baggage_processor)
@@ -481,7 +481,7 @@ def in_memory_provider(
     config: OpenTelemetryV2Config | None = None,
 ) -> tuple[TracerProvider, InMemorySpanExporter]:
     """Convenience for tests: a provider exporting to an in-memory buffer."""
-    cfg = config or OpenTelemetryV2Config(exporter="in_memory")
-    exporter = InMemorySpanExporter()
-    provider = build_tracer_provider(cfg, exporter=exporter)
+    cfg: Final = config or OpenTelemetryV2Config(exporter="in_memory")
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = build_tracer_provider(cfg, exporter=exporter)
     return provider, exporter

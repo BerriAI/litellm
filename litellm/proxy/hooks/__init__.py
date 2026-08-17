@@ -1,5 +1,5 @@
 import os
-from typing import Literal
+from typing import Final, Literal
 
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
@@ -16,7 +16,7 @@ from .sensitive_data_routing import _PROXY_SensitiveDataRoutingHandler
 # Defined before the enterprise import below so that any module re-imported
 # transitively through `enterprise.enterprise_hooks` can resolve `PROXY_HOOKS`
 # and `get_proxy_hook` from this partially-initialized module without circling.
-PROXY_HOOKS = {
+PROXY_HOOKS: Final = {
     "max_budget_limiter": _PROXY_MaxBudgetLimiter,
     "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler_v3,
     "cache_control_check": _PROXY_CacheControlCheck,

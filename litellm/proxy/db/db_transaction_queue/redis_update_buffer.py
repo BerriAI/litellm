@@ -6,7 +6,10 @@ This is to prevent deadlocks and improve reliability
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, cast
+
+from redis.exceptions import RedisError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -98,11 +101,11 @@ class RedisUpdateBuffer:
         if transactions is None or len(transactions) == 0:
             return
 
-        list_of_transactions = [safe_dumps(transactions)]
+        list_of_transactions: Final = [safe_dumps(transactions)]
         if self.redis_cache is None:
             return
         try:
-            current_redis_buffer_size = await self.redis_cache.async_rpush(
+            current_redis_buffer_size: Final = await self.redis_cache.async_rpush(
                 key=redis_key,
                 values=list_of_transactions,
             )
@@ -181,19 +184,19 @@ class RedisUpdateBuffer:
 
         # Get all transactions
         db_spend_update_transactions = await spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
-        daily_spend_update_transactions = (
+        daily_spend_update_transactions: Final = (
             await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
-        daily_team_spend_update_transactions = (
+        daily_team_spend_update_transactions: Final = (
             await daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
-        daily_org_spend_update_transactions = (
+        daily_org_spend_update_transactions: Final = (
             await daily_org_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
-        daily_end_user_spend_update_transactions = (
+        daily_end_user_spend_update_transactions: Final = (
             await daily_end_user_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
-        daily_agent_spend_update_transactions = (
+        daily_agent_spend_update_transactions: Final = (
             await daily_agent_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
 
@@ -201,7 +204,7 @@ class RedisUpdateBuffer:
         verbose_proxy_logger.debug("ALL DAILY SPEND UPDATE TRANSACTIONS: %s", daily_spend_update_transactions)
 
         # Build a list of rpush operations, skipping empty/None transaction sets
-        _queue_configs: list[tuple[Any, str, ServiceTypes]] = [
+        _queue_configs: Final[list[tuple[Any, str, ServiceTypes]]] = [
             (
                 db_spend_update_transactions,
                 REDIS_UPDATE_BUFFER_KEY,
@@ -234,8 +237,8 @@ class RedisUpdateBuffer:
             ),
         ]
 
-        rpush_list: list[RedisPipelineRpushOperation] = []
-        service_types: list[ServiceTypes] = []
+        rpush_list: Final[list[RedisPipelineRpushOperation]] = []
+        service_types: Final[list[ServiceTypes]] = []
         for transactions, redis_key, service_type in _queue_configs:
             if transactions is None or len(transactions) == 0:
                 continue
@@ -251,7 +254,7 @@ class RedisUpdateBuffer:
             return
 
         try:
-            result_lengths = await self.redis_cache.async_rpush_pipeline(
+            result_lengths: Final = await self.redis_cache.async_rpush_pipeline(
                 rpush_list=rpush_list,
             )
         except Exception as e:
@@ -312,7 +315,7 @@ class RedisUpdateBuffer:
         because the source queues were already drained before the rpush.
         """
         if db_spend_update_transactions is not None:
-            entity_entries: list[tuple[Litellm_EntityType, dict[str, float] | None]] = [
+            entity_entries: Final[list[tuple[Litellm_EntityType, dict[str, float] | None]]] = [
                 (
                     Litellm_EntityType.USER,
                     db_spend_update_transactions.get("user_list_transactions"),
@@ -358,7 +361,7 @@ class RedisUpdateBuffer:
                         )
                     )
 
-        daily_pairs: list[tuple[dict[str, BaseDailySpendTransaction] | None, DailySpendUpdateQueue]] = [
+        daily_pairs: Final[list[tuple[dict[str, BaseDailySpendTransaction] | None, DailySpendUpdateQueue]]] = [
             (daily_spend_update_transactions, daily_spend_update_queue),
             (daily_team_spend_update_transactions, daily_team_spend_update_queue),
             (daily_org_spend_update_transactions, daily_org_spend_update_queue),
@@ -371,6 +374,59 @@ class RedisUpdateBuffer:
         for daily_txns, daily_queue in daily_pairs:
             if daily_txns:
                 await daily_queue.update_queue.put(daily_txns)
+
+    async def restore_transactions_to_redis(
+        self,
+        db_spend_update_transactions: DBSpendUpdateTransactions | None = None,
+        daily_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_team_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_org_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_end_user_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_agent_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_tag_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+    ) -> None:
+        """
+        Re-push transactions that were popped from Redis but not committed to the DB.
+
+        The leader drains the buffers with a destructive ``lpop`` before committing to
+        the database. When a commit fails after its retries are exhausted, the popped
+        transactions must be pushed back so a later scheduler tick can retry them;
+        otherwise the aggregated spend is lost permanently. The re-pushed payloads use
+        the same JSON encoding as the store path, so the next drain parses them normally.
+        """
+        if self.redis_cache is None:
+            return
+
+        restore_configs: Final = (
+            (db_spend_update_transactions, REDIS_UPDATE_BUFFER_KEY),
+            (daily_spend_update_transactions, REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY),
+            (daily_team_spend_update_transactions, REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY),
+            (daily_org_spend_update_transactions, REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY),
+            (daily_end_user_spend_update_transactions, REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY),
+            (daily_agent_spend_update_transactions, REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY),
+            (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY),
+        )
+
+        rpush_list: Final = tuple(
+            RedisPipelineRpushOperation(key=redis_key, values=(safe_dumps(transactions),))
+            for transactions, redis_key in restore_configs
+            if transactions
+        )
+        if len(rpush_list) == 0:
+            return
+
+        try:
+            await self.redis_cache.async_rpush_pipeline(rpush_list=rpush_list)
+            verbose_proxy_logger.info(
+                "Spend tracking - restored %d uncommitted transaction set(s) to Redis for retry on next tick.",
+                len(rpush_list),
+            )
+        except RedisError as e:
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to restore uncommitted transactions to Redis. "
+                "These spend updates are lost. Error: %s",
+                str(e),
+            )
 
     @staticmethod
     def _number_of_transactions_to_store_in_redis(
@@ -433,7 +489,7 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self.redis_cache.async_lpop(
             key=REDIS_UPDATE_BUFFER_KEY,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
@@ -448,14 +504,14 @@ class RedisUpdateBuffer:
         )
 
         # Parse the list of transactions from JSON strings
-        parsed_transactions = self._parse_list_of_transactions(list_of_transactions)
+        parsed_transactions: Final = self._parse_list_of_transactions(list_of_transactions)
 
         # If there are no transactions, return None
         if len(parsed_transactions) == 0:
             return None
 
         # Combine all transactions into a single transaction
-        combined_transaction = self._combine_list_of_transactions(parsed_transactions)
+        combined_transaction: Final = self._combine_list_of_transactions(parsed_transactions)
 
         return combined_transaction
 
@@ -483,7 +539,7 @@ class RedisUpdateBuffer:
         if self.redis_cache is None:
             return None, None, None, None, None, None
 
-        lpop_list: list[RedisPipelineLpopOperation] = [
+        lpop_list: Final[list[RedisPipelineLpopOperation]] = [
             RedisPipelineLpopOperation(key=REDIS_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
             RedisPipelineLpopOperation(
                 key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
@@ -507,7 +563,7 @@ class RedisUpdateBuffer:
             ),
         ]
 
-        raw_results = await self.redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
+        raw_results: Final = await self.redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
 
         # Pad with None if pipeline returned fewer results than expected
         while len(raw_results) < 6:
@@ -516,12 +572,12 @@ class RedisUpdateBuffer:
         # Slot 0: DBSpendUpdateTransactions
         db_spend: DBSpendUpdateTransactions | None = None
         if raw_results[0] is not None:
-            parsed = self._parse_list_of_transactions(raw_results[0])
+            parsed: Final = self._parse_list_of_transactions(raw_results[0])
             if len(parsed) > 0:
                 db_spend = self._combine_list_of_transactions(parsed)
 
         # Slots 1-5: daily spend categories
-        daily_results: list[dict[str, Any] | None] = []
+        daily_results: Final[list[dict[str, Any] | None]] = []
         for slot in range(1, 6):
             slot_result = raw_results[slot]
             if slot_result is None:
@@ -547,7 +603,7 @@ class RedisUpdateBuffer:
         """
         Flush in-memory daily tag spend updates and append them to Redis.
         """
-        daily_tag_spend_update_transactions = (
+        daily_tag_spend_update_transactions: Final = (
             await daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
         await self._store_transactions_in_redis(
@@ -564,7 +620,7 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self.redis_cache.async_lpop(
             key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
@@ -586,7 +642,7 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self.redis_cache.async_lpop(
             key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
@@ -608,7 +664,7 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self.redis_cache.async_lpop(
             key=REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
@@ -630,7 +686,7 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self.redis_cache.async_lpop(
             key=REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
@@ -652,7 +708,7 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self.redis_cache.async_lpop(
             key=REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
@@ -674,7 +730,7 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self.redis_cache.async_lpop(
             key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
@@ -708,7 +764,7 @@ class RedisUpdateBuffer:
         Combines the list of transactions into a single DBSpendUpdateTransactions object
         """
         # Initialize a new combined transaction object with empty dictionaries
-        combined_transaction = DBSpendUpdateTransactions(
+        combined_transaction: Final = DBSpendUpdateTransactions(
             user_list_transactions={},
             end_user_list_transactions={},
             key_list_transactions={},
@@ -720,7 +776,7 @@ class RedisUpdateBuffer:
         )
 
         # Define the transaction fields to process
-        transaction_fields = [
+        transaction_fields: Final = [
             "user_list_transactions",
             "end_user_list_transactions",
             "key_list_transactions",
@@ -736,10 +792,8 @@ class RedisUpdateBuffer:
             # Process each field type
             for field in transaction_fields:
                 if transaction.get(field):
-                    for entity_id, amount in transaction[field].items():  # type: ignore
-                        combined_transaction[field][entity_id] = (  # type: ignore
-                            combined_transaction[field].get(entity_id, 0) + amount  # type: ignore
-                        )
+                    for entity_id, amount in transaction[field].items():
+                        combined_transaction[field][entity_id] = combined_transaction[field].get(entity_id, 0) + amount
 
         return combined_transaction
 

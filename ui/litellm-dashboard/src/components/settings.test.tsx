@@ -1,9 +1,9 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Form } from "antd";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { FormProvider, useForm } from "react-hook-form";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall, setCallbacksCall } from "./networking";
 import Settings, { backendCallbackLogoSrc, CallbackSelector } from "./settings";
 
 type SettingsTestProps = {
@@ -139,70 +139,142 @@ describe("Settings", () => {
     });
   });
 
-  it("should display edit modal with fields when edit is clicked", async () => {
-    // Datadog is a plain config callback that renders a row with the legacy
-    // Test/Edit/Delete actions. Config-owned OTEL callbacks (arize, langfuse_otel,
-    // etc.) also render as their own rows now; see the regression test below.
-    const mockCallback = {
-      name: "datadog",
-      variables: {
-        DD_API_KEY: "test-api-key",
-        DD_SITE: "us5.datadoghq.com",
-      },
-    };
-
-    const mockCallbackConfig = {
-      id: "datadog",
-      displayName: "Datadog",
-      dynamic_params: {
-        DD_API_KEY: {
-          type: "password",
-          ui_name: "API Key",
-          required: true,
-        },
-        DD_SITE: {
-          type: "text",
-          ui_name: "Site",
-          required: true,
-        },
-      },
-    };
-
+  const openLangfuseEditModal = async () => {
     mockGetCallbacksCall.mockResolvedValue({
-      callbacks: [mockCallback],
+      callbacks: [
+        {
+          name: "langfuse",
+          variables: {
+            LANGFUSE_PUBLIC_KEY: "test-public-key",
+            LANGFUSE_SECRET_KEY: "test-secret-key",
+            LANGFUSE_HOST: "https://test.langfuse.com",
+            SLACK_WEBHOOK_URL: null,
+            OPENMETER_API_KEY: null,
+          },
+        },
+      ],
       available_callbacks: {
-        datadog: {
-          litellm_callback_name: "datadog",
-          litellm_callback_params: ["DD_API_KEY", "DD_SITE"],
-          ui_callback_name: "Datadog",
+        langfuse: {
+          litellm_callback_name: "langfuse",
+          litellm_callback_params: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+          ui_callback_name: "Langfuse",
         },
       },
       alerts: [],
     });
 
-    mockGetCallbackConfigsCall.mockResolvedValue([mockCallbackConfig]);
+    mockGetCallbackConfigsCall.mockResolvedValue([
+      {
+        id: "langfuse",
+        displayName: "Langfuse",
+        dynamic_params: {
+          LANGFUSE_PUBLIC_KEY: { type: "text", ui_name: "Public Key", required: true },
+          LANGFUSE_SECRET_KEY: { type: "password", ui_name: "Secret Key", required: true },
+          LANGFUSE_HOST: { type: "text", ui_name: "Host", required: false },
+        },
+      },
+    ]);
 
     const user = userEvent.setup();
-    const { getByText } = renderSettings(defaultProps);
+    renderSettings(defaultProps);
 
     await waitFor(() => {
-      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
 
     await waitFor(() => {
-      expect(getByText("Datadog")).toBeInTheDocument();
+      expect(screen.getByText("Langfuse")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId("callback-actions-datadog-success"));
+    await user.click(screen.getByTestId("callback-actions-langfuse-success"));
     await user.click(await screen.findByTestId("callback-action-edit"));
 
     await waitFor(() => {
-      expect(getByText("Edit Callback Settings")).toBeInTheDocument();
+      expect(screen.getByText("Edit Callback Settings")).toBeInTheDocument();
+    });
+
+    return user;
+  };
+
+  it("should display edit modal with fields when edit is clicked", async () => {
+    await openLangfuseEditModal();
+
+    await waitFor(() => {
+      expect(screen.getByText("Public Key")).toBeInTheDocument();
+      expect(screen.getByText("Secret Key")).toBeInTheDocument();
+      expect(screen.getByText("Host")).toBeInTheDocument();
     });
 
     await waitFor(() => {
-      expect(getByText("API Key")).toBeInTheDocument();
-      expect(getByText("Site")).toBeInTheDocument();
+      expect(screen.getByLabelText("Public Key")).toHaveValue("test-public-key");
+    });
+    expect(screen.getByLabelText("Secret Key")).toHaveValue("test-secret-key");
+    expect(screen.getByLabelText("Host")).toHaveValue("https://test.langfuse.com");
+
+    const danglingLabels = [...document.querySelectorAll("label[for]")].filter(
+      (label) => document.getElementById(label.getAttribute("for") as string) === null,
+    );
+    expect(danglingLabels).toEqual([]);
+  });
+
+  it("should post the edited callback variables when the edit modal is saved", async () => {
+    const user = await openLangfuseEditModal();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Host")).toHaveValue("https://test.langfuse.com");
+    });
+
+    await user.clear(screen.getByLabelText("Host"));
+    await user.type(screen.getByLabelText("Host"), "https://edited.langfuse.com");
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith("token", {
+        environment_variables: {
+          callback: "langfuse",
+          LANGFUSE_PUBLIC_KEY: "test-public-key",
+          LANGFUSE_SECRET_KEY: "test-secret-key",
+          LANGFUSE_HOST: "https://edited.langfuse.com",
+        },
+        litellm_settings: { success_callback: ["langfuse"] },
+      });
+    });
+  });
+
+  it("should block the edit submit when a required field is emptied", async () => {
+    const user = await openLangfuseEditModal();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Public Key")).toHaveValue("test-public-key");
+    });
+
+    await user.clear(screen.getByLabelText("Public Key"));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    expect(await screen.findByText("Please enter the public key")).toBeInTheDocument();
+    expect(vi.mocked(setCallbacksCall)).not.toHaveBeenCalled();
+  });
+
+  it("should send the typed webhook url for an alert type when the alerting tab is saved", async () => {
+    const user = userEvent.setup();
+    renderSettings(defaultProps);
+
+    await user.click(await screen.findByRole("tab", { name: "Alerting Types" }));
+
+    const webhookInput = document.querySelector('input[name="llm_exceptions"]') as HTMLInputElement;
+    expect(webhookInput).not.toBeNull();
+    await user.type(webhookInput, "https://hooks.example.com/llm-exceptions");
+
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith("token", {
+        general_settings: expect.objectContaining({
+          alert_to_webhook_url: expect.objectContaining({
+            llm_exceptions: "https://hooks.example.com/llm-exceptions",
+          }),
+        }),
+      });
     });
   });
 
@@ -323,6 +395,19 @@ describe("backendCallbackLogoSrc", () => {
   });
 });
 
+const CallbackSelectorHarness = ({
+  callbackConfigs,
+}: {
+  callbackConfigs: { id: string; displayName: string; logo?: string }[];
+}) => {
+  const form = useForm<Record<string, string>>();
+  return (
+    <FormProvider {...form}>
+      <CallbackSelector callbackConfigs={callbackConfigs} selectedCallback={null} onCallbackChange={vi.fn()} />
+    </FormProvider>
+  );
+};
+
 describe("CallbackSelector logos", () => {
   it("resolves backend logos per entry: bare filename, external url, and missing logo", async () => {
     const callbackConfigs = [
@@ -331,13 +416,9 @@ describe("CallbackSelector logos", () => {
       { id: "nologo", displayName: "NoLogo" },
     ];
 
-    render(
-      <Form>
-        <CallbackSelector callbackConfigs={callbackConfigs} selectedCallback={null} onCallbackChange={vi.fn()} />
-      </Form>,
-    );
+    render(<CallbackSelectorHarness callbackConfigs={callbackConfigs} />);
 
-    fireEvent.mouseDown(screen.getByRole("combobox"));
+    await userEvent.click(screen.getByRole("combobox"));
 
     expect(await screen.findByAltText("Langfuse logo")).toHaveAttribute("src", "/ui/assets/logos/langfuse.png");
     expect(screen.getByAltText("Hosted logo")).toHaveAttribute("src", "https://logos.example.com/hosted.png");
@@ -375,13 +456,14 @@ describe("Add Callback dropdown", () => {
     });
     vi.mocked(getCallbackConfigsCall).mockResolvedValue([{ id: "arize", displayName: "Arize", dynamic_params: {} }]);
 
+    const user = userEvent.setup();
     const { getByText } = renderSettings(defaultProps);
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
 
-    fireEvent.click(getByText("Add Callback"));
-    fireEvent.mouseDown(await screen.findByRole("combobox"));
+    await user.click(getByText("Add Callback"));
+    await user.click(await screen.findByRole("combobox"));
 
     expect(await screen.findByText("Arize")).toBeInTheDocument();
     expect(screen.getByText("Arize (scoped destination)")).toBeInTheDocument();

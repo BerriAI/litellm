@@ -4,7 +4,7 @@ Translates from OpenAI's `/v1/audio/transcriptions` to IBM WatsonX's `/ml/v1/aud
 WatsonX follows the OpenAI spec for audio transcription.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from httpx import Response
 
@@ -50,7 +50,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
 
         Removes Content-Type header so httpx can set multipart/form-data automatically.
         """
-        result = IBMWatsonXMixin.validate_environment(
+        result: Final = IBMWatsonXMixin.validate_environment(
             self,
             headers=headers,
             model=model,
@@ -94,13 +94,13 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         - other optional params
         """
         # Use common utility to process the audio file
-        processed_audio = process_audio_file(audio_file)
-        project_id = optional_params.get("project_id") or optional_params.get("watsonx_project")
-        space_id = optional_params.get("space_id")
+        processed_audio: Final = process_audio_file(audio_file)
+        project_id: Final = optional_params.get("project_id") or optional_params.get("watsonx_project")
+        space_id: Final = optional_params.get("space_id")
         # api_params = _get_api_params(params=optional_params, model=model)
 
         # Initialize form data with required fields
-        form_data: WatsonXAudioTranscriptionRequestBody = {"model": model}
+        form_data: Final[WatsonXAudioTranscriptionRequestBody] = {"model": model}
 
         # Only add project_id or space_id if they were explicitly provided by the user
         if project_id:
@@ -109,13 +109,13 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
             form_data["space_id"] = space_id
 
         # Add supported OpenAI params to form data
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for key, value in optional_params.items():
             if key in supported_params and value is not None:
-                form_data[key] = value  # type: ignore
+                form_data[key] = value
 
         # Prepare files dict with the audio file
-        files = {
+        files: Final = {
             "file": (
                 processed_audio.filename,
                 processed_audio.file_content,
@@ -124,7 +124,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         }
 
         # Convert TypedDict to regular dict for AudioTranscriptionRequestData
-        form_data_dict: dict[str, Any] = dict(form_data)
+        form_data_dict: Final[dict[str, Any]] = dict(form_data)
 
         return AudioTranscriptionRequestData(data=form_data_dict, files=files)
 
@@ -152,7 +152,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         url = f"{url}/ml/v1/audio/transcriptions"
 
         # Add version parameter (only version in query string, not project_id)
-        api_version = optional_params.get("api_version", None) or litellm.WATSONX_DEFAULT_API_VERSION
+        api_version: Final = optional_params.get("api_version", None) or litellm.WATSONX_DEFAULT_API_VERSION
         url = f"{url}?version={api_version}"
 
         return url
@@ -168,17 +168,17 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         removed before creating the TranscriptionResponse object.
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception as e:
             raise ValueError(f"Error transforming response to json: {e}\nResponse: {raw_response.text}")
 
         # Extract only valid fields for TranscriptionResponse.__init__()
         # TranscriptionResponse only accepts 'text' and 'usage' in __init__()
-        text = raw_response_json.get("text")
-        usage = raw_response_json.get("usage")
+        text: Final = raw_response_json.get("text")
+        usage: Final = raw_response_json.get("usage")
 
         # Create response with only valid fields
-        response_kwargs = {}
+        response_kwargs: Final = {}
         if text is not None:
             response_kwargs["text"] = text
         if usage is not None:
@@ -190,7 +190,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
                 raw_response_json,
             )
 
-        response = TranscriptionResponse(**response_kwargs)
+        response: Final = TranscriptionResponse(**response_kwargs)
 
         # Add other fields using dictionary-style assignment (like duration, task, etc.)
         # Skip fields that TranscriptionResponse doesn't accept in __init__()

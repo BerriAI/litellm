@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Final, Literal
 
 import httpx
 
@@ -27,9 +27,9 @@ from .transformation import (
     transform_openai_messages_to_gemini_context_caching,
 )
 
-local_cache_obj = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
+local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
-MAX_PAGINATION_PAGES = 100  # Reasonable upper bound for pagination
+MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -62,7 +62,7 @@ class ContextCachingEndpoints(VertexBase):
         """
         auth_header: str | None
         if custom_llm_provider == "gemini":
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            auth_header = {"x-goog-api-key": gemini_api_key}
             endpoint = "cachedContents"
             url = f"https://generativelanguage.googleapis.com/v1beta/{endpoint}"
         elif custom_llm_provider == "vertex_ai":
@@ -331,8 +331,8 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
 
-        tools = optional_params.pop("tools", None)
-        tool_choice = optional_params.pop("tool_choice", None)
+        tools: Final = optional_params.pop("tools", None)
+        tool_choice: Final = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -345,7 +345,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
         )
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
         }
         if isinstance(token, dict):
@@ -356,20 +356,20 @@ class ContextCachingEndpoints(VertexBase):
             headers.update(extra_headers)
 
         if client is None or not isinstance(client, HTTPHandler):
-            _params = {}
+            _params: Final = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = HTTPHandler(**_params)  # type: ignore
+            client = HTTPHandler(**_params)
         else:
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(
+        generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        google_cache_name = self.check_cache(
+        google_cache_name: Final = self.check_cache(
             cache_key=generated_cache_key,
             client=client,
             headers=headers,
@@ -386,7 +386,7 @@ class ContextCachingEndpoints(VertexBase):
             return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
-        cached_content_request_body = transform_openai_messages_to_gemini_context_caching(
+        cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
             model=model,
             messages=cached_messages,
             cache_key=generated_cache_key,
@@ -411,20 +411,20 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         try:
-            response = client.post(
+            response: Final = client.post(
                 url=url,
                 headers=headers,
-                json=cached_content_request_body,  # type: ignore
+                json=cached_content_request_body,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        raw_response_cached = response.json()
-        cached_content_response_obj = VertexAICachedContentResponseObject(
+        raw_response_cached: Final = response.json()
+        cached_content_response_obj: Final = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
         return (
@@ -490,8 +490,8 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
 
-        tools = optional_params.pop("tools", None)
-        tool_choice = optional_params.pop("tool_choice", None)
+        tools: Final = optional_params.pop("tools", None)
+        tool_choice: Final = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -504,7 +504,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
         )
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
         }
         if isinstance(token, dict):
@@ -520,10 +520,10 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(
+        generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        google_cache_name = await self.async_check_cache(
+        google_cache_name: Final = await self.async_check_cache(
             cache_key=generated_cache_key,
             client=client,
             headers=headers,
@@ -541,7 +541,7 @@ class ContextCachingEndpoints(VertexBase):
             return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
-        cached_content_request_body = transform_openai_messages_to_gemini_context_caching(
+        cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
             model=model,
             messages=cached_messages,
             cache_key=generated_cache_key,
@@ -566,20 +566,20 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         try:
-            response = await client.post(
+            response: Final = await client.post(
                 url=url,
                 headers=headers,
-                json=cached_content_request_body,  # type: ignore
+                json=cached_content_request_body,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        raw_response_cached = response.json()
-        cached_content_response_obj = VertexAICachedContentResponseObject(
+        raw_response_cached: Final = response.json()
+        cached_content_response_obj: Final = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
         return (

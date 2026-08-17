@@ -7,7 +7,7 @@ Handles guardrail execution for passthrough endpoints with:
 - Automatic inheritance from org/team/key levels when enabled
 """
 
-from typing import Any, Union
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -19,10 +19,10 @@ from litellm.proxy.pass_through_endpoints.jsonpath_extractor import JsonPathExtr
 
 # Type for raw guardrails config input (before normalization)
 # Can be a list of names or a dict with settings
-PassThroughGuardrailsConfigInput = Union[
-    list[str],  # Simple list: ["guard-1", "guard-2"]
-    PassThroughGuardrailsConfig,  # Dict: {"guard-1": {"request_fields": [...]}}
-]
+PassThroughGuardrailsConfigInput = (
+    list[str]  # Simple list: ["guard-1", "guard-2"]
+    | PassThroughGuardrailsConfig  # Dict: {"guard-1": {"request_fields": [...]}}
+)
 
 
 class PassthroughGuardrailHandler:
@@ -78,7 +78,7 @@ class PassthroughGuardrailHandler:
         Passthrough endpoints are opt-in only - guardrails only run when
         the guardrails config is set with at least one guardrail.
         """
-        normalized = PassthroughGuardrailHandler.normalize_config(guardrails_config)
+        normalized: Final = PassthroughGuardrailHandler.normalize_config(guardrails_config)
         if normalized is None:
             return False
         return len(normalized) > 0
@@ -88,7 +88,7 @@ class PassthroughGuardrailHandler:
         guardrails_config: PassThroughGuardrailsConfigInput | None,
     ) -> list[str]:
         """Get the list of guardrail names configured for a passthrough endpoint."""
-        normalized = PassthroughGuardrailHandler.normalize_config(guardrails_config)
+        normalized: Final = PassthroughGuardrailHandler.normalize_config(guardrails_config)
         if normalized is None:
             return []
         return list(normalized.keys())
@@ -99,11 +99,11 @@ class PassthroughGuardrailHandler:
         guardrail_name: str,
     ) -> PassThroughGuardrailSettings | None:
         """Get settings for a specific guardrail from the passthrough config."""
-        normalized = PassthroughGuardrailHandler.normalize_config(guardrails_config)
+        normalized: Final = PassthroughGuardrailHandler.normalize_config(guardrails_config)
         if normalized is None:
             return None
 
-        settings = normalized.get(guardrail_name)
+        settings: Final = normalized.get(guardrail_name)
         if settings is None:
             return None
 
@@ -182,7 +182,7 @@ class PassthroughGuardrailHandler:
             verbose_proxy_logger.debug("Passthrough guardrails not enabled, skipping guardrail execution")
             return request_data
 
-        guardrail_names = PassthroughGuardrailHandler.get_guardrail_names(guardrails_config)
+        guardrail_names: Final = PassthroughGuardrailHandler.get_guardrail_names(guardrails_config)
         verbose_proxy_logger.debug("Executing passthrough guardrails: %s", guardrail_names)
 
         # Add to request metadata so guardrails know which to run
@@ -232,7 +232,7 @@ class PassthroughGuardrailHandler:
         )
 
         # Normalize config to dict format (handles both list and dict)
-        normalized_config = PassthroughGuardrailHandler.normalize_config(passthrough_guardrails_config)
+        normalized_config: Final = PassthroughGuardrailHandler.normalize_config(passthrough_guardrails_config)
 
         if normalized_config is None:
             verbose_proxy_logger.debug("Passthrough guardrails not configured, skipping guardrail collection")
@@ -243,15 +243,15 @@ class PassthroughGuardrailHandler:
             return None
 
         # Passthrough is enabled - collect guardrails
-        guardrails_to_run: dict[str, bool] = {}
+        guardrails_to_run: Final[dict[str, bool]] = {}
 
         # Add passthrough-specific guardrails
-        for guardrail_name in normalized_config.keys():
+        for guardrail_name in normalized_config:
             guardrails_to_run[guardrail_name] = True
             verbose_proxy_logger.debug("Added passthrough-specific guardrail: %s", guardrail_name)
 
         # Add org/team/key level guardrails using shared helper
-        temp_data: dict[str, Any] = {"metadata": {}}
+        temp_data: Final[dict[str, Any]] = {"metadata": {}}
         _add_guardrails_from_key_or_team_metadata(
             key_metadata=user_api_key_dict.metadata,
             team_metadata=user_api_key_dict.team_metadata,
@@ -260,7 +260,7 @@ class PassthroughGuardrailHandler:
         )
 
         # Merge inherited guardrails into guardrails_to_run
-        inherited_guardrails = temp_data["metadata"].get("guardrails", [])
+        inherited_guardrails: Final = temp_data["metadata"].get("guardrails", [])
         for guardrail_name in inherited_guardrails:
             if guardrail_name not in guardrails_to_run:
                 guardrails_to_run[guardrail_name] = True
@@ -297,11 +297,11 @@ class PassthroughGuardrailHandler:
             get_passthrough_guardrails_config,
         )
 
-        passthrough_config = get_passthrough_guardrails_config()
+        passthrough_config: Final = get_passthrough_guardrails_config()
         if passthrough_config is None:
             return None
 
-        settings = PassthroughGuardrailHandler.get_settings(passthrough_config, guardrail_name)
+        settings: Final = PassthroughGuardrailHandler.get_settings(passthrough_config, guardrail_name)
         if settings is None:
             return None
 

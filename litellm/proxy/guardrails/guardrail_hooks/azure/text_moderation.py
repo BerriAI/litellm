@@ -3,7 +3,7 @@
 Azure Text Moderation Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, Literal, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 from fastapi import HTTPException
 
@@ -90,7 +90,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         self.severity_threshold = int(severity_threshold) if severity_threshold else None
         self.severity_threshold_by_category = severity_threshold_by_category
 
-        verbose_proxy_logger.info(f"Initialized Azure Text Moderation Guardrail: {guardrail_name}")
+        verbose_proxy_logger.info("Initialized Azure Text Moderation Guardrail: %s", guardrail_name)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -116,14 +116,14 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
         from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
 
-        chunks = self.split_text_by_words(text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
+        chunks: Final = self.split_text_by_words(text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: AzureTextModerationGuardrailResponse | None = None
 
         for chunk in chunks:
             request_body = AzureTextModerationGuardrailRequestBody(
                 text=chunk,
-                **self.optional_params_request_body,  # type: ignore[misc]
+                **self.optional_params_request_body,
             )
             response_json = await self._post_to_content_safety("text:analyze", cast(dict, request_body))
 
@@ -216,14 +216,14 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             "Azure Text Moderation: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        new_messages: list[AllMessageValues] | None = data.get("messages")
+        new_messages: Final[list[AllMessageValues] | None] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning("Azure Text Moderation: not running guardrail. No messages in data")
             return data
-        user_prompt = self.get_user_prompt(new_messages)
+        user_prompt: Final = self.get_user_prompt(new_messages)
 
         if user_prompt:
-            verbose_proxy_logger.info(f"Azure Text Moderation: User prompt: {user_prompt}")
+            verbose_proxy_logger.info("Azure Text Moderation: User prompt: %s", user_prompt)
             await self.async_make_request(
                 text=user_prompt,
             )
@@ -261,7 +261,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         except HTTPException as e:
             import json
 
-            error_returned = json.dumps({"error": e.detail})
+            error_returned: Final = json.dumps({"error": e.detail})
             return f"data: {error_returned}\n\n"
 
 
@@ -269,7 +269,7 @@ def _message_content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        text_parts = [
+        text_parts: Final = [
             item.get("text") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str)
         ]
         return "\n".join(part for part in text_parts if part)

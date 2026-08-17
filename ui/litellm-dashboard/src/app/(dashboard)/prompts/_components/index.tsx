@@ -7,7 +7,7 @@ import PromptInfoView from "./prompt_info";
 import AddPromptForm from "./add_prompt_form";
 import PromptEditorView from "./prompt_editor_view";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { isProxyAdminRole } from "@/utils/roles";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -47,7 +47,6 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
 
-  const isAdmin = userRole ? isAdminRole(userRole) : false;
   // Admin Viewer follows the read-parity rule: see prompts, no writes.
   const canModify = userRole ? isProxyAdminRole(userRole) : false;
 

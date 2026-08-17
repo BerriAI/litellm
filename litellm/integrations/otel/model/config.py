@@ -2,7 +2,7 @@
 
 from enum import Enum
 from functools import lru_cache
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 from pydantic import (
     AliasChoices,
@@ -23,7 +23,7 @@ from litellm.integrations.otel.model.baggage import (
 )
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
-OTEL_V2_ENV = "LITELLM_OTEL_V2"
+OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
 
 
 class CaptureMessageContent(str):
@@ -71,7 +71,7 @@ class _OTelV2Flag(BaseSettings):
         """
         if not isinstance(value, str):
             return value
-        stripped = value.strip()
+        stripped: Final = value.strip()
         if not stripped:
             return False
         try:
@@ -289,7 +289,7 @@ class OpenTelemetryV2Config(BaseSettings):
         # span (including prompt and completion content) to stdout synchronously on the
         # request path. An explicitly chosen exporter (even ``console``), a non-console
         # kind, or an endpoint all still fold.
-        console_by_default = self.exporter == "console" and "exporter" not in self.model_fields_set
+        console_by_default: Final = self.exporter == "console" and "exporter" not in self.model_fields_set
         if not self.exporters and (self.endpoint or not console_by_default):
             self.exporters = [
                 ExporterSpec(

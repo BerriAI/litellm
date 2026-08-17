@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
@@ -21,7 +21,7 @@ from opentelemetry.trace.propagation.tracecontext import (
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
 
-_PROPAGATOR = TraceContextTextMapPropagator()
+_PROPAGATOR: Final = TraceContextTextMapPropagator()
 
 # The request's root span — the FastAPI-owned SERVER span — captured ONCE when the
 # proxy first resolves it, so request-level spans (the LLM call, guardrails) can
@@ -38,9 +38,9 @@ _PROPAGATOR = TraceContextTextMapPropagator()
 # and is inherited by ``asyncio.create_task`` children — i.e. the async logging
 # callbacks that close the span. It is never reset: the contextvar dies with the
 # request task, so there is nothing to leak.
-_request_root_span: "ContextVar[Span | None]" = ContextVar("litellm_otel_request_root_span", default=None)
+_request_root_span: Final["ContextVar[Span | None]"] = ContextVar("litellm_otel_request_root_span", default=None)
 
-_request_destinations: 'ContextVar[tuple["OtelDestination", ...]]' = ContextVar(
+_request_destinations: Final['ContextVar[tuple["OtelDestination", ...]]'] = ContextVar(
     "litellm_otel_request_destinations", default=()
 )
 
@@ -68,7 +68,7 @@ def set_request_root_span(span: Span) -> None:
 
 def request_root_span() -> "Span | None":
     """The anchored request root span, or ``None`` outside a proxy request."""
-    span = _request_root_span.get()
+    span: Final = _request_root_span.get()
     return span if is_recordable_span(span) else None
 
 
@@ -77,7 +77,7 @@ def request_root_span() -> "Span | None":
 # sets it per message so the MCP span can parent to the client's span rather than
 # to the transport. A ``ContextVar`` because, like the root-span anchor, it must
 # ride the request task and be readable by the inline success-logging callback.
-_mcp_message_trace_carrier: "ContextVar[Mapping[str, str] | None]" = ContextVar(
+_mcp_message_trace_carrier: Final["ContextVar[Mapping[str, str] | None]"] = ContextVar(
     "litellm_otel_mcp_message_trace_carrier", default=None
 )
 
@@ -109,7 +109,7 @@ def reset_mcp_message_trace_carrier(token: "Token[Mapping[str, str] | None]") ->
 # all. The gateway instead resolves the current message's transport span on the
 # request task and hands it over the same way it hands over per-request auth, and
 # the handler publishes it here for the span emitter and the failure hook.
-_mcp_message_transport_span: "ContextVar[Span | None]" = ContextVar(
+_mcp_message_transport_span: Final["ContextVar[Span | None]"] = ContextVar(
     "litellm_otel_mcp_message_transport_span", default=None
 )
 
@@ -133,7 +133,7 @@ def set_mcp_message_transport_span(span: object) -> "Token[Span | None]":
     Returns the reset token; the caller must reset it once the message is handled
     so the transport never leaks to the next message on the same session task.
     """
-    transport = span if isinstance(span, Span) and is_recordable_span(span) else None
+    transport: Final = span if isinstance(span, Span) and is_recordable_span(span) else None
     if transport is not None and transport.is_recording():
         set_request_root_span(transport)
     return _mcp_message_transport_span.set(transport)
@@ -154,7 +154,7 @@ def mcp_message_transport_span() -> "Span | None":
     written, so it is recording for the life of the call; a notification POST can
     answer first, and this returns ``None`` for it rather than writing into the void.
     """
-    span = _mcp_message_transport_span.get()
+    span: Final = _mcp_message_transport_span.get()
     if span is None or not span.is_recording():
         return None
     return span
@@ -170,10 +170,10 @@ def _mcp_transport_span_context() -> "SpanContext | None":
     stay correct against a transport that has already finished, so this does not
     require the span to still be recording.
     """
-    published = _mcp_message_transport_span.get()
+    published: Final = _mcp_message_transport_span.get()
     if published is not None:
         return published.get_span_context()
-    span = request_root_span()
+    span: Final = request_root_span()
     return span.get_span_context() if span is not None else None
 
 
@@ -211,7 +211,7 @@ def resolve_parent_context(threaded: Span | None = None) -> Context:
     """
     ctx = get_current()
     if is_recordable_span(threaded) and not is_recordable_span(get_current_span(ctx)):
-        ctx = context_from_span(threaded, context=ctx)  # type: ignore[arg-type]
+        ctx = context_from_span(threaded, context=ctx)
     return ctx
 
 
@@ -228,7 +228,7 @@ def resolve_request_span_context() -> Context:
     to nest under the active phase span, e.g. an auth DB lookup under ``auth``),
     this never returns the active span when an anchor exists.
     """
-    root = request_root_span()
+    root: Final = request_root_span()
     if root is not None:
         return context_from_span(root)
     return get_current()
@@ -267,9 +267,9 @@ def resolve_mcp_span_context(
     for extraction is explicitly empty so an absent or malformed ``traceparent`` can
     never fall through to the ambient (stale session) span.
     """
-    source = carrier if carrier is not None else _mcp_message_trace_carrier.get()
-    parent = _PROPAGATOR.extract(dict(source or {}), context=Context())
-    transport = _mcp_transport_span_context()
+    source: Final = carrier if carrier is not None else _mcp_message_trace_carrier.get()
+    parent: Final = _PROPAGATOR.extract(dict(source or {}), context=Context())
+    transport: Final = _mcp_transport_span_context()
     if is_recordable_span(get_current_span(parent)):
         return parent, (Link(transport),) if transport is not None else ()
     if transport is not None:
@@ -282,7 +282,7 @@ def is_recordable_span(obj: object) -> bool:
     if not isinstance(obj, Span):
         return False
     try:
-        ctx = obj.get_span_context()
+        ctx: Final = obj.get_span_context()
     except Exception:
         return False
     return ctx is not None and ctx.is_valid
@@ -292,5 +292,5 @@ def extract_traceparent(headers: Mapping[str, str]) -> Context | None:
     """Extract a remote parent context from incoming HTTP headers, if present."""
     if not any(key.lower() == "traceparent" for key in headers):
         return None
-    carrier = {str(key).lower(): value for key, value in headers.items()}
+    carrier: Final = {str(key).lower(): value for key, value in headers.items()}
     return _PROPAGATOR.extract(carrier)

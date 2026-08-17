@@ -1,5 +1,7 @@
 """Arize-Phoenix preset."""
 
+from typing import Final
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -28,11 +30,11 @@ def phoenix_preset(
     config_overrides: OpenTelemetryV2Config | None = None,
     allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
-    cfg = _V1Phoenix.get_arize_phoenix_config()
-    headers = cfg.otlp_auth_headers if hasattr(cfg, "otlp_auth_headers") else None
-    project_name = _PhoenixSettings().project_name
-    base = config_overrides or OpenTelemetryV2Config()
-    global_exporter = (
+    cfg: Final = _V1Phoenix.get_arize_phoenix_config()
+    headers: Final = cfg.otlp_auth_headers if hasattr(cfg, "otlp_auth_headers") else None
+    project_name: Final = _PhoenixSettings().project_name
+    base: Final = config_overrides or OpenTelemetryV2Config()
+    global_exporter: Final = (
         ExporterSpec(
             kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
             endpoint=cfg.endpoint,

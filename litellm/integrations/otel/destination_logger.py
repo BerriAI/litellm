@@ -13,7 +13,7 @@ owning logger, and including it here would export the same call twice.
 from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from opentelemetry.trace import Span
 
@@ -34,11 +34,11 @@ if TYPE_CHECKING:
 
 def _vocabulary_config(backend: str) -> OpenTelemetryV2Config:
     """The backend's span vocabulary with no exporter of its own."""
-    preset_fn = PRESET_BY_CALLBACK.get(backend)
+    preset_fn: Final = PRESET_BY_CALLBACK.get(backend)
     if preset_fn is None:
         return OpenTelemetryV2Config()
     try:
-        config = preset_fn(allow_missing_credentials=True)
+        config: Final = preset_fn(allow_missing_credentials=True)
     except Exception:  # noqa: BLE001  # an unbuildable preset still has a usable default vocabulary
         return OpenTelemetryV2Config()
     return config.model_copy(update={"exporters": ()})
@@ -89,7 +89,7 @@ class _DestinationOnlyOtel(OpenTelemetryV2):
         Emitting a second one here would deliver the same discovery call twice; returning
         ``True`` still stops the caller from closing it as an LLM call.
         """
-        raw_payload = kwargs.get("standard_logging_object")
+        raw_payload: Final = kwargs.get("standard_logging_object")
         return isinstance(raw_payload, Mapping) and is_mcp_list_tools(raw_payload)
 
     def export_to_destinations(
@@ -114,15 +114,15 @@ class _DestinationOnlyOtel(OpenTelemetryV2):
 class AdminDestinationLogger(CustomLogger):
     """Delivers each request's gen-AI span to the destinations its identity resolved."""
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401  # forwarded verbatim to CustomLogger
         super().__init__(**kwargs)
         self._emitters: dict[str, _DestinationOnlyOtel] = {}  # mutable-ok: bounded per-backend emitter cache
 
     def _emitter_for(self, backend: str) -> _DestinationOnlyOtel:
-        existing = self._emitters.get(backend)
+        existing: Final = self._emitters.get(backend)
         if existing is not None:
             return existing
-        emitter = _DestinationOnlyOtel(config=_vocabulary_config(backend), callback_name=backend)
+        emitter: Final = _DestinationOnlyOtel(config=_vocabulary_config(backend), callback_name=backend)
         self._emitters[backend] = emitter
         return emitter
 
@@ -132,7 +132,7 @@ class AdminDestinationLogger(CustomLogger):
         start_time: "datetime | float | None",
         end_time: "datetime | float | None",
     ) -> None:
-        owned = otel_v2_owned_backends()
+        owned: Final = otel_v2_owned_backends()
         for backend in sorted({d.callback_name for d in request_destinations() if d.callback_name} - owned):
             try:
                 self._emitter_for(backend).export_to_destinations(kwargs, start_time, end_time)
@@ -142,7 +142,7 @@ class AdminDestinationLogger(CustomLogger):
     async def async_log_success_event(
         self,
         kwargs: "Mapping[str, Any]",
-        response_obj: Any,
+        response_obj: object,
         start_time: "datetime | float | None",
         end_time: "datetime | float | None",
     ) -> None:
@@ -151,7 +151,7 @@ class AdminDestinationLogger(CustomLogger):
     async def async_log_failure_event(
         self,
         kwargs: "Mapping[str, Any]",
-        response_obj: Any,
+        response_obj: object,
         start_time: "datetime | float | None",
         end_time: "datetime | float | None",
     ) -> None:
@@ -165,7 +165,7 @@ def admin_destination_logger() -> AdminDestinationLogger:
 
 def register_admin_destination_logger() -> None:
     """Put the destination sink on the proxy's async callback lists, once."""
-    sink = admin_destination_logger()
-    for bucket in (litellm._async_success_callback, litellm._async_failure_callback):
+    sink: Final = admin_destination_logger()
+    for bucket in (litellm._async_success_callback, litellm._async_failure_callback):  # pyright: ignore[reportPrivateUsage]  # the proxy's own callback lists
         if not any(callback is sink for callback in bucket):
             bucket.append(sink)

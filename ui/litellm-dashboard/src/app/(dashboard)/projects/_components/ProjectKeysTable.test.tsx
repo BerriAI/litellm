@@ -8,6 +8,12 @@ vi.mock("@/components/common_components/DefaultProxyAdminTag", () => ({
   default: ({ userId }: { userId: string }) => <span data-testid="owner-tag">{userId}</span>,
 }));
 
+const push = vi.fn();
+vi.mock("next/navigation", async () => ({
+  ...(await vi.importActual("next/navigation")),
+  useRouter: () => ({ push }),
+}));
+
 const defaultProps = {
   totalCount: 0,
   isLoading: false,
@@ -98,6 +104,40 @@ describe("ProjectKeysTable", () => {
       <ProjectKeysTable {...defaultProps} keys={[makeKey({ key_alias: null as any, user_id: "owner-1" })]} />,
     );
     expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("should link the key name to that key's detail on the Virtual Keys page", () => {
+    renderWithProviders(
+      <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-abc123", key_alias: "My API Key" })]} />,
+    );
+    expect(screen.getByRole("link", { name: "My API Key" })).toHaveAttribute("href", "/ui/api-keys?key=tok-abc123");
+  });
+
+  it("should navigate to the key detail without a full page load when the key name is clicked", async () => {
+    const user = userEvent.setup();
+    push.mockClear();
+    renderWithProviders(
+      <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-abc123", key_alias: "My API Key" })]} />,
+    );
+    await user.click(screen.getByRole("link", { name: "My API Key" }));
+    expect(push).toHaveBeenCalledWith("/ui/api-keys?key=tok-abc123");
+  });
+
+  it("should still link a key that has no alias", () => {
+    renderWithProviders(
+      <ProjectKeysTable
+        {...defaultProps}
+        keys={[makeKey({ token: "tok-no-alias", key_alias: "", user_id: "owner-1" })]}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "—" })).toHaveAttribute("href", "/ui/api-keys?key=tok-no-alias");
+  });
+
+  it("should give each row a link to its own key", () => {
+    const keys = [makeKey({ token: "tok-1", key_alias: "Key One" }), makeKey({ token: "tok-2", key_alias: "Key Two" })];
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={keys} />);
+    expect(screen.getByRole("link", { name: "Key One" })).toHaveAttribute("href", "/ui/api-keys?key=tok-1");
+    expect(screen.getByRole("link", { name: "Key Two" })).toHaveAttribute("href", "/ui/api-keys?key=tok-2");
   });
 
   it("should display the owner using user.user_email when available", () => {

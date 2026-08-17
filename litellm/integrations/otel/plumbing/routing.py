@@ -6,7 +6,7 @@
 
 import threading
 from collections import OrderedDict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import StandardCallbackDynamicParams
 
 # Exporter kinds that ignore headers — never rewritten with dynamic credentials.
-_NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
+_NON_OTLP_KINDS: Final = ("console", "in_memory", "inmemory", "memory")
 
 # Cap on distinct credential-scoped providers held at once. ``dynamic_params``
 # can be populated from request metadata, so an unbounded cache lets a caller
@@ -35,7 +35,7 @@ _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
 # thread) per unique credential set and exhaust the proxy. The LRU bound keeps
 # the working set of active tenants resident while flushing and shutting down
 # evicted providers so their threads are reclaimed.
-_MAX_CACHED_PROVIDERS = 256
+_MAX_CACHED_PROVIDERS: Final = 256
 
 
 def _shutdown_in_background(evicted: "TracerProvider | SpanProcessor") -> None:
@@ -96,7 +96,7 @@ class TenantTracerCache:
         """
         if not destinations:
             return (default,)
-        groups = tuple(
+        groups: Final = tuple(
             self._tracer_for_group(resource_key, group, include_base=False)
             for resource_key, group in self._group_by_resource(destinations)
         )
@@ -112,10 +112,10 @@ class TenantTracerCache:
         fan-out: with this backend's team/key OTLP credentials the global export rides a
         credential-scoped provider and the destination groups omit the base exporters; else plain fan-out.
         """
-        headers = dynamic_otlp_headers(self._callback_name, dynamic_params)
+        headers: Final = dynamic_otlp_headers(self._callback_name, dynamic_params)
         if not headers:
             return self.tracers_for(default, destinations)
-        dynamic = self._credential_scoped_tracer(headers, dynamic_params)
+        dynamic: Final = self._credential_scoped_tracer(headers, dynamic_params)
         if not destinations:
             return (dynamic,)
         return (dynamic, *self.tracers_for(default, destinations, include_base_on_first=False))
@@ -135,20 +135,20 @@ class TenantTracerCache:
         """
         from litellm.integrations.otel.presets import dynamic_otlp_destination
 
-        destination = dynamic_otlp_destination(self._callback_name, dynamic_params)
-        cache_key: tuple[object, ...] = (
+        destination: Final = dynamic_otlp_destination(self._callback_name, dynamic_params)
+        cache_key: Final[tuple[object, ...]] = (
             "dynamic",
             tuple(sorted(headers.items())),
             destination.endpoint if destination is not None else None,
             destination.protocol if destination is not None else None,
         )
-        provider = self._providers.get(cache_key)
-        if provider is not None:
+        cached: Final = self._providers.get(cache_key)
+        if cached is not None:
             self._providers.move_to_end(cache_key)
-        else:
-            provider = build_tracer_provider(self._config_with_headers(headers, dynamic_params))
-            self._providers[cache_key] = provider
-            self._evict_if_full()
+            return get_tracer(cached, self._tracer_name)
+        provider: Final = build_tracer_provider(self._config_with_headers(headers, dynamic_params))
+        self._providers[cache_key] = provider
+        self._evict_if_full()
         return get_tracer(provider, self._tracer_name)
 
     def _config_with_headers(
@@ -171,8 +171,8 @@ class TenantTracerCache:
         same builder an equivalent admin destination would use so the team reaches the
         account its ``callback_vars`` name.
         """
-        header_str = ",".join(f"{key}={value}" for key, value in headers.items())
-        owns_exporter = any(
+        header_str: Final = ",".join(f"{key}={value}" for key, value in headers.items())
+        owns_exporter: Final = any(
             spec.owner == self._callback_name and spec.kind.lower() not in _NON_OTLP_KINDS
             for spec in self._config.exporters
         )
@@ -180,7 +180,7 @@ class TenantTracerCache:
             return self._config.model_copy(
                 update={"exporters": [*self._config.exporters, *self._synthesized_exporter(header_str, dynamic_params)]}
             )
-        exporters = [
+        exporters: Final = [
             (
                 spec.model_copy(update={"headers": header_str})
                 if spec.owner == self._callback_name and spec.kind.lower() not in _NON_OTLP_KINDS
@@ -204,7 +204,7 @@ class TenantTracerCache:
         """
         from litellm.integrations.otel.presets import dynamic_otlp_destination
 
-        destination = dynamic_otlp_destination(self._callback_name, dynamic_params)
+        destination: Final = dynamic_otlp_destination(self._callback_name, dynamic_params)
         if destination is None or not destination.endpoint:
             return ()
         return (
@@ -248,15 +248,15 @@ class TenantTracerCache:
             tuple(sorted((d.endpoint, tuple(sorted(d.headers.items())), d.protocol or "") for d in group)),
             include_base,
         )
-        provider = self._providers.get(cache_key)
-        if provider is not None:
+        cached: Final = self._providers.get(cache_key)
+        if cached is not None:
             self._providers.move_to_end(cache_key)
-        else:
-            provider = build_tracer_provider(
-                self._config_with_destinations(tuple(group), include_base_exporters=include_base)
-            )
-            self._providers[cache_key] = provider
-            self._evict_if_full()
+            return get_tracer(cached, self._tracer_name)
+        provider: Final = build_tracer_provider(
+            self._config_with_destinations(tuple(group), include_base_exporters=include_base)
+        )
+        self._providers[cache_key] = provider
+        self._evict_if_full()
         return get_tracer(provider, self._tracer_name)
 
     def _owned_otlp_kind(self) -> str:
@@ -289,8 +289,8 @@ class TenantTracerCache:
             destination_resource_attrs,
         )
 
-        kind = self._owned_otlp_kind()
-        appended = tuple(
+        kind: Final = self._owned_otlp_kind()
+        appended: Final = tuple(
             ExporterSpec(
                 kind=d.protocol or kind,
                 endpoint=d.endpoint,
@@ -299,8 +299,8 @@ class TenantTracerCache:
             )
             for d in destinations
         )
-        base_exporters = (*self._config.exporters,) if include_base_exporters else ()
-        merged_resource_attrs = {
+        base_exporters: Final = (*self._config.exporters,) if include_base_exporters else ()
+        merged_resource_attrs: Final = {
             **self._config.resource_attributes,
             **{key: value for d in destinations for key, value in destination_resource_attrs(d).items()},
         }
@@ -312,9 +312,9 @@ class TenantTracerCache:
         )
 
 
-_MAX_CACHED_PROCESSORS = 256
+_MAX_CACHED_PROCESSORS: Final = 256
 
-_GENAI_SPAN_ATTR = "gen_ai.operation.name"
+_GENAI_SPAN_ATTR: Final = "gen_ai.operation.name"
 
 
 def _processor_key(destination: OtelDestination) -> "tuple[str, tuple[tuple[str, str], ...], str | None]":
@@ -322,7 +322,7 @@ def _processor_key(destination: OtelDestination) -> "tuple[str, tuple[tuple[str,
 
 
 def _is_genai_span(span: ReadableSpan) -> bool:
-    attributes = span.attributes or {}
+    attributes: Final = span.attributes or {}
     return _GENAI_SPAN_ATTR in attributes
 
 
@@ -333,10 +333,10 @@ def _with_destination_resource(span: ReadableSpan, destination: OtelDestination)
         destination_resource_attrs,
     )
 
-    extra = destination_resource_attrs(destination)
+    extra: Final = destination_resource_attrs(destination)
     if not extra:
         return span
-    merged = Resource.create({**dict(span.resource.attributes), **extra})
+    merged: Final = Resource.create({**dict(span.resource.attributes), **extra})
     return _ResourceWrappedReadableSpan(span, merged)
 
 
@@ -378,7 +378,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         return None
 
     def on_end(self, span: ReadableSpan) -> None:
-        destinations = request_destinations()
+        destinations: Final = request_destinations()
         if not destinations:
             return
         if _is_genai_span(span):
@@ -409,41 +409,44 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._processors.clear()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
-        all_ok = True
         # Snapshot before iterating (see ``shutdown``): a concurrent ``on_end`` mutating
         # the processor cache must not abort the flush and drop the remaining destinations'
         # buffered spans.
-        for processor in tuple(self._processors.values()):
-            try:
-                if not processor.force_flush(timeout_millis):
-                    all_ok = False
-            except Exception:  # noqa: BLE001  # a single processor's flush failure must not fail the whole force_flush
-                all_ok = False
-        return all_ok
+        flushed: Final = tuple(
+            self._flushed(processor, timeout_millis) for processor in tuple(self._processors.values())
+        )
+        return all(flushed)
+
+    @staticmethod
+    def _flushed(processor: SpanProcessor, timeout_millis: int) -> bool:
+        try:
+            return processor.force_flush(timeout_millis)
+        except Exception:  # noqa: BLE001  # a single processor's flush failure must not fail the whole force_flush
+            return False
 
     def _processor_for(self, destination: OtelDestination) -> SpanProcessor | None:
-        key = _processor_key(destination)
-        cached = self._processors.get(key)
+        key: Final = _processor_key(destination)
+        cached: Final = self._processors.get(key)
         if cached is not None:
             self._processors.move_to_end(key)
             return cached
         from litellm.integrations.otel.plumbing.providers import (
-            _exporter_from_spec,
+            _exporter_from_spec,  # pyright: ignore[reportPrivateUsage]  # package-internal exporter builder
             default_otlp_kind_for_backend,
         )
         from litellm.integrations.otel.plumbing.providers import (
-            _processor_for as _build_processor,
+            _processor_for as _build_processor,  # pyright: ignore[reportPrivateUsage]  # package-internal processor builder
         )
 
         try:
-            spec = ExporterSpec(
+            spec: Final = ExporterSpec(
                 kind=destination.protocol or default_otlp_kind_for_backend(destination.callback_name),
                 endpoint=destination.endpoint,
                 headers=destination.header_string(),
                 owner=None,
             )
-            exporter = _exporter_from_spec(spec)
-            processor = _build_processor(exporter, use_simple=False)
+            exporter: Final = _exporter_from_spec(spec)
+            processor: Final = _build_processor(exporter, use_simple=False)
         except Exception as exc:  # noqa: BLE001  # a malformed destination spec must not break fan-out; skip this destination
             verbose_logger.debug(
                 "OTel V2 fan-out: failed to build processor for %s: %s",

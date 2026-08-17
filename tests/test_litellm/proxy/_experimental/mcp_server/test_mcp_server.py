@@ -24,6 +24,12 @@ from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
+
+
 @pytest.fixture(autouse=True)
 def cleanup_mcp_global_state():
     """Clean up MCP global state before and after each test.
@@ -71,7 +77,7 @@ async def test_mcp_server_tool_call_body_contains_request_data():
     # Mock the add_litellm_data_to_request function to capture the data
     captured_data = {}
 
-    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config, **kwargs):
         captured_data.update(data)
         # Simulate the proxy_server_request creation
         captured_data["proxy_server_request"] = {
@@ -111,6 +117,107 @@ async def test_mcp_server_tool_call_body_contains_request_data():
 
 
 @pytest.mark.asyncio
+async def test_mcp_server_tool_call_forwards_client_headers_to_logging():
+    """The MCP protocol path must hand the connection's client headers to the pre-call
+    pipeline, so logging callbacks and guardrails see them the way the REST path does."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            mcp_server_tool_call,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    set_auth_context(
+        UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        raw_headers={
+            "x-nuid": "nuid-1",
+            "x-app-id": "app-1",
+            "content-length": "42",
+            "x-forwarded-for": "9.9.9.9",
+        },
+        client_ip="1.2.3.4",
+    )
+
+    captured_headers = {}
+
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config, **kwargs):
+        captured_headers.update(request.headers)
+        return data
+
+    async def mock_call_mcp_tool(*args, **kwargs):
+        return [{"type": "text", "text": "mocked response"}]
+
+    with patch(
+        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request",
+        mock_add_litellm_data_to_request,
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            mock_call_mcp_tool,
+        ):
+            with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
+                await mcp_server_tool_call("test_tool", {"param": "value"})
+
+    assert captured_headers.get("x-nuid") == "nuid-1"
+    assert captured_headers.get("x-app-id") == "app-1"
+    assert "content-length" not in captured_headers
+    assert captured_headers.get("x-forwarded-for") == "1.2.3.4"
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_tool_call_strips_custom_litellm_key_header():
+    """The deployment can rename the proxy key header via general_settings.litellm_key_header_name.
+    The pre-call pipeline only knows that name if it is passed in, so without it the virtual key
+    reaches metadata.headers and proxy_server_request.headers in plaintext."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            mcp_server_tool_call,
+            set_auth_context,
+        )
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    set_auth_context(
+        UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        raw_headers={"x-company-key": "sk-proxy-secret", "x-nuid": "nuid-1"},
+        client_ip="1.2.3.4",
+    )
+
+    captured_data = {}
+
+    async def capturing_add_litellm_data_to_request(**kwargs):
+        data = await add_litellm_data_to_request(**kwargs)
+        captured_data.update(data)
+        return data
+
+    async def mock_call_mcp_tool(*args, **kwargs):
+        return [{"type": "text", "text": "mocked response"}]
+
+    with patch(
+        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request",
+        capturing_add_litellm_data_to_request,
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            mock_call_mcp_tool,
+        ):
+            with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
+                with patch.dict(
+                    "litellm.proxy.proxy_server.general_settings",
+                    {"litellm_key_header_name": "x-company-key"},
+                    clear=False,
+                ):
+                    await mcp_server_tool_call("test_tool", {"param": "value"})
+
+    metadata_headers = captured_data["metadata"]["headers"]
+    assert metadata_headers.get("x-nuid") == "nuid-1"
+    assert "x-company-key" not in metadata_headers
+    assert "x-company-key" not in captured_data["proxy_server_request"]["headers"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror():
     """The MCP session manager serializes handler exceptions as JSON-RPC errors, so a mid-session
     tool call cannot emit a raw 401 the way the REST path does. mcp_server_tool_call must turn an
@@ -127,7 +234,7 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror():
 
     set_auth_context(UserAPIKeyAuth(api_key="test_key", user_id="test_user"))
 
-    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config, **kwargs):
         return data
 
     async def mock_call_mcp_tool(*args, **kwargs):
@@ -1106,12 +1213,12 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
             assert result.outcomes["failing"].tag == "internal"
 
             # Verify failure logging
-            mock_logger.exception.assert_any_call(
-                "Error getting tools from server failing_server: Server connection failed"
-            )
+            assert "Error getting tools from server failing_server: Server connection failed" in [
+                _rendered_log_message(c) for c in mock_logger.exception.call_args_list if c.args
+            ]
 
             # Verify success logging
-            mock_logger.info.assert_any_call("Successfully fetched 1 tools total from all MCP servers")
+            mock_logger.info.assert_any_call("Successfully fetched %s tools total from all MCP servers", 1)
 
 
 @pytest.mark.asyncio
@@ -1201,15 +1308,20 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
             assert result.outcomes["failing2"].tag == "internal"
 
             # Verify failure logging for both servers
-            mock_logger.exception.assert_any_call(
+            rendered_exceptions = [
+                _rendered_log_message(c) for c in mock_logger.exception.call_args_list if c.args
+            ]
+            assert (
                 "Error getting tools from server failing_server1: Server failing_server1 connection failed"
+                in rendered_exceptions
             )
-            mock_logger.exception.assert_any_call(
+            assert (
                 "Error getting tools from server failing_server2: Server failing_server2 connection failed"
+                in rendered_exceptions
             )
 
             # Verify total logging
-            mock_logger.info.assert_any_call("Successfully fetched 0 tools total from all MCP servers")
+            mock_logger.info.assert_any_call("Successfully fetched %s tools total from all MCP servers", 0)
 
 
 @pytest.mark.asyncio
@@ -1234,7 +1346,7 @@ async def test_mcp_server_tool_call_body_with_none_arguments():
     # Mock the add_litellm_data_to_request function to capture the data
     captured_data = {}
 
-    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
+    async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config, **kwargs):
         captured_data.update(data)
         captured_data["proxy_server_request"] = {
             "url": str(request.url),

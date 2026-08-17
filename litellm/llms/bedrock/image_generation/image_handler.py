@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import BaseModel
@@ -49,12 +49,12 @@ class BedrockImagePreparedRequest(BaseModel):
     data: dict
 
 
-BedrockImageConfigClass = Union[
-    type[AmazonTitanImageGenerationConfig],
-    type[AmazonNovaCanvasConfig],
-    type[AmazonStability3Config],
-    type[AmazonStabilityConfig],
-]
+BedrockImageConfigClass = (
+    type[AmazonTitanImageGenerationConfig]
+    | type[AmazonNovaCanvasConfig]
+    | type[AmazonStability3Config]
+    | type[AmazonStabilityConfig]
+)
 
 
 class BedrockImageGeneration(BaseAWSLLM):
@@ -87,7 +87,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_key: str | None = None,
     ):
-        prepared_request = self._prepare_request(
+        prepared_request: Final = self._prepare_request(
             model=model,
             optional_params=optional_params,
             api_base=api_base,
@@ -111,14 +111,14 @@ class BedrockImageGeneration(BaseAWSLLM):
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
         try:
-            response = client.post(
+            response: Final = client.post(
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
@@ -148,20 +148,20 @@ class BedrockImageGeneration(BaseAWSLLM):
 
         Awaits the response from the bedrock image generation endpoint
         """
-        async_client = client or get_async_httpx_client(
+        async_client: Final = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.BEDROCK,
             params={"timeout": timeout},
         )
 
         try:
-            response = await async_client.post(
+            response: Final = await async_client.post(
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
@@ -181,9 +181,9 @@ class BedrockImageGeneration(BaseAWSLLM):
         """
         Extract guardrail parameters from optional_params and convert them to headers.
         """
-        headers = {}
-        guardrail_identifier = optional_params.pop("guardrailIdentifier", None)
-        guardrail_version = optional_params.pop("guardrailVersion", None)
+        headers: Final = {}
+        guardrail_identifier: Final = optional_params.pop("guardrailIdentifier", None)
+        guardrail_version: Final = optional_params.pop("guardrailVersion", None)
 
         if guardrail_identifier is not None:
             headers["x-amz-bedrock-guardrail-identifier"] = guardrail_identifier
@@ -220,12 +220,12 @@ class BedrockImageGeneration(BaseAWSLLM):
             prepped (httpx.Request): The prepared request object
             body (bytes): The request body
         """
-        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params, model)
+        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         # Use the existing ARN-aware provider detection method
-        bedrock_provider = self.get_bedrock_invoke_provider(model)
+        bedrock_provider: Final = self.get_bedrock_invoke_provider(model)
         ### SET RUNTIME ENDPOINT ###
-        modelId = self.get_bedrock_model_id(
+        modelId: Final = self.get_bedrock_model_id(
             model=model,
             provider=bedrock_provider,
             optional_params=optional_params,
@@ -236,23 +236,23 @@ class BedrockImageGeneration(BaseAWSLLM):
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
         proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
-        data = self._get_request_body(
+        data: Final = self._get_request_body(
             model=model,
             prompt=prompt,
             optional_params=optional_params,
         )
 
         # Make POST Request
-        body = json.dumps(data).encode("utf-8")
+        body: Final = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
 
         # Extract guardrail parameters and add them as headers
-        guardrail_headers = self._extract_headers_from_optional_params(optional_params)
+        guardrail_headers: Final = self._extract_headers_from_optional_params(optional_params)
         headers.update(guardrail_headers)
 
-        prepped = self.get_request_headers(
+        prepped: Final = self.get_request_headers(
             credentials=boto3_credentials_info.credentials,
             aws_region_name=boto3_credentials_info.aws_region_name,
             extra_headers=extra_headers,
@@ -293,8 +293,8 @@ class BedrockImageGeneration(BaseAWSLLM):
         Returns:
             dict: The request body to use for the Bedrock Image Generation API
         """
-        config_class = self.get_config_class(model=model)
-        request_body = config_class.transform_request_body(text=prompt, optional_params=optional_params)
+        config_class: Final = self.get_config_class(model=model)
+        request_body: Final = config_class.transform_request_body(text=prompt, optional_params=optional_params)
         return dict(request_body)
 
     def _transform_response_dict_to_openai_response(
@@ -319,11 +319,11 @@ class BedrockImageGeneration(BaseAWSLLM):
                 additional_args={"complete_input_dict": data},
             )
         verbose_logger.debug("raw model_response: %s", response.text)
-        response_dict = response.json()
+        response_dict: Final = response.json()
         if response_dict is None:
             raise ValueError("Error in response object format, got None")
 
-        config_class = self.get_config_class(model=model)
+        config_class: Final = self.get_config_class(model=model)
 
         config_class.transform_response_dict_to_openai_response(
             model_response=model_response,

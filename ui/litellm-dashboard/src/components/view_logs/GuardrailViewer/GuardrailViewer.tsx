@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { Tooltip } from "antd";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import PresidioDetectedEntities from "./PresidioDetectedEntities";
 import BedrockGuardrailDetails, {
   BedrockGuardrailResponse,
@@ -229,18 +229,6 @@ const DownloadIcon = () => (
       d="M8 2v8m0 0l-3-3m3 3l3-3M3 12h10"
       stroke="currentColor"
       strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const ExternalLinkIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="inline ml-1">
-    <path
-      d="M6 2H3a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V8M8 2h4m0 0v4m0-4L6.5 7.5"
-      stroke="currentColor"
-      strokeWidth="1.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
@@ -529,13 +517,20 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           )}
 
           {riskScore != null && success && (
-            <Tooltip title={`Risk score: ${riskScore}/10`}>
-              <span
-                className={`px-2 py-0.5 border rounded-sm text-[11px] font-semibold shrink-0 ${getRiskColor(riskScore)}`}
-              >
-                Risk {riskScore}/10
-              </span>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className={`px-2 py-0.5 border rounded-sm text-[11px] font-semibold shrink-0 ${getRiskColor(riskScore)}`}
+                    />
+                  }
+                >
+                  Risk {riskScore}/10
+                </TooltipTrigger>
+                <TooltipContent>{`Risk score: ${riskScore}/10`}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
 
@@ -645,10 +640,6 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
 
   const totalOverheadMs = useMemo(() => {
     return Math.round(guardrailEntries.reduce((sum, e) => sum + (e.duration ?? 0), 0) * 1000);
-  }, [guardrailEntries]);
-
-  const policyTemplates = useMemo(() => {
-    return Array.from(new Set(guardrailEntries.map((e) => e.policy_template).filter(Boolean)));
   }, [guardrailEntries]);
 
   if (guardrailEntries.length === 0) {

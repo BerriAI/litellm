@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import AllMessageValues, BaseLLMException
@@ -77,13 +79,13 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
 
-        _embedding_output = []
+        _embedding_output: Final = []
 
-        _outputs = raw_response_json["outputs"]
+        _outputs: Final = raw_response_json["outputs"]
         for output in _outputs:
             _shape = output["shape"]
             _data = output["data"]
@@ -104,7 +106,7 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
         return model_response
 
     def _build_embedding_usage(self, model: str, request_data: dict) -> Usage:
-        input_data = request_data.get("inputs", [])
+        input_data: Final = request_data.get("inputs", [])
         input_text_values: list[str] = []
         for item in input_data:
             if isinstance(item, dict) and item.get("name") == "input_text":
@@ -135,5 +137,5 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
     def split_embedding_by_shape(data: list[float], shape: list[int]) -> list[list[float]]:
         if len(shape) != 2:
             raise ValueError("Shape must be of length 2.")
-        embedding_size = shape[1]
+        embedding_size: Final = shape[1]
         return [data[i * embedding_size : (i + 1) * embedding_size] for i in range(shape[0])]

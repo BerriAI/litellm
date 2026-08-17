@@ -10,6 +10,7 @@ exporters are kept (global also receives), a logger only exports the destination
 its own backend, and request credentials rewrite only their own backend's exporter headers.
 """
 
+import base64
 import os
 import sys
 
@@ -27,6 +28,7 @@ from litellm.integrations.otel.plumbing.context import (
     set_request_destinations,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
+from litellm.integrations.otel.presets import dynamic_otlp_headers
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +65,40 @@ def _event(destinations):
 
 
 # --- routing only happens for admin destinations --------------------------- #
+
+
+def test_langfuse_dynamic_headers_carry_v4_ingestion_version():
+    headers = dynamic_otlp_headers(
+        "langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}
+    )
+    expected_auth = "Basic " + base64.b64encode(b"pk:sk").decode()
+    assert headers == {
+        "Authorization": expected_auth,
+        "x-langfuse-ingestion-version": "4",
+    }
+
+
+def test_weave_dynamic_headers():
+    headers = dynamic_otlp_headers(
+        "weave_otel", {"wandb_api_key": "w", "weave_project_id": "p"}
+    )
+    assert headers is not None
+    assert "Authorization" in headers and headers["project_id"] == "p"
+
+
+def test_non_participating_callbacks_have_no_routing():
+    # Phoenix subclasses the base in V1 (no override) → no dynamic routing.
+    assert dynamic_otlp_headers("arize_phoenix", {"arize_api_key": "K"}) is None
+    assert dynamic_otlp_headers("langtrace", {"arize_api_key": "K"}) is None
+    assert dynamic_otlp_headers(None, {"arize_api_key": "K"}) is None
+
+
+def test_no_dynamic_params_is_no_routing():
+    assert dynamic_otlp_headers("arize", None) is None
+    assert dynamic_otlp_headers("arize", {}) is None
+
+
+# --- TenantTracerCache routes + caches a TracerProvider per destination set --- #
 
 
 def test_no_destinations_uses_default_tracer():

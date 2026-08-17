@@ -1,5 +1,5 @@
 import React from "react";
-import { Tag } from "antd";
+import { Badge } from "@/components/ui/badge";
 import { CogIcon, BanIcon } from "@heroicons/react/outline";
 import { callbackInfo, callback_map, reverse_callback_map } from "./callback_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -35,16 +35,16 @@ export function LoggingSettingsView({
     return callbackDisplayName || callbackName;
   };
 
-  const getEventTypeColor = (eventType: string): string | undefined => {
+  const getEventTypeVariant = (eventType: string): React.ComponentProps<typeof Badge>["variant"] => {
     switch (eventType) {
       case "success":
-        return "green";
+        return "default";
       case "failure":
-        return "red";
+        return "destructive";
       case "success_and_failure":
-        return "blue";
+        return "secondary";
       default:
-        return undefined;
+        return "outline";
     }
   };
 
@@ -68,14 +68,14 @@ export function LoggingSettingsView({
           <div className="flex items-center gap-2">
             <CogIcon className="h-4 w-4 text-blue-600" />
             <span className="font-semibold text-gray-900">Logging Exporters</span>
-            <Tag color="blue">{scopedExporters.length}</Tag>
+            <Badge variant="secondary">{scopedExporters.length}</Badge>
           </div>
           {scopedExporters.length > 0 ? (
             <div className="flex flex-wrap gap-2">
               {scopedExporters.map((name, index) => (
-                <Tag key={index} color="geekblue">
+                <Badge key={index} variant="secondary">
                   {name}
-                </Tag>
+                </Badge>
               ))}
             </div>
           ) : (
@@ -92,7 +92,7 @@ export function LoggingSettingsView({
         <div className="flex items-center gap-2">
           <CogIcon className="h-4 w-4 text-blue-600" />
           <span className="font-semibold text-gray-900">Logging Integrations</span>
-          <Tag color="blue">{loggingConfigs.length}</Tag>
+          <Badge variant="secondary">{loggingConfigs.length}</Badge>
         </div>
 
         {loggingConfigs.length > 0 ? (
@@ -118,7 +118,9 @@ export function LoggingSettingsView({
                       </span>
                     </div>
                   </div>
-                  <Tag color={getEventTypeColor(config.callback_type)}>{getEventTypeLabel(config.callback_type)}</Tag>
+                  <Badge variant={getEventTypeVariant(config.callback_type)}>
+                    {getEventTypeLabel(config.callback_type)}
+                  </Badge>
                 </div>
               );
             })}
@@ -136,7 +138,7 @@ export function LoggingSettingsView({
         <div className="flex items-center gap-2">
           <BanIcon className="h-4 w-4 text-red-600" />
           <span className="font-semibold text-gray-900">Disabled Callbacks</span>
-          <Tag color="red">{disabledCallbacks.length}</Tag>
+          <Badge variant="destructive">{disabledCallbacks.length}</Badge>
         </div>
 
         {disabledCallbacks.length > 0 ? (
@@ -161,7 +163,7 @@ export function LoggingSettingsView({
                       <span className="block text-xs text-red-600">Disabled for this key</span>
                     </div>
                   </div>
-                  <Tag color="red">Disabled</Tag>
+                  <Badge variant="destructive">Disabled</Badge>
                 </div>
               );
             })}

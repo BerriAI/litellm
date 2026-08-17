@@ -6,6 +6,7 @@ request time. This module only checks that a write sets a well-formed ``access``
 """
 
 from collections.abc import Mapping
+from typing import Final
 
 from fastapi import HTTPException, status
 
@@ -19,7 +20,7 @@ def validate_credential_access(credential_info: Mapping[str, object] | None) -> 
     """
     if not isinstance(credential_info, dict) or "access" not in credential_info:
         return
-    access = credential_info["access"]
+    access: Final = credential_info["access"]
     if not isinstance(access, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -37,7 +38,7 @@ def validate_credential_access(credential_info: Mapping[str, object] | None) -> 
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": f"access.{field} must be a list of strings"},
             )
-    unknown = set(access) - {"global", "teams", "orgs"}
+    unknown: Final = set(access) - {"global", "teams", "orgs"}
     if unknown:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

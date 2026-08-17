@@ -1,4 +1,11 @@
-import { Member, Team } from "@/components/networking";
+import { Member, Organization, Team } from "@/components/networking";
+
+const ORG_ADMIN_MEMBERSHIP_ROLE = "org_admin";
+
+interface OrganizationMembership {
+  user_id?: string | null;
+  user_role?: string | null;
+}
 
 // Define admin roles and permissions
 export const old_admin_roles = ["Admin", "Admin Viewer"];
@@ -44,6 +51,19 @@ export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | nul
   return teamMemberWithRoles.some((member) => member.user_id === userID && member.role === "admin");
 };
 
+export const isOrgAdminForAnyOrg = (
+  organizations: Organization[] | null | undefined,
+  userID: string | null | undefined,
+): boolean => {
+  if (organizations == null || !userID) {
+    return false;
+  }
+  return organizations.some((org) => {
+    const members: OrganizationMembership[] = org.members ?? [];
+    return members.some((member) => member.user_id === userID && member.user_role === ORG_ADMIN_MEMBERSHIP_ROLE);
+  });
+};
+
 export const formatUserRole = (userRole: string): string => {
   if (!userRole) {
     return "Undefined Role";
@@ -53,8 +73,6 @@ export const formatUserRole = (userRole: string): string => {
       return "App Owner";
     case "demo_app_owner":
       return "App Owner";
-    case "app_admin":
-      return "Admin";
     case "proxy_admin":
       return "Admin";
     case "proxy_admin_viewer":
@@ -72,3 +90,27 @@ export const formatUserRole = (userRole: string): string => {
       return "Unknown Role";
   }
 };
+
+export const isOrgAdminSessionRole = (userRole?: string | null): boolean =>
+  userRole === ORG_ADMIN_MEMBERSHIP_ROLE || userRole === formatUserRole(ORG_ADMIN_MEMBERSHIP_ROLE);
+
+const viewOnlyRawRoles = ["proxy_admin_viewer", "internal_user_viewer", "internal_viewer"];
+
+export const effectiveSessionRole = (rawUserRole?: string): string => {
+  if (rawUserRole?.toLowerCase() === "proxy_admin_viewer") {
+    return "Admin";
+  }
+  return formatUserRole(rawUserRole ?? "");
+};
+
+export const isViewOnlySessionRole = (rawUserRole?: string): boolean =>
+  viewOnlyRawRoles.includes(rawUserRole?.toLowerCase() ?? "");
+
+// Session roles (the value `useAuthorized().userRole` supplies) that /team/list and
+// /v2/team/list already answer with a broad list: proxy-wide for admins, org-wide for
+// org admins. Sending a user_id for those narrows the response to direct memberships,
+// so only the roles the endpoints would otherwise reject carry one.
+const sessionRolesWithBroadTeamList: string[] = ["Admin", "Admin Viewer", "Org Admin"];
+
+export const teamListScopeUserId = (userRole: string | null, userId: string | null): string | null =>
+  sessionRolesWithBroadTeamList.includes(userRole ?? "") ? null : userId;

@@ -1,8 +1,11 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    hoist_images_from_tool_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
@@ -66,7 +69,7 @@ class AzureOpenAIConfig(BaseConfig):
         temperature: int | None = None,
         top_p: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -121,7 +124,7 @@ class AzureOpenAIConfig(BaseConfig):
         import re
 
         # Normalize model name: e.g., gpt-3-5-turbo -> gpt-3.5-turbo
-        normalized_model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
+        normalized_model: Final = re.sub(r"(\d)-(\d)", r"\1.\2", model)
 
         if "gpt-3.5" in normalized_model or "gpt-35" in model:
             return False
@@ -133,10 +136,10 @@ class AzureOpenAIConfig(BaseConfig):
         - check if api_version is supported for response_format
         - returns True if the API version is equal to or newer than the supported version
         """
-        api_year = int(api_version_year)
-        api_month = int(api_version_month)
-        supported_year = int(API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT)
-        supported_month = int(API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT)
+        api_year: Final = int(api_version_year)
+        api_month: Final = int(api_version_month)
+        supported_year: Final = int(API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT)
+        supported_month: Final = int(API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT)
 
         # If the year is greater than supported year, it's definitely supported
         if api_year > supported_year:
@@ -156,8 +159,8 @@ class AzureOpenAIConfig(BaseConfig):
         drop_params: bool,
         api_version: str = "",
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model)
-        api_version_times = api_version.split("-")
+        supported_openai_params: Final = self.get_supported_openai_params(model)
+        api_version_times: Final = api_version.split("-")
 
         if len(api_version_times) >= 3:
             api_version_year = api_version_times[0]
@@ -236,10 +239,10 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        messages = convert_to_azure_openai_messages(messages)
+        azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(messages))
         return {
             "model": model,
-            "messages": messages,
+            "messages": azure_messages,
             **optional_params,
         }
 

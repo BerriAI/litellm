@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Final
 
 import httpx
 
@@ -42,17 +43,17 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
     ) -> ModelResponse | TextCompletionResponse | None:
-        cohere_model_response_iterator = CohereModelResponseIterator(
+        cohere_model_response_iterator: Final = CohereModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
         )
-        litellm_custom_stream_wrapper = CustomStreamWrapper(
+        litellm_custom_stream_wrapper: Final = CustomStreamWrapper(
             completion_stream=cohere_model_response_iterator,
             model=model,
             logging_obj=litellm_logging_obj,
             custom_llm_provider="cohere",
         )
-        all_openai_chunks = []
+        all_openai_chunks: Final = []
         for _chunk_str in all_chunks:
             try:
                 generic_chunk = cohere_model_response_iterator.convert_str_chunk_to_generic_chunk(chunk=_chunk_str)
@@ -61,7 +62,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     all_openai_chunks.append(litellm_chunk)
             except (StopIteration, StopAsyncIteration):
                 break
-        complete_streaming_response = stream_chunk_builder(chunks=all_openai_chunks)
+        complete_streaming_response: Final = stream_chunk_builder(chunks=all_openai_chunks)
         return complete_streaming_response
 
     def cohere_passthrough_handler(
@@ -81,12 +82,12 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         Handle Cohere passthrough logging with route detection and cost tracking.
         """
         # Check if this is an embed endpoint
-        if "/v1/embed" in url_route:
-            model = request_body.get("model", response_body.get("model", ""))
+        if "/v1/embed" in url_route and "/v1/embeddings" not in url_route:
+            model: Final = request_body.get("model", response_body.get("model", ""))
             try:
-                cohere_embed_config = CohereEmbeddingConfig()
+                cohere_embed_config: Final = CohereEmbeddingConfig()
                 litellm_model_response = litellm.EmbeddingResponse()
-                handler_instance = CoherePassthroughLoggingHandler()
+                handler_instance: Final = CoherePassthroughLoggingHandler()
 
                 input_texts = request_body.get("texts", [])
                 if not input_texts:
@@ -105,7 +106,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 )
 
                 # Calculate cost using LiteLLM's cost calculator
-                response_cost = litellm.completion_cost(
+                response_cost: Final = litellm.completion_cost(
                     completion_response=litellm_model_response,
                     model=model,
                     custom_llm_provider="cohere",
@@ -122,11 +123,11 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 kwargs["custom_llm_provider"] = "cohere"
 
                 # Extract user information for tracking
-                passthrough_logging_payload: PassthroughStandardLoggingPayload | None = kwargs.get(
+                passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = kwargs.get(
                     "passthrough_logging_payload"
                 )
                 if passthrough_logging_payload:
-                    user = handler_instance._get_user_from_metadata(
+                    user: Final = handler_instance._get_user_from_metadata(
                         passthrough_logging_payload=passthrough_logging_payload,
                     )
                     if user:
