@@ -670,6 +670,10 @@ def _resolve_max_in_memory_cache_size() -> int | None:
 # keeps _PROXY_TagRateLimiter._partitions from leaking a fresh partition
 # every time _TagRateLimitIndex rebuilds and reconstructs `_ConfiguredLimit`s.
 _PartitionKey: TypeAlias = tuple[str, str, float, int, bool, int] | None
+# Grouping type for async_log_success_event's per-partition tokens/dollars
+# pipeline dispatch -- named only so the declaration fits on one line; see
+# that method for why the grouping is needed.
+_PartitionOperations: TypeAlias = dict[_PartitionKey, list[RedisPipelineIncrementOperation]]
 
 
 def _partition_key(entry: TagRateLimitEntry) -> _PartitionKey:
@@ -1152,8 +1156,7 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # more than one partition, and each partition owns its own v3
         # handler (see _build_partition), so each group's operations are
         # pipelined through that partition's own handler.
-        # mutable-ok: groups operations by cache partition before dispatching each group's pipeline call
-        operations_by_partition: Final[dict[_PartitionKey, list[RedisPipelineIncrementOperation]]] = {}
+        operations_by_partition: Final[_PartitionOperations] = {}  # mutable-ok: see comment above
         for configured_limit, operation in operation_by_limit:
             operations_by_partition.setdefault(_partition_key(configured_limit.entry), []).append(
                 operation
