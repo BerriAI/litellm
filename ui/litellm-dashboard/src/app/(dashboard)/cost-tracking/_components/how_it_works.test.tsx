@@ -32,7 +32,7 @@ describe("HowItWorks", () => {
   it("should render the code block with a curl example", () => {
     renderWithProviders(<HowItWorks />);
     expect(screen.getByTestId("code-block")).toBeInTheDocument();
-    expect(screen.getByTestId("code-block").textContent).toContain("curl");
+    expect(screen.getByTestId("code-block")).toHaveTextContent(/curl/);
   });
 
   it("should show the response header names for discount verification", () => {

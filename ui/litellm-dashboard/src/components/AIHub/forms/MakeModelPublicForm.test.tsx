@@ -121,7 +121,7 @@ describe("MakeModelPublicForm", () => {
 
     // Check that the Next button is enabled (models are preselected)
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
   });
 
   it("should handle model selection and navigation", async () => {
@@ -138,7 +138,7 @@ describe("MakeModelPublicForm", () => {
 
     // Verify Next button is enabled
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
 
     // Click Next
     await act(async () => {

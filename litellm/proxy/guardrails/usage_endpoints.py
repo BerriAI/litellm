@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, overload
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -26,7 +26,12 @@ from litellm.repositories.table_repositories import (
 if TYPE_CHECKING:
     from prisma import models as prisma_models
     from prisma import types as prisma_types
-    from prisma.actions import LiteLLM_GuardrailsTableActions, LiteLLM_PolicyTableActions
+    from prisma.actions import (
+        LiteLLM_DailyGuardrailMetricsActions,
+        LiteLLM_DailyPolicyMetricsActions,
+        LiteLLM_GuardrailsTableActions,
+        LiteLLM_PolicyTableActions,
+    )
 
     from litellm.proxy.utils import PrismaClient
     from litellm.types.guardrails import Guardrail
@@ -55,7 +60,49 @@ def _policies_table(
     return policies_table
 
 
+def _daily_guardrail_metrics_table(
+    prisma_client: "PrismaClient",
+) -> "LiteLLM_DailyGuardrailMetricsActions[prisma_models.LiteLLM_DailyGuardrailMetrics]":
+    metrics_table: Final[LiteLLM_DailyGuardrailMetricsActions[prisma_models.LiteLLM_DailyGuardrailMetrics]] = (
+        DailyGuardrailMetricsRepository(prisma_client).table
+    )
+    return metrics_table
+
+
+def _daily_policy_metrics_table(
+    prisma_client: "PrismaClient",
+) -> "LiteLLM_DailyPolicyMetricsActions[prisma_models.LiteLLM_DailyPolicyMetrics]":
+    metrics_table: Final[LiteLLM_DailyPolicyMetricsActions[prisma_models.LiteLLM_DailyPolicyMetrics]] = (
+        DailyPolicyMetricsRepository(prisma_client).table
+    )
+    return metrics_table
+
+
+async def _find_daily_guardrail_metrics(
+    prisma_client: "PrismaClient",
+    where: "prisma_types.LiteLLM_DailyGuardrailMetricsWhereInput",
+) -> "Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics]":
+    return await _daily_guardrail_metrics_table(prisma_client).find_many(where=where)
+
+
+async def _find_daily_policy_metrics(
+    prisma_client: "PrismaClient",
+    where: "prisma_types.LiteLLM_DailyPolicyMetricsWhereInput",
+) -> "Sequence[prisma_models.LiteLLM_DailyPolicyMetrics]":
+    return await _daily_policy_metrics_table(prisma_client).find_many(where=where)
+
+
 # --- Response models ---
+
+
+class _GuardrailRunInfo(TypedDict, total=False):
+    guardrail_id: ReadOnly[str | None]
+    guardrail_name: ReadOnly[str | None]
+    guardrail_status: ReadOnly[str | None]
+    duration: ReadOnly[float | None]
+    confidence_score: ReadOnly[float | None]
+    risk_score: ReadOnly[float | None]
+    guardrail_response: ReadOnly[str | Mapping[str, object] | Sequence[Mapping[str, object]] | None]
 
 
 class UsageChartPoint(TypedDict):
@@ -356,15 +403,15 @@ async def guardrails_usage_overview(
         guardrails: Final[Sequence[_DbOrConfigGuardrail]] = [*db_guardrails, *config_guardrails]
 
         # Daily metrics in range
-        metrics: Final[Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics]] = await DailyGuardrailMetricsRepository(
-            prisma_client
-        ).table.find_many(where={"date": {"gte": start, "lte": end}})
+        metrics: Final[Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics]] = await _find_daily_guardrail_metrics(
+            prisma_client, where={"date": {"gte": start, "lte": end}}
+        )
 
         # Previous period for trend
         start_prev: Final = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
-        metrics_prev: Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics] = await DailyGuardrailMetricsRepository(
-            prisma_client
-        ).table.find_many(where={"date": {"gte": start_prev, "lt": start}})
+        metrics_prev: Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics] = await _find_daily_guardrail_metrics(
+            prisma_client, where={"date": {"gte": start_prev, "lt": start}}
+        )
 
         agg: Final = _aggregate_daily_metrics(metrics, "guardrail_id")
         prev_agg: Final = _prev_fail_rates(metrics_prev, "guardrail_id")
@@ -424,21 +471,19 @@ async def guardrails_usage_detail(
     logical_id: Final = _get_guardrail_field(guardrail, "guardrail_name")
     metric_ids: Final = [i for i in (logical_id, guardrail_id) if i]
 
-    metrics: Final[Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics]] = await DailyGuardrailMetricsRepository(
-        prisma_client
-    ).table.find_many(
+    metrics: Final[Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics]] = await _find_daily_guardrail_metrics(
+        prisma_client,
         where={
             "guardrail_id": {"in": metric_ids},
             "date": {"gte": start, "lte": end},
-        }
+        },
     )
-    metrics_prev: Final[Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics]] = await DailyGuardrailMetricsRepository(
-        prisma_client
-    ).table.find_many(
+    metrics_prev: Final[Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics]] = await _find_daily_guardrail_metrics(
+        prisma_client,
         where={
             "guardrail_id": {"in": metric_ids},
             "date": {"lt": start},
-        }
+        },
     )
 
     requests: Final = sum(int(m.requests_evaluated or 0) for m in metrics)
@@ -510,7 +555,9 @@ def _build_usage_logs_where(
 
 
 def _usage_log_entry_from_row(
-    r: "prisma_models.LiteLLM_SpendLogGuardrailIndex", sl: Any, action_filter: str | None
+    r: "prisma_models.LiteLLM_SpendLogGuardrailIndex",
+    sl: "prisma_models.LiteLLM_SpendLogs",
+    action_filter: str | None,
 ) -> UsageLogEntry | None:
     meta = sl.metadata
     if isinstance(meta, str):
@@ -518,8 +565,8 @@ def _usage_log_entry_from_row(
             meta = json.loads(meta)
         except Exception:
             meta = {}
-    guardrail_info_list: Final = (meta or {}).get("guardrail_information") or []
-    entry_for_guardrail = None
+    guardrail_info_list: Final[Sequence[_GuardrailRunInfo]] = (meta or {}).get("guardrail_information") or []
+    entry_for_guardrail: _GuardrailRunInfo | None = None
     for gi in guardrail_info_list:
         if (gi.get("guardrail_id") or gi.get("guardrail_name")) == r.guardrail_id:
             entry_for_guardrail = gi
@@ -567,13 +614,12 @@ def _snippet(text: Any, max_len: int = 200) -> str | None:
     if isinstance(text, str):
         s = text
     elif isinstance(text, list):
-        parts: Final = []
-        for item in text:
-            if isinstance(item, dict) and "content" in item:
-                c = item["content"]
-                parts.append(c if isinstance(c, str) else str(c))
-            else:
-                parts.append(str(item))
+        parts: Final[Sequence[str]] = [
+            (c if isinstance(c := item["content"], str) else str(c))
+            if isinstance(item, dict) and "content" in item
+            else str(item)
+            for item in text
+        ]
         s = " ".join(parts)
     else:
         s = str(text)
@@ -705,18 +751,17 @@ async def policies_usage_overview(
 
     try:
         policies: Final = await _policies_table(prisma_client).find_many()
-        metrics: Final[Sequence[prisma_models.LiteLLM_DailyPolicyMetrics]] = await DailyPolicyMetricsRepository(
-            prisma_client
-        ).table.find_many(where={"date": {"gte": start, "lte": end}})
-        metrics_prev: Final[Sequence[prisma_models.LiteLLM_DailyPolicyMetrics]] = await DailyPolicyMetricsRepository(
-            prisma_client
-        ).table.find_many(
+        metrics: Final[Sequence[prisma_models.LiteLLM_DailyPolicyMetrics]] = await _find_daily_policy_metrics(
+            prisma_client, where={"date": {"gte": start, "lte": end}}
+        )
+        metrics_prev: Final[Sequence[prisma_models.LiteLLM_DailyPolicyMetrics]] = await _find_daily_policy_metrics(
+            prisma_client,
             where={
                 "date": {
                     "gte": (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d"),
                     "lt": start,
                 }
-            }
+            },
         )
         agg: Final = _aggregate_daily_metrics(metrics, "policy_id")
         prev_agg: Final = _prev_fail_rates(metrics_prev, "policy_id")

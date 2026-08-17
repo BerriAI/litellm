@@ -70,6 +70,17 @@ async def _handle_completed_batch(
         model_name: Optional model name
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
     """
+    # A completed batch whose request lines all failed has no output file - the
+    # results are written to a separate error_file_id and output_file_id is None.
+    # There is nothing to price or measure, so report an empty result set instead
+    # of calling _fetch_batch_output_file_content, which raises on a missing
+    # output file. Without this guard the logging worker crashes on every
+    # aretrieve_batch poll and the completed batch's zero-cost accounting is lost.
+    # The generic retrieval helper keeps raising for callers that explicitly ask
+    # for a missing output file.
+    if batch.output_file_id is None:
+        return 0.0, Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), []
+
     file_content = await _fetch_batch_output_file_content(batch, custom_llm_provider, litellm_params=litellm_params)
     error_file_failed_requests: Final = await _count_error_file_failed_requests(
         batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
@@ -532,11 +543,23 @@ def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_prov
     """
     if custom_llm_provider in ("anthropic", "bedrock"):
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
-        return AnthropicConfig().calculate_usage(
-            usage_object=response_body.get("usage", None) or {},
+        usage_object: Final = response_body.get("usage", None) or {}
+        if custom_llm_provider == "bedrock" and AmazonConverseConfig.is_converse_usage_shape(usage_object):
+            return AmazonConverseConfig().usage_from_batch_output(usage_object)
+        anthropic_usage: Final = AnthropicConfig().calculate_usage(
+            usage_object=usage_object,
             reasoning_content=None,
         )
+        if usage_object and anthropic_usage.total_tokens == 0:
+            verbose_logger.warning(
+                "batch output line reported usage this parser does not understand, so it will be billed at $0. "
+                "provider=%s usage_keys=%s",
+                custom_llm_provider,
+                sorted(usage_object.keys()),
+            )
+        return anthropic_usage
     from litellm.responses.utils import ResponseAPILoggingUtils
 
     _usage_dict: Final = response_body.get("usage", None) or {}

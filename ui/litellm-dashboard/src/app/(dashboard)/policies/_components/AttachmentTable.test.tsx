@@ -135,9 +135,9 @@ describe("AttachmentTable", () => {
     const attachment = makeAttachment({ attachment_id: "att-abcdef1234567" });
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} />);
     const idElement = screen.getByText("att-abcdef1234567");
-    expect(idElement.className).toContain("font-mono");
-    expect(idElement.className).toContain("truncate");
-    expect(idElement.className).not.toContain("bg-blue-50");
+    expect(idElement).toHaveClass("font-mono");
+    expect(idElement).toHaveClass("truncate");
+    expect(idElement).not.toHaveClass("bg-blue-50");
   });
 
   it("should render model chips when the attachment has models", () => {

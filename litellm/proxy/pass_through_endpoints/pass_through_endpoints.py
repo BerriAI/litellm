@@ -1538,6 +1538,8 @@ async def pass_through_request(
 
         #########################################################
 
+        if isinstance(e, ProxyException):
+            raise
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(getattr(e, "detail", str(e)))),
@@ -2091,8 +2093,8 @@ async def websocket_passthrough_request(
                     raw_response = await upstream_ws.recv(decode=False)
                     # Ensure raw_response is bytes before decoding
                     if isinstance(raw_response, str):
-                        raw_response = raw_response.encode("ascii")
-                    setup_response: Final[Mapping[str, object]] = json.loads(raw_response.decode("ascii"))
+                        raw_response = raw_response.encode("utf-8")
+                    setup_response: Final[Mapping[str, object]] = json.loads(raw_response.decode("utf-8"))
                     verbose_proxy_logger.debug("Setup response: %s", setup_response)
 
                     # Extract model and provider from setup response for Vertex AI Live

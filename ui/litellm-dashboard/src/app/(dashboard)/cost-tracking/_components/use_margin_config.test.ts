@@ -89,7 +89,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalled();
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Please select a provider");
     });
 
     it("should return false and notify when percentage is out of range", async () => {
@@ -160,7 +160,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(true);
-      expect(NotificationsManager.success).toHaveBeenCalled();
+      expect(NotificationsManager.success).toHaveBeenCalledWith("Margin configuration updated successfully");
     });
 
     it("should save a fixed amount margin and return true for a valid new provider", async () => {
@@ -189,7 +189,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(true);
-      expect(NotificationsManager.success).toHaveBeenCalled();
+      expect(NotificationsManager.success).toHaveBeenCalledWith("Margin configuration updated successfully");
     });
 
     it("should accept the global provider without provider_map lookup", async () => {

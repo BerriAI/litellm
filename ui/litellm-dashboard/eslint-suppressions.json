@@ -1493,9 +1493,6 @@
     "max-lines": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 1
-    },
     "react-hooks/purity": {
       "count": 1
     },
@@ -2945,9 +2942,6 @@
       "count": 1
     },
     "max-lines": {
-      "count": 1
-    },
-    "no-nested-ternary": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
