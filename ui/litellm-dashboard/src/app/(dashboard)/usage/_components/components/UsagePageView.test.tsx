@@ -4,6 +4,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import type { Organization } from "@/components/networking";
@@ -142,207 +143,6 @@ vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
 vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
   useInfiniteUsers: vi.fn(),
 }));
-
-vi.mock("antd", async (importOriginal) => {
-  const React = await import("react");
-  const actual = await importOriginal<typeof import("antd")>();
-
-  function Select(props: any) {
-    const { value, onChange, options, ...rest } = props;
-    return React.createElement(
-      "select",
-      {
-        ...rest,
-        value,
-        onChange: (e: any) => onChange?.(e.target.value),
-        role: "combobox",
-      },
-      options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
-    );
-  }
-  (Select as any).displayName = "AntdSelect";
-
-  function Alert(props: any) {
-    const { message, description, type, closable, onClose, ...rest } = props;
-    return React.createElement(
-      "div",
-      { ...rest, "data-testid": "antd-alert", "data-type": type },
-      message && React.createElement("div", null, message),
-      description && React.createElement("div", null, description),
-      closable && React.createElement("button", { onClick: onClose, "aria-label": "Close" }, "×"),
-    );
-  }
-  (Alert as any).displayName = "AntdAlert";
-
-  function Badge(props: any) {
-    const { count, color, children, ...rest } = props;
-    return React.createElement(
-      "div",
-      { ...rest, "data-testid": "antd-badge", "data-color": color },
-      count && React.createElement("span", { "data-testid": "antd-badge-count" }, count),
-      children,
-    );
-  }
-  (Badge as any).displayName = "AntdBadge";
-
-  function Table({ columns, dataSource, ...rest }: any) {
-    return React.createElement(
-      "div",
-      { ...rest, "data-testid": "antd-table" },
-      columns?.map((col: any) =>
-        React.createElement("div", { key: col.key, "data-testid": `column-${col.key}` }, col.title),
-      ),
-      dataSource?.map((row: any) =>
-        React.createElement(
-          "div",
-          { key: row.key, "data-testid": `row-${row.key}` },
-          columns?.map((col: any) => {
-            const value = col.render ? col.render(row[col.dataIndex], row) : row[col.dataIndex];
-            return React.createElement("div", { key: col.key }, value);
-          }),
-        ),
-      ),
-    );
-  }
-  (Table as any).displayName = "Table";
-
-  function Segmented(props: any) {
-    const { value, onChange, options, ...rest } = props;
-    return React.createElement(
-      "div",
-      { ...rest, "data-testid": "antd-segmented" },
-      options?.map((opt: any) =>
-        React.createElement(
-          "button",
-          {
-            key: opt.value,
-            onClick: () => onChange?.(opt.value),
-            "data-selected": value === opt.value,
-          },
-          opt.label,
-        ),
-      ),
-    );
-  }
-  (Segmented as any).displayName = "AntdSegmented";
-
-  function Tooltip(props: any) {
-    const { title, children, ...rest } = props;
-    return React.createElement("div", { ...rest, "data-testid": "antd-tooltip", title }, children);
-  }
-  (Tooltip as any).displayName = "AntdTooltip";
-
-  return {
-    ...actual,
-    Select,
-    Alert,
-    Badge,
-    Table,
-    Segmented,
-    Tooltip,
-  };
-});
-
-vi.mock("@ant-design/icons", async () => {
-  const React = await import("react");
-
-  function Icon() {
-    return React.createElement("span");
-  }
-
-  function LoadingOutlined(props: any) {
-    return React.createElement("span", { "data-testid": "loading-icon", ...props });
-  }
-
-  return {
-    GlobalOutlined: Icon,
-    BankOutlined: Icon,
-    TeamOutlined: Icon,
-    ShoppingCartOutlined: Icon,
-    TagsOutlined: Icon,
-    RobotOutlined: Icon,
-    LineChartOutlined: Icon,
-    BarChartOutlined: Icon,
-    ClockCircleOutlined: Icon,
-    CalendarOutlined: Icon,
-    InfoCircleOutlined: Icon,
-    UserOutlined: Icon,
-    DownOutlined: Icon,
-    RightOutlined: Icon,
-    ExportOutlined: Icon,
-    LoadingOutlined,
-  };
-});
-
-// Mock Tremor components
-vi.mock("@tremor/react", async () => {
-  const React = await import("react");
-  const actual = await import("@tremor/react");
-
-  function TabGroup({ children }: any) {
-    return React.createElement("div", { "data-testid": "tremor-tab-group" }, children);
-  }
-
-  function TabList({ children }: any) {
-    return React.createElement("div", { "data-testid": "tremor-tab-list" }, children);
-  }
-
-  function Tab({ children, ...props }: any) {
-    return React.createElement("button", { ...props, "data-testid": "tremor-tab" }, children);
-  }
-
-  function TabPanels({ children }: any) {
-    return React.createElement("div", { "data-testid": "tremor-tab-panels" }, children);
-  }
-
-  function TabPanel({ children }: any) {
-    return React.createElement("div", { "data-testid": "tremor-tab-panel" }, children);
-  }
-
-  function Card({ children, ...props }: any) {
-    return React.createElement("div", { ...props, "data-testid": "tremor-card" }, children);
-  }
-
-  function Grid({ children, numItems, ...props }: any) {
-    return React.createElement("div", { ...props, "data-testid": "tremor-grid" }, children);
-  }
-
-  function Col({ children, numColSpan, ...props }: any) {
-    return React.createElement("div", { ...props, "data-testid": "tremor-col" }, children);
-  }
-
-  function Title({ children, ...props }: any) {
-    return React.createElement("h2", { ...props, "data-testid": "tremor-title" }, children);
-  }
-
-  function Text({ children, ...props }: any) {
-    return React.createElement("p", { ...props, "data-testid": "tremor-text" }, children);
-  }
-
-  function Button({ children, icon, onClick, ...props }: any) {
-    return React.createElement(
-      "button",
-      { ...props, onClick, "data-testid": "tremor-button" },
-      icon && React.createElement("span", { "data-testid": "tremor-button-icon" }),
-      children,
-    );
-  }
-
-  return {
-    ...actual,
-    TabGroup,
-    TabList,
-    Tab,
-    TabPanels,
-    TabPanel,
-    Card,
-    Grid,
-    Col,
-    Title,
-    Text,
-    Button,
-  };
-});
 
 describe("UsagePage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
@@ -885,6 +685,26 @@ describe("UsagePage", () => {
   });
 
   describe("admin user selector", () => {
+    // Anchored on the field's own label, so it does not depend on which library draws the control.
+    const userSelectCombobox = (): HTMLElement => {
+      let node: HTMLElement | null = screen.getByText("Filter by user");
+      while (node && !node.querySelector('[role="combobox"]')) {
+        node = node.parentElement;
+      }
+      const combobox = node?.querySelector('[role="combobox"]') ?? null;
+      expect(combobox).not.toBeNull();
+      return combobox as HTMLElement;
+    };
+
+    const openUserSelect = async () => {
+      await userEvent.setup().click(userSelectCombobox());
+    };
+
+    // One library paints the prompt as its own text node and the other leaves it on the input's
+    // placeholder attribute, so either one means the user is being told what to type.
+    const promptsWith = (text: string) =>
+      screen.queryAllByText(text).length + screen.queryAllByPlaceholderText(text).length > 0;
+
     it("should render user selector for admin users in global view", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -892,10 +712,8 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      // Admin should see the user selector select element with the placeholder attribute
-      const userSelects = screen.getAllByRole("combobox");
-      const userSelect = userSelects.find((el) => el.getAttribute("placeholder") === "Select user to filter...");
-      expect(userSelect).toBeDefined();
+      expect(userSelectCombobox()).toBeInTheDocument();
+      expect(promptsWith("Select user to filter...")).toBe(true);
     });
 
     it("should format user options with alias when available", async () => {
@@ -904,6 +722,8 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
+
+      await openUserSelect();
 
       // User with alias should show "alias (id)"
       expect(screen.getByText("Alice (user-001)")).toBeInTheDocument();
@@ -958,6 +778,8 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
+      await openUserSelect();
+
       // Duplicate user should appear only once
       const dupElements = screen.getAllByText("DupUser (user-dup)");
       expect(dupElements).toHaveLength(1);
@@ -1003,10 +825,9 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      // Non-admin should not see the user selector
-      const userSelects = screen.getAllByRole("combobox");
-      const userSelect = userSelects.find((el) => el.getAttribute("placeholder") === "Select user to filter...");
-      expect(userSelect).toBeUndefined();
+      // The admin case above proves this label is rendered when the selector exists, so its
+      // absence here is a live assertion rather than a query that can never match.
+      expect(screen.queryByText("Filter by user")).not.toBeInTheDocument();
     });
 
     it("should always pass own userId for non-admin users", async () => {

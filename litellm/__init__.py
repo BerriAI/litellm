@@ -172,6 +172,7 @@ callbacks: List[
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
+langfuse_enable_update_trace_keys: bool = False
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 prometheus_latency_buckets: Optional[List[float]] = None
@@ -246,6 +247,7 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 # config.yaml.
 strip_anthropic_total_tokens: bool = False
 anthropic_sse_ping_interval_seconds: float = 15.0
+sse_keepalive_ping_interval_seconds: float | None = None
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge

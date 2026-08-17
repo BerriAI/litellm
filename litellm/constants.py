@@ -141,6 +141,8 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
     "x-litellm-adaptive-router-model",
+    "x-litellm-applied-guardrails",
+    "x-litellm-guardrail-scan-id",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -472,6 +474,8 @@ EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = float(
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv("ANTHROPIC_TOKEN_COUNTING_BETA_VERSION", "token-counting-2024-11-01")
 ANTHROPIC_SKILLS_API_BETA_VERSION: Final = "skills-2025-10-02"
+ANTHROPIC_BATCHES_ROUTE: Final = "/v1/messages/batches"
+VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,
     "medium": 5,
@@ -1323,6 +1327,7 @@ LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
+CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
@@ -1488,11 +1493,15 @@ SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(os.getenv("SPEND_LOG_CLEA
 SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS: Final = float(
     os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
 )
+SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS: Final = float(os.getenv("SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS", "300"))
+SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = float(os.getenv("SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS", "30"))
+SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = int(os.getenv("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", "100000"))
 TOOL_SPEND_TOP_TOOLS: Final = 100
 SPEND_LOG_PARTITION_INTERVAL: Final = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
 SPEND_LOG_PARTITION_PRECREATE_AHEAD: Final = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
 SPEND_LOG_WRITE_BATCH_MAX_BYTES: Final = max(1, int(os.getenv("SPEND_LOG_WRITE_BATCH_MAX_BYTES", 2_000_000)))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD: Final = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
+SPEND_LOG_QUEUE_MAX_BYTES: Final = max(1, int(os.getenv("SPEND_LOG_QUEUE_MAX_BYTES", "64000000")))
 SPEND_LOG_QUEUE_POLL_INTERVAL: Final = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = int(os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = int(os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60))  # 1 minute
@@ -1526,6 +1535,10 @@ APSCHEDULER_REPLACE_EXISTING: Final = os.getenv("APSCHEDULER_REPLACE_EXISTING", 
     "true",
     "1",
 ]  # always replace existing jobs
+
+# Width of the window scheduled background jobs are spread across, so they do not all fire
+# on one instant on every replica. Tunable per deployment via general_settings.
+DEFAULT_STAGGER_WINDOW_SECONDS: Final = 300
 
 # The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
 # This will run tag spcific tasks at a later time to smooth QPS
@@ -1735,6 +1748,9 @@ PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
+# Deployments named in the lapsed-window alert before it is truncated, so a fleet-wide
+# expiry cannot produce an alert too large for the channel delivering it.
+PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
 # Slack allowed when deciding a sentinel row is stale. The row's updated_at and the
 # run's cutoff are stamped by different hosts, so clock skew between them must not let
 # one run delete a charge another just wrote. A stale row is hours old and a concurrent

@@ -266,6 +266,8 @@ class CredentialLiteLLMParams(BaseModel):
     s3_region_name: str | None = None
     s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
+    s3_output_bucket_name: str | None = None
+    bedrock_tags: list | None = None
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
 
@@ -900,6 +902,14 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
     tags: tuple[str, ...]
     strategy: _PreRoutingStrategyT_co
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumedRequestTagsStamp:
+    """The model group a tagged router rewrote to, plus the request tags spent selecting it."""
+
+    model_group: str
+    tags: tuple[str, ...]
 
 
 @runtime_checkable

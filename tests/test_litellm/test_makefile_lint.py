@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = ROOT / "Makefile"
+GATE_SLOT_LOCK = ROOT / "scripts" / "gate_slot_lock.py"
 
 BARRIER_HELPER = """barrier_sync() {
     touch "$STUB_BARRIER_DIR/$1.started"
@@ -66,6 +67,7 @@ def _sandbox(tmp_path: Path) -> tuple[Path, Path, Path]:
     (repo / "scripts").mkdir()
     (repo / "tests" / "e2e").mkdir(parents=True)
     shutil.copy(MAKEFILE, repo / "Makefile")
+    shutil.copy(GATE_SLOT_LOCK, repo / "scripts" / "gate_slot_lock.py")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -97,6 +99,7 @@ def test_lint_overlaps_env_sync_with_base_fetch(tmp_path: Path) -> None:
             "HOME": str(tmp_path),
             "STUB_BIN": str(bin_dir),
             "STUB_BARRIER_DIR": str(barrier_dir),
+            "LITELLM_GATE_SLOTS": "0",
         },
     )
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"

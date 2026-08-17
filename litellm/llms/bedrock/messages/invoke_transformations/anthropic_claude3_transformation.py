@@ -33,9 +33,9 @@ from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
+    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
-    remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -749,11 +749,9 @@ class AmazonAnthropicClaudeMessagesConfig(
                     model,
                 )
 
-        # 5b. Remove `custom` field from tools (Bedrock doesn't support it)
-        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
-        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # 5b. Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
         # Ref: https://github.com/BerriAI/litellm/issues/22847
-        remove_custom_field_from_tools(anthropic_messages_request)
+        normalize_custom_field_on_tools(anthropic_messages_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 

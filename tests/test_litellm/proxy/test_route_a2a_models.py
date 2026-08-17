@@ -32,6 +32,7 @@ async def test_route_a2a_model_bypasses_router():
     mock_router.model_names = ["gpt-4", "gpt-3.5-turbo"]
     mock_router.deployment_names = []
     mock_router.has_model_id = Mock(return_value=False)
+    mock_router.is_recognized_model = Mock(return_value=False)
     mock_router.model_group_alias = None
     mock_router.router_general_settings = Mock(pass_through_all_models=False)
     mock_router.default_deployment = None
@@ -88,6 +89,7 @@ async def test_route_non_a2a_model_raises_error_if_not_in_router():
     mock_router.model_names = ["gpt-4", "gpt-3.5-turbo"]
     mock_router.deployment_names = []
     mock_router.has_model_id = Mock(return_value=False)
+    mock_router.is_recognized_model = Mock(return_value=False)
     mock_router.model_group_alias = None
     mock_router.router_general_settings = Mock(pass_through_all_models=False)
     mock_router.default_deployment = None
