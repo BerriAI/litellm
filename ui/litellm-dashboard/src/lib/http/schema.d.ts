@@ -7371,6 +7371,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/key/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Key
+         * @description Partially update a key using RFC 7386 JSON Merge Patch semantics.
+         *
+         *     `key` is taken from the path; a `key` in the body is accepted only when it matches.
+         *     `metadata` is merged with the key's stored metadata rather than replacing it: an
+         *     omitted entry is preserved, `entry: null` deletes it, and any other value overwrites
+         *     (recursing into nested objects). Every other field behaves exactly like
+         *     `POST /key/update` (omitted preserves, `null` clears, a value overwrites). An unknown
+         *     field is rejected with a 422 rather than silently ignored. Returns the updated key.
+         *
+         *     ```
+         *     curl --location --request PATCH 'http://0.0.0.0:4000/key/sk-1234'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *         "metadata": {"cost_center": "1234", "deprecated_entry": null}
+         *     }'
+         *     ```
+         */
+        patch: operations["patch_key_key__key__patch"];
+        trace?: never;
+    };
     "/key/{key}/regenerate": {
         parameters: {
             query?: never;
@@ -30307,6 +30340,159 @@ export interface components {
             guardrail_name?: string | null;
             litellm_params?: components["schemas"]["BaseLitellmParams-Input"] | null;
         };
+        /**
+         * PatchKeyRequest
+         * @description Body of PATCH /key/{key}.
+         *
+         *     Differs from UpdateKeyRequest in two ways. `key` is optional, because PATCH takes it
+         *     from the path; a `key` in the body is still accepted when it matches. Unknown fields
+         *     are rejected rather than ignored, because on a merge patch the set of fields present
+         *     *is* the request, so a misspelled field has to fail loudly instead of silently
+         *     no-op'ing.
+         */
+        PatchKeyRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
+            /** Agent Id */
+            agent_id?: string | null;
+            /**
+             * Aliases
+             * @default {}
+             */
+            aliases: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: unknown[] | null;
+            /** Allowed Passthrough Routes */
+            allowed_passthrough_routes?: unknown[] | null;
+            /**
+             * Allowed Routes
+             * @default []
+             */
+            allowed_routes: unknown[] | null;
+            /** Allowed Vector Store Indexes */
+            allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
+            /** Auto Rotate */
+            auto_rotate?: boolean | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /**
+             * Config
+             * @default {}
+             */
+            config: {
+                [key: string]: unknown;
+            } | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
+            /** Disable Global Guardrails */
+            disable_global_guardrails?: boolean | null;
+            /** Duration */
+            duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
+            /** Enforced Params */
+            enforced_params?: string[] | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Key */
+            key?: string | null;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
+            models: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /**
+             * Permissions
+             * @default {}
+             */
+            permissions: {
+                [key: string]: unknown;
+            } | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Rotation Interval */
+            rotation_interval?: string | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Rpm Limit Type */
+            rpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+            /** Spend */
+            spend?: number | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Tags */
+            tags?: string[] | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** Tpm Limit Type */
+            tpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+            /** User Id */
+            user_id?: string | null;
+        };
         /** PatchPromptRequest */
         PatchPromptRequest: {
             litellm_params?: components["schemas"]["PromptLiteLLMParams"] | null;
@@ -45552,6 +45738,44 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_key_key__key__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchKeyRequest"];
             };
         };
         responses: {

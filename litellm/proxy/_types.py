@@ -1241,6 +1241,27 @@ class UpdateKeyRequest(KeyRequestBase):
         return self
 
 
+class PatchKeyRequest(UpdateKeyRequest):
+    """
+    Body of PATCH /key/{key}.
+
+    Differs from UpdateKeyRequest in two ways. `key` is optional, because PATCH takes it
+    from the path; a `key` in the body is still accepted when it matches. Unknown fields
+    are rejected rather than ignored, because on a merge patch the set of fields present
+    *is* the request, so a misspelled field has to fail loudly instead of silently
+    no-op'ing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str | None = None
+
+    @model_validator(mode="after")
+    def validate_key_identifier(self) -> "PatchKeyRequest":
+        """The path supplies the identifier, so the body needs neither key nor key_alias."""
+        return self
+
+
 class RegenerateKeyRequest(GenerateKeyRequest):
     # This needs to be different from UpdateKeyRequest, because "key" is optional for this
     key: str | None = None
