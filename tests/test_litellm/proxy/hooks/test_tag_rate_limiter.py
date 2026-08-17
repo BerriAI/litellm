@@ -2181,3 +2181,95 @@ async def test_flooding_tag_buckets_does_not_evict_the_shared_cache_authenticati
         )
 
     assert await shared_cache.async_get_cache(key="authentication_bound_counter") == "do-not-evict"
+
+
+def _single_request_per_minute_router() -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
+                    }
+                },
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_max_in_memory_cache_size_setting_lets_high_cardinality_tags_avoid_early_eviction(
+    time_controller, monkeypatch
+):
+    """
+    This hook's own isolated cache still defaults to 200 items, shared across
+    every distinct tag value it sees. A deployment rate-limiting on a
+    high-cardinality tag_id (e.g. per end user) without Redis can raise
+    `litellm_settings.tag_rate_limiter_max_in_memory_cache_size` so an
+    earlier bucket survives churn from later, unrelated tag values: with
+    limit=1, a still-live bucket rejects a second request instead of having
+    been evicted back to a fresh count of 0.
+    """
+    monkeypatch.setattr(litellm, "tag_rate_limiter_max_in_memory_cache_size", 500)
+
+    limiter = _PROXY_TagRateLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
+    router = _single_request_per_minute_router()
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:early-user"]}},
+    )
+
+    for i in range(250):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": [f"end_user_id:flood-{i}"]}},
+        )
+
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:early-user"]}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_max_in_memory_cache_size_of_zero_falls_back_to_the_safe_default(time_controller, monkeypatch):
+    """
+    0 would hit InMemoryCache.set_cache's own `max_size_in_memory == 0`
+    short-circuit and silently disable this hook's in-memory cache outright,
+    so it must be rejected in favor of the safe 200-item default rather than
+    passed straight through: a limit=1 bucket must still reject a second,
+    immediate request for the same tag.
+    """
+    monkeypatch.setattr(litellm, "tag_rate_limiter_max_in_memory_cache_size", 0)
+
+    limiter = _PROXY_TagRateLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
+    router = _single_request_per_minute_router()
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )

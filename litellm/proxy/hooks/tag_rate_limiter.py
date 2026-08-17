@@ -9,8 +9,10 @@ from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple, TypeAlias
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -624,7 +626,20 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # ceiling could evict an unrelated, authentication-bound counter and
         # exceed a limit nothing here configured. The real Redis connection
         # (if any) is still shared, so cross-instance correctness is unaffected.
-        isolated_dual_cache: Final = DualCache(redis_cache=internal_usage_cache.redis_cache)
+        #
+        # This cache's own 200-item default is still shared across every
+        # distinct tag value this hook sees. Deployments rate-limiting on a
+        # high-cardinality tag_id (e.g. per end user) without Redis can raise
+        # `litellm_settings.tag_rate_limiter_max_in_memory_cache_size` so
+        # active buckets aren't evicted before their period elapses. 0 would
+        # disable this hook's in-memory cache outright, so it's rejected here
+        # in favor of the safe default.
+        configured_max_cache_size: Final = litellm.tag_rate_limiter_max_in_memory_cache_size
+        max_cache_size: Final = configured_max_cache_size if configured_max_cache_size else None
+        isolated_dual_cache: Final = DualCache(
+            in_memory_cache=InMemoryCache(max_size_in_memory=max_cache_size),
+            redis_cache=internal_usage_cache.redis_cache,
+        )
         self.internal_usage_cache = InternalUsageCache(dual_cache=isolated_dual_cache)
         self._v3 = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
         self._time_provider = time_provider or datetime.now

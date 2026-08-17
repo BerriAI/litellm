@@ -394,6 +394,7 @@ cache: Optional["Cache"] = None  # cache object <- use this - https://docs.litel
 default_in_memory_ttl: Optional[float] = None
 default_redis_ttl: Optional[float] = None
 default_redis_batch_cache_expiry: Optional[float] = None
+tag_rate_limiter_max_in_memory_cache_size: Optional[int] = None
 model_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
