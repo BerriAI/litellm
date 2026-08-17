@@ -76,6 +76,46 @@ describe("transformModelData", () => {
     expect(result.data[0]).toHaveProperty("output_cost", "0.00");
   });
 
+  it("should display tiered prices as ranges instead of zero", () => {
+    const rawData = {
+      data: [
+        {
+          model_name: "volcengine/doubao-seed-2-0-lite-260215",
+          litellm_params: {
+            model: "volcengine/doubao-seed-2-0-lite-260215",
+          },
+          model_info: {
+            input_cost_per_token: 0,
+            output_cost_per_token: 0,
+            tiered_pricing: [
+              {
+                range: [0, 32000],
+                input_cost_per_token: 8.7e-8,
+                output_cost_per_token: 5.2e-7,
+              },
+              {
+                range: [32000, 128000],
+                input_cost_per_token: 1.3e-7,
+                output_cost_per_token: 7.8e-7,
+              },
+              {
+                range: [128000, 256000],
+                input_cost_per_token: 2.6e-7,
+                output_cost_per_token: 1.6e-6,
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    const result = transformModelData(rawData, mockGetProviderFromModel);
+
+    expect(result.data[0]).toHaveProperty("input_cost", "0.09–$0.26");
+    expect(result.data[0]).toHaveProperty("output_cost", "0.52–$1.60");
+    expect(result.data[0]).toHaveProperty("has_tiered_pricing", true);
+  });
+
   it("should handle null cost fields in model_info", () => {
     const rawData = {
       data: [

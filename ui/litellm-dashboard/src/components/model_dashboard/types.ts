@@ -25,8 +25,9 @@ export interface ModelData {
   model_name: string;
   provider: string;
   litellm_model_name: string;
-  input_cost: number;
-  output_cost: number;
+  input_cost: number | string;
+  output_cost: number | string;
+  has_tiered_pricing?: boolean;
   max_tokens: number;
   max_input_tokens: number;
   api_base?: string;

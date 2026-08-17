@@ -1021,6 +1021,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             },
                             "input_cost_per_token": {"type": "number"},
                             "output_cost_per_token": {"type": "number"},
+                            "output_cost_per_token_above_200_tokens": {"type": "number"},
                             "cache_read_input_token_cost": {"type": "number"},
                             "cache_creation_input_token_cost": {"type": "number"},
                             "output_cost_per_reasoning_token": {"type": "number"},
