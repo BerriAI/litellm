@@ -4828,6 +4828,8 @@
             "text",
             "audio"
         ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
@@ -4860,6 +4862,8 @@
             "text",
             "audio"
         ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,

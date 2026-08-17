@@ -11,7 +11,14 @@ import pytest
 REPO_ROOT = Path(__file__).parents[2]
 GENERATOR_PATH = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
+BACKUP_PRICES_PATH = (
+    REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
+)
 SCHEMA_PATH = REPO_ROOT / "model_prices_and_context_window.schema.json"
+AZURE_AUDIO_MODELS = (
+    "azure/gpt-audio-1.5-2026-02-23",
+    "azure/gpt-audio-mini-2025-10-06",
+)
 
 
 def build_validator(schema: dict) -> jsonschema.Draft202012Validator:
@@ -34,6 +41,20 @@ def committed_schema() -> dict:
 @pytest.fixture(scope="module")
 def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
+
+
+@pytest.fixture(scope="module")
+def backup_prices() -> dict:
+    return json.loads(BACKUP_PRICES_PATH.read_text())
+
+
+@pytest.mark.parametrize("model", AZURE_AUDIO_MODELS)
+def test_azure_audio_models_support_audio_input_and_output(
+    prices: dict, backup_prices: dict, model: str
+):
+    assert prices[model]["supports_audio_input"] is True
+    assert prices[model]["supports_audio_output"] is True
+    assert backup_prices[model] == prices[model]
 
 
 def test_committed_schema_matches_generator_output(prices: dict, committed_schema: dict):
