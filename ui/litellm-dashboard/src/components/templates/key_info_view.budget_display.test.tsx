@@ -11,6 +11,12 @@ import useTeams from "@/app/(dashboard)/hooks/useTeams";
 // where the overview "Spend" card formatted `max_budget` with the default 0
 // decimals, truncating sub-dollar budgets (e.g. $0.10) to "$0".
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => ({ data: [] }),
+}));
+
 vi.mock("./key_edit_view", () => ({
   KeyEditView: () => <div data-testid="key-edit-view-stub" />,
 }));
@@ -24,6 +30,7 @@ vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   useResetKeySpend: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }));
 vi.mock("../networking", () => ({
+  serverRootPath: "",
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({ resolved_guardrails: [] }),
