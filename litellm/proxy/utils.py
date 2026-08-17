@@ -1003,7 +1003,9 @@ class ProxyLogging:
             Result from the guardrail execution
         """
         # Use unified_guardrail if callback has apply_guardrail method
-        has_apply_guardrail: Final = "apply_guardrail" in type(callback).__dict__
+        has_apply_guardrail: Final = "apply_guardrail" in type(callback).__dict__ and not getattr(
+            callback, "use_native_lifecycle_hooks", False
+        )
         use_unified: Final = has_apply_guardrail and not (
             hook_type == "during_call" and getattr(callback, "use_native_during_call_hook", False)
         )
@@ -1756,7 +1758,7 @@ class ProxyLogging:
             if "async_post_call_streaming_iterator_hook" in cls_attrs:
                 has_iterator_override = True
                 iterator_overrides.append((resolved, "override"))
-            elif "apply_guardrail" in cls_attrs:
+            elif "apply_guardrail" in cls_attrs and not getattr(resolved, "use_native_lifecycle_hooks", False):
                 iterator_overrides.append((resolved, "apply_guardrail"))
             # Walk the MRO for ``async_post_call_streaming_hook`` rather than
             # using the leaf-class ``__dict__`` check used by the other flags:
@@ -1890,6 +1892,7 @@ class ProxyLogging:
                 # Add task to list for parallel execution
                 if (
                     "apply_guardrail" in type(callback).__dict__
+                    and not callback.use_native_lifecycle_hooks
                     and user_api_key_dict is not None
                     and not getattr(callback, "use_native_during_call_hook", False)
                 ):
@@ -2413,7 +2416,7 @@ class ProxyLogging:
 
                 guardrail_response: Any | None = None
 
-                if "apply_guardrail" in type(callback).__dict__:
+                if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
                     data["guardrail_to_apply"] = callback
                     guardrail_response = await self._run_guardrail_with_metrics(
                         callback,
@@ -2486,7 +2489,7 @@ class ProxyLogging:
         async def _run_one(callback: CustomGuardrail) -> None:
             if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
                 return
-            if "apply_guardrail" in type(callback).__dict__:
+            if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
                 data["guardrail_to_apply"] = callback
                 await self._run_guardrail_with_metrics(
                     callback,
@@ -2552,7 +2555,7 @@ class ProxyLogging:
         for callback in caps.resolved_callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue
-            if "apply_guardrail" not in type(callback).__dict__:
+            if "apply_guardrail" not in type(callback).__dict__ or callback.use_native_lifecycle_hooks:
                 continue
             if (
                 callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call)
@@ -2789,6 +2792,7 @@ class ProxyLogging:
                     and stream_needs_translation
                     and isinstance(resolved_callback, CustomGuardrail)
                     and resolved_callback.uses_apply_guardrail_interface()
+                    and getattr(resolved_callback, "use_native_lifecycle_hooks", False) is not True
                     and not resolved_callback.mask_response_content
                 )
                 else kind

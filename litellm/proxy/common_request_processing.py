@@ -2669,10 +2669,10 @@ class ProxyBaseLLMRequestProcessing:
         streaming pipeline (including unified_guardrail end-of-stream blocks)
         has completed.
 
-        Guardrails with apply_guardrail are skipped — they already ran via
-        unified_guardrail's streaming iterator.  Only guardrails that override
-        async_post_call_success_hook directly (without apply_guardrail) run
-        here.
+        Guardrails routed through unified_guardrail are skipped, since they already ran
+        via its streaming iterator.  Guardrails that override
+        async_post_call_success_hook directly run here, including those that implement
+        apply_guardrail but keep their native lifecycle hooks.
 
         This is audit-only — content has already been delivered to the client.
 
@@ -2695,8 +2695,8 @@ class ProxyBaseLLMRequestProcessing:
                     continue
                 try:
                     guardrail_result = None
-                    if "apply_guardrail" in type(cb).__dict__:
-                        # Skip — apply_guardrail guardrails already ran via
+                    if "apply_guardrail" in type(cb).__dict__ and not cb.use_native_lifecycle_hooks:
+                        # Skip — unified-routed guardrails already ran via
                         # unified_guardrail's end-of-stream block in the
                         # streaming iterator pipeline.  Running them again
                         # here would duplicate the guardrail API call
