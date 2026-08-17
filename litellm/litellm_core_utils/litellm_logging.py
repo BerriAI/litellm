@@ -13,6 +13,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 from httpx import Response
@@ -1189,6 +1190,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
+            attr: Literal["warning", "debug"]
             if self.litellm_request_debug:
                 attr = "warning"
             else:
@@ -1802,7 +1804,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.model_call_details.get("litellm_params") is None:
             return
         metadata_hidden_params: Final = hidden_params.copy()
-        response_cost: Final = self.model_call_details.get("response_cost")
+        response_cost: Final[object] = self.model_call_details.get("response_cost")
         if metadata_hidden_params.get("response_cost") is None and response_cost is not None:
             metadata_hidden_params["response_cost"] = response_cost
 
@@ -1844,7 +1846,10 @@ class Logging(LiteLLMLoggingBaseClass):
             logging_result, start_time, end_time
         )
 
-        if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
+        standard_logging_payload: Final[StandardLoggingPayload | None] = self.model_call_details.get(
+            "standard_logging_object"
+        )
+        if standard_logging_payload is not None:
             emit_standard_logging_payload(standard_logging_payload)
 
     def _build_standard_logging_payload(
@@ -2109,7 +2114,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _success_handler_body(
         self,
-        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
+        result: object = None,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
@@ -2150,7 +2155,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
                     complete_streaming_response, start_time, end_time
                 )
-                if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
+                standard_logging_payload: Final[StandardLoggingPayload | None] = self.model_call_details.get(
+                    "standard_logging_object"
+                )
+                if standard_logging_payload is not None:
                     # Only emit for sync requests (async_success_handler handles async)
                     if is_sync_request:
                         emit_standard_logging_payload(standard_logging_payload)
@@ -2983,7 +2991,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 global_callbacks=litellm.failure_callback,
             )
 
-            result = None  # result sent to all loggers, init this to None incase it's not created
+            result: object = None  # result sent to all loggers, init this to None incase it's not created
 
             result = redact_message_input_output_from_logging(
                 model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
@@ -3397,11 +3405,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _get_assembled_streaming_response(
         self,
-        result: ModelResponse | TextCompletionResponse | ModelResponseStream | ResponseCompletedEvent | Any,
+        result: ModelResponse | TextCompletionResponse | ModelResponseStream | ResponseCompletedEvent | object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         is_async: bool,
-        streaming_chunks: list[Any],
+        streaming_chunks: list[object],
     ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | None:
         if self.stream is not True:
             return None
@@ -3679,9 +3687,7 @@ def set_callbacks(callback_list, function_id=None):
                 from sentry_sdk.scrubber import EventScrubber
 
                 sentry_sdk_instance = sentry_sdk
-                sentry_trace_rate = (
-                    os.environ.get("SENTRY_API_TRACE_RATE") if "SENTRY_API_TRACE_RATE" in os.environ else "1.0"
-                )
+                sentry_trace_rate = os.environ.get("SENTRY_API_TRACE_RATE", "1.0")
                 sentry_sample_rate = (
                     os.environ.get("SENTRY_API_SAMPLE_RATE") if "SENTRY_API_SAMPLE_RATE" in os.environ else "1.0"
                 )
@@ -5154,13 +5160,13 @@ class StandardLoggingPayloadSetup:
         # ProxyException uses .code, LiteLLM exceptions use .status_code,
         # httpx.HTTPStatusError exposes status only as .response.status_code.
         # Stringified for Prisma JSON compatibility.
-        error_code_attr: Final = getattr(original_exception, "code", None)
+        error_code_attr: Final[object] = getattr(original_exception, "code", None)
         if error_code_attr is not None and str(error_code_attr) not in ("", "None"):
             error_status: str = str(error_code_attr)
         else:
-            status_code_attr = getattr(original_exception, "status_code", None)
+            status_code_attr: object = getattr(original_exception, "status_code", None)
             if status_code_attr is None:
-                response_attr: Final = getattr(original_exception, "response", None)
+                response_attr: Final[object] = getattr(original_exception, "response", None)
                 status_code_attr = getattr(response_attr, "status_code", None)
             error_status = str(status_code_attr) if status_code_attr is not None else ""
         error_class: Final[str] = str(original_exception.__class__.__name__) if original_exception else ""
@@ -5169,7 +5175,7 @@ class StandardLoggingPayloadSetup:
         # Get traceback information (first 100 lines)
         traceback_info = traceback_str or ""
         if original_exception:
-            tb: Final = getattr(original_exception, "__traceback__", None)
+            tb: Final[TracebackType | None] = getattr(original_exception, "__traceback__", None)
             if tb:
                 tb_lines: Final = traceback.format_tb(tb)
                 traceback_info += "".join(tb_lines[:MAXIMUM_TRACEBACK_LINES_TO_LOG])  # Limit to first 100 lines
@@ -5280,11 +5286,11 @@ class StandardLoggingPayloadSetup:
         """
         dynamic_litellm_session_id: Final = litellm_params.get("litellm_session_id")
         dynamic_litellm_trace_id: Final = litellm_params.get("litellm_trace_id")
-        metadata: Final = litellm_params.get("metadata")
+        metadata: Final[Mapping[str, object] | None] = litellm_params.get("metadata")
         metadata_session_id: Final = metadata.get("session_id") if metadata else None
         metadata_trace_id: Final = metadata.get("trace_id") if metadata else None
 
-        ordered_candidates: Final[tuple[Any, Any, Any, Any]] = (
+        ordered_candidates: Final[tuple[object, object, object, object]] = (
             (dynamic_litellm_trace_id, dynamic_litellm_session_id, metadata_trace_id, metadata_session_id)
             if litellm.request_correlation_in_logs
             else (dynamic_litellm_session_id, dynamic_litellm_trace_id, metadata_session_id, metadata_trace_id)
@@ -5309,10 +5315,10 @@ class StandardLoggingPayloadSetup:
         """
         if not litellm.request_correlation_in_logs:
             return ""
-        dynamic_litellm_session_id: Final = litellm_params.get("litellm_session_id")
+        dynamic_litellm_session_id: Final[object] = litellm_params.get("litellm_session_id")
         if dynamic_litellm_session_id:
             return str(dynamic_litellm_session_id)
-        metadata: Final = litellm_params.get("metadata")
+        metadata: Final[Mapping[str, object] | None] = litellm_params.get("metadata")
         metadata_session_id: Final = metadata.get("session_id") if metadata else None
         if metadata_session_id:
             return str(metadata_session_id)

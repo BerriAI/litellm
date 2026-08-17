@@ -15,6 +15,7 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 """
 
 import json
+import logging
 import os
 import sys
 from types import MappingProxyType
@@ -1112,6 +1113,27 @@ async def test_handle_completed_batch_no_error_file_id_reports_zero_error_failur
 
 
 @pytest.mark.asyncio
+async def test_handle_completed_batch_no_output_file_is_zero(monkeypatch):
+    """
+    Regression: an all-error batch completes with output_file_id=None (results go
+    to a separate error_file_id). _handle_completed_batch must report an empty
+    result set - zero cost, zero usage, no models - instead of letting the file
+    fetch raise "Output file id is None" on every aretrieve_batch logging poll.
+    """
+    # The output-file fetch must not even be attempted when there is no output file.
+    async def _must_not_fetch(*args, **kwargs):
+        pytest.fail("_fetch_batch_output_file_content should not be called")
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", _must_not_fetch)
+
+    cost, usage, models = await bu._handle_completed_batch(_batch(None), custom_llm_provider="openai")
+
+    assert cost == 0.0
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (0, 0, 0)
+    assert models == []
+
+
+@pytest.mark.asyncio
 async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch):
     raw_rows = [{"response": {"usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2}}}]
 
@@ -1439,3 +1461,55 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
     assert captured["aws_region_name"] == "us-west-2"
     assert captured["_litellm_internal_model_credentials"] is snapshot
     assert "model" not in captured
+
+
+# =========================================================================== #
+# _get_batch_job_usage_from_response_body: bedrock usage shapes
+# =========================================================================== #
+
+
+def test_bedrock_converse_shaped_batch_usage_is_parsed():
+    body = {"model": "us.amazon.nova-lite-v1:0", "usage": {"inputTokens": 2202, "outputTokens": 540, "totalTokens": 2742}}
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (2202, 540, 2742)
+
+
+def test_bedrock_converse_batch_usage_totals_default_when_absent():
+    body = {"model": "us.amazon.nova-lite-v1:0", "usage": {"inputTokens": 10, "outputTokens": 4}}
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 4, 14)
+
+
+def test_bedrock_converse_batch_usage_includes_cache_tokens():
+    body = {
+        "model": "us.amazon.nova-lite-v1:0",
+        "usage": {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "totalTokens": 120,
+            "cacheReadInputTokens": 800,
+            "cacheWriteInputTokens": 200,
+        },
+    }
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert usage.prompt_tokens == 1100
+    assert usage.completion_tokens == 20
+    assert usage.prompt_tokens_details.cached_tokens == 800
+    assert usage.prompt_tokens_details.cache_creation_tokens == 200
+
+
+def test_bedrock_anthropic_shaped_batch_usage_still_parsed():
+    """Anthropic-shaped bedrock output (what an Anthropic model's batch emits) must not regress."""
+    body = {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 18, "output_tokens": 10}}
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (18, 10, 28)
+
+
+def test_unparsable_bedrock_batch_usage_warns(caplog):
+    """An unrecognized usage shape must be visible, not a silent $0."""
+    body = {"model": "amazon.titan-text-lite-v1", "usage": {"inputTextTokenCount": 42}}
+    with caplog.at_level(logging.WARNING):
+        usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert usage.total_tokens == 0
+    assert "does not understand" in caplog.text
+    assert "inputTextTokenCount" in caplog.text

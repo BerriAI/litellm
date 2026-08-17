@@ -138,14 +138,14 @@ describe("CompareUI", () => {
     }
 
     await waitFor(() => {
-      expect(queryByTestId("has-attachment")).toBeInTheDocument();
+      expect(getByTestId("has-attachment")).toBeInTheDocument();
     });
 
     const textarea = getByTestId("message-textarea");
     await user.type(textarea, "Describe this image");
 
     const sendButton = getByTestId("send-button");
-    expect(sendButton).not.toBeDisabled();
+    expect(sendButton).toBeEnabled();
     await user.click(sendButton);
 
     await waitFor(() => {

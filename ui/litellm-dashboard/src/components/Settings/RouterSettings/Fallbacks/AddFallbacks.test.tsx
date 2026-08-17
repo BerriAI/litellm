@@ -189,7 +189,7 @@ describe("AddFallbacks", () => {
     });
 
     const saveButton = screen.getByRole("button", { name: /save all configurations/i });
-    expect(saveButton).not.toBeDisabled();
+    expect(saveButton).toBeEnabled();
     await user.click(saveButton);
 
     await waitFor(() => {

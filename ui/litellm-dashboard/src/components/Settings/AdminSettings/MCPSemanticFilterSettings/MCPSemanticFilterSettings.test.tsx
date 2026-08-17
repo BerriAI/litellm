@@ -143,7 +143,7 @@ describe("MCPSemanticFilterSettings", () => {
 
     await user.click(screen.getByRole("switch"));
 
-    expect(screen.getByRole("button", { name: /save settings/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /save settings/i })).toBeEnabled();
   });
 
   it("should show an error alert when the mutation fails", async () => {

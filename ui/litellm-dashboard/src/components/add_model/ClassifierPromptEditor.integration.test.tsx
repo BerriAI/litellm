@@ -1,4 +1,4 @@
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
@@ -45,7 +45,7 @@ const openEditor = async ({
     />,
   );
   await userEvent.click(screen.getByRole("button", { name: /prompt/i }));
-  await waitFor(() => expect(screen.getByLabelText("Classifier system prompt")).toBeInTheDocument());
+  expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
   return onChange;
 };
 

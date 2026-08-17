@@ -56,6 +56,15 @@ migrationJob:
   enabled: true
   backoffLimit: 4
   ttlSecondsAfterFinished: 120
+  # Wall-clock budget for the whole Job, shared across every `backoffLimit`
+  # retry rather than granted per attempt. Without it a migration that blocks
+  # on the database never fails, and because this is a pre-upgrade hook the
+  # release waits on it forever: `helm upgrade` and any GitOps controller
+  # driving it stop reconciling the whole chart until someone deletes the Job
+  # by hand. A migration that has exhausted its retries is not going to
+  # succeed on the next one, so failing is strictly better than hanging.
+  # Set to null to opt out and restore the unbounded behaviour.
+  activeDeadlineSeconds: 1800
   resources: {}
   # ServiceAccount for the Job pod only.
   #

@@ -226,9 +226,9 @@ describe("CreateVectorStore", () => {
 
     // Check if S3-specific fields are displayed
     await waitFor(() => {
-      expect(screen.queryByText("Vector Bucket Name")).toBeInTheDocument();
-      expect(screen.queryByText("AWS Region")).toBeInTheDocument();
-      expect(screen.queryByText("Embedding Model")).toBeInTheDocument();
+      expect(screen.getByText("Vector Bucket Name")).toBeInTheDocument();
+      expect(screen.getByText("AWS Region")).toBeInTheDocument();
+      expect(screen.getByText("Embedding Model")).toBeInTheDocument();
     });
   });
 

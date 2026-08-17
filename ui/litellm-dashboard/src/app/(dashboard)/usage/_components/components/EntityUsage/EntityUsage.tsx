@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
+import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import type { EntityType } from "@/components/EntityUsageExport/types";
@@ -253,6 +254,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const getFilterPlaceholder = (entityType: string) => {
     return `Select ${entityType} to filter...`;
   };
+
+  const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
+    team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
+    user: (
+      <UserDropdown value={selectedTags[0] ?? null} onChange={(userId) => setSelectedTags(userId ? [userId] : [])} />
+    ),
+  };
+  const filterSlot = entityFilterSlots[entityType];
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
@@ -679,16 +688,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
-        showFilters={entityType !== "team" && entityList !== null && entityList.length > 0}
-        filterSlot={
-          entityType === "team" ? <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} /> : undefined
-        }
-        filterLabel={entityType === "team" ? "Filter by team" : getFilterLabel(entityType)}
+        showFilters={filterSlot === undefined && entityList !== null && entityList.length > 0}
+        filterSlot={filterSlot}
+        filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
-        filterMode={entityType === "user" ? "single" : "multiple"}
         teams={teams || []}
       />
       <Tabs defaultValue={tabs[0].key}>
