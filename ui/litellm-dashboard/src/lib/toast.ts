@@ -22,11 +22,6 @@ const DEFAULT_DURATION_MS: Readonly<Record<ToastKind, number>> = {
   error: 6000,
 };
 
-/**
- * Titles for the proxy `ProxyErrorTypes` values (litellm/proxy/_types.py) that are set deliberately and say more
- * than the status does. `auth_error` and `internal_server_error` are deliberately absent: the proxy uses them as
- * catch-alls regardless of status (see `handle_exception_on_proxy`), so for those the HTTP status is the truth.
- */
 const PROXY_TYPE_TITLES: Readonly<Record<string, string>> = {
   budget_exceeded: "Budget Exceeded",
   no_db_connection: "Service Unavailable",
@@ -69,7 +64,6 @@ const toStatus = (value: unknown): number | undefined => {
   return undefined;
 };
 
-/** The proxy wraps errors as `{ error: { message, type, code } }`; bare `{ message, type, code }` also occurs. */
 const proxyEnvelope = (payload: unknown): Record<string, unknown> | undefined => {
   const record = asRecord(payload);
   return asRecord(record?.error) ?? record;
@@ -128,11 +122,6 @@ const show = (kind: ToastKind, message: ReactNode, options?: ToastOptions): void
   });
 };
 
-/**
- * The dashboard's single toast surface, backed by sonner (`<Toaster />` in the root layout).
- * `fromError` turns anything a request can reject with (ApiError, Error, raw proxy string, response payload)
- * into a titled toast: the title comes from the proxy error `type` or the HTTP status, never from the prose.
- */
 export const toast = {
   success: (message: ReactNode, options?: ToastOptions): void => show("success", message, options),
   info: (message: ReactNode, options?: ToastOptions): void => show("info", message, options),
