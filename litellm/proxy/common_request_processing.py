@@ -2502,8 +2502,9 @@ class ProxyBaseLLMRequestProcessing:
         buffered (guardrail-rewritten) and the unbuffered relay paths so
         clients that enforce the event-stream content-type (e.g. Claude Code on
         Bedrock invoke-with-response-stream) see the correct header instead of
-        Starlette's application/octet-stream default. Returns None for providers
-        with no event-stream media type, leaving the response default unchanged.
+        no content-type at all, which they fall back to reading as
+        application/octet-stream. Returns None for providers with no
+        event-stream media type, leaving the response headers unchanged.
         """
         from litellm.llms.pass_through.guardrail_translation.handler import (
             LlmPassthroughRouteHandler,
