@@ -196,32 +196,47 @@ async def process_spend_logs_guardrail_usage(
             n = int(agg["requests_evaluated"])
             if n == 0:
                 continue
-            await DailyGuardrailMetricsRepository(prisma_client).table.upsert(
-                where={
-                    "guardrail_id_date": {
-                        "guardrail_id": guardrail_id,
-                        "date": date_key,
-                    }
-                },
-                data={
-                    "create": {
-                        "guardrail_id": guardrail_id,
-                        "date": date_key,
-                        "requests_evaluated": n,
-                        "passed_count": int(agg["passed_count"]),
-                        "blocked_count": int(agg["blocked_count"]),
-                        "flagged_count": int(agg["flagged_count"]),
+            try:
+                await DailyGuardrailMetricsRepository(prisma_client).table.upsert(
+                    where={
+                        "guardrail_id_date": {
+                            "guardrail_id": guardrail_id,
+                            "date": date_key,
+                        }
                     },
-                    "update": {
-                        "requests_evaluated": {"increment": n},
-                        "passed_count": {"increment": int(agg["passed_count"])},
-                        "blocked_count": {"increment": int(agg["blocked_count"])},
-                        "flagged_count": {"increment": int(agg["flagged_count"])},
+                    data={
+                        "create": {
+                            "guardrail_id": guardrail_id,
+                            "date": date_key,
+                            "requests_evaluated": n,
+                            "passed_count": int(agg["passed_count"]),
+                            "blocked_count": int(agg["blocked_count"]),
+                            "flagged_count": int(agg["flagged_count"]),
+                        },
+                        "update": {
+                            "requests_evaluated": {"increment": n},
+                            "passed_count": {"increment": int(agg["passed_count"])},
+                            "blocked_count": {"increment": int(agg["blocked_count"])},
+                            "flagged_count": {"increment": int(agg["flagged_count"])},
+                        },
                     },
-                },
-            )
+                )
+            except Exception as metrics_error:
+                verbose_proxy_logger.warning(
+                    "Guardrail usage tracking: daily metrics upsert failed for %s on %s (non-fatal): %s",
+                    guardrail_id,
+                    date_key,
+                    metrics_error,
+                )
 
         for unit_key, units in usage_unit_totals.items():
-            await _upsert_usage_unit_row(prisma_client, unit_key, units)
+            try:
+                await _upsert_usage_unit_row(prisma_client, unit_key, units)
+            except Exception as unit_error:
+                verbose_proxy_logger.warning(
+                    "Guardrail usage tracking: usage unit upsert failed for %s (non-fatal): %s",
+                    unit_key,
+                    unit_error,
+                )
     except Exception as e:
         verbose_proxy_logger.warning("Guardrail usage tracking failed (non-fatal): %s", e)

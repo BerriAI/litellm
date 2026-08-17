@@ -81,6 +81,26 @@ async def test_usage_units_rolled_up_by_guardrail_team_key_and_date():
 
 
 @pytest.mark.asyncio
+async def test_one_failing_upsert_does_not_drop_remaining_writes():
+    """
+    A DB error on one daily-metrics or usage-unit upsert must not cancel the
+    remaining upserts in the flushed batch, or the usage endpoints would
+    permanently under-report billable counters (batches are never retried).
+    """
+    prisma = _prisma()
+    prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = RuntimeError("db down")
+    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [RuntimeError("db down"), None]
+    logs = [
+        _payload("r1", usage={"topicPolicyUnits": 1}),
+        _payload("r2", team_id=None, api_key="hashed-key-2", usage={"topicPolicyUnits": 1}),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert prisma.db.litellm_dailyguardrailusageunits.upsert.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_zero_and_non_int_usage_counters_are_skipped():
     prisma = _prisma()
     logs = [
