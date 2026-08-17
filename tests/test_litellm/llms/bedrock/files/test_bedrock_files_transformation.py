@@ -586,6 +586,60 @@ class TestBedrockFilesTransformation:
         assert "x-amz-server-side-encryption" not in headers
         assert "x-amz-server-side-encryption-aws-kms-key-id" not in headers
 
+    def test_create_file_response_reports_uploaded_object_size(self):
+        """
+        S3 answers PutObject with an empty body, so the returned FileObject must report the
+        size of the body that was uploaded instead of the response's Content-Length (always 0).
+        """
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+        litellm_params: dict = {"s3_bucket_name": "litellm-batch-bucket"}
+        jsonl_content = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock/amazon.nova-pro-v1:0",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 10,
+                },
+            }
+        ).encode()
+
+        request = config.transform_create_file_request(
+            model="amazon.nova-pro-v1:0",
+            create_file_data={
+                "file": ("batch.jsonl", jsonl_content, "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params=litellm_params,
+        )
+        assert isinstance(request, dict)
+        uploaded_size = len(request["data"].encode("utf-8"))
+        assert uploaded_size > 0
+
+        file_object = config.transform_create_file_response(
+            model=None,
+            raw_response=httpx.Response(
+                status_code=200,
+                headers={"Content-Length": "0", "ETag": '"abc123"'},
+                content=b"",
+            ),
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert file_object.bytes == uploaded_size
+
     def test_openai_passthrough_still_works(self):
         """
         Regression test: ensure OpenAI-compatible models (e.g. gpt-oss)
@@ -621,6 +675,200 @@ class TestBedrockFilesTransformation:
         assert "messages" in model_input
         assert "max_tokens" in model_input
         assert model_input["max_tokens"] == 10
+
+    def test_resolves_model_alias_before_provider_mapping(self, monkeypatch):
+        import litellm
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setitem(
+            litellm.model_alias_map,
+            "bedrock-batch",
+            "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "req-1",
+                    "body": {
+                        "model": "bedrock-batch",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 16,
+                    },
+                }
+            ]
+        )
+
+        assert result == [
+            {
+                "recordId": "req-1",
+                "modelInput": {
+                    "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+                    "max_tokens": 16,
+                    "anthropic_version": "bedrock-2023-05-31",
+                },
+            }
+        ]
+
+    def test_resolves_model_alias_before_embedding_mapping(self, monkeypatch):
+        import litellm
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setitem(
+            litellm.model_alias_map,
+            "bedrock-embedding-batch",
+            "bedrock/amazon.titan-embed-text-v2:0",
+        )
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "embedding-1",
+                    "url": "/v1/embeddings",
+                    "body": {
+                        "model": "bedrock-embedding-batch",
+                        "input": "hello",
+                    },
+                }
+            ]
+        )
+
+        assert result == [
+            {
+                "recordId": "embedding-1",
+                "modelInput": {"inputText": "hello"},
+            }
+        ]
+
+    def test_unmapped_alias_falls_back_to_target_model(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "req-1",
+                    "body": {
+                        "model": "bedrock-batch",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 16,
+                    },
+                },
+                {
+                    "custom_id": "req-2",
+                    "body": {
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 16,
+                    },
+                },
+            ],
+            target_model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+
+        expected_model_input = {
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            "max_tokens": 16,
+            "anthropic_version": "bedrock-2023-05-31",
+        }
+        assert result == [
+            {"recordId": "req-1", "modelInput": expected_model_input},
+            {"recordId": "req-2", "modelInput": expected_model_input},
+        ]
+
+    def test_record_provider_wins_over_target_model(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "openai-1",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "openai.gpt-oss-120b-1:0",
+                        "messages": [{"role": "user", "content": "Hello!"}],
+                        "max_tokens": 10,
+                    },
+                }
+            ],
+            target_model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+
+        assert result == [
+            {
+                "recordId": "openai-1",
+                "modelInput": {
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                    "max_tokens": 10,
+                },
+            }
+        ]
+
+    def test_embedding_alias_falls_back_to_target_model(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "embedding-1",
+                    "url": "/v1/embeddings",
+                    "body": {
+                        "model": "bedrock-embedding-batch",
+                        "input": "hello",
+                    },
+                }
+            ],
+            target_model="bedrock/amazon.titan-embed-text-v2:0",
+        )
+
+        assert result == [
+            {
+                "recordId": "embedding-1",
+                "modelInput": {"inputText": "hello"},
+            }
+        ]
+
+    def test_create_file_request_threads_deployment_model_to_alias_records(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        class CapturingSignConfig(BedrockFilesConfig):
+            def __init__(self):
+                super().__init__()
+                self.signed_content: str | None = None
+
+            def _sign_s3_request(self, content, api_base, optional_params, s3_encryption_key_id=None):
+                self.signed_content = content
+                return {"Authorization": "fake"}, content
+
+        config = CapturingSignConfig()
+        jsonl_content = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock-batch",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 10,
+                },
+            }
+        ).encode()
+
+        config.transform_create_file_request(
+            model="",
+            create_file_data={
+                "file": ("batch.jsonl", jsonl_content, "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={},
+            litellm_params={
+                "s3_bucket_name": "litellm-batch-352026",
+                "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            },
+        )
+
+        assert config.signed_content is not None
+        record = json.loads(config.signed_content)
+        assert record["modelInput"]["anthropic_version"] == "bedrock-2023-05-31"
+        assert "model" not in record["modelInput"]
 
 
 class TestBedrockFilesEmbeddingTransformation:
