@@ -86,8 +86,8 @@ export default function ActiveRequests({ accessToken }: ActiveRequestsProps) {
   );
   const [draftFilters, setDraftFilters] = useState<ActiveRequestFilters>(filtersFromUrl);
   const [filters, setFilters] = useState<ActiveRequestFilters>(filtersFromUrl);
-  const [paused, setPaused] = useState(false);
-  const pausedRef = useRef(paused);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const autoRefreshRef = useRef(autoRefresh);
   const [selected, setSelected] = useState<ActiveRequest | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const requestControllerRef = useRef<AbortController | null>(null);
@@ -119,16 +119,16 @@ export default function ActiveRequests({ accessToken }: ActiveRequestsProps) {
   }, [accessToken, filters, page]);
 
   useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
+    autoRefreshRef.current = autoRefresh;
+  }, [autoRefresh]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void loadRequests(), 0);
     const interval = window.setInterval(() => {
-      if (!pausedRef.current && document.visibilityState === "visible") void loadRequests();
+      if (autoRefreshRef.current && document.visibilityState === "visible") void loadRequests();
     }, POLL_INTERVAL_MS);
     const handleVisibilityChange = () => {
-      if (!pausedRef.current && document.visibilityState === "visible") void loadRequests();
+      if (autoRefreshRef.current && document.visibilityState === "visible") void loadRequests();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
@@ -239,10 +239,10 @@ export default function ActiveRequests({ accessToken }: ActiveRequestsProps) {
               Refresh
             </Button>
             <div className="flex items-center gap-2">
-              <Switch id="active-requests-pause" checked={paused} onCheckedChange={setPaused} />
-              <Label htmlFor="active-requests-pause" className="flex items-center gap-1.5">
-                {paused ? <Play className="size-3.5" aria-hidden /> : <Pause className="size-3.5" aria-hidden />}
-                {paused ? "Paused" : "Auto refresh"}
+              <Switch id="active-requests-auto-refresh" checked={autoRefresh} onCheckedChange={setAutoRefresh} />
+              <Label htmlFor="active-requests-auto-refresh" className="flex items-center gap-1.5">
+                {autoRefresh ? <Play className="size-3.5" aria-hidden /> : <Pause className="size-3.5" aria-hidden />}
+                Auto refresh
               </Label>
             </div>
           </div>

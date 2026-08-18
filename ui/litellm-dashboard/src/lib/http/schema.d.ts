@@ -21353,8 +21353,8 @@ export interface components {
             end_user_id?: string | null;
             /** Key Alias */
             key_alias?: string | null;
-            /** Key Fingerprint */
-            key_fingerprint?: string | null;
+            /** Key Hash */
+            key_hash?: string | null;
             /** Model */
             model?: string | null;
             /** Organization Alias */

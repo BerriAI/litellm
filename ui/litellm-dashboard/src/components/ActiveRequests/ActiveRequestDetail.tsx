@@ -24,8 +24,8 @@ const rows = (request: ActiveRequest): DetailRow[] => [
   { label: "Organization", value: request.organization_alias || request.organization_id },
   { label: "Project", value: request.project_alias || request.project_id },
   { label: "Team", value: request.team_alias || request.team_id },
-  { label: "Key", value: request.key_alias },
-  { label: "Key fingerprint", value: request.key_fingerprint, mono: true },
+  { label: "Key alias", value: request.key_alias },
+  { label: "Key hash", value: request.key_hash, mono: true },
   { label: "Worker", value: request.pod, mono: true },
 ];
 

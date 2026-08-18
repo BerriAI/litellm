@@ -1,9 +1,9 @@
 """Redis-backed registry of authenticated proxy requests that are still running."""
 
 import asyncio
-import hashlib
 import json
 import os
+import re
 import secrets
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -13,7 +13,7 @@ from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth, hash_token
 from litellm.types.utils import CallTypesLiteral
 
 if TYPE_CHECKING:
@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.utils import InternalUsageCache, ProxyLogging
+
+
+HASHED_KEY_PATTERN: Final = re.compile(r"(?:hashed-jwt-)?[0-9a-f]{64}")
 
 
 class ActiveRequestRecord(TypedDict):
@@ -42,7 +45,7 @@ class ActiveRequestRecord(TypedDict):
     team_id: ReadOnly[str | None]
     team_alias: ReadOnly[str | None]
     key_alias: ReadOnly[str | None]
-    key_fingerprint: ReadOnly[str | None]
+    key_hash: ReadOnly[str | None]
     pod: ReadOnly[str | None]
 
 
@@ -221,23 +224,18 @@ class ActiveRequestRegistry(CustomLogger):
         return next((value for value in candidates if value is not None), None)
 
     @staticmethod
-    def _fingerprint_salt() -> str:
-        """Salt the fingerprint with the master key, which every replica shares."""
-        from litellm.proxy.proxy_server import master_key
+    def _key_hash(api_key: str | None) -> str | None:
+        """The key hash the rest of the UI shows, so a row can be traced back to its key.
 
-        return master_key or ""
-
-    @classmethod
-    def _key_fingerprint(cls, api_key: str | None) -> str | None:
-        """Correlate requests from one key without exposing the credential itself.
-
-        Virtual keys reach here already hashed, but custom auth can return the raw
-        credential, so this hashes unconditionally rather than slicing a prefix. The
-        salt keeps a short fingerprint from being verifiable offline against a guess.
+        `UserAPIKeyAuth` has already hashed virtual keys and JWTs by the time a record is
+        built and those pass through unchanged, which is what makes the value match the
+        Key Hash column in Logs and on the key pages. Custom auth can hand back a raw
+        credential, so anything that is neither of those two hashed forms is hashed here
+        rather than published.
         """
         if not api_key:
             return None
-        return hashlib.sha256(f"{cls._fingerprint_salt()}:{api_key}".encode()).hexdigest()[:12]
+        return api_key if HASHED_KEY_PATTERN.fullmatch(api_key) else hash_token(api_key)
 
     @classmethod
     def build_record(
@@ -270,7 +268,7 @@ class ActiveRequestRegistry(CustomLogger):
             team_id=cls._safe_string(auth.team_id),
             team_alias=cls._safe_string(auth.team_alias),
             key_alias=cls._safe_string(auth.key_alias),
-            key_fingerprint=cls._key_fingerprint(auth.api_key),
+            key_hash=cls._key_hash(auth.api_key),
             pod=cls._safe_string(os.getenv("HOSTNAME"), max_length=253),
         )
 
@@ -310,10 +308,11 @@ class ActiveRequestRegistry(CustomLogger):
                 await pipe.execute()
             self._filtered_cache.clear()
             self._track_locally(resolved_id)
-            return resolved_id
         except Exception:  # noqa: BLE001  # observability must never fail a model request
             verbose_proxy_logger.exception("Failed to register active request")
             return None
+        else:
+            return resolved_id
 
     async def remove(self, registry_id: str | None) -> None:
         if not registry_id:

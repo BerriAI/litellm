@@ -35,6 +35,7 @@ const page: ActiveRequestsResponse = {
       project_id: "project-1",
       team_alias: "AI Team",
       key_alias: "production",
+      key_hash: "b8f1c0a9d2e34f5061728394a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e",
       route: "/v1/chat/completions",
       pod: "proxy-1",
     },
@@ -63,10 +64,28 @@ describe("ActiveRequests", () => {
 
     render(<ActiveRequests accessToken="token" />);
 
-    await waitFor(() => expect(screen.getByText("end-user-123")).toBeInTheDocument());
+    expect(await screen.findByText("end-user-123")).toBeInTheDocument();
     expect(screen.getByText("org-1")).toBeInTheDocument();
     expect(screen.getByText("project-1")).toBeInTheDocument();
     expect(screen.getByText("user@example.test")).toBeInTheDocument();
+    expect(screen.getByText("production")).toBeInTheDocument();
+    expect(screen.getByText("b8f1c0a9d2e34f5061728394a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e")).toBeInTheDocument();
+  });
+
+  it("should refresh on its own until an admin switches it off", async () => {
+    vi.useFakeTimers();
+    mockedActiveRequestsCall.mockResolvedValue(page);
+
+    render(<ActiveRequests accessToken="token" />);
+    await act(async () => vi.advanceTimersByTime(0));
+
+    const toggle = screen.getByRole("switch", { name: "Auto refresh" });
+    expect(toggle).toBeChecked();
+    expect(toggle.closest("div")?.querySelector(".lucide-play")).not.toBeNull();
+
+    fireEvent.click(toggle);
+    expect(screen.getByRole("switch", { name: "Auto refresh" })).not.toBeChecked();
+    expect(toggle.closest("div")?.querySelector(".lucide-pause")).not.toBeNull();
   });
 
   it("should show a safe error when refreshing fails", async () => {
@@ -74,7 +93,7 @@ describe("ActiveRequests", () => {
 
     render(<ActiveRequests accessToken="token" />);
 
-    await waitFor(() => expect(screen.getByText("Could not refresh active requests")).toBeInTheDocument());
+    expect(await screen.findByText("Could not refresh active requests")).toBeInTheDocument();
     expect(screen.getByText("Registry unavailable")).toBeInTheDocument();
   });
 
@@ -96,7 +115,7 @@ describe("ActiveRequests", () => {
     mockedCancelCall.mockResolvedValue({ cancelled: true, detail: "Cancellation sent to the worker" });
 
     render(<ActiveRequests accessToken="token" />);
-    await waitFor(() => expect(screen.getByText("end-user-123")).toBeInTheDocument());
+    expect(await screen.findByText("end-user-123")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("end-user-123"));
     const panel = await screen.findByRole("dialog");
@@ -111,13 +130,13 @@ describe("ActiveRequests", () => {
     mockedCancelCall.mockRejectedValue(new Error("That request is no longer running"));
 
     render(<ActiveRequests accessToken="token" />);
-    await waitFor(() => expect(screen.getByText("end-user-123")).toBeInTheDocument());
+    expect(await screen.findByText("end-user-123")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("end-user-123"));
     await screen.findByRole("dialog");
     fireEvent.click(screen.getByRole("button", { name: "Cancel request" }));
 
-    await waitFor(() => expect(screen.getByText("That request is no longer running")).toBeInTheDocument());
+    expect(await screen.findByText("That request is no longer running")).toBeInTheDocument();
   });
 
   it("should encode a client-provided request id in the logs link", async () => {
@@ -127,7 +146,7 @@ describe("ActiveRequests", () => {
     });
 
     render(<ActiveRequests accessToken="token" />);
-    await waitFor(() => expect(screen.getByText("end-user-123")).toBeInTheDocument());
+    expect(await screen.findByText("end-user-123")).toBeInTheDocument();
     fireEvent.click(screen.getByText("end-user-123"));
 
     expect((await screen.findByText("Open in Logs")).closest("a")).toHaveAttribute(
@@ -140,7 +159,7 @@ describe("ActiveRequests", () => {
     mockedActiveRequestsCall.mockResolvedValue({ ...page, total: 120 });
 
     render(<ActiveRequests accessToken="token" />);
-    await waitFor(() => expect(screen.getByText("end-user-123")).toBeInTheDocument());
+    expect(await screen.findByText("end-user-123")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
 
@@ -170,7 +189,7 @@ describe("ActiveRequests", () => {
     expect(mockedActiveRequestsCall).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 }), expect.anything());
   });
 
-  it("should stop polling while paused and resume afterwards", async () => {
+  it("should stop polling while auto refresh is off and resume afterwards", async () => {
     vi.useFakeTimers();
     mockedActiveRequestsCall.mockResolvedValue(page);
 

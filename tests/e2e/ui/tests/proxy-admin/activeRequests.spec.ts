@@ -134,7 +134,7 @@ test.describe("proxy admin active requests", () => {
     const updated = page.getByText(/^Updated /);
     await expect(updated).toBeVisible({ timeout: 15_000 });
 
-    await page.getByRole("switch").click();
+    await page.getByRole("switch", { name: "Auto refresh" }).click();
     const frozen = await updated.textContent();
     await page.waitForTimeout(12_000);
 

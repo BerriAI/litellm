@@ -122,9 +122,6 @@ def set_general_settings(monkeypatch, **settings):
 
 def test_should_build_identity_record_without_request_content(monkeypatch):
     monkeypatch.setenv("HOSTNAME", "proxy-1")
-    import litellm.proxy.proxy_server as proxy_server
-
-    monkeypatch.setattr(proxy_server, "master_key", "master-key", raising=False)
     auth = UserAPIKeyAuth(
         api_key="sk-test-key-value",
         user_id="user-1",
@@ -151,7 +148,7 @@ def test_should_build_identity_record_without_request_content(monkeypatch):
     assert record["organization_id"] == "org-1"
     assert record["organization_alias"] == "Example Org"
     assert record["project_alias"] == "Chat Project"
-    assert record["key_fingerprint"] == hashlib.sha256(f"master-key:{auth.api_key}".encode()).hexdigest()[:12]
+    assert record["key_hash"] == hashlib.sha256(b"sk-test-key-value").hexdigest()
     assert record["pod"] == "proxy-1"
     assert "messages" not in record
 
@@ -564,14 +561,45 @@ def test_should_drop_fields_that_are_blank_after_trimming():
     assert record["model"] is None
 
 
-def test_should_omit_the_key_fingerprint_when_there_is_no_key():
+def test_should_omit_the_key_hash_when_there_is_no_key():
     record = ActiveRequestRegistry.build_record(
         {"litellm_call_id": "call-1"},
         UserAPIKeyAuth(api_key=None),
         "acompletion",
     )
 
-    assert record["key_fingerprint"] is None
+    assert record["key_hash"] is None
+
+
+@pytest.mark.parametrize(
+    "already_hashed",
+    (
+        hashlib.sha256(b"sk-virtual-key").hexdigest(),
+        f"hashed-jwt-{hashlib.sha256(b'jwt').hexdigest()}",
+    ),
+)
+def test_should_keep_the_key_hash_the_proxy_already_computed(already_hashed):
+    """The value has to match what Logs shows, so a hashed key passes through untouched."""
+    record = ActiveRequestRegistry.build_record(
+        {"litellm_call_id": "call-1"},
+        UserAPIKeyAuth(api_key=already_hashed),
+        "acompletion",
+    )
+
+    assert record["key_hash"] == already_hashed
+
+
+def test_should_never_publish_a_credential_that_custom_auth_returned_raw():
+    raw = "custom-auth-plaintext-credential"
+
+    record = ActiveRequestRegistry.build_record(
+        {"litellm_call_id": "call-1"},
+        UserAPIKeyAuth(api_key=raw),
+        "acompletion",
+    )
+
+    assert record["key_hash"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert raw not in str(record)
 
 
 @pytest.mark.asyncio

@@ -125,13 +125,23 @@ export const activeRequestColumns: ColumnDef<ActiveRequest>[] = [
     cell: ({ row }) => text(row.original.team_alias || row.original.team_id),
   },
   {
-    id: "key",
-    accessorFn: (row) => row.key_alias ?? row.key_fingerprint ?? "",
-    meta: { title: "Key" },
-    header: "Key",
+    id: "key_alias",
+    accessorFn: (row) => row.key_alias ?? "",
+    meta: { title: "Key Alias" },
+    header: "Key Alias",
     size: 170,
     enableSorting: false,
-    cell: ({ row }) => text(row.original.key_alias || row.original.key_fingerprint),
+    cell: ({ row }) => text(row.original.key_alias),
+  },
+  {
+    id: "key_hash",
+    accessorFn: (row) => row.key_hash ?? "",
+    meta: { title: "Key Hash" },
+    header: "Key Hash",
+    size: 200,
+    enableSorting: false,
+    cell: ({ row }) =>
+      row.original.key_hash ? <span className="truncate font-mono text-xs">{row.original.key_hash}</span> : <Dash />,
   },
   {
     id: "route",

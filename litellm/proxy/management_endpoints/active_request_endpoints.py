@@ -42,7 +42,7 @@ class ActiveRequestRecord(BaseModel):
     team_id: str | None = None
     team_alias: str | None = None
     key_alias: str | None = None
-    key_fingerprint: str | None = None
+    key_hash: str | None = None
     pod: str | None = None
 
 
