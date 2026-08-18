@@ -79,14 +79,16 @@ def _is_misparsed_authority(parsed: ParseResult, raw_database: str, query: Mappi
     back the username as the host and strands the real userinfo ``@`` in the
     path, fragment or query. A PostgreSQL DSN never carries a fragment, and its
     database name cannot hold an unencoded ``@`` or ``/``. An ``@`` in the query
-    is only suspicious when the query did not parse as parameters, since
-    ``?application_name=svc@prod`` is legitimate.
+    is legitimate only when the query parsed as parameters AND a database path
+    preceded it, as in ``postgres://host/db?application_name=svc@prod``. A ``?``
+    in a password strands the tail in the query with no path left behind, and it
+    can still parse as parameters, so neither test alone is enough.
     """
     if parsed.fragment:
         return True
     if _MISPARSED_AUTHORITY_MARKERS & set(raw_database):
         return True
-    return "@" in parsed.query and not query
+    return "@" in parsed.query and (not query or not parsed.path)
 
 
 def _first(values: Sequence[str] | None) -> str:

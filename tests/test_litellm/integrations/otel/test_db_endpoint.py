@@ -97,6 +97,10 @@ MISPARSED_AUTHORITY_DSNS = (
     # empty and only the stranded userinfo '@' reveals the mis-split.
     ("postgresql://litellm:12345#aBcD@db.internal/litellm", "aBcD"),
     ("postgresql://litellm:12345?aBcD@db.internal/litellm", "aBcD"),
+    # A '?'-stranded tail that happens to parse as parameters, including one
+    # that hijacks the host= parameter into server.address.
+    ("postgresql://litellm:12345?a=aBcD@db.internal/litellm", "aBcD"),
+    ("postgresql://litellm:12345?host=aBcD@db.internal/litellm", "aBcD"),
 )
 
 
