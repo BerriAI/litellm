@@ -95,21 +95,30 @@ class TestComprehendMedicalPassthroughHandler:
 
 
 class TestIsComprehendMedicalRoute:
-    def test_matches_by_hostname(self):
-        assert PassThroughEndpointLogging().is_comprehend_medical_route(
-            "https://comprehendmedical.us-east-1.amazonaws.com/", None
-        )
-
     def test_matches_by_provider_tag(self):
-        assert PassThroughEndpointLogging().is_comprehend_medical_route("https://example.com/", "comprehendmedical")
+        assert PassThroughEndpointLogging().is_comprehend_medical_route("comprehendmedical")
 
-    def test_does_not_match_other_aws_hosts(self):
-        assert not PassThroughEndpointLogging().is_comprehend_medical_route(
-            "https://bedrock-runtime.us-east-1.amazonaws.com/model/x/converse", None
+    def test_does_not_match_other_providers(self):
+        assert not PassThroughEndpointLogging().is_comprehend_medical_route("bedrock")
+
+    def test_config_driven_passthrough_to_comprehend_host_is_not_claimed(self):
+        logging_obj = _make_logging_obj()
+
+        normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+            httpx_response=_make_response("DetectEntitiesV2"),
+            response_body={"Entities": []},
+            request_body={"Text": "John Smith"},
+            logging_obj=logging_obj,
+            url_route="https://comprehendmedical.us-east-1.amazonaws.com/",
+            result='{"Entities": []}',
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            custom_llm_provider=None,
         )
 
-    def test_does_not_match_lookalike_hosts_outside_aws(self):
-        assert not PassThroughEndpointLogging().is_comprehend_medical_route("https://comprehendmedical.evil.com/", None)
+        assert normalized["kwargs"].get("model") != "comprehendmedical/DetectEntitiesV2"
+        assert "response_cost" not in normalized["kwargs"]
 
 
 class TestNormalizeDispatch:
