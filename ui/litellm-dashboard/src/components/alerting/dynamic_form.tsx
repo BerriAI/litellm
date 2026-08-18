@@ -49,7 +49,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
     <Form form={form} onFinish={onFinish} labelAlign="left">
       {alertingSettings.map((value, index) => (
         <TableRow key={index}>
-          <TableCell className="text-center">
+          <TableCell>
             <p className="text-sm">{value.field_name}</p>
             <p
               style={{
