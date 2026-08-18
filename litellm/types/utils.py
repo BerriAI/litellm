@@ -1627,7 +1627,10 @@ class PromptTokensDetailsWrapper(
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        nested_cache_creation_input_tokens: Final = (self.model_extra or {}).get("cache_creation_input_tokens")
+        extra_fields: Final = self.model_extra
+        nested_cache_creation_input_tokens: Final = (
+            extra_fields.get("cache_creation_input_tokens") if extra_fields is not None else None
+        )
         self.cache_write_tokens = (
             self.cache_write_tokens
             if self.cache_write_tokens is not None
