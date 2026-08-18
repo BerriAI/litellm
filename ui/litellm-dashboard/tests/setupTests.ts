@@ -164,6 +164,7 @@ vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   const refWarnings = consumePendingRefWarnings();
   if (refWarnings.length > 0) {
     throw new Error(
