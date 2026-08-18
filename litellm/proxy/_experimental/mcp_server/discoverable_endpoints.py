@@ -2104,13 +2104,15 @@ async def _build_oauth_protected_resource_response(
 
     For pass-through MCP servers, the gateway proxies the upstream's own
     ``oauth-protected-resource`` metadata so standards-compliant MCP clients
-    discover the **upstream** IdP instead of the gateway. For ``true_passthrough``
-    and ``oauth_delegate`` the metadata is returned verbatim (``resource`` stays
-    the upstream): the caller's token is forwarded to and validated by the
-    upstream, so its audience must be the upstream — rewriting it to the gateway
-    would make a strict IdP (e.g. Entra) refuse to mint it or the upstream reject
-    it. Only the legacy ``is_oauth_passthrough`` opt-in rewrites ``resource`` to
-    the gateway's own URL so clients present the bearer token back to the gateway.
+    discover the **upstream** IdP instead of the gateway. ``resource`` is
+    rewritten to the gateway URL the client dialed, because a document served
+    from the gateway's own well-known path that names a different resource is
+    rejected outright by RFC 9728 clients (they compare it to the MCP URL they
+    connected to) before any sign-in can start. Only ``true_passthrough``, whose
+    contract is that the gateway is invisible and the client transacts with the
+    upstream directly, keeps the upstream metadata verbatim. A strict IdP that
+    refuses to mint a token for the gateway resource needs ``dcr_bridge``, where
+    the gateway holds the upstream token instead of the client.
 
     An explicitly named gateway-managed oauth2 server (interactive with
     gateway-vaulted per-user tokens, or M2M) advertises the gateway's own
@@ -2187,7 +2189,7 @@ async def _build_oauth_protected_resource_response(
             )
 
         if upstream_metadata is not None:
-            if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+            if mcp_server.is_true_passthrough:
                 return upstream_metadata
             return {**upstream_metadata, "resource": resource_url}
 

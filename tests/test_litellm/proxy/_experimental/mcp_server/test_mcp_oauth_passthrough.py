@@ -500,13 +500,12 @@ def _make_upstream_metadata_client() -> tuple[dict, MagicMock]:
 
 
 @pytest.mark.asyncio
-async def test_oauth_protected_resource_oauth_delegate_returns_upstream_metadata_verbatim():
-    """oauth_delegate discovery must return the upstream metadata verbatim,
-    resource included. The caller's token is forwarded to and validated by the
-    upstream, so its audience must be the upstream; rewriting resource to the
-    gateway would make a strict IdP refuse to mint it or the upstream reject it.
-    A regression that dropped oauth_delegate from the pass-through predicate would
-    fall through to the gateway-AS branch and advertise LiteLLM as the AS."""
+@pytest.mark.parametrize("use_standard_pattern", [True, False])
+async def test_oauth_protected_resource_oauth_delegate_resource_is_the_gateway_url(use_standard_pattern):
+    """A non-bridge oauth_delegate server keeps the upstream authorization server but must
+    advertise the gateway URL the client dialed as ``resource``: an RFC 9728 client compares
+    ``resource`` against the MCP URL it connected to and refuses to start the upstream sign-in
+    when they differ (#36803). Returning the upstream document verbatim regresses that."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -520,6 +519,7 @@ async def test_oauth_protected_resource_oauth_delegate_returns_upstream_metadata
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth_delegate,
+        dcr_bridge=False,
     )
     global_mcp_server_manager.registry[delegate_server.server_id] = delegate_server
 
@@ -529,14 +529,17 @@ async def test_oauth_protected_resource_oauth_delegate_returns_upstream_metadata
             result = await _build_oauth_protected_resource_response(
                 request=_make_request(),
                 mcp_server_name="sample_docs",
-                use_standard_pattern=True,
+                use_standard_pattern=use_standard_pattern,
             )
-
-        assert result == upstream_payload
-        assert result["authorization_servers"] == ["https://okta.example.com/oauth2/default"]
-        assert result["resource"] == "https://upstream.example.com/mcp"
     finally:
         global_mcp_server_manager.registry.clear()
+
+    expected_resource = (
+        "https://gateway.example.com/mcp/sample_docs"
+        if use_standard_pattern
+        else "https://gateway.example.com/sample_docs/mcp"
+    )
+    assert result == {**upstream_payload, "resource": expected_resource}
 
 
 @pytest.mark.asyncio
