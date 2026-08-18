@@ -322,12 +322,6 @@
     }
   },
   "src/app/(dashboard)/guardrails/_components/content_filter/CompetitorIntentConfiguration.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1546,9 +1540,6 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
-    },
-    "react/no-unescaped-entities": {
       "count": 1
     }
   },
@@ -1565,7 +1556,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
