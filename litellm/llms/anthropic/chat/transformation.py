@@ -2150,6 +2150,28 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ephemeral_1h_input_tokens=cache_creation.get("ephemeral_1h_input_tokens"),
         )
 
+    @staticmethod
+    def _resolve_provider_thinking_tokens(usage: Mapping[str, Any]) -> int | None:
+        """Return Anthropic's own thinking token count, or None when it is absent.
+
+        Anthropic reports adaptive-thinking usage in
+        ``output_tokens_details.thinking_tokens``. When the thinking blocks come back
+        redacted there is no thinking text to estimate from, so the text estimator
+        returns 0 and reasoning_tokens is reported as 0 even though those tokens were
+        billed. Preferring the provider count fixes that, and the estimator stays as
+        the fallback for responses that carry no details block.
+        """
+        details: Final = usage.get("output_tokens_details")
+        if not isinstance(details, Mapping):
+            return None
+        thinking_tokens: Final = details.get("thinking_tokens")
+        # bool is a subclass of int, so exclude it explicitly
+        if isinstance(thinking_tokens, bool) or not isinstance(thinking_tokens, (int, float)):
+            return None
+        if thinking_tokens <= 0:
+            return None
+        return int(thinking_tokens)
+
     def calculate_usage(
         self,
         usage_object: dict,
@@ -2223,10 +2245,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             text_tokens=raw_input_tokens,
         )
         # Always populate completion_token_details, not just when there's reasoning_content
+        # Prefer Anthropic's own thinking token count when the response carries one.
+        # Redacted thinking blocks (Vertex AI Opus 4.7/4.8 on adaptive thinking) return no
+        # thinking text, so the estimator below sees an empty string and yields 0 while the
+        # real count is reported in output_tokens_details.thinking_tokens. Fixes #30099.
+        provider_thinking_tokens: Final = self._resolve_provider_thinking_tokens(_usage)
         estimated_reasoning_tokens: Final = (
             token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
         )
-        reasoning_tokens: Final = min(estimated_reasoning_tokens, completion_tokens)
+        reasoning_tokens: Final = min(
+            estimated_reasoning_tokens if provider_thinking_tokens is None else provider_thinking_tokens,
+            completion_tokens,
+        )
         completion_token_details: Final = CompletionTokensDetailsWrapper(
             reasoning_tokens=max(0, reasoning_tokens),
             text_tokens=(completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens),

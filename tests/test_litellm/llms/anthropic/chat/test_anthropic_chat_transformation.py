@@ -5985,3 +5985,64 @@ def test_is_anthropic_usage_object_rejects_responses_api_usage():
             "output_tokens_details": {"reasoning_tokens": 0},
         }
     )
+
+
+def test_calculate_usage_prefers_provider_thinking_tokens():
+    """Redacted thinking blocks carry no text, so reasoning_tokens must come from
+    output_tokens_details.thinking_tokens rather than the text estimator.
+
+    Regression for https://github.com/BerriAI/litellm/issues/30099 - Vertex AI
+    Opus 4.7/4.8 on adaptive thinking bills thinking tokens but returns the blocks
+    redacted, which made the estimator report reasoning_tokens=0.
+    """
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 100,
+        "output_tokens": 1220,
+        "output_tokens_details": {"thinking_tokens": 1152},
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    assert usage.completion_tokens == 1220
+    assert usage.completion_tokens_details.reasoning_tokens == 1152
+    assert usage.completion_tokens_details.text_tokens == 1220 - 1152
+
+
+def test_calculate_usage_falls_back_to_estimator_without_provider_thinking_tokens():
+    """With no output_tokens_details the estimator path must still be used."""
+    config = AnthropicConfig()
+
+    usage_object = {"input_tokens": 10, "output_tokens": 500}
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content="some thinking text")
+
+    assert usage.completion_tokens_details.reasoning_tokens > 0
+
+
+def test_calculate_usage_ignores_non_positive_provider_thinking_tokens():
+    """A zero or missing thinking_tokens must not suppress the estimator fallback."""
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 10,
+        "output_tokens": 500,
+        "output_tokens_details": {"thinking_tokens": 0},
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content="some thinking text")
+
+    assert usage.completion_tokens_details.reasoning_tokens > 0
+
+
+def test_calculate_usage_caps_provider_thinking_tokens_at_completion_tokens():
+    """A provider count larger than output_tokens must not produce negative text_tokens."""
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 10,
+        "output_tokens": 100,
+        "output_tokens_details": {"thinking_tokens": 999},
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    assert usage.completion_tokens_details.reasoning_tokens == 100
+    assert usage.completion_tokens_details.text_tokens == 0
