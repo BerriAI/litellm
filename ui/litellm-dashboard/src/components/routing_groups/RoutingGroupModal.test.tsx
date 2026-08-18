@@ -26,6 +26,20 @@ const STORED_GROUP: RoutingGroup = {
   routing_strategy_args: { ttl: 3600 },
 };
 
+const STORED_GROUP_NULL_ARGS: RoutingGroup = {
+  group_name: "already-taken",
+  models: ["gpt-4o"],
+  routing_strategy: "latency-based-routing",
+  routing_strategy_args: null,
+};
+
+const EXPECTED_NULL_ARGS_PAYLOAD: RoutingGroup = {
+  group_name: "already-taken",
+  models: ["gpt-4o"],
+  routing_strategy: "latency-based-routing",
+  routing_strategy_args: null,
+};
+
 const renderModal = (overrides: Partial<React.ComponentProps<typeof RoutingGroupModal>> = {}) => {
   const onSubmit = vi.fn();
   const onClose = vi.fn();
@@ -76,6 +90,15 @@ const save = async (user: ReturnType<typeof userEvent.setup>, name: string) =>
   await user.click(screen.getByRole("button", { name }));
 
 describe("RoutingGroupModal", () => {
+  it("submits an untouched edit of a group whose stored arguments are null", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderModal({ mode: "edit", initialValue: STORED_GROUP_NULL_ARGS });
+
+    await save(user, "Save Changes");
+
+    expect(onSubmit).toHaveBeenCalledWith(EXPECTED_NULL_ARGS_PAYLOAD);
+  });
+
   it("submits an untouched edit with the stored models, strategy and parsed arguments", async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderModal({ mode: "edit", initialValue: STORED_GROUP });

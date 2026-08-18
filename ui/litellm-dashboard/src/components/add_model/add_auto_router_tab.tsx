@@ -16,7 +16,7 @@ import { modelAvailableCall } from "../networking";
 import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
-import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import { type AddAutoRouterValues, handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import ComplexityRouterConfig, {
@@ -422,7 +422,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     // complexity_router_config.default_model (-> the pin marker read back on edit, see
     // hydratePinnedDefaultModel in edit_auto_router_modal.tsx) must both come from the same
     // `defaultModel`, or the two fields diverge and hydration's divergence check misfires.
-    const submitValues = {
+    const submitValues: AddAutoRouterValues = {
       auto_router_name: name,
       ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
       auto_router_default_model: defaultModel,
