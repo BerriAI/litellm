@@ -4235,22 +4235,15 @@ async def _assert_user_can_view_request_id(
     would let any non-admin read another user's request/response payload.
     """
     row: Final = await _find_spend_log_row(prisma_client, request_id)
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
-        )
+    if row is not None:
+        if row.user is not None and row.user == user_api_key_dict.user_id:
+            return
 
-    if row.user is not None and row.user == user_api_key_dict.user_id:
-        return
-
-    if row.team_id:
-        can_view: Final = await _can_team_member_view_log(
+        if row.team_id and await _can_team_member_view_log(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
             team_id=row.team_id,
-        )
-        if can_view:
+        ):
             return
 
     raise HTTPException(
