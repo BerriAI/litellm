@@ -894,6 +894,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     request_data=request_data,
                     event_type=event_type,
                     start_time=start_time,
+                    aws_region_name=aws_region_name,
+                    completed_chunk_usages=completed_chunk_usages,
                 )
             raise
         merged_response: Final = self._merge_bedrock_guardrail_responses(responses)
@@ -1268,20 +1270,36 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
+        aws_region_name: str | None,
+        completed_chunk_usages: Sequence[BedrockGuardrailUsage],
     ) -> None:
         """Log one logical ApplyGuardrail call that failed end-to-end (an
         unrecoverable too-large error, a non-size validation error, or
         exhausted throttle retries) as a single failure, rather than logging
-        every failed attempt chunking made along the way."""
+        every failed attempt chunking made along the way. Chunk calls AWS
+        billed before the failure still carry their usage and cost."""
+        billed_usage: Final = self._sum_usage_counters(completed_chunk_usages) if completed_chunk_usages else None
+        error_payload: Final = {"error": str(detail)}  # mutable-ok: logging helper requires a dict
+        json_response: Final = (
+            {**error_payload, "usage": billed_usage}  # mutable-ok: logging helper requires a dict
+            if billed_usage is not None
+            else error_payload
+        )
+        tracing_detail: Final = (
+            self._build_tracing_detail(BedrockGuardrailResponse(usage=billed_usage), aws_region_name=aws_region_name)
+            if billed_usage is not None
+            else None
+        )
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response={"error": str(detail)},  # mutable-ok: logging helper requires a dict
+            guardrail_json_response=json_response,
             request_data=request_data or {},  # mutable-ok: logging helper requires a dict
             guardrail_status="guardrail_failed_to_respond",
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
             duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
             event_type=event_type,
+            tracing_detail=tracing_detail or None,
         )
 
     @staticmethod
