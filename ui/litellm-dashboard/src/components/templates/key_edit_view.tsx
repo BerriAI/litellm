@@ -493,13 +493,17 @@ export function KeyEditView({
         <NumericalInput min={0} />
       </Form.Item>
 
-      <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" showDetailedDescriptions={false} />
+      <Form.Item name="tpm_limit_type" initialValue={null} noStyle>
+        <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" showDetailedDescriptions={false} />
+      </Form.Item>
 
       <Form.Item label="RPM Limit" name="rpm_limit">
         <NumericalInput min={0} />
       </Form.Item>
 
-      <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" showDetailedDescriptions={false} />
+      <Form.Item name="rpm_limit_type" initialValue={null} noStyle>
+        <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" showDetailedDescriptions={false} />
+      </Form.Item>
 
       <Form.Item
         label={
@@ -840,15 +844,16 @@ export function KeyEditView({
 
       {/* Auto-Rotation Settings */}
       <div className="mb-4">
-        <KeyLifecycleSettings
-          form={form}
-          autoRotationEnabled={autoRotationEnabled}
-          onAutoRotationChange={setAutoRotationEnabled}
-          rotationInterval={rotationInterval}
-          onRotationIntervalChange={setRotationInterval}
-          neverExpire={neverExpire}
-          onNeverExpireChange={setNeverExpire}
-        />
+        <Form.Item name="duration" initialValue="" noStyle>
+          <KeyLifecycleSettings
+            autoRotationEnabled={autoRotationEnabled}
+            onAutoRotationChange={setAutoRotationEnabled}
+            rotationInterval={rotationInterval}
+            onRotationIntervalChange={setRotationInterval}
+            neverExpire={neverExpire}
+            onNeverExpireChange={setNeverExpire}
+          />
+        </Form.Item>
       </div>
 
       {/* Hidden form field for token */}

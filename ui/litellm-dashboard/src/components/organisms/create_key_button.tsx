@@ -1128,14 +1128,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
-                  <RateLimitTypeFormItem
-                    type="tpm"
-                    name="tpm_limit_type"
-                    className="mt-4"
-                    initialValue={null}
-                    form={form}
-                    showDetailedDescriptions={true}
-                  />
+                  <Form.Item name="tpm_limit_type" initialValue={null} noStyle>
+                    <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" className="mt-4" showDetailedDescriptions />
+                  </Form.Item>
                   <Form.Item
                     className="mt-4"
                     label={
@@ -1160,14 +1155,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
-                  <RateLimitTypeFormItem
-                    type="rpm"
-                    name="rpm_limit_type"
-                    className="mt-4"
-                    initialValue={null}
-                    form={form}
-                    showDetailedDescriptions={true}
-                  />
+                  <Form.Item name="rpm_limit_type" initialValue={null} noStyle>
+                    <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" className="mt-4" showDetailedDescriptions />
+                  </Form.Item>
                   <Form.Item
                     className="mt-4"
                     label={
@@ -1633,14 +1623,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     </AccordionHeader>
                     <AccordionBody>
                       <div className="mt-4">
-                        <KeyLifecycleSettings
-                          form={form}
-                          autoRotationEnabled={autoRotationEnabled}
-                          onAutoRotationChange={setAutoRotationEnabled}
-                          rotationInterval={rotationInterval}
-                          onRotationIntervalChange={setRotationInterval}
-                          isCreateMode={true}
-                        />
+                        <Form.Item name="duration" initialValue="" noStyle>
+                          <KeyLifecycleSettings
+                            autoRotationEnabled={autoRotationEnabled}
+                            onAutoRotationChange={setAutoRotationEnabled}
+                            rotationInterval={rotationInterval}
+                            onRotationIntervalChange={setRotationInterval}
+                            isCreateMode={true}
+                          />
+                        </Form.Item>
                       </div>
                     </AccordionBody>
                   </Accordion>
