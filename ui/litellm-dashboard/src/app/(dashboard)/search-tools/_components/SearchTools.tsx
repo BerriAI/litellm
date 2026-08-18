@@ -1,8 +1,8 @@
 import { isAdminRole } from "@/utils/roles";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Text, Title } from "@tremor/react";
-import { Form, Input, Modal, Select } from "antd";
+import { Modal } from "antd";
 import React, { useState } from "react";
+import { z } from "zod/v4";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
@@ -11,7 +11,17 @@ import {
   fetchSearchTools,
   updateSearchTool,
 } from "@/components/networking";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import CreateSearchTool from "./CreateSearchTools";
+import { buildSearchToolPayload } from "./searchToolPayload";
 import SearchToolTable from "./SearchToolTable";
 import { SearchToolView } from "./SearchToolView";
 import { AvailableSearchProvider, SearchTool } from "./types";
@@ -21,6 +31,19 @@ interface SearchToolsProps {
   userRole: string | null;
   userID: string | null;
 }
+
+const editSearchToolShape = {
+  search_tool_name: z.string().min(1, "Please enter a search tool name"),
+  search_provider: z.string().min(1, "Please select a search provider"),
+  api_key: z.string().optional(),
+  description: z.string().optional(),
+};
+
+const editSearchToolSchema = z.object(editSearchToolShape);
+
+type EditSearchToolFormValues = z.infer<typeof editSearchToolSchema>;
+
+const EMPTY_EDIT_VALUES: EditSearchToolFormValues = { search_tool_name: "", search_provider: "" };
 
 const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID }) => {
   const {
@@ -55,7 +78,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   const [editTool, setEditTool] = useState(false);
   const [isCreateModalVisible, setCreateModalVisible] = useState(false);
   const [isEditModalVisible, setEditModalVisible] = useState(false);
-  const [form] = Form.useForm();
+  const form = useZodForm(editSearchToolSchema, { defaultValues: EMPTY_EDIT_VALUES });
 
   const handleView = (toolId: string) => {
     setSelectedToolId(toolId);
@@ -67,16 +90,13 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     if (!tool) {
       return;
     }
-    const editFormValues = {
+    const editFormValues: EditSearchToolFormValues = {
       search_tool_name: tool.search_tool_name,
       search_provider: tool.litellm_params.search_provider,
       api_key: tool.litellm_params.api_key,
-      api_base: tool.litellm_params.api_base,
-      timeout: tool.litellm_params.timeout,
-      max_retries: tool.litellm_params.max_retries,
       description: tool.search_tool_info?.description,
     };
-    form.setFieldsValue(editFormValues);
+    form.reset(editFormValues);
     setSelectedToolId(toolId);
     setEditModalVisible(true);
   };
@@ -120,75 +140,82 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     refetch();
   };
 
-  const handleEditSubmit = async () => {
-    if (!accessToken || !selectedToolId) return;
+  const submitEdit = form.handleSubmit(
+    async (values) => {
+      if (!accessToken || !selectedToolId) return;
 
-    try {
-      const values = await form.validateFields();
-      const searchToolData = {
-        search_tool_name: values.search_tool_name,
-        litellm_params: {
-          search_provider: values.search_provider,
-          api_key: values.api_key,
-          api_base: values.api_base,
-          timeout: values.timeout ? parseFloat(values.timeout) : undefined,
-          max_retries: values.max_retries ? parseInt(values.max_retries) : undefined,
-        },
-        search_tool_info: values.description
-          ? {
-              description: values.description,
-            }
-          : undefined,
-      };
-
-      await updateSearchTool(accessToken, selectedToolId, searchToolData);
-      NotificationsManager.success("Search tool updated successfully");
-      setEditModalVisible(false);
-      form.resetFields();
-      setSelectedToolId(null);
-      refetch();
-    } catch (error) {
-      console.error("Failed to update search tool:", error);
+      try {
+        await updateSearchTool(accessToken, selectedToolId, buildSearchToolPayload(values));
+        NotificationsManager.success("Search tool updated successfully");
+        setEditModalVisible(false);
+        form.reset(EMPTY_EDIT_VALUES);
+        setSelectedToolId(null);
+        refetch();
+      } catch (error) {
+        console.error("Failed to update search tool:", error);
+        NotificationsManager.error("Failed to update search tool");
+      }
+    },
+    (errors) => {
+      console.error("Failed to update search tool:", errors);
       NotificationsManager.error("Failed to update search tool");
-    }
+    },
+  );
+
+  const handleEditSubmit = () => {
+    if (!accessToken || !selectedToolId) return;
+    void submitEdit();
   };
 
   const renderEditForm = () => (
-    <Form form={form} layout="vertical">
-      <Form.Item
-        name="search_tool_name"
-        label="Search Tool Name"
-        rules={[{ required: true, message: "Please enter a search tool name" }]}
-      >
-        <Input placeholder="e.g., my-perplexity-search" />
-      </Form.Item>
+    <form onSubmit={(event) => event.preventDefault()} noValidate>
+      <FieldGroup>
+        <FormField control={form.control} name="search_tool_name" label="Search Tool Name">
+          {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., my-perplexity-search" />}
+        </FormField>
 
-      <Form.Item
-        name="search_provider"
-        label="Search Provider"
-        rules={[{ required: true, message: "Please select a search provider" }]}
-      >
-        <Select placeholder="Select a search provider" loading={isLoadingProviders}>
-          {availableProviders.map((provider) => (
-            <Select.Option key={provider.provider_name} value={provider.provider_name}>
-              {provider.ui_friendly_name}
-            </Select.Option>
-          ))}
-        </Select>
-      </Form.Item>
+        <FormField control={form.control} name="search_provider" label="Search Provider">
+          {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+            <Select
+              items={availableProviders.map((provider) => ({
+                label: provider.ui_friendly_name,
+                value: provider.provider_name,
+              }))}
+              value={value === "" ? null : value}
+              onValueChange={(provider: string | null) => onChange(provider ?? "")}
+            >
+              <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy} className="w-full">
+                <SelectValue placeholder="Select a search provider" />
+                {isLoadingProviders && <UiLoadingSpinner className="size-4" />}
+              </SelectTrigger>
+              <SelectContent>
+                {availableProviders.map((provider) => (
+                  <SelectItem key={provider.provider_name} value={provider.provider_name}>
+                    {provider.ui_friendly_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </FormField>
 
-      <Form.Item name="api_key" label="API Key" extra="API key for the search provider">
-        <Input.Password placeholder="Enter API key" />
-      </Form.Item>
+        <FormField control={form.control} name="api_key" label="API Key" description="API key for the search provider">
+          {({ ref, value, ...field }) => (
+            <PasswordInput {...field} ref={ref} value={value ?? ""} placeholder="Enter API key" />
+          )}
+        </FormField>
 
-      <Form.Item name="description" label="Description">
-        <Input.TextArea rows={3} placeholder="Description of this search tool" />
-      </Form.Item>
-    </Form>
+        <FormField control={form.control} name="description" label="Description">
+          {({ ref, value, ...field }) => (
+            <Textarea {...field} ref={ref} value={value ?? ""} rows={3} placeholder="Description of this search tool" />
+          )}
+        </FormField>
+      </FieldGroup>
+    </form>
   );
 
   if (!accessToken || !userRole || !userID) {
-    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
+    return <div className="p-6 text-center text-muted-foreground">Missing required authentication parameters.</div>;
   }
 
   const ToolsTab = () =>
@@ -265,7 +292,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         onOk={handleEditSubmit}
         onCancel={() => {
           setEditModalVisible(false);
-          form.resetFields();
+          form.reset(EMPTY_EDIT_VALUES);
           setSelectedToolId(null);
         }}
         width={600}
@@ -273,10 +300,10 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         {renderEditForm()}
       </Modal>
 
-      <Title>Search Tools</Title>
-      <Text className="text-tremor-content mt-2">Configure and manage your search providers</Text>
+      <h1 className="text-lg font-semibold text-foreground">Search Tools</h1>
+      <p className="mt-2 text-sm text-muted-foreground">Configure and manage your search providers</p>
       {isAdminRole(userRole) && (
-        <Button className="mt-4 mb-4" onClick={() => setCreateModalVisible(true)}>
+        <Button className="mt-4 mb-4" variant="outline" onClick={() => setCreateModalVisible(true)}>
           + Add New Search Tool
         </Button>
       )}
