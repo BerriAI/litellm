@@ -15,7 +15,7 @@ fetcher dispatches by ``discovery_mode``:
 """
 
 from enum import Enum
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urlencode
 
 from litellm._logging import verbose_proxy_logger
@@ -37,13 +37,13 @@ class DiscoveryMode(str, Enum):
 # Paths the pure-A2A fetcher tries in order. The first two are the current and
 # previous A2A spec locations; ``/agent.json`` is a non-standard root fallback
 # some agents still serve.
-AGENT_CARD_WELL_KNOWN_PATHS: tuple[str, ...] = (
+AGENT_CARD_WELL_KNOWN_PATHS: Final[tuple[str, ...]] = (
     "/.well-known/agent-card.json",
     "/.well-known/agent.json",
     "/agent.json",
 )
 
-DEFAULT_DISCOVERY_TIMEOUT_SECONDS = 10.0
+DEFAULT_DISCOVERY_TIMEOUT_SECONDS: Final = 10.0
 
 
 class AgentCardDiscoveryError(Exception):
@@ -64,10 +64,10 @@ def _build_langgraph_platform_paths(
     A2A path variants (with the same query string appended) so we degrade
     gracefully if a deployment uses an older spec name.
     """
-    assistant_id = (params or {}).get("assistant_id")
+    assistant_id: Final = (params or {}).get("assistant_id")
     if not assistant_id:
         raise AgentCardDiscoveryError("langgraph_platform discovery requires params.assistant_id")
-    query = urlencode({"assistant_id": str(assistant_id)})
+    query: Final = urlencode({"assistant_id": str(assistant_id)})
     return tuple(f"{path}?{query}" for path in AGENT_CARD_WELL_KNOWN_PATHS)
 
 
@@ -99,9 +99,9 @@ async def fetch_well_known_card(
     if not base_url:
         raise AgentCardDiscoveryError("base_url is required")
 
-    normalized = _normalize_base_url(base_url)
-    paths = _paths_for_mode(discovery_mode, params)
-    client = get_async_httpx_client(
+    normalized: Final = _normalize_base_url(base_url)
+    paths: Final = _paths_for_mode(discovery_mode, params)
+    client: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.A2A,
         params={"timeout": timeout},
     )

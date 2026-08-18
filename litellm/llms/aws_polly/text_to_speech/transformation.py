@@ -7,7 +7,7 @@ Reference: https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
 
 import json
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 
@@ -93,7 +93,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             base_llm_http_handler: The BaseLLMHTTPHandler instance from main.py
         """
         # Get AWS region from kwargs or environment
-        aws_region_name = kwargs.get("aws_region_name") or self._get_aws_region_name_for_polly(
+        aws_region_name: Final = kwargs.get("aws_region_name") or self._get_aws_region_name_for_polly(
             optional_params=optional_params
         )
 
@@ -112,7 +112,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         litellm_params_dict["api_key"] = api_key
 
         # Call the text_to_speech_handler
-        response = base_llm_http_handler.text_to_speech_handler(
+        response: Final = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
             voice=voice_str,
@@ -153,7 +153,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         """
         Map OpenAI parameters to AWS Polly parameters
         """
-        mapped_params = {}
+        mapped_params: Final = {}
 
         # Map voice - support both native Polly voices and OpenAI voice mappings
         mapped_voice: str | None = None
@@ -167,7 +167,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
 
         # Map response format
         if "response_format" in optional_params:
-            format_name = optional_params["response_format"]
+            format_name: Final = optional_params["response_format"]
             if format_name in self.FORMAT_MAPPINGS:
                 mapped_params["output_format"] = self.FORMAT_MAPPINGS[format_name]
             else:
@@ -176,7 +176,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             mapped_params["output_format"] = self.DEFAULT_OUTPUT_FORMAT
 
         # Extract engine from model name (e.g., "aws_polly/neural" -> "neural")
-        engine = self._extract_engine_from_model(model)
+        engine: Final = self._extract_engine_from_model(model)
         mapped_params["engine"] = engine
 
         # Pass through Polly-specific parameters (use AWS API casing)
@@ -200,9 +200,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             - aws_polly -> neural (default)
         """
         if "/" in model:
-            parts = model.split("/")
+            parts: Final = model.split("/")
             if len(parts) >= 2:
-                engine = parts[1].lower()
+                engine: Final = parts[1].lower()
                 if engine in self.VALID_ENGINES:
                     return engine
         return self.DEFAULT_ENGINE
@@ -218,7 +218,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         Validate AWS environment and set up headers.
         AWS SigV4 signing will be done in transform_text_to_speech_request.
         """
-        validated_headers = headers.copy()
+        validated_headers: Final = headers.copy()
         validated_headers["Content-Type"] = "application/json"
         return validated_headers
 
@@ -237,7 +237,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         if api_base is not None:
             return api_base.rstrip("/") + "/v1/speech"
 
-        aws_region_name = litellm_params.get("aws_region_name", self.DEFAULT_REGION)
+        aws_region_name: Final = litellm_params.get("aws_region_name", self.DEFAULT_REGION)
         return f"https://polly.{aws_region_name}.amazonaws.com/v1/speech"
 
     def is_ssml_input(self, input: str) -> bool:
@@ -267,10 +267,10 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             raise ImportError("Missing boto3 to call AWS Polly. Run 'pip install boto3'.")
 
         # Get AWS region
-        aws_region_name = litellm_params.get("aws_region_name", self.DEFAULT_REGION)
+        aws_region_name: Final = litellm_params.get("aws_region_name", self.DEFAULT_REGION)
 
         # Get AWS credentials
-        credentials = self.get_credentials(
+        credentials: Final = self.get_credentials(
             aws_access_key_id=litellm_params.get("aws_access_key_id"),
             aws_secret_access_key=litellm_params.get("aws_secret_access_key"),
             aws_session_token=litellm_params.get("aws_session_token"),
@@ -284,15 +284,15 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         )
 
         # Serialize request body to JSON
-        json_body = json.dumps(request_body)
+        json_body: Final = json.dumps(request_body)
 
         # Create headers for signing
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
         }
 
         # Create AWS request for signing
-        aws_request = AWSRequest(
+        aws_request: Final = AWSRequest(
             method="POST",
             url=endpoint_url,
             data=json_body,
@@ -327,16 +327,16 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             TextToSpeechRequestData: Contains signed request for Polly API
         """
         # Get voice (already mapped in main.py, or use default)
-        polly_voice = voice or self.DEFAULT_VOICE
+        polly_voice: Final = voice or self.DEFAULT_VOICE
 
         # Get output format
-        output_format = optional_params.get("output_format", self.DEFAULT_OUTPUT_FORMAT)
+        output_format: Final = optional_params.get("output_format", self.DEFAULT_OUTPUT_FORMAT)
 
         # Get engine
-        engine = optional_params.get("engine", self.DEFAULT_ENGINE)
+        engine: Final = optional_params.get("engine", self.DEFAULT_ENGINE)
 
         # Build request body
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "Engine": engine,
             "OutputFormat": output_format,
             "Text": input,
@@ -355,7 +355,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
                 request_body[key] = optional_params[key]
 
         # Get endpoint URL
-        endpoint_url = self.get_complete_url(
+        endpoint_url: Final = self.get_complete_url(
             model=model,
             api_base=litellm_params.get("api_base"),
             litellm_params=litellm_params,

@@ -2,6 +2,8 @@
 Deprecated. Only PostgresSQL is supported.
 """
 
+from typing import Final
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import DynamoDBArgs
 from litellm.proxy.db.base_client import CustomDB
@@ -28,7 +30,7 @@ class DynamoDBWrapper(CustomDB):
                 self.throughput_type = Throughput(
                     read=database_arguments.read_capacity_units,
                     write=database_arguments.write_capacity_units,
-                )  # type: ignore
+                )
             else:
                 raise Exception(
                     f"Invalid args passed in. Need to set both read_capacity_units and write_capacity_units. Args passed in - {database_arguments}"
@@ -44,7 +46,7 @@ class DynamoDBWrapper(CustomDB):
 
         import boto3
 
-        sts_client = boto3.client("sts")
+        sts_client: Final = boto3.client("sts")
 
         # call 1
         sts_client.assume_role_with_web_identity(
@@ -54,14 +56,14 @@ class DynamoDBWrapper(CustomDB):
         )
 
         # call 2
-        assumed_role = sts_client.assume_role(
+        assumed_role: Final = sts_client.assume_role(
             RoleArn=self.database_arguments.assume_role_aws_role_name,
             RoleSessionName=self.database_arguments.assume_role_aws_session_name,
         )
 
-        aws_access_key_id = assumed_role["Credentials"]["AccessKeyId"]
-        aws_secret_access_key = assumed_role["Credentials"]["SecretAccessKey"]
-        aws_session_token = assumed_role["Credentials"]["SessionToken"]
+        aws_access_key_id: Final = assumed_role["Credentials"]["AccessKeyId"]
+        aws_secret_access_key: Final = assumed_role["Credentials"]["SecretAccessKey"]
+        aws_session_token: Final = assumed_role["Credentials"]["SessionToken"]
 
         verbose_proxy_logger.debug("Got STS assumed Role, aws_access_key_id=%s", aws_access_key_id)
         # set these in the env so aiodynamo can use them

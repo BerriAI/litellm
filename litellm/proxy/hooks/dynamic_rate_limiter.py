@@ -6,6 +6,7 @@ import asyncio
 import os
 from collections.abc import Callable
 from datetime import datetime
+from typing import Final
 
 import litellm
 from litellm import ModelResponse, Router
@@ -37,10 +38,10 @@ class DynamicRateLimiterCache:
         self.time_fn = time_fn
 
     async def async_get_cache(self, model: str) -> int | None:
-        dt = self.time_fn()
-        current_minute = dt.strftime("%H-%M")
-        key_name = f"{current_minute}:{model}"
-        _response = await self.cache.async_get_cache(key=key_name)
+        dt: Final = self.time_fn()
+        current_minute: Final = dt.strftime("%H-%M")
+        key_name: Final = f"{current_minute}:{model}"
+        _response: Final = await self.cache.async_get_cache(key=key_name)
         response: int | None = None
         if _response is not None:
             response = len(_response)
@@ -61,10 +62,10 @@ class DynamicRateLimiterCache:
         - Exception, if unable to connect to cache client (if redis caching enabled)
         """
         try:
-            dt = self.time_fn()
-            current_minute = dt.strftime("%H-%M")
+            dt: Final = self.time_fn()
+            current_minute: Final = dt.strftime("%H-%M")
 
-            key_name = f"{current_minute}:{model}"
+            key_name: Final = f"{current_minute}:{model}"
             await self.cache.async_set_cache_sadd(key=key_name, value=value, ttl=self.ttl)
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -101,7 +102,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         """
         try:
             # Get model info first for conversion
-            model_group_info: ModelGroupInfo | None = self.llm_router.get_model_group_info(model_group=model)
+            model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
 
             weight: float = 1
             if litellm.priority_reservation is None or priority not in litellm.priority_reservation:
@@ -116,10 +117,10 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                         "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
                     )
                 else:
-                    value = litellm.priority_reservation[priority]
+                    value: Final = litellm.priority_reservation[priority]
                     weight = convert_priority_to_percent(value, model_group_info)
 
-            active_projects = await self.internal_usage_cache.async_get_cache(model=model)
+            active_projects: Final = await self.internal_usage_cache.async_get_cache(model=model)
             (
                 current_model_tpm,
                 current_model_rpm,
@@ -193,7 +194,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         - Raise RateLimitError if no tpm/rpm available
         """
         if "model" in data:
-            key_priority: str | None = user_api_key_dict.metadata.get("priority", None)
+            key_priority: Final[str | None] = user_api_key_dict.metadata.get("priority", None)
             (
                 available_tpm,
                 available_rpm,
@@ -227,7 +228,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 ## UPDATE CACHE WITH ACTIVE PROJECT
                 asyncio.create_task(
                     self.internal_usage_cache.async_set_cache_sadd(  # this is a set
-                        model=data["model"],  # type: ignore
+                        model=data["model"],
                         value=[user_api_key_dict.token or "default_key"],
                     )
                 )
@@ -236,11 +237,11 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         try:
             if isinstance(response, ModelResponse):
-                model_info = self.llm_router.get_model_info(id=response._hidden_params["model_id"])
+                model_info: Final = self.llm_router.get_model_info(id=response._hidden_params["model_id"])
                 assert model_info is not None, "Model info for model with id={} is None".format(
                     response._hidden_params["model_id"]
                 )
-                key_priority: str | None = user_api_key_dict.metadata.get("priority", None)
+                key_priority: Final[str | None] = user_api_key_dict.metadata.get("priority", None)
                 (
                     available_tpm,
                     available_rpm,

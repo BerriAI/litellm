@@ -6,7 +6,7 @@ If weights are provided, it will return a deployment based on the weights.
 """
 
 import random
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_router_logger
 
@@ -68,5 +68,5 @@ def simple_shuffle(
             return deployment or deployment[0]
 
     ############## No RPM/TPM passed, we do a random pick #################
-    item = random.choice(healthy_deployments)
+    item: Final = random.choice(healthy_deployments)
     return item or item[0]

@@ -10,7 +10,7 @@ LAR-1 metadata passed via request_kwargs["metadata"]["lar1"]
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from pydantic import ValidationError
 
@@ -21,7 +21,7 @@ from litellm.types.lar1 import LAR1Metadata, LAR1Time
 if TYPE_CHECKING:
     from litellm.router import Router
 
-DEFAULT_THRESHOLDS: dict[str, float] = {"low": 0.3, "medium": 0.5, "high": 0.7}
+DEFAULT_THRESHOLDS: Final[dict[str, float]] = {"low": 0.3, "medium": 0.5, "high": 0.7}
 
 
 def _coerce_threshold(value: object, default: float) -> float:
@@ -33,7 +33,7 @@ def _coerce_threshold(value: object, default: float) -> float:
 def lar1_thresholds_from_args(
     routing_strategy_args: Mapping[str, object] | None = None,
 ) -> dict[str, float]:
-    args = routing_strategy_args or {}
+    args: Final = routing_strategy_args or {}
     return {
         "low": _coerce_threshold(args.get("confidence_threshold_low"), DEFAULT_THRESHOLDS["low"]),
         "medium": _coerce_threshold(args.get("confidence_threshold_medium"), DEFAULT_THRESHOLDS["medium"]),
@@ -45,7 +45,7 @@ def apply_lar1_routing_strategy(
     router: Router,
     routing_strategy_args: Mapping[str, object] | None = None,
 ) -> None:
-    strategy = LAR1RoutingStrategy(
+    strategy: Final = LAR1RoutingStrategy(
         router_instance=router,
         thresholds=lar1_thresholds_from_args(routing_strategy_args),
     )
@@ -54,10 +54,10 @@ def apply_lar1_routing_strategy(
 
 
 def _normalize_thresholds(thresholds: dict[str, float] | None) -> dict[str, float]:
-    merged = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
-    low = merged["low"]
-    medium = merged["medium"]
-    high = merged["high"]
+    merged: Final = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
+    low: Final = merged["low"]
+    medium: Final = merged["medium"]
+    high: Final = merged["high"]
     if not (0 < low < medium < high < 1):
         raise ValueError(
             f"LAR-1 thresholds must satisfy 0 < low < medium < high < 1, got low={low}, medium={medium}, high={high}"
@@ -66,7 +66,7 @@ def _normalize_thresholds(thresholds: dict[str, float] | None) -> dict[str, floa
 
 
 def _parse_lar1_metadata(request_kwargs: dict) -> LAR1Metadata:
-    lar1_raw = request_kwargs.get("metadata", {}).get("lar1", {})
+    lar1_raw: Final = request_kwargs.get("metadata", {}).get("lar1", {})
     if not isinstance(lar1_raw, dict):
         verbose_router_logger.warning("[LAR-1] Invalid lar1 metadata type: %s. Using defaults", type(lar1_raw).__name__)
         return LAR1Metadata()
@@ -99,12 +99,12 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         if self._router is None:
             return None
 
-        lar1 = _parse_lar1_metadata(request_kwargs)
-        confidence = lar1.confidence
-        evidence = tuple(e.value for e in lar1.evidence)
-        time_dim = lar1.time.value
+        lar1: Final = _parse_lar1_metadata(request_kwargs)
+        confidence: Final = lar1.confidence
+        evidence: Final = tuple(e.value for e in lar1.evidence)
+        time_dim: Final = lar1.time.value
 
-        healthy = await self._router.async_get_healthy_deployments(
+        healthy: Final = await self._router.async_get_healthy_deployments(
             model=model,
             request_kwargs=request_kwargs,
             messages=messages,
@@ -117,7 +117,7 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         if not healthy:
             return None
 
-        target = self._classify_request(confidence, evidence, time_dim)
+        target: Final = self._classify_request(confidence, evidence, time_dim)
         selected, exact_match = self._select_deployment(target, healthy)
 
         if selected is None:
@@ -125,7 +125,7 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         if exact_match:
             verbose_router_logger.info("[LAR-1] confidence=%s -> %s", confidence, target)
         else:
-            actual_type = selected.get("model_info", {}).get("type", "unknown")
+            actual_type: Final = selected.get("model_info", {}).get("type", "unknown")
             verbose_router_logger.warning(
                 "[LAR-1] No deployment for type '%s', fallback to deployment type '%s'", target, actual_type
             )
@@ -143,7 +143,7 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         if time_dim == LAR1Time.MEM.value:
             return "cloud-fast"
 
-        t = self.thresholds
+        t: Final = self.thresholds
         if confidence < t["low"]:
             return "cloud-smart"
         if confidence < t["medium"]:

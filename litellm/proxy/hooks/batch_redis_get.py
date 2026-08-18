@@ -4,7 +4,7 @@
 ### [BETA] this is in Beta. And might change.
 
 import traceback
-from typing import Literal
+from typing import Final, Literal
 
 from fastapi import HTTPException
 
@@ -46,14 +46,14 @@ class _PROXY_BatchRedisRequests(CustomLogger):
 
             If no, then get relevant cache from redis
             """
-            api_key = user_api_key_dict.api_key
+            api_key: Final = user_api_key_dict.api_key
 
-            cache_key_name = f"litellm:{api_key}:{call_type}"
+            cache_key_name: Final = f"litellm:{api_key}:{call_type}"
             self.in_memory_cache = cache.in_memory_cache
 
             key_value_dict = {}
             in_memory_cache_exists = False
-            for key in cache.in_memory_cache.cache_dict.keys():
+            for key in cache.in_memory_cache.cache_dict:
                 if isinstance(key, str) and key.startswith(cache_key_name):
                     in_memory_cache_exists = True
 
@@ -107,8 +107,8 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 )  # returns "<cache_key_name>:<hash>" - we pass redis_namespace in async_pre_call_hook. Done to avoid rewriting the async_set_cache logic
 
             if cache_key is not None and self.in_memory_cache is not None and litellm.cache is not None:
-                cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
+                cache_control_args: Final = kwargs.get("cache", {})
+                max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
                 cached_result = self.in_memory_cache.get_cache(cache_key, *args, **kwargs)
                 if cached_result is None:
                     cached_result = await litellm.cache.cache.async_get_cache(cache_key, *args, **kwargs)

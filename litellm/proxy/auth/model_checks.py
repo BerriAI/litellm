@@ -1,7 +1,8 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -42,7 +43,7 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
         return get_valid_models(litellm_params=litellm_params)
 
     if provider in litellm.models_by_provider:
-        provider_models = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
+        provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
         return provider_models
     return None
 
@@ -51,20 +52,20 @@ def _get_models_from_access_groups(
     model_access_groups: dict[str, list[str]],
     all_models: list[str],
     include_model_access_groups: bool | None = False,
+    proxy_model_list: Sequence[str] | None = None,
 ) -> list[str]:
-    idx_to_remove = []
-    new_models = []
-    for idx, model in enumerate(all_models):
-        if model in model_access_groups:
-            if not include_model_access_groups:  # remove access group, unless requested - e.g. when creating a key
-                idx_to_remove.append(idx)
-            new_models.extend(model_access_groups[model])
-
-    for idx in sorted(idx_to_remove, reverse=True):
-        all_models.pop(idx)
-
-    all_models.extend(new_models)
-    return all_models
+    # a grant naming both a deployed model and an access group means both at runtime
+    # (_check_model_access_helper unions them), so listings must keep the literal too
+    deployed_model_names: Final = frozenset(proxy_model_list or ())
+    kept_models: Final = [
+        model
+        for model in all_models
+        if model not in model_access_groups or include_model_access_groups or model in deployed_model_names
+    ]
+    member_models: Final = [
+        member for model in all_models if model in model_access_groups for member in model_access_groups[model]
+    ]
+    return kept_models + member_models
 
 
 async def get_mcp_server_ids(
@@ -83,7 +84,7 @@ async def get_mcp_server_ids(
 
     # Make a direct SQL query to get just the mcp_servers
     try:
-        result = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        result: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
             where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
         if result and result.mcp_servers:
@@ -127,6 +128,7 @@ def get_key_models(
         model_access_groups=model_access_groups,
         all_models=all_models,
         include_model_access_groups=include_model_access_groups,
+        proxy_model_list=proxy_model_list,
     )
 
     # deduplicate while preserving order
@@ -148,7 +150,7 @@ def get_team_models(
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models_set: set[str] = set()
+    all_models_set: Final[set[str]] = set()
     if len(team_models) > 0:
         all_models_set.update(team_models)
         if SpecialModelNames.all_team_models.value in all_models_set:
@@ -168,6 +170,7 @@ def get_team_models(
         model_access_groups=model_access_groups,
         all_models=list(all_models_set),
         include_model_access_groups=include_model_access_groups,
+        proxy_model_list=proxy_model_list,
     )
 
     # deduplicate while preserving order
@@ -178,8 +181,8 @@ def get_team_models(
 
 
 def get_complete_model_list(
-    key_models: list[str],
-    team_models: list[str],
+    key_models: Sequence[str],
+    team_models: Sequence[str],
     proxy_model_list: list[str],
     user_model: str | None,
     infer_model_from_keys: bool | None,
@@ -199,11 +202,11 @@ def get_complete_model_list(
     If list contains wildcard -> return known provider models
     """
 
-    unique_models = []
+    unique_models: Final = []
 
     def append_unique(models):
         for model in models:
-            if model not in unique_models:
+            if model not in unique_models and model != SpecialModelNames.no_default_models.value:
                 unique_models.append(model)
 
     if key_models:
@@ -219,24 +222,24 @@ def get_complete_model_list(
             append_unique([user_model])
 
         if infer_model_from_keys:
-            valid_models = get_valid_models()
+            valid_models: Final = get_valid_models()
             append_unique(valid_models)
 
     if only_model_access_groups:
-        model_access_groups_to_return: list[str] = []
+        model_access_groups_to_return: Final[list[str]] = []
         for model in unique_models:
             if model in model_access_groups:
                 model_access_groups_to_return.append(model)
         return model_access_groups_to_return
 
-    all_wildcard_models = _get_wildcard_models(
+    all_wildcard_models: Final = _get_wildcard_models(
         unique_models=unique_models,
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
         team_id=team_id,
     )
 
-    complete_model_list = unique_models + all_wildcard_models
+    complete_model_list: Final = unique_models + all_wildcard_models
 
     return complete_model_list
 
@@ -247,7 +250,7 @@ def _hydrate_litellm_credential_name(
     if litellm_params is None or litellm_params.litellm_credential_name is None:
         return litellm_params
 
-    credential_values = CredentialAccessor.get_credential_values(litellm_params.litellm_credential_name)
+    credential_values: Final = CredentialAccessor.get_credential_values(litellm_params.litellm_credential_name)
     if not credential_values:
         return litellm_params
 
@@ -260,7 +263,7 @@ def _hydrate_litellm_credential_name(
 
 
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
-    wildcard_model_to_expand = (
+    wildcard_model_to_expand: Final = (
         litellm_params.model
         if wildcard_model == "*"
         and litellm_params is not None
@@ -291,9 +294,9 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
         return []
     if wildcard_suffix != "*":
         ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
-        model_prefix = wildcard_suffix.replace("*", "")
+        model_prefix: Final = wildcard_suffix.replace("*", "")
 
-        is_partial_filter = any(wc_model.startswith(model_prefix) for wc_model in wildcard_models)
+        is_partial_filter: Final = any(wc_model.startswith(model_prefix) for wc_model in wildcard_models)
         if is_partial_filter:
             filtered_wildcard_models = [wc_model for wc_model in wildcard_models if wc_model.startswith(model_prefix)]
             wildcard_models = filtered_wildcard_models
@@ -301,8 +304,8 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
 
-    known_providers = {provider.value for provider in LlmProviders}
-    suffix_appended_wildcard_models = []
+    known_providers: Final = {provider.value for provider in LlmProviders}
+    suffix_appended_wildcard_models: Final = []
     for model in wildcard_models:
         if not model.startswith(wildcard_provider_prefix):
             # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
@@ -330,7 +333,7 @@ def expand_wildcard_deployments_for_model_info(
     on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
     becomes one entry per known openai model, matching /v1/models behaviour.
     """
-    expanded: list[dict[str, Any]] = []
+    expanded: Final[list[dict[str, Any]]] = []
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
@@ -380,8 +383,8 @@ def _get_wildcard_models(
     llm_router: Router | None = None,
     team_id: str | None = None,
 ) -> list[str]:
-    models_to_remove = set()
-    all_wildcard_models = []
+    models_to_remove: Final = set()
+    all_wildcard_models: Final = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
             if return_wildcard_routes:  # will add the wildcard route to the list eg: anthropic/*.
@@ -394,9 +397,7 @@ def _get_wildcard_models(
                     for router_model in model_list:
                         wildcard_models = get_known_models_from_wildcard(
                             wildcard_model=model,
-                            litellm_params=LiteLLM_Params(
-                                **router_model["litellm_params"]  # type: ignore
-                            ),
+                            litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
                         )
                         all_wildcard_models.extend(wildcard_models)
                 else:

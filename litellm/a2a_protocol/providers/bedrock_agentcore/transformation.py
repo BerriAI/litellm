@@ -7,7 +7,7 @@ and signs requests via AmazonAgentCoreConfig (SigV4 or JWT).
 
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
@@ -23,13 +23,13 @@ from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreCo
 # ``runtimeSessionId`` / ``runtimeUserId`` in the agent's ``litellm_params``;
 # ``authorization`` is set by the AgentCore signer (JWT or SigV4); ``host`` and
 # the ``x-amz-*`` family are owned by SigV4 itself.
-_RESERVED_EXACT_HEADERS = frozenset(
+_RESERVED_EXACT_HEADERS: Final = frozenset(
     {
         "authorization",
         "host",
     }
 )
-_RESERVED_PREFIX_HEADERS: tuple[str, ...] = (
+_RESERVED_PREFIX_HEADERS: Final[tuple[str, ...]] = (
     "x-amzn-bedrock-agentcore-runtime-",
     "x-amz-",
 )
@@ -47,8 +47,8 @@ def _filter_reserved_headers(
     if not agent_extra_headers:
         return None
 
-    filtered: dict[str, str] = {}
-    dropped: list = []
+    filtered: Final[dict[str, str]] = {}
+    dropped: Final[list] = []
     for k, v in agent_extra_headers.items():
         k_lower = k.lower()
         if k_lower in _RESERVED_EXACT_HEADERS or any(k_lower.startswith(prefix) for prefix in _RESERVED_PREFIX_HEADERS):
@@ -107,19 +107,19 @@ class BedrockAgentCoreA2ATransformation:
         """
         # Extract model and strip the "bedrock/" prefix
         # "bedrock/agentcore/arn:aws:..." → "agentcore/arn:aws:..."
-        model = litellm_params.get("model", "")
+        model: Final = litellm_params.get("model", "")
         if model.startswith("bedrock/"):
             agentcore_model = model[len("bedrock/") :]
         else:
             agentcore_model = model
 
         # Build optional_params from litellm_params (everything except model and custom_llm_provider)
-        optional_params = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
+        optional_params: Final = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
 
-        agentcore_config = AmazonAgentCoreConfig()
+        agentcore_config: Final = AmazonAgentCoreConfig()
 
         # Derive URL from ARN
-        url = agentcore_config.get_complete_url(
+        url: Final = agentcore_config.get_complete_url(
             api_base=optional_params.get("api_base"),
             api_key=optional_params.get("api_key"),
             model=agentcore_model,
@@ -129,7 +129,7 @@ class BedrockAgentCoreA2ATransformation:
         )
 
         # Construct JSON-RPC 2.0 envelope
-        json_rpc_body = {
+        json_rpc_body: Final = {
             "jsonrpc": "2.0",
             "method": method,
             "id": request_id,
@@ -138,17 +138,17 @@ class BedrockAgentCoreA2ATransformation:
 
         # Set required AgentCore session headers (normally set by transform_request,
         # which we skip because it also builds {"prompt": "..."})
-        headers: dict = {}
-        session_id = agentcore_config._get_runtime_session_id(optional_params)
+        headers: Final[dict] = {}
+        session_id: Final = agentcore_config._get_runtime_session_id(optional_params)
         headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = session_id
-        runtime_user_id = agentcore_config._get_runtime_user_id(optional_params)
+        runtime_user_id: Final = agentcore_config._get_runtime_user_id(optional_params)
         if runtime_user_id:
             headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] = runtime_user_id
 
         # Merge per-request agent headers before signing so SigV4 covers them.
         # Reserved headers are stripped first to prevent client-controlled values
         # from spoofing the AgentCore runtime identity / SigV4 metadata.
-        safe_extra_headers = _filter_reserved_headers(agent_extra_headers)
+        safe_extra_headers: Final = _filter_reserved_headers(agent_extra_headers)
         if safe_extra_headers:
             headers.update(safe_extra_headers)
 

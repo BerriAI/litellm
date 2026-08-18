@@ -1,5 +1,5 @@
-from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import Any, Final
 
 import httpx
 
@@ -12,13 +12,15 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_messages,
 )
 from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.cost_calculator import (
+    apply_server_side_tool_usage_details_to_usage,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     Choices,
     ModelResponse,
     ModelResponseStream,
-    PromptTokensDetailsWrapper,
     Usage,
 )
 
@@ -36,8 +38,8 @@ class XAIChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE  # type: ignore
-        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
+        api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE
+        dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
 
     def validate_environment(
@@ -56,7 +58,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             should_use_xai_oauth,
         )
 
-        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
+        dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
             try:
                 headers["Authorization"] = f"Bearer {XAIOAuthAuthenticator().get_access_token()}"
@@ -91,7 +93,7 @@ class XAIChatConfig(OpenAIGPTConfig):
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
 
-        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
+        dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
             api_base = XAIOAuthAuthenticator().get_api_base()
 
@@ -105,7 +107,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         )
 
     def get_supported_openai_params(self, model: str) -> list:
-        base_openai_params = [
+        base_openai_params: Final = [
             "logit_bias",
             "logprobs",
             "max_tokens",
@@ -172,7 +174,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool = False,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
@@ -248,11 +250,11 @@ class XAIChatConfig(OpenAIGPTConfig):
         XAI API returns empty string for finish_reason when using tools,
         so we need to fix this after the standard OpenAI transformation.
 
-        Also handles X.AI web search usage tracking by extracting num_sources_used.
+        Also handles X.AI web search usage tracking.
         """
 
         # First, let the parent class handle the standard transformation
-        response = super().transform_response(
+        response: Final = super().transform_response(
             model=model,
             raw_response=raw_response,
             model_response=model_response,
@@ -274,7 +276,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         # Handle X.AI web search usage tracking
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
             verbose_logger.debug("Error extracting X.AI web search usage: %s", e)
@@ -351,25 +353,20 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     def _enhance_usage_with_xai_web_search_fields(self, model_response: ModelResponse, raw_response_json: dict) -> None:
         """
-        Extract num_sources_used from X.AI response and map it to web_search_requests.
+        Copy usage.server_side_tool_usage_details from the provider usage block
+        onto model_response.usage for tool cost calculation.
         """
         if not hasattr(model_response, "usage") or model_response.usage is None:
             return
 
-        usage: Usage = model_response.usage
-        num_sources_used = None
-        response_usage = raw_response_json.get("usage", {})
-        if isinstance(response_usage, dict) and "num_sources_used" in response_usage:
-            num_sources_used = response_usage.get("num_sources_used")
-
-        # Map num_sources_used to web_search_requests for cost detection
-        if num_sources_used is not None and num_sources_used > 0:
-            if usage.prompt_tokens_details is None:
-                usage.prompt_tokens_details = PromptTokensDetailsWrapper()
-
-            usage.prompt_tokens_details.web_search_requests = int(num_sources_used)
-            setattr(usage, "num_sources_used", int(num_sources_used))
-            verbose_logger.debug("X.AI web search sources used: %s", num_sources_used)
+        usage: Final[Usage] = model_response.usage
+        response_usage: Final = raw_response_json.get("usage")
+        if not isinstance(response_usage, dict):
+            return
+        details: Final = response_usage.get("server_side_tool_usage_details")
+        if isinstance(details, Mapping):
+            apply_server_side_tool_usage_details_to_usage(usage, details)
+            verbose_logger.debug("X.AI server_side_tool_usage_details: %s", details)
 
     @staticmethod
     def _normalize_openai_compatible_usage_totals(
@@ -404,7 +401,7 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
          "choices":[],"usage":{"prompt_tokens":171,"completion_tokens":2,"total_tokens":173,...}}
         """
         # Handle chunks with empty choices but with usage data
-        choices = chunk.get("choices", [])
+        choices: Final = chunk.get("choices", [])
         if len(choices) == 0 and "usage" in chunk:
             # xAI sends usage in a chunk with empty choices array
             # Add a dummy choice with empty delta to ensure proper processing

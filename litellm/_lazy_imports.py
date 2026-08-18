@@ -18,7 +18,7 @@ until they're actually needed.
 import importlib
 import sys
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, Final, cast
 
 # Import all the data structures that define what can be lazy-loaded
 # These are just lists of names and maps of where to find them
@@ -54,7 +54,7 @@ from ._lazy_imports_registry import (
 )
 
 
-def _get_litellm_globals() -> dict:
+def get_litellm_globals() -> dict:
     """
     Get the globals dictionary of the litellm module.
 
@@ -233,7 +233,7 @@ def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], cate
         raise AttributeError(f"{category} lazy import: unknown attribute {name!r}")
 
     # Step 2: Get the cache (where we store imported things)
-    _globals = _get_litellm_globals()
+    _globals: Final = get_litellm_globals()
 
     # Step 3: If we've already imported it, just return the cached version
     if name in _globals:
@@ -255,7 +255,7 @@ def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], cate
 
     # Step 6: Get the actual attribute from the module
     # Example: getattr(utils_module, "ModelResponse") returns the ModelResponse class
-    value = getattr(module, attr_name)
+    value: Final = getattr(module, attr_name)
 
     # Step 7: Cache it so we don't have to import again next time
     _globals[name] = value
@@ -332,14 +332,14 @@ def _lazy_import_utils_module(name: str) -> Any:
     Handler for utils module lazy imports.
 
     This uses a custom implementation because utils module needs to use
-    _get_utils_globals() instead of _get_litellm_globals() for caching.
+    _get_utils_globals() instead of get_litellm_globals() for caching.
     """
     # Check if this attribute exists in our map
     if name not in _UTILS_MODULE_IMPORT_MAP:
         raise AttributeError(f"Utils module lazy import: unknown attribute {name!r}")
 
     # Get the cache (where we store imported things) - use utils globals
-    _globals = _get_utils_globals()
+    _globals: Final = _get_utils_globals()
 
     # If we've already imported it, just return the cached version
     if name in _globals:
@@ -355,7 +355,7 @@ def _lazy_import_utils_module(name: str) -> Any:
         module = importlib.import_module(module_path)
 
     # Get the actual attribute from the module
-    value = getattr(module, attr_name)
+    value: Final = getattr(module, attr_name)
 
     # Cache it so we don't have to import again next time
     _globals[name] = value
@@ -379,15 +379,15 @@ def _lazy_import_llm_client_cache(name: str) -> Any:
     - "in_memory_llm_clients_cache" is a singleton instance of that class
     So we need custom logic to handle both cases.
     """
-    _globals = _get_litellm_globals()
+    _globals: Final = get_litellm_globals()
 
     # If already cached, return it
     if name in _globals:
         return _globals[name]
 
     # Import the class
-    module = importlib.import_module("litellm.caching.llm_caching_handler")
-    LLMClientCache = getattr(module, "LLMClientCache")
+    module: Final = importlib.import_module("litellm.caching.llm_caching_handler")
+    LLMClientCache: Final = getattr(module, "LLMClientCache")
 
     # If they want the class itself, return it
     if name == "LLMClientCache":
@@ -396,7 +396,7 @@ def _lazy_import_llm_client_cache(name: str) -> Any:
 
     # If they want the singleton instance, create it (only once)
     if name == "in_memory_llm_clients_cache":
-        instance = LLMClientCache()
+        instance: Final = LLMClientCache()
         _globals["in_memory_llm_clients_cache"] = instance
         return instance
 
@@ -412,7 +412,7 @@ def _lazy_import_http_handlers(name: str) -> Any:
     - They need configuration (timeout, etc.) from the module globals
     - They use factory functions instead of direct instantiation
     """
-    _globals = _get_litellm_globals()
+    _globals: Final = get_litellm_globals()
 
     if name == "module_level_aclient":
         # Create an async HTTP client using the factory function
@@ -420,11 +420,11 @@ def _lazy_import_http_handlers(name: str) -> Any:
 
         # Get timeout from module config (if set)
         timeout = _globals.get("request_timeout")
-        params = {"timeout": timeout, "client_alias": "module level aclient"}
+        params: Final = {"timeout": timeout, "client_alias": "module level aclient"}
 
         # Create the client instance
-        provider_id = cast(Any, "litellm_module_level_client")
-        async_client = get_async_httpx_client(
+        provider_id: Final = cast(Any, "litellm_module_level_client")
+        async_client: Final = get_async_httpx_client(
             llm_provider=provider_id,
             params=params,
         )
@@ -438,7 +438,7 @@ def _lazy_import_http_handlers(name: str) -> Any:
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         timeout = _globals.get("request_timeout")
-        sync_client = HTTPHandler(timeout=timeout)
+        sync_client: Final = HTTPHandler(timeout=timeout)
 
         # Cache it
         _globals["module_level_client"] = sync_client

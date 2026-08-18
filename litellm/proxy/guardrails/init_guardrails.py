@@ -1,4 +1,4 @@
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import litellm
 from litellm import Router
@@ -23,7 +23,7 @@ def init_guardrails_v2(
 ):
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
-    guardrail_list: list[Guardrail] = []
+    guardrail_list: Final[list[Guardrail]] = []
 
     for guardrail in all_guardrails:
         initialized_guardrail = IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
@@ -56,7 +56,7 @@ def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:
         verbose_proxy_logger.debug("Router not initialized yet, skipping guardrail_list population")
         return
 
-    router_guardrail_list: list[GuardrailTypedDict] = []
+    router_guardrail_list: Final[list[GuardrailTypedDict]] = []
 
     for guardrail in guardrail_list:
         guardrail_id = guardrail.get("guardrail_id")
@@ -111,8 +111,8 @@ def initialize_guardrails(
                 litellm.guardrail_name_config_map[k] = guardrail_item
 
         # set appropriate callbacks if they are default on
-        default_on_callbacks = set()
-        callback_specific_params = {}
+        default_on_callbacks: Final = set()
+        callback_specific_params: Final = {}
         for guardrail in all_guardrails:
             verbose_proxy_logger.debug(guardrail.guardrail_name)
             verbose_proxy_logger.debug(guardrail.default_on)
@@ -127,9 +127,9 @@ def initialize_guardrails(
 
                     if guardrail.logging_only is True:
                         if callback == "presidio":
-                            callback_specific_params["presidio"] = {"logging_only": True}  # type: ignore
+                            callback_specific_params["presidio"] = {"logging_only": True}
 
-        default_on_callbacks_list = list(default_on_callbacks)
+        default_on_callbacks_list: Final = list(default_on_callbacks)
         if len(default_on_callbacks_list) > 0:
             initialize_callbacks_on_proxy(
                 value=default_on_callbacks_list,

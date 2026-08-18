@@ -3,6 +3,8 @@ Azure AI cost calculation helper.
 Handles Azure AI Foundry Model Router flat cost and other Azure AI specific pricing.
 """
 
+from typing import Final
+
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
@@ -25,7 +27,7 @@ def _is_azure_model_router(model: str) -> bool:
     Returns:
         bool: True if this is a model router model
     """
-    model_lower = model.lower()
+    model_lower: Final = model.lower()
     return "model-router" in model_lower or "model_router" in model_lower or model_lower == "azure-model-router"
 
 
@@ -45,8 +47,8 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
 
     # Get the model router pricing from model_prices_and_context_window.json
     # Use "model_router" as the key (without actual model name suffix)
-    model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
-    router_flat_cost_per_token = model_info.get("input_cost_per_token", 0)
+    model_info: Final = get_model_info(model="model_router", custom_llm_provider="azure_ai")
+    router_flat_cost_per_token: Final = model_info.get("input_cost_per_token", 0)
 
     if router_flat_cost_per_token and router_flat_cost_per_token > 0:
         return prompt_tokens * router_flat_cost_per_token
@@ -86,7 +88,7 @@ def cost_per_token(
 
     # Determine if this was a model router request
     # Check both the response model and the request model
-    is_router_request = _is_azure_model_router(model) or (
+    is_router_request: Final = _is_azure_model_router(model) or (
         request_model is not None and _is_azure_model_router(request_model)
     )
 
@@ -114,8 +116,8 @@ def cost_per_token(
     # The flat cost is defined in model_prices_and_context_window.json for azure_ai/model_router
     if is_router_request:
         # Use the request model for flat cost calculation if available, otherwise use response model
-        router_model_for_calc = request_model if request_model else model
-        router_flat_cost = calculate_azure_model_router_flat_cost(router_model_for_calc, usage.prompt_tokens)
+        router_model_for_calc: Final = request_model if request_model else model
+        router_flat_cost: Final = calculate_azure_model_router_flat_cost(router_model_for_calc, usage.prompt_tokens)
 
         if router_flat_cost > 0:
             verbose_logger.debug(

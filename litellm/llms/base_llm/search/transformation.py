@@ -2,7 +2,7 @@
 Base Search transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -18,6 +18,16 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_PERPLEXITY_UNIFIED_PARAMS: Final[frozenset[str]] = frozenset(
+    (
+        "max_results",
+        "search_domain_filter",
+        "country",
+        "max_tokens_per_page",
+    )
+)
+
+
 def _search_host(url: str) -> str:
     return urlsplit(url).netloc.lower()
 
@@ -27,10 +37,10 @@ def _is_trusted_search_api_base(
     default_api_base: str | None,
     base_env_var: str | None,
 ) -> bool:
-    candidate = _search_host(caller_api_base)
+    candidate: Final = _search_host(caller_api_base)
     if not candidate:
         return False
-    trusted = {
+    trusted: Final = {
         _search_host(base)
         for base in (
             default_api_base,
@@ -96,7 +106,7 @@ class BaseSearchConfig:
         return "POST"
 
     @staticmethod
-    def get_supported_perplexity_optional_params() -> set:
+    def get_supported_perplexity_optional_params() -> frozenset[str]:
         """
         Get the set of Perplexity unified search parameters.
         These are the standard parameters that providers should transform from.
@@ -104,12 +114,7 @@ class BaseSearchConfig:
         Returns:
             Set of parameter names that are part of the unified spec
         """
-        return {
-            "max_results",
-            "search_domain_filter",
-            "country",
-            "max_tokens_per_page",
-        }
+        return _PERPLEXITY_UNIFIED_PARAMS
 
     def _assert_trusted_api_base_for_server_credential(
         self,
@@ -154,7 +159,7 @@ class BaseSearchConfig:
         """
         if caller_api_key:
             return caller_api_key
-        server_key = next(
+        server_key: Final = next(
             (key for key in (get_secret_str(var) for var in key_env_vars) if key),
             None,
         )

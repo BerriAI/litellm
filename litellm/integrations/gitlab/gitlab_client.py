@@ -4,7 +4,7 @@ Now supports selecting a tag via `config["tag"]`; falls back to branch ("main").
 """
 
 import base64
-from typing import Any
+from typing import Any, Final
 from urllib.parse import quote
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -35,8 +35,8 @@ class GitLabClient:
                 - branch: Branch to fetch from (default: "main")
                 - base_url: Base GitLab API URL (default: "https://gitlab.com/api/v4")
         """
-        project = config.get("project")
-        access_token = config.get("access_token")
+        project: Final = config.get("project")
+        access_token: Final = config.get("access_token")
         if project is None or access_token is None:
             raise ValueError("project and access_token are required")
 
@@ -77,13 +77,13 @@ class GitLabClient:
     # ------------------------
 
     def _file_raw_url(self, file_path: str, *, ref: str | None = None) -> str:
-        file_enc = quote(file_path, safe="")
-        ref_q = quote(ref or self.ref, safe="")
+        file_enc: Final = quote(file_path, safe="")
+        ref_q: Final = quote(ref or self.ref, safe="")
         return f"{self.base_url}/projects/{self._project_enc}/repository/files/{file_enc}/raw?ref={ref_q}"
 
     def _file_json_url(self, file_path: str, *, ref: str | None = None) -> str:
-        file_enc = quote(file_path, safe="")
-        ref_q = quote(ref or self.ref, safe="")
+        file_enc: Final = quote(file_path, safe="")
+        ref_q: Final = quote(ref or self.ref, safe="")
         return f"{self.base_url}/projects/{self._project_enc}/repository/files/{file_enc}?ref={ref_q}"
 
     def _tree_url(
@@ -93,9 +93,9 @@ class GitLabClient:
         *,
         ref: str | None = None,
     ) -> str:
-        path_q = f"&path={quote(directory_path, safe='')}" if directory_path else ""
-        rec_q = "&recursive=true" if recursive else ""
-        ref_q = quote(ref or self.ref, safe="")
+        path_q: Final = f"&path={quote(directory_path, safe='')}" if directory_path else ""
+        rec_q: Final = "&recursive=true" if recursive else ""
+        ref_q: Final = quote(ref or self.ref, safe="")
         return f"{self.base_url}/projects/{self._project_enc}/repository/tree?ref={ref_q}{path_q}{rec_q}"
 
     # ------------------------
@@ -120,16 +120,16 @@ class GitLabClient:
         Returns:
             File content as UTF-8 string, or None if file not found.
         """
-        raw_url = self._file_raw_url(file_path, ref=ref)
+        raw_url: Final = self._file_raw_url(file_path, ref=ref)
 
         try:
-            resp = self.http_handler.get(raw_url, headers=self.headers)
+            resp: Final = self.http_handler.get(raw_url, headers=self.headers)
             if resp.status_code == 404:
                 # Fallback to JSON endpoint
                 return self._get_file_content_via_json(file_path, ref=ref)
             resp.raise_for_status()
 
-            ctype = (resp.headers.get("content-type") or "").lower()
+            ctype: Final = (resp.headers.get("content-type") or "").lower()
             if ctype.startswith("text/") or "charset=" in ctype or ctype.startswith("application/json"):
                 return resp.text
             try:
@@ -138,7 +138,7 @@ class GitLabClient:
                 return resp.content.decode("utf-8", errors="replace")
 
         except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
+            status: Final = getattr(getattr(e, "response", None), "status_code", None)
             if status == 404:
                 return None
             if status == 403:
@@ -153,15 +153,15 @@ class GitLabClient:
         """
         Fallback for get_file_content(): use the JSON file API which returns base64 content.
         """
-        json_url = self._file_json_url(file_path, ref=ref)
+        json_url: Final = self._file_json_url(file_path, ref=ref)
         try:
-            resp = self.http_handler.get(json_url, headers=self.headers)
+            resp: Final = self.http_handler.get(json_url, headers=self.headers)
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            data = resp.json()
-            content = data.get("content")
-            encoding = data.get("encoding", "")
+            data: Final = resp.json()
+            content: Final = data.get("content")
+            encoding: Final = data.get("encoding", "")
             if content and encoding == "base64":
                 try:
                     return base64.b64decode(content).decode("utf-8")
@@ -169,7 +169,7 @@ class GitLabClient:
                     return base64.b64decode(content).decode("utf-8", errors="replace")
             return content
         except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
+            status: Final = getattr(getattr(e, "response", None), "status_code", None)
             if status == 404:
                 return None
             if status == 403:
@@ -200,16 +200,16 @@ class GitLabClient:
         Returns:
             List of file paths (relative to repo root)
         """
-        url = self._tree_url(directory_path, recursive=recursive, ref=ref)
+        url: Final = self._tree_url(directory_path, recursive=recursive, ref=ref)
 
         try:
-            resp = self.http_handler.get(url, headers=self.headers)
+            resp: Final = self.http_handler.get(url, headers=self.headers)
             if resp.status_code == 404:
                 return []
             resp.raise_for_status()
 
-            data = resp.json() or []
-            files: list[str] = []
+            data: Final = resp.json() or []
+            files: Final[list[str]] = []
             for item in data:
                 if item.get("type") == "blob":
                     file_path = item.get("path", "")
@@ -218,7 +218,7 @@ class GitLabClient:
             return files
 
         except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
+            status: Final = getattr(getattr(e, "response", None), "status_code", None)
             if status == 404:
                 return []
             if status == 403:
@@ -231,9 +231,9 @@ class GitLabClient:
 
     def get_repository_info(self) -> dict[str, Any]:
         """Get information about the project/repository."""
-        url = f"{self.base_url}/projects/{self._project_enc}"
+        url: Final = f"{self.base_url}/projects/{self._project_enc}"
         try:
-            resp = self.http_handler.get(url, headers=self.headers)
+            resp: Final = self.http_handler.get(url, headers=self.headers)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -249,11 +249,11 @@ class GitLabClient:
 
     def get_branches(self) -> list[dict[str, Any]]:
         """Get list of branches in the repository."""
-        url = f"{self.base_url}/projects/{self._project_enc}/repository/branches"
+        url: Final = f"{self.base_url}/projects/{self._project_enc}/repository/branches"
         try:
-            resp = self.http_handler.get(url, headers=self.headers)
+            resp: Final = self.http_handler.get(url, headers=self.headers)
             resp.raise_for_status()
-            data = resp.json()
+            data: Final = resp.json()
             return data if isinstance(data, list) else []
         except Exception as e:
             raise Exception(f"Failed to get branches: {e}")
@@ -266,11 +266,11 @@ class GitLabClient:
             file_path: Path to the file in the repository.
             ref: Optional override (tag/branch/SHA). Defaults to self.ref.
         """
-        url = self._file_raw_url(file_path, ref=ref)
+        url: Final = self._file_raw_url(file_path, ref=ref)
         try:
-            headers = dict(self.headers)
+            headers: Final = dict(self.headers)
             headers["Range"] = "bytes=0-0"
-            resp = self.http_handler.get(url, headers=headers)
+            resp: Final = self.http_handler.get(url, headers=headers)
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
@@ -280,7 +280,7 @@ class GitLabClient:
                 "last_modified": resp.headers.get("last-modified"),
             }
         except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
+            status: Final = getattr(getattr(e, "response", None), "status_code", None)
             if status == 404:
                 return None
             raise Exception(f"Failed to get file metadata for '{file_path}': {e}")

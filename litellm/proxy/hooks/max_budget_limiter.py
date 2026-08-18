@@ -1,3 +1,5 @@
+from typing import Final
+
 from fastapi import HTTPException
 
 from litellm import verbose_logger
@@ -24,15 +26,18 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
     ):
         try:
             verbose_proxy_logger.debug("Inside Max Budget Limiter Pre-Call Hook")
-            max_budget = user_api_key_dict.user_max_budget
-            user_id = user_api_key_dict.user_id
+            max_budget: Final = user_api_key_dict.user_max_budget
+            user_id: Final = user_api_key_dict.user_id
 
             if max_budget is None or user_id is None:
                 return
 
-            # Personal budget applies only to non-team requests, matching
-            # the explicit team-key exemption in common_checks section 4.1.
-            if user_api_key_dict.team_id is not None:
+            from litellm.proxy.proxy_server import general_settings
+
+            if (
+                user_api_key_dict.team_id is not None
+                and general_settings.get("apply_user_budget_to_team_keys") is not True
+            ):
                 return
 
             # The reservation path admits at the strict-`<` boundary and
@@ -44,13 +49,13 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
                 get_reserved_counter_keys,
             )
 
-            user_counter_key = f"spend:user:{user_id}"
+            user_counter_key: Final = f"spend:user:{user_id}"
             if user_counter_key in get_reserved_counter_keys(user_api_key_dict.budget_reservation):
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
 
-            curr_spend = await get_current_spend(
+            curr_spend: Final = await get_current_spend(
                 counter_key=user_counter_key,
                 fallback_spend=user_api_key_dict.user_spend or 0.0,
             )

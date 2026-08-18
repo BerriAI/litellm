@@ -7,9 +7,9 @@ different managed resource types (files, vector stores, etc.).
 
 import base64
 import re
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
-PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS = ("azure", "azure_ai")
+PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS: Final = ("azure", "azure_ai")
 
 
 def resolve_passthrough_managed_id_provider(
@@ -29,7 +29,7 @@ def resolve_passthrough_managed_id_provider(
     Splitting them would make a managed ID minted on ``azure`` fail to resolve
     when replayed on ``azure_ai`` and vice versa.
     """
-    provider = str(getattr(custom_llm_provider, "value", custom_llm_provider) or "").lower()
+    provider: Final = str(getattr(custom_llm_provider, "value", custom_llm_provider) or "").lower()
     if not provider:
         return None
     if provider in PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS or provider.endswith((".azure", ".azure_ai")):
@@ -58,11 +58,11 @@ def is_base64_encoded_unified_id(
         return False
 
     # Add padding back if needed
-    padded = resource_id + "=" * (-len(resource_id) % 4)
+    padded: Final = resource_id + "=" * (-len(resource_id) % 4)
 
     # Decode from base64
     try:
-        decoded = base64.urlsafe_b64decode(padded).decode()
+        decoded: Final = base64.urlsafe_b64decode(padded).decode()
         if decoded.startswith(prefix):
             return decoded
         else:
@@ -93,12 +93,12 @@ def extract_target_model_names_from_unified_id(
             return []
 
         # Decode if it's base64 encoded
-        decoded_id = is_base64_encoded_unified_id(unified_id)
+        decoded_id: Final = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
 
         # Extract model names using regex
-        match = re.search(r"target_model_names,([^;]+)", unified_id)
+        match: Final = re.search(r"target_model_names,([^;]+)", unified_id)
         if match:
             # Split on comma and strip whitespace from each model name
             return [model.strip() for model in match.group(1).split(",")]
@@ -130,12 +130,12 @@ def extract_resource_type_from_unified_id(
             return None
 
         # Decode if it's base64 encoded
-        decoded_id = is_base64_encoded_unified_id(unified_id)
+        decoded_id: Final = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
 
         # Extract resource type (comes after prefix and before first semicolon)
-        match = re.search(r"litellm_proxy:([^;]+)", unified_id)
+        match: Final = re.search(r"litellm_proxy:([^;]+)", unified_id)
         if match:
             return match.group(1).strip()
 
@@ -166,12 +166,12 @@ def extract_unified_uuid_from_unified_id(
             return None
 
         # Decode if it's base64 encoded
-        decoded_id = is_base64_encoded_unified_id(unified_id)
+        decoded_id: Final = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
 
         # Extract UUID
-        match = re.search(r"unified_id,([^;]+)", unified_id)
+        match: Final = re.search(r"unified_id,([^;]+)", unified_id)
         if match:
             return match.group(1).strip()
 
@@ -202,7 +202,7 @@ def extract_model_id_from_unified_id(
             return None
 
         # Decode if it's base64 encoded
-        decoded_id = is_base64_encoded_unified_id(unified_id)
+        decoded_id: Final = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
 
@@ -213,7 +213,7 @@ def extract_model_id_from_unified_id(
         # into the team-access check and 403 every team-BYOK file attach
         # with `Tried to access <uuid>` (LIT-3244 patch/1.86.0 second-order
         # finding).
-        match = re.search(r"(?:^|;)model_id,([^;]+)", unified_id)
+        match: Final = re.search(r"(?:^|;)model_id,([^;]+)", unified_id)
         if match:
             return match.group(1).strip()
 
@@ -244,12 +244,12 @@ def extract_provider_resource_id_from_unified_id(
             return None
 
         # Decode if it's base64 encoded
-        decoded_id = is_base64_encoded_unified_id(unified_id)
+        decoded_id: Final = is_base64_encoded_unified_id(unified_id)
         if decoded_id:
             unified_id = decoded_id
 
         # Extract resource ID (try multiple patterns for different resource types)
-        patterns = [
+        patterns: Final = [
             r"resource_id,([^;]+)",
             r"vector_store_id,([^;]+)",
             r"file_id,([^;]+)",
@@ -298,7 +298,7 @@ def generate_unified_id_string(
         returns: "litellm_proxy:vector_store;unified_id,abc-123;target_model_names,gpt-4,gemini;resource_id,vs_xyz;model_id,model-id-123"
     """
     # Build the unified ID string
-    parts = [
+    parts: Final = [
         f"litellm_proxy:{resource_type}",
         f"unified_id,{unified_uuid}",
         f"target_model_names,{','.join(target_model_names)}",
@@ -339,10 +339,10 @@ def decode_unified_id(encoded_unified_id: str) -> str | None:
     """
     try:
         # Add padding back if needed
-        padded = encoded_unified_id + "=" * (-len(encoded_unified_id) % 4)
+        padded: Final = encoded_unified_id + "=" * (-len(encoded_unified_id) % 4)
 
         # Decode from base64
-        decoded = base64.urlsafe_b64decode(padded).decode()
+        decoded: Final = base64.urlsafe_b64decode(padded).decode()
 
         # Verify it starts with the expected prefix
         if decoded.startswith("litellm_proxy:"):

@@ -6,7 +6,7 @@ This allows the same policy to be attached to multiple scopes.
 """
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.table_repositories import PolicyAttachmentRepository
@@ -18,7 +18,16 @@ from litellm.types.proxy.policy_engine import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from prisma.models import LiteLLM_PolicyAttachmentTable
+
     from litellm.proxy.utils import PrismaClient
+
+
+class PolicyAttachmentMatch(TypedDict):
+    policy_name: str
+    matched_via: str
 
 
 class AttachmentRegistry:
@@ -40,7 +49,7 @@ class AttachmentRegistry:
     ```
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._attachments: list[PolicyAttachment] = []
         self._config_attachments: tuple[PolicyAttachment, ...] = ()
         self._initialized: bool = False
@@ -98,7 +107,7 @@ class AttachmentRegistry:
         """
         return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context)]
 
-    def get_attached_policies_with_reasons(self, context: PolicyMatchContext) -> list[dict[str, Any]]:
+    def get_attached_policies_with_reasons(self, context: PolicyMatchContext) -> list[PolicyAttachmentMatch]:
         """
         Get list of policy names and match reasons for the given context.
 
@@ -107,8 +116,8 @@ class AttachmentRegistry:
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
-        results: list[dict[str, Any]] = []
-        seen_policies: set = set()
+        results: Final[list[PolicyAttachmentMatch]] = []
+        seen_policies: Final[set[str]] = set()
 
         for attachment in self._attachments:
             scope = attachment.to_policy_scope()
@@ -141,9 +150,9 @@ class AttachmentRegistry:
         if attachment.is_global():
             return "scope:*"
 
-        reasons = []
+        reasons: Final = []
         if attachment.tags and context.tags:
-            matching_tags = [t for t in context.tags if PolicyMatcher.matches_pattern(t, attachment.tags)]
+            matching_tags: Final = [t for t in context.tags if PolicyMatcher.matches_pattern(t, attachment.tags)]
             if matching_tags:
                 reasons.append(f"tag:{matching_tags[0]}")
         if attachment.teams and context.team_alias:
@@ -166,7 +175,7 @@ class AttachmentRegistry:
         Returns:
             True if the policy is attached to a matching scope
         """
-        attached = self.get_attached_policies(context)
+        attached: Final = self.get_attached_policies(context)
         return policy_name in attached
 
     def get_all_attachments(self) -> list[PolicyAttachment]:
@@ -237,9 +246,9 @@ class AttachmentRegistry:
         Returns:
             Number of attachments removed
         """
-        original_count = len(self._attachments)
+        original_count: Final = len(self._attachments)
         self._attachments = [a for a in self._attachments if a.policy != policy_name]
-        removed_count = original_count - len(self._attachments)
+        removed_count: Final = original_count - len(self._attachments)
         if removed_count > 0:
             verbose_proxy_logger.debug("Removed %s attachment(s) for policy: %s", removed_count, policy_name)
         return removed_count
@@ -280,7 +289,9 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse with the created attachment
         """
         try:
-            created_attachment = await PolicyAttachmentRepository(prisma_client).table.create(
+            created_attachment: Final[LiteLLM_PolicyAttachmentTable] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.create(
                 data={
                     "policy_name": attachment_request.policy_name,
                     "scope": attachment_request.scope,
@@ -296,7 +307,7 @@ class AttachmentRegistry:
             )
 
             # Also add to in-memory registry
-            attachment = PolicyAttachment(
+            attachment: Final = PolicyAttachment(
                 policy=attachment_request.policy_name,
                 scope=attachment_request.scope,
                 teams=attachment_request.teams,
@@ -340,9 +351,9 @@ class AttachmentRegistry:
         """
         try:
             # Get attachment before deleting
-            attachment = await PolicyAttachmentRepository(prisma_client).table.find_unique(
-                where={"attachment_id": attachment_id}
-            )
+            attachment: Final[LiteLLM_PolicyAttachmentTable | None] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_unique(where={"attachment_id": attachment_id})
 
             if attachment is None:
                 raise Exception(f"Attachment with ID {attachment_id} not found")
@@ -375,9 +386,9 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse if found, None otherwise
         """
         try:
-            attachment = await PolicyAttachmentRepository(prisma_client).table.find_unique(
-                where={"attachment_id": attachment_id}
-            )
+            attachment: Final[LiteLLM_PolicyAttachmentTable | None] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_unique(where={"attachment_id": attachment_id})
 
             if attachment is None:
                 return None
@@ -413,7 +424,9 @@ class AttachmentRegistry:
             List of PolicyAttachmentDBResponse objects
         """
         try:
-            attachments = await PolicyAttachmentRepository(prisma_client).table.find_many(
+            attachments: Final[Sequence[LiteLLM_PolicyAttachmentTable]] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_many(
                 order={"created_at": "desc"},
             )
 
@@ -449,9 +462,9 @@ class AttachmentRegistry:
             prisma_client: The Prisma client instance
         """
         try:
-            attachments = await self.get_all_attachments_from_db(prisma_client)
+            attachments: Final = await self.get_all_attachments_from_db(prisma_client)
 
-            db_attachments = [
+            db_attachments: Final = [
                 PolicyAttachment(
                     policy=attachment_response.policy_name,
                     scope=attachment_response.scope,

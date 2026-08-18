@@ -14,7 +14,7 @@ Key differences from OpenAI:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm import get_secret_str
 from litellm._logging import verbose_logger
@@ -124,20 +124,20 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
         # Set GCS_BUCKET_NAME env var for litellm.files.create_file
         # The handler uses this to determine where to upload
-        original_bucket = os.environ.get("GCS_BUCKET_NAME")
+        original_bucket: Final = os.environ.get("GCS_BUCKET_NAME")
         if self.gcs_bucket:
             os.environ["GCS_BUCKET_NAME"] = self.gcs_bucket
 
         try:
             # Create file tuple for litellm.files.acreate_file
-            file_tuple = (filename, file_content, content_type)
+            file_tuple: Final = (filename, file_content, content_type)
 
             verbose_logger.debug(
                 "Uploading file to GCS via litellm.files.acreate_file: %s (bucket: %s)", filename, self.gcs_bucket
             )
 
             # Upload to GCS using LiteLLM's file upload
-            response = await litellm.acreate_file(
+            response: Final = await litellm.acreate_file(
                 file=file_tuple,
                 purpose="assistants",  # Purpose for file storage
                 custom_llm_provider="vertex_ai",
@@ -147,7 +147,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             )
 
             # The response.id should be the GCS URI
-            gcs_uri = response.id
+            gcs_uri: Final = response.id
             verbose_logger.info("Uploaded file to GCS: %s", gcs_uri)
 
             return gcs_uri
@@ -170,7 +170,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         """
         try:
             from vertexai import init as vertexai_init
-            from vertexai import rag  # type: ignore[import-not-found]
+            from vertexai import rag
         except ImportError:
             raise ImportError(
                 "vertexai.rag module not found. Vertex AI RAG requires "
@@ -182,14 +182,14 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         vertexai_init(project=self.vertex_project, location=self.vertex_location)
 
         # Get chunking config from ingest_options (unified interface)
-        transformation_config = self._build_transformation_config()
+        transformation_config: Final = self._build_transformation_config()
 
-        corpus_name = self._get_corpus_name()
+        corpus_name: Final = self._get_corpus_name()
         verbose_logger.debug("Importing %s into corpus %s", gcs_uri, self.corpus_id)
 
         if self.wait_for_import:
             # Synchronous import - wait for completion
-            response = rag.import_files(
+            response: Final = rag.import_files(
                 corpus_name=corpus_name,
                 paths=[gcs_uri],
                 transformation_config=transformation_config,
@@ -212,7 +212,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         Uses chunking_strategy from ingest_options (not vector_store).
         """
         try:
-            from vertexai import rag  # type: ignore[import-not-found]
+            from vertexai import rag
         except ImportError:
             raise ImportError(
                 "vertexai.rag module not found. Vertex AI RAG requires "
@@ -225,13 +225,13 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
         from litellm.types.rag import RAGChunkingStrategy
 
-        transformation = VertexAIRAGTransformation()
-        chunking_config = transformation.transform_chunking_strategy_to_vertex_format(
+        transformation: Final = VertexAIRAGTransformation()
+        chunking_config: Final = transformation.transform_chunking_strategy_to_vertex_format(
             cast(RAGChunkingStrategy | None, self.chunking_strategy)
         )
 
-        chunk_size = chunking_config["chunking_config"]["chunk_size"]
-        chunk_overlap = chunking_config["chunking_config"]["chunk_overlap"]
+        chunk_size: Final = chunking_config["chunking_config"]["chunk_size"]
+        chunk_overlap: Final = chunking_config["chunking_config"]["chunk_overlap"]
 
         return rag.TransformationConfig(
             chunking_config=rag.ChunkingConfig(
@@ -283,7 +283,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             return _get_str_or_none(self.corpus_id), None
 
         # Step 1: Upload file to GCS
-        gcs_uri = await self._upload_file_to_gcs(
+        gcs_uri: Final = await self._upload_file_to_gcs(
             file_content=file_content,
             filename=filename,
             content_type=content_type or "application/octet-stream",

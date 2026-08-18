@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.proxy.types_utils.utils import get_instance_fn
@@ -12,7 +12,7 @@ else:
     try:
         from mcp.types import Tool as MCPToolSDKTool
     except ImportError:
-        MCPToolSDKTool = None  # type: ignore
+        MCPToolSDKTool = None
 
 
 class MCPToolRegistry:
@@ -140,4 +140,4 @@ class MCPToolRegistry:
         verbose_logger.debug("all registered tools: %s", json.dumps(self.tools, indent=4, default=str))
 
 
-global_mcp_tool_registry = MCPToolRegistry()
+global_mcp_tool_registry: Final = MCPToolRegistry()

@@ -1,6 +1,7 @@
 import functools
 import json
 from collections.abc import AsyncIterator, Iterator
+from typing import Final
 
 import httpx
 
@@ -16,8 +17,8 @@ def _load_sagemaker_response_stream_shape():
         from botocore.loaders import Loader
         from botocore.model import ServiceModel
 
-        loader = Loader()
-        service_dict = loader.load_service_model("sagemaker-runtime", "service-2")
+        loader: Final = Loader()
+        service_dict: Final = loader.load_service_model("sagemaker-runtime", "service-2")
         return ServiceModel(service_dict).shape_for("InvokeEndpointWithResponseStreamOutput")
     except Exception as e:
         verbose_logger.warning(
@@ -59,18 +60,18 @@ class AWSEventStreamDecoder:
         self.is_messages_api = is_messages_api
 
     def _chunk_parser_messages_api(self, chunk_data: dict) -> StreamingChatCompletionChunk:
-        openai_chunk = StreamingChatCompletionChunk(**{"model": self.model, **chunk_data})
+        openai_chunk: Final = StreamingChatCompletionChunk(**{"model": self.model, **chunk_data})
 
         return openai_chunk
 
     def _chunk_parser(self, chunk_data: dict) -> GChunk:
         verbose_logger.debug("in sagemaker chunk parser, chunk_data %s", chunk_data)
-        _token = chunk_data.get("token", {}) or {}
-        _index = chunk_data.get("index", None) or 0
-        is_finished = False
-        finish_reason = ""
+        _token: Final = chunk_data.get("token", {}) or {}
+        _index: Final = chunk_data.get("index", None) or 0
+        is_finished: Final = False
+        finish_reason: Final = ""
 
-        _text = _token.get("text", "")
+        _text: Final = _token.get("text", "")
         if _text == "<|endoftext|>":
             return GChunk(
                 text="",
@@ -92,7 +93,7 @@ class AWSEventStreamDecoder:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
-        event_stream_buffer = EventStreamBuffer()
+        event_stream_buffer: Final = EventStreamBuffer()
         accumulated_json = ""
 
         for chunk in iterator:
@@ -139,7 +140,7 @@ class AWSEventStreamDecoder:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
-        event_stream_buffer = EventStreamBuffer()
+        event_stream_buffer: Final = EventStreamBuffer()
         accumulated_json = ""
 
         async for chunk in iterator:
@@ -190,7 +191,7 @@ class AWSEventStreamDecoder:
                 verbose_logger.error("Final error parsing accumulated JSON: %s", e)
 
     def _parse_message_from_event(self, event) -> str | None:
-        response_stream_shape = get_sagemaker_response_stream_shape()
+        response_stream_shape: Final = get_sagemaker_response_stream_shape()
         if response_stream_shape is None:
             raise SagemakerError(
                 status_code=500,
@@ -199,8 +200,8 @@ class AWSEventStreamDecoder:
                     "Ensure botocore is correctly installed."
                 ),
             )
-        response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, response_stream_shape)
+        response_dict: Final = event.to_response_dict()
+        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise ValueError(f"Bad response code, expected 200: {response_dict}")
@@ -209,10 +210,10 @@ class AWSEventStreamDecoder:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()  # type: ignore[no-any-return]
+            return chunk.get("bytes").decode()
         else:
             chunk = response_dict.get("body")
             if not chunk:
                 return None
 
-            return chunk.decode()  # type: ignore[no-any-return]
+            return chunk.decode()

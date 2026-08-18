@@ -7,7 +7,7 @@ Endpoints here:
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -33,10 +33,31 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     UpdateModelGroupRequest,
 )
 
-router = APIRouter()
+if TYPE_CHECKING:
+    from litellm import Router
+
+router: Final = APIRouter()
 
 
-def validate_models_exist(model_names: list[str], llm_router) -> tuple[bool, list[str]]:
+class _DeploymentRow(Protocol):
+    model_id: str
+    model_name: str
+    model_info: object
+
+
+class _ModelTableClient(Protocol):
+    async def find_many(self, where: Mapping[str, object] | None = None) -> Sequence[_DeploymentRow]: ...
+
+    async def find_unique(self, where: Mapping[str, object]) -> _DeploymentRow | None: ...
+
+    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+
+
+def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
+    return ModelRepository(prisma_client).table
+
+
+def validate_models_exist(model_names: list[str], llm_router: "Router | None") -> tuple[bool, list[str]]:
     """
     Validate that all requested model names exist in the router.
     Checks only exact model name matches.
@@ -47,8 +68,8 @@ def validate_models_exist(model_names: list[str], llm_router) -> tuple[bool, lis
     if llm_router is None:
         return False, model_names
 
-    router_model_names = set(llm_router.get_model_names())
-    missing = [m for m in model_names if m not in router_model_names]
+    router_model_names: Final = set(llm_router.get_model_names())
+    missing: Final = [m for m in model_names if m not in router_model_names]
     return (len(missing) == 0, missing)
 
 
@@ -63,7 +84,7 @@ def add_access_group_to_deployment(model_info: dict[str, Any], access_group: str
     Returns:
         Tuple[Dict[str, Any], bool]: (updated_model_info, was_modified)
     """
-    access_groups = model_info.get("access_groups", [])
+    access_groups: Final = model_info.get("access_groups", [])
 
     # Check if access group already exists
     if access_group in access_groups:
@@ -87,7 +108,7 @@ def _raise_http_if_reload_degraded_serving(
     serving before the reload is never blamed here; only a model this reload stopped
     serving is reported."""
     missing, collateral = reload_serving_verdict(before=before, written_models=written_models, written_must_serve=False)
-    gone = tuple(dict.fromkeys((*missing, *collateral)))
+    gone: Final = tuple(dict.fromkeys((*missing, *collateral)))
     if not gone:
         return
     raise HTTPException(
@@ -117,7 +138,7 @@ async def _tag_deployment_with_access_group(
     )
     if not was_modified:
         return None
-    await ModelRepository(prisma_client).table.update(
+    await _model_table(prisma_client).update(
         where={"model_id": model_id},
         data={"model_info": json.dumps(updated_model_info)},
     )
@@ -129,7 +150,7 @@ def _readable_model_info_or_raise(model_id: str, model_info: object) -> Mapping[
     """These helpers rewrite the model_info column wholesale, so a present-but-unreadable
     value must refuse loudly rather than be silently replaced with a fresh object; an
     absent value stays a legitimate empty start."""
-    parsed = model_info_as_mapping(model_info)
+    parsed: Final = model_info_as_mapping(model_info)
     if parsed is None and model_info is not None:
         raise ValueError(f"model_info for deployment {model_id} is not a readable JSON object; refusing to rewrite it")
     return parsed or {}
@@ -150,7 +171,7 @@ async def _strip_access_group_from_deployment(
     )
     if not was_modified:
         return None
-    await ModelRepository(prisma_client).table.update(
+    await _model_table(prisma_client).update(
         where={"model_id": model_id},
         data={"model_info": json.dumps(updated_model_info)},
     )
@@ -174,10 +195,10 @@ async def update_deployments_with_access_group(
         The (model_id, updated model_info) pair of every deployment actually written,
         so callers can verify each one survived the post-write reload
     """
-    deployments = await ModelRepository(prisma_client).table.find_many(where={"model_name": {"in": model_names}})
+    deployments: Final = await _model_table(prisma_client).find_many(where={"model_name": {"in": model_names}})
     verbose_proxy_logger.debug("Found %s deployments for model_names: %s", len(deployments), model_names)
 
-    found_names = {deployment.model_name for deployment in deployments}
+    found_names: Final = {deployment.model_name for deployment in deployments}
     for model_name in model_names:
         if model_name not in found_names:
             raise HTTPException(
@@ -187,7 +208,7 @@ async def update_deployments_with_access_group(
                 },
             )
 
-    tagged = [
+    tagged: Final = [
         await _tag_deployment_with_access_group(
             model_id=deployment.model_id,
             model_info=deployment.model_info,
@@ -213,7 +234,7 @@ async def update_specific_deployments_with_access_group(
     deployment actually written.
     """
     verbose_proxy_logger.debug("Updating specific deployment model_ids: %s", model_ids)
-    tagged = [
+    tagged: Final = [
         await _tag_deployment_with_access_group(
             model_id=model_id,
             model_info=(await _find_deployment_or_400(model_id=model_id, prisma_client=prisma_client)),
@@ -225,8 +246,8 @@ async def update_specific_deployments_with_access_group(
     return tuple(pair for pair in tagged if pair is not None)
 
 
-async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) -> Mapping[str, object] | None:
-    deployment = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_id})
+async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) -> object:
+    deployment: Final = await _model_table(prisma_client).find_unique(where={"model_id": model_id})
     if deployment is None:
         raise HTTPException(
             status_code=400,
@@ -246,7 +267,7 @@ def remove_access_group_from_deployment(model_info: dict[str, Any], access_group
     Returns:
         Tuple[Dict[str, Any], bool]: (updated_model_info, was_modified)
     """
-    access_groups = model_info.get("access_groups", [])
+    access_groups: Final = model_info.get("access_groups", [])
 
     # Check if access group exists
     if access_group not in access_groups:
@@ -269,10 +290,10 @@ async def get_all_access_groups_from_db(
         Dict[str, AccessGroupInfo]: Dictionary mapping access_group name to info
     """
     # Get all deployments
-    deployments = await ModelRepository(prisma_client).table.find_many()
+    deployments: Final = await ModelRepository(prisma_client).table.find_many()
 
     # Build access group map
-    access_group_map: dict[str, dict[str, Any]] = {}
+    access_group_map: Final[dict[str, dict[str, Any]]] = {}
 
     for deployment in deployments:
         model_info = deployment.model_info or {}
@@ -290,7 +311,7 @@ async def get_all_access_groups_from_db(
             access_group_map[access_group]["deployment_count"] += 1
 
     # Convert to AccessGroupInfo objects
-    result = {}
+    result: Final = {}
     for access_group, data in access_group_map.items():
         result[access_group] = AccessGroupInfo(
             access_group=access_group,
@@ -354,8 +375,8 @@ async def create_model_group(
         )
 
     # Validation: Check that at least one of model_names or model_ids is provided
-    has_model_names = data.model_names and len(data.model_names) > 0
-    has_model_ids = data.model_ids and len(data.model_ids) > 0
+    has_model_names: Final = data.model_names and len(data.model_names) > 0
+    has_model_ids: Final = data.model_ids and len(data.model_ids) > 0
 
     if not has_model_names and not has_model_ids:
         raise HTTPException(
@@ -364,7 +385,7 @@ async def create_model_group(
         )
 
     # If model_ids is provided, use it (more precise targeting)
-    use_model_ids = has_model_ids
+    use_model_ids: Final = has_model_ids
 
     # Validate model_names exist in router (only if using model_names path)
     if not use_model_ids and has_model_names:
@@ -389,7 +410,7 @@ async def create_model_group(
 
     try:
         # Check if access group already exists
-        existing_access_groups = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        existing_access_groups: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
 
         if data.access_group in existing_access_groups:
             raise HTTPException(
@@ -414,9 +435,9 @@ async def create_model_group(
                 access_group=data.access_group,
                 prisma_client=prisma_client,
             )
-        models_updated = len(updated_pairs)
+        models_updated: Final = len(updated_pairs)
 
-        live_before_reload = live_model_ids_snapshot()
+        live_before_reload: Final = live_model_ids_snapshot()
 
         await clear_cache()
         _raise_http_if_reload_degraded_serving(
@@ -478,10 +499,10 @@ async def list_access_groups(
         )
 
     try:
-        access_groups_map = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
 
         # Sort by access group name
-        access_groups_list = sorted(
+        access_groups_list: Final = sorted(
             access_groups_map.values(),
             key=lambda x: x.access_group,
         )
@@ -533,7 +554,7 @@ async def get_access_group_info(
         )
 
     try:
-        access_groups_map = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
 
         if access_group not in access_groups_map:
             raise HTTPException(
@@ -603,8 +624,8 @@ async def update_access_group(
     verbose_proxy_logger.debug("Updating access group: %s with models: %s", access_group, data.model_names)
 
     # Validation: Check that at least one of model_names or model_ids is provided
-    has_model_names = data.model_names and len(data.model_names) > 0
-    has_model_ids = data.model_ids and len(data.model_ids) > 0
+    has_model_names: Final = data.model_names and len(data.model_names) > 0
+    has_model_ids: Final = data.model_ids and len(data.model_ids) > 0
 
     if not has_model_names and not has_model_ids:
         raise HTTPException(
@@ -612,11 +633,11 @@ async def update_access_group(
             detail={"error": "Either model_names or model_ids must be provided and non-empty"},
         )
 
-    use_model_ids = has_model_ids
+    use_model_ids: Final = has_model_ids
 
     # Validation: Check if access group exists
     try:
-        access_groups_map = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
         if access_group not in access_groups_map:
             raise HTTPException(
                 status_code=404,
@@ -646,9 +667,9 @@ async def update_access_group(
 
     try:
         # Step 1: Remove access group from ALL DB deployments (skip config models)
-        all_deployments = await ModelRepository(prisma_client).table.find_many()
+        all_deployments: Final = await _model_table(prisma_client).find_many()
 
-        stripped = [
+        stripped: Final = [
             await _strip_access_group_from_deployment(
                 model_id=deployment.model_id,
                 model_info=deployment.model_info,
@@ -657,7 +678,7 @@ async def update_access_group(
             )
             for deployment in all_deployments
         ]
-        stripped_pairs = tuple(pair for pair in stripped if pair is not None)
+        stripped_pairs: Final = tuple(pair for pair in stripped if pair is not None)
 
         # Step 2: Add access group using the appropriate method
         if use_model_ids:
@@ -674,10 +695,10 @@ async def update_access_group(
                 access_group=access_group,
                 prisma_client=prisma_client,
             )
-        models_updated = len(updated_pairs)
+        models_updated: Final = len(updated_pairs)
 
         # Clear cache and reload models to pick up the access group changes
-        live_before_reload = live_model_ids_snapshot()
+        live_before_reload: Final = live_model_ids_snapshot()
         await clear_cache()
         _raise_http_if_reload_degraded_serving(
             before=live_before_reload,
@@ -748,7 +769,7 @@ async def delete_access_group(
 
     # Validation: Check if access group exists
     try:
-        access_groups_map = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
         if access_group not in access_groups_map:
             raise HTTPException(
                 status_code=404,
@@ -764,9 +785,9 @@ async def delete_access_group(
 
     try:
         # Remove access group from all DB deployments (skip config models)
-        all_deployments = await ModelRepository(prisma_client).table.find_many()
+        all_deployments: Final = await _model_table(prisma_client).find_many()
 
-        removed = [
+        removed: Final = [
             await _strip_access_group_from_deployment(
                 model_id=deployment.model_id,
                 model_info=deployment.model_info,
@@ -775,11 +796,11 @@ async def delete_access_group(
             )
             for deployment in all_deployments
         ]
-        removed_pairs = tuple(pair for pair in removed if pair is not None)
-        models_updated = len(removed_pairs)
+        removed_pairs: Final = tuple(pair for pair in removed if pair is not None)
+        models_updated: Final = len(removed_pairs)
 
         # Clear cache and reload models to pick up the access group changes
-        live_before_reload = live_model_ids_snapshot()
+        live_before_reload: Final = live_model_ids_snapshot()
         await clear_cache()
         _raise_http_if_reload_degraded_serving(
             before=live_before_reload,

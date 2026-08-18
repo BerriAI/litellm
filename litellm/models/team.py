@@ -8,7 +8,7 @@ budget-window value types and the team-model alias table). Re-exported from
 
 import json
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Final, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -83,7 +83,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_TeamTable(TeamBase):
-    team_id: str  # type: ignore
+    team_id: str
     spend: float | None = None
     max_parallel_requests: int | None = None
     budget_duration: str | None = None
@@ -104,7 +104,7 @@ class LiteLLM_TeamTable(TeamBase):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        dict_fields = [
+        dict_fields: Final = [
             "metadata",
             "aliases",
             "config",

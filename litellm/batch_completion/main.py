@@ -1,4 +1,5 @@
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from typing import Final
 
 import litellm
 from litellm._logging import print_verbose
@@ -55,17 +56,17 @@ def batch_completion(
     Returns:
         list: A list of completion results.
     """
-    args = locals()
+    args: Final = locals()
 
-    batch_messages = messages
-    completions = []
+    batch_messages: Final = messages
+    completions: Final = []
     model = model
     custom_llm_provider = None
     if model.split("/", 1)[0] in litellm.provider_list:
         custom_llm_provider = model.split("/", 1)[0]
         model = model.split("/", 1)[1]
     if custom_llm_provider == "vllm":
-        optional_params = get_optional_params(
+        optional_params: Final = get_optional_params(
             functions=functions,
             function_call=function_call,
             temperature=temperature,
@@ -145,7 +146,7 @@ def batch_completion_models(*args, **kwargs):
     if "model" in kwargs:
         kwargs.pop("model")
     if "models" in kwargs:
-        models = kwargs["models"]
+        models: Final = kwargs["models"]
         kwargs.pop("models")
         futures = {}
         with ThreadPoolExecutor(max_workers=len(models)) as executor:
@@ -156,10 +157,10 @@ def batch_completion_models(*args, **kwargs):
                 if future.result() is not None:
                     return future.result()
     elif "deployments" in kwargs:
-        deployments = kwargs["deployments"]
+        deployments: Final = kwargs["deployments"]
         kwargs.pop("deployments")
         kwargs.pop("model_list")
-        nested_kwargs = kwargs.pop("kwargs", {})
+        nested_kwargs: Final = kwargs.pop("kwargs", {})
         futures = {}
         with ThreadPoolExecutor(max_workers=len(deployments)) as executor:
             for deployment in deployments:
@@ -238,10 +239,10 @@ def batch_completion_models_all_responses(*args, **kwargs):
     if len(models) == 0:
         return []
 
-    responses = []
+    responses: Final = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
-        futures = [executor.submit(litellm.completion, *args, model=model, **kwargs) for model in models]
+        futures: Final = [executor.submit(litellm.completion, *args, model=model, **kwargs) for model in models]
 
         for future in futures:
             try:

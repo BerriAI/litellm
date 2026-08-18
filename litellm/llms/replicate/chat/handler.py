@@ -2,9 +2,11 @@ import asyncio
 import json
 import time
 from collections.abc import Callable
+from typing import Final
 
 import litellm
 from litellm.constants import REPLICATE_POLLING_DELAY_SECONDS
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -17,7 +19,7 @@ from litellm.utils import CustomStreamWrapper, ModelResponse
 from ..common_utils import ReplicateError
 from .transformation import ReplicateConfig
 
-replicate_config = ReplicateConfig()
+replicate_config: Final = ReplicateConfig()
 
 
 # Function to handle prediction response (streaming)
@@ -127,7 +129,7 @@ def completion(
     print_verbose: Callable,
     optional_params: dict,
     litellm_params: dict,
-    logging_obj,
+    logging_obj: LiteLLMLoggingObj,
     api_key,
     encoding,
     custom_prompt_dict={},
@@ -144,8 +146,8 @@ def completion(
         litellm_params=litellm_params,
     )
     # Start a prediction and get the prediction URL
-    version_id = replicate_config.model_to_version_id(model)
-    input_data = replicate_config.transform_request(
+    version_id: Final = replicate_config.model_to_version_id(model)
+    input_data: Final = replicate_config.transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -168,7 +170,7 @@ def completion(
             logging_obj=logging_obj,
             print_verbose=print_verbose,
             headers=headers,
-        )  # type: ignore
+        )
     ## COMPLETION CALL
     model_response.created = int(time.time())  # for pricing this must remain right before calling api
 
@@ -181,7 +183,7 @@ def completion(
     )
 
     ## COMPLETION CALL
-    httpx_client = _get_httpx_client(
+    httpx_client: Final = _get_httpx_client(
         params={"timeout": 600.0},
     )
     response = httpx_client.post(
@@ -195,14 +197,14 @@ def completion(
     # Handle the prediction response (streaming or non-streaming)
     if "stream" in optional_params and optional_params["stream"] is True:
         print_verbose("streaming request")
-        _response = handle_prediction_response_streaming(
+        _response: Final = handle_prediction_response_streaming(
             prediction_url,
             api_key,
             print_verbose,
             headers=headers,
             http_client=httpx_client,
         )
-        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")  # type: ignore
+        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")
     else:
         for retry in range(litellm.DEFAULT_REPLICATE_POLLING_RETRIES):
             time.sleep(
@@ -245,7 +247,7 @@ async def async_completion(
     input_data,
     api_key,
     api_base,
-    logging_obj,
+    logging_obj: LiteLLMLoggingObj,
     print_verbose,
     headers: dict,
 ) -> ModelResponse | CustomStreamWrapper:
@@ -256,7 +258,7 @@ async def async_completion(
         optional_params=optional_params,
         litellm_params=litellm_params,
     )
-    async_handler = get_async_httpx_client(
+    async_handler: Final = get_async_httpx_client(
         llm_provider=litellm.LlmProviders.REPLICATE,
         params={"timeout": 600.0},
     )
@@ -264,14 +266,14 @@ async def async_completion(
     prediction_url = replicate_config.get_prediction_url(response)
 
     if "stream" in optional_params and optional_params["stream"] is True:
-        _response = async_handle_prediction_response_streaming(
+        _response: Final = async_handle_prediction_response_streaming(
             prediction_url,
             api_key,
             print_verbose,
             headers=headers,
             http_client=async_handler,
         )
-        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")  # type: ignore
+        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")
 
     for retry in range(litellm.DEFAULT_REPLICATE_POLLING_RETRIES):
         await asyncio.sleep(

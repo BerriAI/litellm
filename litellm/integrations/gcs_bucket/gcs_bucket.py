@@ -4,7 +4,7 @@ import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -42,9 +42,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
         )
-        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue(  # type: ignore[assignment]
-            maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
-        )
+        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
         asyncio.create_task(self.periodic_flush())
         AdditionalLoggingUtils.__init__(self)
 
@@ -67,7 +65,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 kwargs,
                 response_obj,
             )
-            logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
+            logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
             # When queue is at maxsize, flush immediately to make room (no blocking, no data dropped)
@@ -86,7 +84,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 response_obj,
             )
 
-            logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
+            logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
             # When queue is at maxsize, flush immediately to make room (no blocking, no data dropped)
@@ -106,7 +104,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         Returns:
             List of items to process, up to batch_size items
         """
-        items_to_process: list[GCSLogQueueItem] = []
+        items_to_process: Final[list[GCSLogQueueItem]] = []
         while len(items_to_process) < self.batch_size:
             try:
                 items_to_process.append(self.log_queue.get_nowait())
@@ -130,10 +128,10 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         This key may contain sensitive information (bucket names, paths) - use _sanitize_config_key()
         for logging purposes.
         """
-        standard_callback_dynamic_params = kwargs.get("standard_callback_dynamic_params", None) or {}
+        standard_callback_dynamic_params: Final = kwargs.get("standard_callback_dynamic_params", None) or {}
 
         bucket_name = standard_callback_dynamic_params.get("gcs_bucket_name", None) or self.BUCKET_NAME or "default"
-        path_service_account = (
+        path_service_account: Final = (
             standard_callback_dynamic_params.get("gcs_path_service_account", None)
             or self.path_service_account_json
             or "default"
@@ -148,7 +146,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
         Returns a short hash prefix for safe logging.
         """
-        hash_obj = hashlib.sha256(config_key.encode("utf-8"))
+        hash_obj: Final = hashlib.sha256(config_key.encode("utf-8"))
         return f"config-{hash_obj.hexdigest()[:8]}"
 
     def _group_items_by_config(self, items: list[GCSLogQueueItem]) -> dict[str, list[GCSLogQueueItem]]:
@@ -158,7 +156,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
         Returns a dict mapping config_key -> list of items with that config.
         """
-        grouped: dict[str, list[GCSLogQueueItem]] = {}
+        grouped: Final[dict[str, list[GCSLogQueueItem]]] = {}
         for item in items:
             config_key = self._get_config_key(item["kwargs"])
             if config_key not in grouped:
@@ -171,7 +169,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         Combine multiple log payloads into newline-delimited JSON (NDJSON) format.
         Each line is a valid JSON object representing one log entry.
         """
-        lines = []
+        lines: Final = []
         for item in items:
             logging_payload = item["payload"]
             json_line = json.dumps(logging_payload, default=str, ensure_ascii=False)
@@ -188,21 +186,21 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         if not items:
             return (0, 0)
 
-        first_kwargs = items[0]["kwargs"]
+        first_kwargs: Final = items[0]["kwargs"]
 
         try:
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(first_kwargs)
+            gcs_logging_config: Final[GCSLoggingConfig] = await self.get_gcs_logging_config(first_kwargs)
 
-            headers = await self.construct_request_headers(
+            headers: Final = await self.construct_request_headers(
                 vertex_instance=gcs_logging_config["vertex_instance"],
                 service_account_json=gcs_logging_config["path_service_account"],
             )
-            bucket_name = gcs_logging_config["bucket_name"]
+            bucket_name: Final = gcs_logging_config["bucket_name"]
 
-            current_date = self._get_object_date_from_datetime(datetime.now(timezone.utc))
-            batch_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
-            object_name = self._generate_batch_object_name(current_date, batch_id)
-            combined_payload = self._combine_payloads_to_ndjson(items)
+            current_date: Final = self._get_object_date_from_datetime(datetime.now(timezone.utc))
+            batch_id: Final = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+            object_name: Final = self._generate_batch_object_name(current_date, batch_id)
+            combined_payload: Final = self._combine_payloads_to_ndjson(items)
 
             await self._log_json_data_on_gcs(
                 headers=headers,
@@ -234,15 +232,15 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         Send a single log item to GCS as an individual object.
         """
         try:
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(item["kwargs"])
+            gcs_logging_config: Final[GCSLoggingConfig] = await self.get_gcs_logging_config(item["kwargs"])
 
-            headers = await self.construct_request_headers(
+            headers: Final = await self.construct_request_headers(
                 vertex_instance=gcs_logging_config["vertex_instance"],
                 service_account_json=gcs_logging_config["path_service_account"],
             )
-            bucket_name = gcs_logging_config["bucket_name"]
+            bucket_name: Final = gcs_logging_config["bucket_name"]
 
-            object_name = self._get_object_name(
+            object_name: Final = self._get_object_name(
                 kwargs=item["kwargs"],
                 logging_payload=item["payload"],
                 response_obj=item["response_obj"],
@@ -266,13 +264,13 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
         If disabled, sends each log individually as separate GCS objects (legacy behavior).
         """
-        items_to_process = self._drain_queue_batch()
+        items_to_process: Final = self._drain_queue_batch()
 
         if not items_to_process:
             return
 
         if self.use_batched_logging:
-            grouped_items = self._group_items_by_config(items_to_process)
+            grouped_items: Final = self._group_items_by_config(items_to_process)
 
             for config_key, group_items in grouped_items.items():
                 await self._send_grouped_batch(group_items, config_key)
@@ -283,7 +281,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         Get the object name to use for the current payload
         """
-        current_date = self._get_object_date_from_datetime(datetime.now(timezone.utc))
+        current_date: Final = self._get_object_date_from_datetime(datetime.now(timezone.utc))
         if logging_payload.get("error_str", None) is not None:
             object_name = self._generate_failure_object_name(
                 request_date_str=current_date,
@@ -295,10 +293,10 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             )
 
         # used for testing
-        _litellm_params = kwargs.get("litellm_params", None) or {}
-        _metadata = _litellm_params.get("metadata", None) or {}
+        _litellm_params: Final = kwargs.get("litellm_params", None) or {}
+        _metadata: Final = _litellm_params.get("metadata", None) or {}
         if "gcs_log_id" in _metadata:
-            safe_log_id = sanitize_cloud_object_component(_metadata.get("gcs_log_id"), fallback="")
+            safe_log_id: Final = sanitize_cloud_object_component(_metadata.get("gcs_log_id"), fallback="")
             if safe_log_id:
                 object_name = f"{current_date}/custom-{uuid.uuid4().hex}-{safe_log_id}"
 
@@ -317,7 +315,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         if start_time_utc is None:
             raise ValueError("start_time_utc is required for getting a payload from GCS Bucket")
 
-        dates_to_try = [
+        dates_to_try: Final = [
             start_time_utc,
             start_time_utc + timedelta(days=1),
             start_time_utc - timedelta(days=1),

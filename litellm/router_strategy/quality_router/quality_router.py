@@ -16,7 +16,7 @@ then cheapest `model_info.input_cost_per_token`).
 """
 
 import math
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -157,12 +157,12 @@ class QualityRouter(CustomLogger):
         `_model_quality`, and `_model_cost`. Raises if any listed model is
         missing `litellm_routing_preferences`.
         """
-        model_list = getattr(self.litellm_router_instance, "model_list", None) or []
-        available = set(self.config.available_models)
+        model_list: Final = getattr(self.litellm_router_instance, "model_list", None) or []
+        available: Final = set(self.config.available_models)
 
         # Track which available models we've matched so we can error on missing.
-        seen: dict[str, bool] = {name: False for name in available}
-        tier_to_models: dict[int, list[str]] = {}
+        seen: Final[dict[str, bool]] = {name: False for name in available}
+        tier_to_models: Final[dict[int, list[str]]] = {}
 
         for deployment in model_list:
             name = self._get_deployment_model_name(deployment)
@@ -201,7 +201,7 @@ class QualityRouter(CustomLogger):
             self._model_order[name] = prefs.order
             seen[name] = True
 
-        missing = [name for name, found in seen.items() if not found]
+        missing: Final = [name for name, found in seen.items() if not found]
         if missing:
             raise ValueError(
                 f"QualityRouter: the following available_models are not present in "
@@ -219,12 +219,12 @@ class QualityRouter(CustomLogger):
 
     def _order_key(self, model_name: str) -> float:
         """`order` lookup as a float — unset becomes +inf so explicit wins."""
-        order = self._model_order.get(model_name)
+        order: Final = self._model_order.get(model_name)
         return float(order) if order is not None else math.inf
 
     def _cost_key(self, model_name: str) -> float:
         """`input_cost_per_token` as a float — unset becomes +inf."""
-        cost = self._model_cost.get(model_name)
+        cost: Final = self._model_cost.get(model_name)
         return float(cost) if cost is not None else math.inf
 
     def _keyword_override(self, user_message: str) -> tuple[str, str] | None:
@@ -243,9 +243,9 @@ class QualityRouter(CustomLogger):
         # `_model_cost` / `_model_order` are populated.
         _ = self._tier_to_models
 
-        text = user_message.lower()
+        text: Final = user_message.lower()
 
-        matches: list[tuple[str, str]] = []  # (model_name, matched_keyword)
+        matches: Final[list[tuple[str, str]]] = []  # (model_name, matched_keyword)
         for model_name, keywords in self._model_keywords.items():
             for kw in keywords:
                 if kw and kw in text:
@@ -256,11 +256,11 @@ class QualityRouter(CustomLogger):
             return None
 
         def sort_key(match: tuple[str, str]) -> tuple[int, float, float, str]:
-            name = match[0]
-            quality = self._model_quality.get(name, 0)
-            order_val = self._order_key(name)
-            cost = self._model_cost.get(name)
-            cost_val = cost if cost is not None else math.inf
+            name: Final = match[0]
+            quality: Final = self._model_quality.get(name, 0)
+            order_val: Final = self._order_key(name)
+            cost: Final = self._model_cost.get(name)
+            cost_val: Final = cost if cost is not None else math.inf
             # Negate quality so higher tier sorts first under ASC sort.
             return (-quality, order_val, cost_val, name)
 
@@ -281,18 +281,18 @@ class QualityRouter(CustomLogger):
             4. Fall back to `config.default_model`.
             5. Otherwise raise.
         """
-        tier_index = self._tier_to_models
+        tier_index: Final = self._tier_to_models
         if tier in tier_index and tier_index[tier]:
             return tier_index[tier][0]
 
         # Round up.
-        higher_tiers = sorted(t for t in tier_index if t > tier)
+        higher_tiers: Final = sorted(t for t in tier_index if t > tier)
         for t in higher_tiers:
             if tier_index[t]:
                 return tier_index[t][0]
 
         # Round down — closest lower tier first.
-        lower_tiers = sorted((t for t in tier_index if t < tier), reverse=True)
+        lower_tiers: Final = sorted((t for t in tier_index if t < tier), reverse=True)
         for t in lower_tiers:
             if tier_index[t]:
                 return tier_index[t][0]
@@ -314,7 +314,7 @@ class QualityRouter(CustomLogger):
         """
         if request_kwargs is None:
             return
-        metadata = request_kwargs.setdefault("metadata", {})
+        metadata: Final = request_kwargs.setdefault("metadata", {})
         if isinstance(metadata, dict):
             metadata["quality_router_decision"] = decision
 
@@ -368,7 +368,7 @@ class QualityRouter(CustomLogger):
             )
 
         # Try keyword override first — it short-circuits complexity classification.
-        keyword_match = self._keyword_override(user_message)
+        keyword_match: Final = self._keyword_override(user_message)
         if keyword_match is not None:
             routed_model, matched_keyword = keyword_match
             verbose_router_logger.info(
@@ -389,14 +389,14 @@ class QualityRouter(CustomLogger):
                     "complexity_tier": None,
                 },
             )
-            routing_decision = StandardLoggingRoutingDecision(
+            routing_decision: Final = StandardLoggingRoutingDecision(
                 router_model_name=self.model_name,
                 router_type="quality",
                 routed_model=routed_model,
                 cause="keyword",
                 matched_keyword=matched_keyword,
             )
-            keyword_quality_tier = self._model_quality.get(routed_model)
+            keyword_quality_tier: Final = self._model_quality.get(routed_model)
             if keyword_quality_tier is not None:
                 routing_decision["tier"] = str(keyword_quality_tier)
             return PreRoutingHookResponse(
@@ -407,9 +407,9 @@ class QualityRouter(CustomLogger):
 
         # No keyword match → complexity classification flow.
         complexity_tier, score, signals = self._scorer.classify(user_message, system_prompt)
-        complexity_name = complexity_tier.value if hasattr(complexity_tier, "value") else str(complexity_tier)
+        complexity_name: Final = complexity_tier.value if hasattr(complexity_tier, "value") else str(complexity_tier)
 
-        quality_tier = self.config.complexity_to_quality.get(complexity_name)
+        quality_tier: Final = self.config.complexity_to_quality.get(complexity_name)
         if quality_tier is None:
             raise ValueError(
                 f"QualityRouter: complexity tier '{complexity_name}' not present "

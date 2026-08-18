@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Final
+
 from litellm.types.utils import ServiceTier, StandardLoggingPayload
 
 # Tiers a caller may name in a request, across the providers that accept the
@@ -8,7 +10,7 @@ from litellm.types.utils import ServiceTier, StandardLoggingPayload
 # maps "default" to "standard". Bounds the caller-controlled requested tier
 # wherever it is recorded. Derived from ``ServiceTier`` so a tier added there for
 # cost calculation cannot go missing here.
-KNOWN_REQUEST_SERVICE_TIERS = frozenset(
+KNOWN_REQUEST_SERVICE_TIERS: Final = frozenset(
     tuple(tier.value for tier in ServiceTier) + ("batch", "default", "scale", "standard", "standard_only")
 )
 
@@ -21,10 +23,10 @@ def get_served_service_tier(standard_logging_payload: StandardLoggingPayload) ->
     Groq) or on the usage object (Anthropic). Streaming responses carry no served
     tier.
     """
-    response = standard_logging_payload.get("response")
-    usage_object = standard_logging_payload.get("metadata", {}).get("usage_object")
+    response: Final = standard_logging_payload.get("response")
+    usage_object: Final = standard_logging_payload.get("metadata", {}).get("usage_object")
 
-    served_candidates: tuple[object, ...] = (
+    served_candidates: Final[tuple[object, ...]] = (
         response.get("service_tier") if isinstance(response, dict) else None,
         usage_object.get("service_tier") if isinstance(usage_object, dict) else None,
     )
@@ -39,8 +41,8 @@ def get_requested_service_tier(standard_logging_payload: StandardLoggingPayload)
     provider then ignores it (Bedrock and Groq accept the request and drop an
     unrecognized tier), so it is only reported when it names a known tier.
     """
-    model_parameters = standard_logging_payload.get("model_parameters")
-    requested_tier = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
+    model_parameters: Final = standard_logging_payload.get("model_parameters")
+    requested_tier: Final = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
     if isinstance(requested_tier, str) and requested_tier in KNOWN_REQUEST_SERVICE_TIERS:
         return requested_tier
     return None
@@ -61,7 +63,7 @@ def get_service_tier_from_standard_logging_payload(
     stay unrestricted, so a tier a provider adds later is still labelled
     correctly.
     """
-    served_tier = get_served_service_tier(standard_logging_payload)
+    served_tier: Final = get_served_service_tier(standard_logging_payload)
     if served_tier is not None:
         return served_tier
 

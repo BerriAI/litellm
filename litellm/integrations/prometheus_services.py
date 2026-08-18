@@ -3,6 +3,8 @@
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
 
 
+from typing import Final
+
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS
@@ -13,7 +15,7 @@ from litellm.types.services import (
     ServiceTypes,
 )
 
-FAILED_REQUESTS_LABELS = ["error_class", "function_name"]
+FAILED_REQUESTS_LABELS: Final = ["error_class", "function_name"]
 
 
 class PrometheusServicesLogger:
@@ -32,7 +34,7 @@ class PrometheusServicesLogger:
             except ImportError:
                 raise Exception("Missing prometheus_client. Run `pip install prometheus-client`")
 
-            _custom_buckets = litellm.prometheus_latency_buckets
+            _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
 
             self.Histogram = Histogram
@@ -86,11 +88,11 @@ class PrometheusServicesLogger:
             raise e
 
     def _get_service_metrics_initialize(self, service: ServiceTypes) -> list[ServiceMetrics]:
-        DEFAULT_METRICS = [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
+        DEFAULT_METRICS: Final = [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
         if service not in DEFAULT_SERVICE_CONFIGS:
             return DEFAULT_METRICS
 
-        metrics = DEFAULT_SERVICE_CONFIGS.get(service, {}).get("metrics", [])
+        metrics: Final = DEFAULT_SERVICE_CONFIGS.get(service, {}).get("metrics", [])
         if not metrics:
             verbose_logger.debug("No metrics found for service %s", service)
             return DEFAULT_METRICS
@@ -99,7 +101,7 @@ class PrometheusServicesLogger:
     def is_metric_registered(self, metric_name) -> bool:
         # Use _names_to_collectors (O(1)) instead of REGISTRY.collect() (O(n)) to avoid
         # perf regression when a new Router is created per request (e.g. router_settings in DB).
-        names_to_collectors = getattr(self.REGISTRY, "_names_to_collectors", None)
+        names_to_collectors: Final = getattr(self.REGISTRY, "_names_to_collectors", None)
         if names_to_collectors is not None:
             return metric_name in names_to_collectors
         for metric in self.REGISTRY.collect():
@@ -114,8 +116,8 @@ class PrometheusServicesLogger:
         return self.REGISTRY._names_to_collectors.get(metric_name)
 
     def create_histogram(self, service: str, type_of_request: str):
-        metric_name = f"litellm_{service}_{type_of_request}"
-        is_registered = self.is_metric_registered(metric_name)
+        metric_name: Final = f"litellm_{service}_{type_of_request}"
+        is_registered: Final = self.is_metric_registered(metric_name)
         if is_registered:
             return self._get_metric(metric_name)
         return self.Histogram(
@@ -126,8 +128,8 @@ class PrometheusServicesLogger:
         )
 
     def create_gauge(self, service: str, type_of_request: str):
-        metric_name = f"litellm_{service}_{type_of_request}"
-        is_registered = self.is_metric_registered(metric_name)
+        metric_name: Final = f"litellm_{service}_{type_of_request}"
+        is_registered: Final = self.is_metric_registered(metric_name)
         if is_registered:
             return self._get_metric(metric_name)
         return self.Gauge(metric_name, f"Gauge for {service} service", labelnames=[service])
@@ -138,8 +140,8 @@ class PrometheusServicesLogger:
         type_of_request: str,
         additional_labels: list[str] | None = None,
     ):
-        metric_name = f"litellm_{service}_{type_of_request}"
-        is_registered = self.is_metric_registered(metric_name)
+        metric_name: Final = f"litellm_{service}_{type_of_request}"
+        is_registered: Final = self.is_metric_registered(metric_name)
         if is_registered:
             return self._get_metric(metric_name)
         return self.Counter(
@@ -186,7 +188,7 @@ class PrometheusServicesLogger:
             self.mock_testing_success_calls += 1
 
         if payload.service.value in self.payload_to_prometheus_map:
-            prom_objects = self.payload_to_prometheus_map[payload.service.value]
+            prom_objects: Final = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Histogram):
                     self.observe_histogram(
@@ -206,7 +208,7 @@ class PrometheusServicesLogger:
             self.mock_testing_failure_calls += 1
 
         if payload.service.value in self.payload_to_prometheus_map:
-            prom_objects = self.payload_to_prometheus_map[payload.service.value]
+            prom_objects: Final = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Counter):
                     self.increment_counter(
@@ -223,7 +225,7 @@ class PrometheusServicesLogger:
             self.mock_testing_success_calls += 1
 
         if payload.service.value in self.payload_to_prometheus_map:
-            prom_objects = self.payload_to_prometheus_map[payload.service.value]
+            prom_objects: Final = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Histogram):
                     self.observe_histogram(
@@ -252,11 +254,11 @@ class PrometheusServicesLogger:
     ):
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
-        error_class = error.__class__.__name__
-        function_name = payload.call_type
+        error_class: Final = error.__class__.__name__
+        function_name: Final = payload.call_type
 
         if payload.service.value in self.payload_to_prometheus_map:
-            prom_objects = self.payload_to_prometheus_map[payload.service.value]
+            prom_objects: Final = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 # increment both failed and total requests
                 if isinstance(obj, self.Counter):

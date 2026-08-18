@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Perplexity's `/v1/chat/completions`
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -23,7 +23,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
+        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
         dynamic_api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return api_base, dynamic_api_key
 
@@ -35,7 +35,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         Eg. Perplexity does not support tools, tool_choice, function_call, functions, etc.
         """
-        base_openai_params = [
+        base_openai_params: Final = [
             "frequency_penalty",
             "max_tokens",
             "max_completion_tokens",
@@ -93,7 +93,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         # Extract and enhance usage with Perplexity-specific fields
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
             self._enhance_usage_with_perplexity_fields(model_response, raw_response_json)
             self._add_citations_as_annotations(model_response, raw_response_json)
         except Exception as e:
@@ -108,26 +108,24 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         """
         if not hasattr(model_response, "usage") or model_response.usage is None:
             # Create a usage object if it doesn't exist (when usage was None)
-            model_response.usage = Usage(  # type: ignore[attr-defined]
-                prompt_tokens=0, completion_tokens=0, total_tokens=0
-            )
+            model_response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
-        usage = model_response.usage  # type: ignore[attr-defined]
+        usage: Final = model_response.usage
 
         # Extract citation tokens count
-        citations = raw_response_json.get("citations", [])
+        citations: Final = raw_response_json.get("citations", [])
         citation_tokens = 0
         if citations:
             # Count total characters in citations as a proxy for citation tokens
             # This is an estimation - in practice, you might want to use proper tokenization
-            total_citation_chars = sum(len(str(citation)) for citation in citations if citation)
+            total_citation_chars: Final = sum(len(str(citation)) for citation in citations if citation)
             # Rough estimation: ~4 characters per token (OpenAI's general rule)
             if total_citation_chars > 0:
                 citation_tokens = max(1, total_citation_chars // 4)
 
         # Extract search queries count from usage or response metadata
         # Perplexity might include this in the usage object or as separate metadata
-        perplexity_usage = raw_response_json.get("usage", {})
+        perplexity_usage: Final = raw_response_json.get("usage", {})
 
         # Try to extract search queries from usage field first, then root level
         num_search_queries = perplexity_usage.get("num_search_queries")
@@ -160,36 +158,36 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             return
 
         # Get the first choice (assuming single response)
-        choice = model_response.choices[0]
+        choice: Final = model_response.choices[0]
         if not hasattr(choice, "message") or choice.message is None:
             return
 
-        message = choice.message
-        annotations = []
+        message: Final = choice.message
+        annotations: Final = []
 
         # Extract citations from the response
-        citations = raw_response_json.get("citations", [])
-        search_results = raw_response_json.get("search_results", [])
+        citations: Final = raw_response_json.get("citations", [])
+        search_results: Final = raw_response_json.get("search_results", [])
 
         # Create a mapping of URLs to search result titles
-        url_to_title = {}
+        url_to_title: Final = {}
         for result in search_results:
             if isinstance(result, dict) and "url" in result and "title" in result:
                 url_to_title[result["url"]] = result["title"]
 
         # Get the message content to find citation positions
-        content = getattr(message, "content", "")
+        content: Final = getattr(message, "content", "")
         if not content:
             return
 
         # Find all citation markers like [1], [2], [3], [4] in the text
         import re
 
-        citation_pattern = r"\[(\d+)\]"
-        citation_matches = list(re.finditer(citation_pattern, content))
+        citation_pattern: Final = r"\[(\d+)\]"
+        citation_matches: Final = list(re.finditer(citation_pattern, content))
 
         # Create a mapping of citation numbers to URLs
-        citation_number_to_url = {}
+        citation_number_to_url: Final = {}
         for i, citation in enumerate(citations):
             if isinstance(citation, str):
                 citation_number_to_url[i + 1] = citation  # 1-indexed

@@ -3,6 +3,8 @@ Translates from OpenAI's `/v1/chat/completions` to Tencent TokenHub's
 OpenAI-compatible endpoint.
 """
 
+from typing import Final
+
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import supports_reasoning
 
@@ -11,7 +13,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 class TencentChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
-        params = super().get_supported_openai_params(model)
+        params: Final = super().get_supported_openai_params(model)
         if supports_reasoning(model, custom_llm_provider="tencent"):
             params.extend(["thinking", "reasoning_effort"])
         return params
@@ -25,8 +27,8 @@ class TencentChatConfig(OpenAIGPTConfig):
     ) -> dict:
         optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
-        thinking_value = optional_params.pop("thinking", None)
-        reasoning_effort = optional_params.pop("reasoning_effort", None)
+        thinking_value: Final = optional_params.pop("thinking", None)
+        reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
 
         if thinking_value is not None:
             if isinstance(thinking_value, dict):
@@ -40,7 +42,7 @@ class TencentChatConfig(OpenAIGPTConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("TENCENT_API_BASE") or "https://tokenhub-intl.tencentcloudmaas.com/v1"
-        dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
+        dynamic_api_key: Final = api_key or get_secret_str("TENCENT_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(

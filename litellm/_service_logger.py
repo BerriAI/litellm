@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy._types import UserAPIKeyAuth
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     OTELClass = OpenTelemetry
 else:
     Span = Any
@@ -67,7 +67,7 @@ class ServiceLogging(CustomLogger):
         whether the callback is the logger instance itself or the ``"otel"`` string
         (which routes to the proxy's registered ``open_telemetry_logger``).
         """
-        otel_v2_cls = _get_otel_v2_class()
+        otel_v2_cls: Final = _get_otel_v2_class()
 
         def _is_otel_logger(obj: Any) -> bool:
             if isinstance(obj, OpenTelemetry):
@@ -101,7 +101,7 @@ class ServiceLogging(CustomLogger):
 
         try:
             # Try to get the current event loop
-            loop = asyncio.get_event_loop()
+            loop: Final = asyncio.get_event_loop()
             # Check if the loop is running
             if loop.is_running():
                 # If we're in a running loop, create a task
@@ -163,7 +163,7 @@ class ServiceLogging(CustomLogger):
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
 
-        payload = ServiceLoggerPayload(
+        payload: Final = ServiceLoggerPayload(
             is_error=False,
             error=None,
             service=service,
@@ -178,7 +178,7 @@ class ServiceLogging(CustomLogger):
         # (the V2 logger self-registers its instance even when the string is
         # present, unlike V1). Without this guard each such reference emits its own
         # span, so a single DB call shows up as duplicate ``postgres ...`` spans.
-        emitted_otel_logger_ids: set = set()
+        emitted_otel_logger_ids: Final[set] = set()
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -267,7 +267,7 @@ class ServiceLogging(CustomLogger):
         elif isinstance(error, str):
             error_message = error
 
-        payload = ServiceLoggerPayload(
+        payload: Final = ServiceLoggerPayload(
             is_error=True,
             error=error_message,
             service=service,
@@ -278,7 +278,7 @@ class ServiceLogging(CustomLogger):
 
         # Dedupe OTel loggers per event — see ``async_service_success_hook`` for why
         # the same logger can be referenced twice in ``service_callback``.
-        emitted_otel_logger_ids: set = set()
+        emitted_otel_logger_ids: Final[set] = set()
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()

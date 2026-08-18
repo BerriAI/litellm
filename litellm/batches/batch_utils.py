@@ -1,11 +1,12 @@
 import json
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.utils import _parse_prompt_tokens_details
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import token_counter
@@ -47,6 +48,7 @@ async def _handle_completed_batch(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: str | None = None,
     litellm_params: dict | None = None,
+    model_info: ModelInfo | None = None,
 ) -> tuple[float, Usage, list[str]]:
     """Fetch a completed batch's output file and aggregate its cost, usage, and
     models in a single pass over the JSONL lines, so the parsed file content is
@@ -57,7 +59,21 @@ async def _handle_completed_batch(
         custom_llm_provider: The LLM provider
         model_name: Optional model name
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
+        model_info: Optional deployment-level model info with custom pricing,
+            threaded through so a deployment's configured rates win over the
+            global cost map.
     """
+    # A completed batch whose request lines all failed has no output file - the
+    # results are written to a separate error_file_id and output_file_id is None.
+    # There is nothing to price or measure, so report an empty result set instead
+    # of calling _fetch_batch_output_file_content, which raises on a missing
+    # output file. Without this guard the logging worker crashes on every
+    # aretrieve_batch poll and the completed batch's zero-cost accounting is lost.
+    # The generic retrieval helper keeps raising for callers that explicitly ask
+    # for a missing output file.
+    if batch.output_file_id is None:
+        return 0.0, Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), []
+
     file_content = await _fetch_batch_output_file_content(batch, custom_llm_provider, litellm_params=litellm_params)
 
     if (
@@ -74,6 +90,7 @@ async def _handle_completed_batch(
         entries=_iter_batch_input_entries(file_content),
         custom_llm_provider=custom_llm_provider,
         model_name=model_name,
+        model_info=model_info,
     )
 
 
@@ -101,7 +118,7 @@ def _iter_successful_output_line_stats(
             continue
         response_body = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
         usage = _get_batch_job_usage_from_response_body(response_body, custom_llm_provider)
-        prompt_details = _parse_prompt_tokens_details(usage)
+        prompt_details = parse_prompt_tokens_details(usage)
         raw_model = response_body.get("model")
         response_model = raw_model if isinstance(raw_model, str) and raw_model else None
         if model_info is not None or custom_llm_provider in ("anthropic", "bedrock"):
@@ -141,9 +158,9 @@ def _aggregate_batch_cost_usage_models(
 ) -> tuple[float, Usage, list[str]]:
     """Aggregate cost, usage, and models from batch output entries in a single
     pass, holding one small stats record per line instead of the parsed file."""
-    line_stats = tuple(_iter_successful_output_line_stats(entries, custom_llm_provider, model_name, model_info))
+    line_stats: Final = tuple(_iter_successful_output_line_stats(entries, custom_llm_provider, model_name, model_info))
 
-    cache_token_params = {
+    cache_token_params: Final = {
         key: tokens
         for key, tokens in (
             ("cache_read_input_tokens", sum(stats.cache_read_tokens for stats in line_stats)),
@@ -151,14 +168,14 @@ def _aggregate_batch_cost_usage_models(
         )
         if tokens > 0
     }
-    batch_usage = Usage(
+    batch_usage: Final = Usage(
         total_tokens=sum(stats.total_tokens for stats in line_stats),
         prompt_tokens=sum(stats.prompt_tokens for stats in line_stats),
         completion_tokens=sum(stats.completion_tokens for stats in line_stats),
         **cache_token_params,
     )
-    batch_models = [model_name] if model_name else [stats.model for stats in line_stats if stats.model]
-    total_cost = sum((stats.cost for stats in line_stats), 0.0)
+    batch_models: Final = [model_name] if model_name else [stats.model for stats in line_stats if stats.model]
+    total_cost: Final = sum((stats.cost for stats in line_stats), 0.0)
     verbose_logger.debug("batch output aggregate: cost=%s usage=%s models=%s", total_cost, batch_usage, batch_models)
     return total_cost, batch_usage, batch_models
 
@@ -184,7 +201,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
     total_tokens = 0
     prompt_tokens = 0
     completion_tokens = 0
-    actual_model_name = model_name or "gemini-2.0-flash-001"
+    actual_model_name: Final = model_name or "gemini-2.0-flash-001"
 
     for response in vertex_ai_batch_responses:
         response_body = response.get("response")
@@ -254,7 +271,7 @@ async def _fetch_batch_output_file_content(
         raise ValueError("Output file id is None cannot retrieve file content")
 
     file_id = batch.output_file_id
-    is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+    is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(file_id)
     if is_base64_unified_file_id:
         try:
             file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
@@ -265,16 +282,16 @@ async def _fetch_batch_output_file_content(
             )
 
     # Build kwargs for afile_content with credentials from litellm_params
-    file_content_kwargs = {
+    file_content_kwargs: Final = {
         "file_id": file_id,
         "custom_llm_provider": custom_llm_provider,
     }
 
     # Extract and add credentials for file access
-    credentials = _extract_file_access_credentials(litellm_params)
+    credentials: Final = _extract_file_access_credentials(litellm_params)
     file_content_kwargs.update(credentials)
 
-    _file_content = await afile_content(**file_content_kwargs)  # type: ignore[reportArgumentType]
+    _file_content: Final = await afile_content(**file_content_kwargs)
     return _file_content.content
 
 
@@ -291,11 +308,11 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
     Returns:
         Dictionary containing only the credentials needed for file access
     """
-    credentials = {}
+    credentials: Final = {}
 
     if litellm_params:
         # List of credential keys that should be passed to file operations
-        credential_keys = [
+        credential_keys: Final = (
             "api_key",
             "api_base",
             "api_version",
@@ -309,7 +326,9 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "bucket_name",
             "timeout",
             "max_retries",
-        ]
+            "_litellm_internal_model_credentials",
+            *AWS_CREDENTIAL_KWARGS_KEYS,
+        )
         for key in credential_keys:
             if key in litellm_params:
                 credentials[key] = litellm_params[key]
@@ -355,7 +374,7 @@ def _iter_batch_input_entries(file_content: bytes) -> Iterator[dict]:
 
 # A batch request's input tokens scale roughly with its serialized size, so this
 # is a conservative per-row fallback when the token counter cannot measure a row.
-_BATCH_TOKEN_ESTIMATE_BYTES_PER_TOKEN = 4
+_BATCH_TOKEN_ESTIMATE_BYTES_PER_TOKEN: Final = 4
 
 
 def _estimate_batch_entry_tokens(raw_line: bytes) -> int:
@@ -370,18 +389,18 @@ def _count_entry_tokens(
     model_name: str | None = None,
 ) -> int:
     """Token-count a single batch input entry's body (chat / text / embedding)."""
-    body = entry.get("body", {}) or {}
-    model = body.get("model", model_name or "")
+    body: Final = entry.get("body", {}) or {}
+    model: Final = body.get("model", model_name or "")
 
-    messages = body.get("messages")
+    messages: Final = body.get("messages")
     if messages:
         return token_counter(model=model, messages=messages)
 
-    prompt = body.get("prompt")
+    prompt: Final = body.get("prompt")
     if prompt:
         return _count_prompt_or_input_tokens(model=model, value=prompt)
 
-    input_data = body.get("input")
+    input_data: Final = body.get("input")
     if input_data:
         return _count_prompt_or_input_tokens(model=model, value=input_data)
 
@@ -427,13 +446,29 @@ def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_prov
     """
     if custom_llm_provider in ("anthropic", "bedrock"):
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
-        return AnthropicConfig().calculate_usage(
-            usage_object=response_body.get("usage", None) or {},
+        usage_object: Final = response_body.get("usage", None) or {}
+        if custom_llm_provider == "bedrock" and AmazonConverseConfig.is_converse_usage_shape(usage_object):
+            return AmazonConverseConfig().usage_from_batch_output(usage_object)
+        anthropic_usage: Final = AnthropicConfig().calculate_usage(
+            usage_object=usage_object,
             reasoning_content=None,
         )
-    _usage_dict = response_body.get("usage", None) or {}
-    usage: Usage = Usage(**_usage_dict)
+        if usage_object and anthropic_usage.total_tokens == 0:
+            verbose_logger.warning(
+                "batch output line reported usage this parser does not understand, so it will be billed at $0. "
+                "provider=%s usage_keys=%s",
+                custom_llm_provider,
+                sorted(usage_object.keys()),
+            )
+        return anthropic_usage
+    from litellm.responses.utils import ResponseAPILoggingUtils
+
+    _usage_dict: Final = response_body.get("usage", None) or {}
+    if ResponseAPILoggingUtils._is_response_api_usage(_usage_dict):
+        return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_usage_dict)
+    usage: Final[Usage] = Usage(**_usage_dict)
     return usage
 
 
@@ -455,8 +490,8 @@ def _get_response_from_batch_job_output_file(batch_job_output_file: dict, custom
         return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput", None) or {}
-    _response: dict = batch_job_output_file.get("response", None) or {}
-    _response_body = _response.get("body", None) or {}
+    _response: Final[dict] = batch_job_output_file.get("response", None) or {}
+    _response_body: Final = _response.get("body", None) or {}
     return _response_body
 
 
@@ -472,5 +507,5 @@ def _batch_response_was_successful(batch_job_output_file: dict, custom_llm_provi
         return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("type") == "succeeded"
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput") is not None and batch_job_output_file.get("error") is None
-    _response: dict = batch_job_output_file.get("response", None) or {}
+    _response: Final[dict] = batch_job_output_file.get("response", None) or {}
     return _response.get("status_code", None) == 200

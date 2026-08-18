@@ -2,6 +2,8 @@
 Similar to init_guardrails.py, but for prompts.
 """
 
+from typing import Final
+
 from litellm._logging import verbose_proxy_logger
 
 
@@ -13,7 +15,7 @@ def init_prompts(
 
     from .prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
-    prompt_list: list[PromptSpec] = []
+    prompt_list: Final[list[PromptSpec]] = []
 
     for prompt in all_prompts:
         initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(

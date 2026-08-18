@@ -6,7 +6,7 @@
 ##########################################################################
 
 import asyncio
-from typing import cast
+from typing import Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
@@ -17,11 +17,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    validate_managed_id_requirement,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.utils import LiteLLMFineTuningJob
 
-router = APIRouter()
+router: Final = APIRouter()
 
 from litellm.types.llms.openai import LiteLLMFineTuningJobCreate
 
@@ -117,7 +118,7 @@ async def create_fine_tuning_job(
         )
 
         # Include original request and headers in the data
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
             litellm_logging_obj,
@@ -132,8 +133,20 @@ async def create_fine_tuning_job(
         )
 
         ## CHECK IF MANAGED FILE ID
-        unified_file_id: Union[str, Literal[False]] = False
-        training_file = fine_tuning_request.training_file
+        unified_file_id: str | Literal[False] = False
+        training_file: Final = fine_tuning_request.training_file
+        await validate_managed_id_requirement(
+            resource_id=training_file,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+        await validate_managed_id_requirement(
+            resource_id=fine_tuning_request.validation_file,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         response: LiteLLMFineTuningJob | None = None
         if training_file:
             unified_file_id = _is_base64_encoded_unified_file_id(training_file)
@@ -152,7 +165,7 @@ async def create_fine_tuning_job(
         ## ELSE, Route based on custom_llm_provider
         elif fine_tuning_request.custom_llm_provider:
             # get configs for custom_llm_provider
-            llm_provider_config = get_fine_tuning_provider_config(
+            llm_provider_config: Final = get_fine_tuning_provider_config(
                 custom_llm_provider=fine_tuning_request.custom_llm_provider,
             )
             # add llm_provider_config to data
@@ -165,7 +178,7 @@ async def create_fine_tuning_job(
             raise ValueError("Invalid request, No litellm managed file id or custom_llm_provider provided.")
 
         ### CALL HOOKS ### - modify outgoing data
-        _response = await proxy_logging_obj.post_call_success_hook(
+        _response: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -179,10 +192,10 @@ async def create_fine_tuning_job(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        model_id: Final = hidden_params.get("model_id", None) or ""
+        cache_key: Final = hidden_params.get("cache_key", None) or ""
+        api_base: Final = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -246,8 +259,14 @@ async def retrieve_fine_tuning_job(
     try:
         if premium_user is not True:
             raise ValueError(f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}")
+        await validate_managed_id_requirement(
+            resource_id=fine_tuning_job_id,
+            resource_kind="fine-tuning job",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         # Include original request and headers in the data
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
             litellm_logging_obj,
@@ -269,7 +288,7 @@ async def retrieve_fine_tuning_job(
         custom_llm_provider = request_body.get("custom_llm_provider", None) or custom_llm_provider
 
         ## CHECK IF MANAGED FILE ID
-        unified_finetuning_job_id: Union[str, Literal[False]] = False
+        unified_finetuning_job_id: str | Literal[False] = False
         response: LiteLLMFineTuningJob | None = None
         if fine_tuning_job_id:
             unified_finetuning_job_id = _is_base64_encoded_unified_file_id(fine_tuning_job_id)
@@ -288,7 +307,7 @@ async def retrieve_fine_tuning_job(
             response._hidden_params["unified_finetuning_job_id"] = unified_finetuning_job_id
         elif custom_llm_provider:
             # get configs for custom_llm_provider
-            llm_provider_config = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)
+            llm_provider_config: Final = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)
 
             if llm_provider_config is not None:
                 data.update(llm_provider_config)
@@ -304,7 +323,7 @@ async def retrieve_fine_tuning_job(
             )
 
         ### CALL HOOKS ### - modify outgoing data
-        _response = await proxy_logging_obj.post_call_success_hook(
+        _response: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -318,10 +337,10 @@ async def retrieve_fine_tuning_job(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        model_id: Final = hidden_params.get("model_id", None) or ""
+        cache_key: Final = hidden_params.get("cache_key", None) or ""
+        api_base: Final = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -393,7 +412,7 @@ async def list_fine_tuning_jobs(
         if premium_user is not True:
             raise ValueError(f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}")
         # Include original request and headers in the data
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
             litellm_logging_obj,
@@ -409,7 +428,7 @@ async def list_fine_tuning_jobs(
 
         response: Any | None = None
         if target_model_names and isinstance(target_model_names, str):
-            target_model_names_list = target_model_names.split(",")
+            target_model_names_list: Final = target_model_names.split(",")
             if len(target_model_names_list) != 1:
                 raise HTTPException(
                     status_code=400,
@@ -430,7 +449,7 @@ async def list_fine_tuning_jobs(
             return response
         elif custom_llm_provider:
             # get configs for custom_llm_provider
-            llm_provider_config = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)
+            llm_provider_config: Final = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)
 
             if llm_provider_config is not None:
                 data.update(llm_provider_config)
@@ -447,10 +466,10 @@ async def list_fine_tuning_jobs(
             )
 
         ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        model_id: Final = hidden_params.get("model_id", None) or ""
+        cache_key: Final = hidden_params.get("cache_key", None) or ""
+        api_base: Final = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -513,8 +532,14 @@ async def cancel_fine_tuning_job(
     try:
         if premium_user is not True:
             raise ValueError(f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}")
+        await validate_managed_id_requirement(
+            resource_id=fine_tuning_job_id,
+            resource_kind="fine-tuning job",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         # Include original request and headers in the data
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
             litellm_logging_obj,
@@ -533,10 +558,10 @@ async def cancel_fine_tuning_job(
         except Exception:
             request_body = {}
 
-        custom_llm_provider = request_body.get("custom_llm_provider", None)
+        custom_llm_provider: Final = request_body.get("custom_llm_provider", None)
 
         ## CHECK IF MANAGED FILE ID
-        unified_finetuning_job_id: Union[str, Literal[False]] = False
+        unified_finetuning_job_id: str | Literal[False] = False
         response: LiteLLMFineTuningJob | None = None
         if fine_tuning_job_id:
             unified_finetuning_job_id = _is_base64_encoded_unified_file_id(fine_tuning_job_id)
@@ -555,7 +580,7 @@ async def cancel_fine_tuning_job(
             response._hidden_params["unified_finetuning_job_id"] = unified_finetuning_job_id
         else:
             # get configs for custom_llm_provider
-            llm_provider_config = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)
+            llm_provider_config: Final = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)
 
             if llm_provider_config is not None:
                 data.update(llm_provider_config)
@@ -571,7 +596,7 @@ async def cancel_fine_tuning_job(
             )
 
         ### CALL HOOKS ### - modify outgoing data
-        _response = await proxy_logging_obj.post_call_success_hook(
+        _response: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -585,10 +610,10 @@ async def cancel_fine_tuning_job(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        model_id: Final = hidden_params.get("model_id", None) or ""
+        cache_key: Final = hidden_params.get("cache_key", None) or ""
+        api_base: Final = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(

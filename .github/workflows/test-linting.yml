@@ -11,10 +11,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # actions: read lets scripts/type_check_gate.py download the base-counts
+    # artifact published by publish-basedpyright-base-counts.yml instead of
+    # re-running basedpyright over the merge-base tree.
+    permissions:
+      contents: read
+      actions: read
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -23,9 +33,21 @@ jobs:
         # Any-discipline) would otherwise blame on this branch.
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           clean: true
           persist-credentials: false
+
+      - name: Fetch gate base (merge-base with target branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+          MERGE_BASE=$(retry gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          test -n "$MERGE_BASE"
+          retry git fetch --no-tags --depth=1 origin "$MERGE_BASE"
+          echo "GATE_BASE_SHA=$MERGE_BASE" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -50,20 +72,19 @@ jobs:
         run: |
           uv sync --frozen --group proxy-dev --group e2e-dev
 
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
       # basedpyright resolves Prisma's generated client (litellm/proxy/schema.prisma)
       # only after `prisma generate` writes prisma/client.py et al. Without this the
       # DB wrappers typed against the generated client would degrade to Unknown.
       - name: Generate Prisma client
-        env:
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Check ruff format
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- 'litellm/**/*.py' | grep -v '^litellm/enterprise/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
+          git diff --name-only --diff-filter=ACMR "$GATE_BASE_SHA" HEAD -- 'litellm/**/*.py' | grep -v '^litellm/enterprise/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
           if [ ! -s "$RUNNER_TEMP/ruff_format_files.txt" ]; then
             echo "No changed litellm Python files to check with ruff format."
             exit 0
@@ -86,16 +107,12 @@ jobs:
           cd ..
 
       - name: Check strict-rule budget (delta vs base)
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          uv run --no-sync python scripts/ruff_strict_gate.py --base "$BASE_SHA"
+          uv run --no-sync python scripts/ruff_strict_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check type-discipline budget (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs base)
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          uv run --no-sync python scripts/type_discipline_gate.py --base "$BASE_SHA"
+          uv run --no-sync python scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
 
       - name: Print OpenAI version
         run: |
@@ -103,16 +120,13 @@ jobs:
 
       - name: Check basedpyright budget (delta vs base)
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          NODE_OPTIONS: --max-old-space-size=12288
+          GH_TOKEN: ${{ github.token }}
         run: |
-          (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py --base "$BASE_SHA"
+          uv run --no-sync python scripts/type_check_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check tests/e2e basedpyright (zero errors)
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if git diff --name-only --diff-filter=ACMRD "$BASE_SHA"...HEAD -- 'tests/e2e/**/*.py' | grep -q .; then
+          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- 'tests/e2e/**/*.py' | grep -q .; then
             uv run --no-sync basedpyright tests/e2e
           else
             echo "No changed tests/e2e Python files; skipping."
@@ -141,8 +155,15 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
+
+      - name: Fetch ratchet base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+          retry git fetch --no-tags --depth=1 origin "$BASE_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -164,7 +185,7 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Python
@@ -179,13 +200,15 @@ jobs:
 
       - name: Run secret scan test
         run: |
-          uv run --frozen --with 'pytest==9.0.2' pytest tests/litellm/test_no_hardcoded_secrets.py -v
+          uv run --no-project --with 'pytest==9.0.2' pytest tests/litellm/test_no_hardcoded_secrets.py -v
 
       - name: Run ggshield secret scan
         env:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
         run: |
           if [ -n "$GITGUARDIAN_API_KEY" ]; then
+            retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+            retry git fetch --no-tags --unshallow origin
             uv tool run --from 'ggshield==1.48.0' ggshield secret scan repo .
           else
             echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"

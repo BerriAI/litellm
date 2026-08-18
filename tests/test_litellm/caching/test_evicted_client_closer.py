@@ -334,6 +334,7 @@ async def test_the_aiohttp_backed_handler_is_not_closed_mid_request():
     clock = FakeClock()
     closer = make_closer(clock)
     handler = AsyncHTTPHandler()
+    held_client = handler.client
 
     closer.mark_owned(handler)
     closer.schedule(handler)
@@ -344,14 +345,15 @@ async def test_the_aiohttp_backed_handler_is_not_closed_mid_request():
     closer.reap()
     await asyncio.sleep(0.05)
 
-    assert handler.client.is_closed is False, "closed a handler that was serving a request"
+    assert held_client.is_closed is False, "closed a handler that was serving a request"
     assert (await request).status_code == 200
 
     clock.advance(3600.0)
     closer.reap()
     await asyncio.sleep(0.05)
 
-    assert handler.client.is_closed is True
+    assert held_client.is_closed is True
+    assert handler.client.is_closed is False, "a held handler must self-heal after its evicted client is closed"
     server.close()
 
 

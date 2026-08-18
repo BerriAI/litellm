@@ -5,7 +5,7 @@ Opik Logger that logs LLM events to an Opik server
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -49,7 +49,7 @@ class OpikLogger(CustomBatchLogger):
             or "Default Project"
         )
 
-        opik_base_url: str = (
+        opik_base_url: Final[str] = (
             utils.get_opik_config_variable(
                 "url_override",
                 user_value=kwargs.get("url", None),
@@ -57,10 +57,10 @@ class OpikLogger(CustomBatchLogger):
             )
             or "https://www.comet.com/opik/api"
         )
-        opik_api_key: str | None = utils.get_opik_config_variable(
+        opik_api_key: Final[str | None] = utils.get_opik_config_variable(
             "api_key", user_value=kwargs.get("api_key", None), default_value=None
         )
-        opik_workspace: str | None = utils.get_opik_config_variable(
+        opik_workspace: Final[str | None] = utils.get_opik_config_variable(
             "workspace", user_value=kwargs.get("workspace", None), default_value=None
         )
 
@@ -165,10 +165,10 @@ class OpikLogger(CustomBatchLogger):
 
     def _sync_send(self, url: str, headers: dict[str, str], batch: dict[str, Any]) -> None:
         try:
-            response = self.sync_httpx_client.post(
+            response: Final = self.sync_httpx_client.post(
                 url=url,
                 headers=headers,
-                json=batch,  # type: ignore
+                json=batch,
             )
             response.raise_for_status()
             if response.status_code != 204:
@@ -249,10 +249,10 @@ class OpikLogger(CustomBatchLogger):
 
     async def _submit_batch(self, url: str, headers: dict[str, str], batch: dict[str, Any]) -> None:
         try:
-            response = await self.async_httpx_client.post(
+            response: Final = await self.async_httpx_client.post(
                 url=url,
                 headers=headers,
-                json=batch,  # type: ignore
+                json=batch,
             )
             response.raise_for_status()
 
@@ -264,7 +264,7 @@ class OpikLogger(CustomBatchLogger):
             verbose_logger.exception("OpikLogger failed to send batch - %s", e)
 
     def _create_opik_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {}
+        headers: Final[dict[str, str]] = {}
         if self.opik_workspace:
             headers["Comet-Workspace"] = self.opik_workspace
 

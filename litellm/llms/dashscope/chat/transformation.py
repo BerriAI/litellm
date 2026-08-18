@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/complet
 """
 
 from collections.abc import Coroutine
-from typing import Any, Literal, overload
+from typing import Any, Final, Literal, overload
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -50,8 +50,8 @@ class DashScopeChatConfig(OpenAIGPTConfig):
     ) -> tuple[str | None, str | None]:
         api_base = (
             api_base or get_secret_str("DASHSCOPE_API_BASE") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("DASHSCOPE_API_KEY")
+        )
+        dynamic_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(

@@ -9,7 +9,7 @@ Non-streaming endpoint: POST /runs/wait
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 import httpx
 
@@ -122,13 +122,13 @@ class LangGraphConfig(BaseConfig):
 
         model format: "langgraph/assistant_id" or just "assistant_id"
         """
-        assistant_id = optional_params.get("assistant_id")
+        assistant_id: Final = optional_params.get("assistant_id")
         if assistant_id:
             return assistant_id
 
         # Extract from model name
         if "/" in model:
-            parts = model.split("/", 1)
+            parts: Final = model.split("/", 1)
             if len(parts) == 2:
                 return parts[1]
         return model
@@ -142,7 +142,7 @@ class LangGraphConfig(BaseConfig):
 
         Preserves per-message ``metadata`` when present (e.g. A2A ``skillId``).
         """
-        langgraph_messages: list[dict[str, Any]] = []
+        langgraph_messages: Final[list[dict[str, Any]]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -197,18 +197,18 @@ class LangGraphConfig(BaseConfig):
             "stream_mode": "messages-tuple"  # for streaming
         }
         """
-        assistant_id = self._get_assistant_id(model, optional_params)
-        langgraph_messages = self._convert_messages_to_langgraph_format(messages)
+        assistant_id: Final = self._get_assistant_id(model, optional_params)
+        langgraph_messages: Final = self._convert_messages_to_langgraph_format(messages)
 
-        payload: dict[str, Any] = {
+        payload: Final[dict[str, Any]] = {
             "assistant_id": assistant_id,
             "input": {"messages": langgraph_messages},
         }
 
         # Add stream_mode for streaming requests
-        stream = litellm_params.get("stream", False)
+        stream: Final = litellm_params.get("stream", False)
         if stream:
-            stream_mode = optional_params.get("stream_mode", "messages-tuple")
+            stream_mode: Final = optional_params.get("stream_mode", "messages-tuple")
             payload["stream_mode"] = stream_mode
 
         # Add optional config if provided
@@ -237,7 +237,7 @@ class LangGraphConfig(BaseConfig):
         }
         """
         # Try to get the last AI message from the response
-        messages = response_json.get("messages", [])
+        messages: Final = response_json.get("messages", [])
         if isinstance(messages, list) and messages:
             # Find the last AI/assistant message
             for msg in reversed(messages):
@@ -248,9 +248,9 @@ class LangGraphConfig(BaseConfig):
                         return msg.get("content", "")
 
         # Check values for output
-        values = response_json.get("values", {})
+        values: Final = response_json.get("values", {})
         if isinstance(values, dict):
-            output_messages = values.get("messages", [])
+            output_messages: Final = values.get("messages", [])
             if isinstance(output_messages, list) and output_messages:
                 for msg in reversed(output_messages):
                     if isinstance(msg, dict):
@@ -300,7 +300,7 @@ class LangGraphConfig(BaseConfig):
         verbose_logger.debug("Making sync streaming request to: %s", api_base)
 
         # Make streaming request
-        response = client.post(
+        response: Final = client.post(
             api_base,
             headers=headers,
             data=json.dumps(data),
@@ -312,9 +312,9 @@ class LangGraphConfig(BaseConfig):
             raise LangGraphError(status_code=response.status_code, message=str(response.read()))
 
         # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(model=model, raw_response=response)
+        completion_stream: Final = self.get_streaming_response(model=model, raw_response=response)
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -359,7 +359,7 @@ class LangGraphConfig(BaseConfig):
         verbose_logger.debug("Making async streaming request to: %s", api_base)
 
         # Make async streaming request
-        response = await client.post(
+        response: Final = await client.post(
             api_base,
             headers=headers,
             data=json.dumps(data),
@@ -371,9 +371,9 @@ class LangGraphConfig(BaseConfig):
             raise LangGraphError(status_code=response.status_code, message=str(await response.aread()))
 
         # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(model=model, raw_response=response)
+        completion_stream: Final = self.get_streaming_response(model=model, raw_response=response)
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -421,16 +421,16 @@ class LangGraphConfig(BaseConfig):
         Transform the LangGraph response to LiteLLM ModelResponse format.
         """
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
             verbose_logger.debug("LangGraph response: %s", response_json)
 
-            content = self._extract_content_from_response(response_json)
+            content: Final = self._extract_content_from_response(response_json)
 
             # Create the message
-            message = Message(content=content, role="assistant")
+            message: Final = Message(content=content, role="assistant")
 
             # Create choices
-            choice = Choices(finish_reason="stop", index=0, message=message)
+            choice: Final = Choices(finish_reason="stop", index=0, message=message)
 
             # Update model response
             model_response.choices = [choice]
@@ -440,11 +440,11 @@ class LangGraphConfig(BaseConfig):
             try:
                 from litellm.utils import token_counter
 
-                prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+                prompt_tokens: Final = token_counter(model="gpt-3.5-turbo", messages=messages)
                 completion_tokens = token_counter(model="gpt-3.5-turbo", text=content, count_response_tokens=True)
-                total_tokens = prompt_tokens + completion_tokens
+                total_tokens: Final = prompt_tokens + completion_tokens
 
-                usage = Usage(
+                usage: Final = Usage(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     total_tokens=total_tokens,

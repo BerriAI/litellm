@@ -8,7 +8,7 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -70,10 +70,10 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 )
 
             # Get default headers
-            default_headers = get_copilot_default_headers(api_key)
+            default_headers: Final = get_copilot_default_headers(api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
-            merged_headers = {**default_headers, **headers}
+            merged_headers: Final = {**default_headers, **headers}
 
             verbose_logger.debug("GitHub Copilot Embedding API: Successfully configured headers for model %s", model)
 
@@ -154,7 +154,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # GitHub Copilot returns standard OpenAI-compatible embedding response
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         return convert_to_model_response_object(
             response_object=response_json,

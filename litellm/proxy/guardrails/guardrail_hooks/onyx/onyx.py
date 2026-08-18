@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -70,7 +70,7 @@ class OnyxGuardrail(CustomGuardrail):
         """
         Call external Onyx Guard server for validation
         """
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             f"{self.api_base}/guard/evaluate/v1/{self.api_key}/litellm",
             json={
                 "payload": payload,
@@ -82,7 +82,7 @@ class OnyxGuardrail(CustomGuardrail):
             },
         )
         response.raise_for_status()
-        result = response.json()
+        result: Final = response.json()
         if not result.get("allowed", True):
             detection_message = "Unknown violation"
             if "violated_rules" in result:
@@ -102,7 +102,7 @@ class OnyxGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        conversation_id = logging_obj.litellm_call_id if logging_obj else str(uuid.uuid4())
+        conversation_id: Final = logging_obj.litellm_call_id if logging_obj else str(uuid.uuid4())
 
         verbose_proxy_logger.info(
             "Running Onyx Guard apply_guardrail hook",
@@ -113,8 +113,8 @@ class OnyxGuardrail(CustomGuardrail):
             payload = request_data.get("proxy_server_request", {})
         else:
             try:
-                response = ModelResponse(**request_data)
-                parsed = response.json()
+                response: Final = ModelResponse(**request_data)
+                parsed: Final = response.json()
                 payload = parsed.get("response", {})
             except Exception as e:
                 verbose_proxy_logger.error(

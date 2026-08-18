@@ -14,7 +14,7 @@ Generated files are returned directly in the response - no separate storage need
 import base64
 import json
 from enum import Enum
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 
@@ -70,7 +70,7 @@ def get_litellm_code_execution_tool_anthropic() -> dict[str, Any]:
 
 
 # Singleton tool definition for backwards compatibility
-LITELLM_CODE_EXECUTION_TOOL = get_litellm_code_execution_tool()
+LITELLM_CODE_EXECUTION_TOOL: Final = get_litellm_code_execution_tool()
 
 
 class CodeExecutionHandler:
@@ -133,11 +133,11 @@ class CodeExecutionHandler:
             SkillsSandboxExecutor,
         )
 
-        current_messages = list(messages)
-        generated_files: list[dict[str, Any]] = []  # Files returned directly
-        execution_results: list[dict] = []
+        current_messages: Final = list(messages)
+        generated_files: Final[list[dict[str, Any]]] = []  # Files returned directly
+        execution_results: Final[list[dict]] = []
 
-        executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
+        executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
         response: Any = None  # Initialize to avoid possibly unbound error
 
         for iteration in range(self.max_iterations):
@@ -151,8 +151,8 @@ class CodeExecutionHandler:
                 **kwargs,
             )
 
-            assistant_message = response.choices[0].message  # type: ignore
-            stop_reason = response.choices[0].finish_reason  # type: ignore
+            assistant_message = response.choices[0].message
+            stop_reason = response.choices[0].finish_reason
 
             # Build assistant message for conversation history
             assistant_msg_dict: dict[str, Any] = {
@@ -298,4 +298,4 @@ def add_code_execution_tool(tools: list[dict] | None) -> list[dict]:
 
 
 # Global handler instance
-code_execution_handler = CodeExecutionHandler()
+code_execution_handler: Final = CodeExecutionHandler()

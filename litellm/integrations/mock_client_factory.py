@@ -8,9 +8,10 @@ making actual network calls.
 
 import asyncio
 import json
+from collections.abc import AsyncIterable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import cast
+from typing import Final, cast
 
 import httpx
 
@@ -85,9 +86,9 @@ class MockResponse:
 def _is_url_match(url, matchers: list[str]) -> bool:
     """Check if URL matches any of the provided matchers."""
     try:
-        parsed_url = httpx.URL(url) if isinstance(url, str) else url
-        url_str = str(parsed_url).lower()
-        hostname = parsed_url.host or ""
+        parsed_url: Final = httpx.URL(url) if isinstance(url, str) else url
+        url_str: Final = str(parsed_url).lower()
+        hostname: Final = parsed_url.host or ""
 
         for matcher in matchers:
             if matcher.lower() in url_str or matcher.lower() in hostname.lower():
@@ -120,8 +121,8 @@ def create_mock_client_factory(config: MockClientConfig):
     # Calculate mock latency
     import os
 
-    latency_env = f"{config.name.upper()}_MOCK_LATENCY_MS"
-    _MOCK_LATENCY_SECONDS = float(os.getenv(latency_env, str(config.default_latency_ms))) / 1000.0
+    latency_env: Final = f"{config.name.upper()}_MOCK_LATENCY_MS"
+    _MOCK_LATENCY_SECONDS: Final = float(os.getenv(latency_env, str(config.default_latency_ms))) / 1000.0
 
     # Create URL matcher function
     def _is_mock_url(url) -> bool:
@@ -140,7 +141,7 @@ def create_mock_client_factory(config: MockClientConfig):
         stream=False,
         logging_obj=None,
         files=None,
-        content=None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
     ):
         """Monkey-patched AsyncHTTPHandler.post that intercepts API calls."""
         if isinstance(url, str) and _is_mock_url(url):
@@ -193,7 +194,7 @@ def create_mock_client_factory(config: MockClientConfig):
         timeout=None,
         stream=False,
         files=None,
-        content=None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
         logging_obj=None,
     ):
         """Monkey-patched HTTPHandler.post that intercepts API calls."""
@@ -242,19 +243,19 @@ def create_mock_client_factory(config: MockClientConfig):
             from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
             _original_async_handler_post = AsyncHTTPHandler.post
-            AsyncHTTPHandler.post = _mock_async_handler_post  # type: ignore
+            AsyncHTTPHandler.post = _mock_async_handler_post
             verbose_logger.debug("[%s MOCK] Patched AsyncHTTPHandler.post", config.name)
 
         if config.patch_sync_client and _original_sync_client_post is None:
             _original_sync_client_post = httpx.Client.post
-            httpx.Client.post = _mock_sync_client_post  # type: ignore
+            httpx.Client.post = _mock_sync_client_post
             verbose_logger.debug("[%s MOCK] Patched httpx.Client.post", config.name)
 
         if config.patch_http_handler and _original_http_handler_post is None:
             from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
             _original_http_handler_post = HTTPHandler.post
-            HTTPHandler.post = _mock_http_handler_post  # type: ignore
+            HTTPHandler.post = _mock_http_handler_post
             verbose_logger.debug("[%s MOCK] Patched HTTPHandler.post", config.name)
 
         verbose_logger.debug(f"[{config.name} MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms")
@@ -269,7 +270,7 @@ def create_mock_client_factory(config: MockClientConfig):
 
         from litellm.secret_managers.main import str_to_bool
 
-        mock_mode = os.getenv(config.env_var, "false")
+        mock_mode: Final = os.getenv(config.env_var, "false")
         result = str_to_bool(mock_mode)
         result = bool(result) if result is not None else False
 

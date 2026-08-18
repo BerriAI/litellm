@@ -1,6 +1,6 @@
 import ssl
 from enum import Enum
-from typing import Union
+from typing import Final, Union
 
 
 class httpxSpecialProvider(str, Enum):
@@ -33,4 +33,4 @@ class httpxSpecialProvider(str, Enum):
     ModelCostMap = "model_cost_map"
 
 
-VerifyTypes = Union[str, bool, ssl.SSLContext]
+VerifyTypes = str | bool | ssl.SSLContext

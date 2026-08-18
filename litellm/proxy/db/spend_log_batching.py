@@ -18,11 +18,13 @@ byte budget tracks what the engine actually allocates.
 
 import json
 from collections.abc import Iterator, Mapping, Sequence
+from itertools import accumulate
+from typing import Final
 
 SpendLogRow = Mapping[str, object]
 
-_STATEMENT_FRAMING_BYTES = len(json.dumps([]))
-_ROW_SEPARATOR_BYTES = len(json.dumps([0, 0])) - len(json.dumps([0])) - len(json.dumps(0))
+_STATEMENT_FRAMING_BYTES: Final = len(json.dumps([]))
+_ROW_SEPARATOR_BYTES: Final = len(json.dumps([0, 0])) - len(json.dumps([0])) - len(json.dumps(0))
 
 
 def _row_payload_bytes(row: SpendLogRow) -> int:
@@ -55,6 +57,45 @@ def _row_payload_bytes(row: SpendLogRow) -> int:
         return 0
 
 
+def spend_log_row_bytes(row: SpendLogRow) -> int:
+    """Bytes this row costs, measured the same way the write budget measures it."""
+    return _row_payload_bytes(row)
+
+
+def spend_log_queue_within_budget(
+    rows: Sequence[SpendLogRow],
+    queued_bytes: int,
+    max_bytes: int,
+) -> tuple[Sequence[SpendLogRow], int]:
+    """Drop the oldest rows until the queue costs at most ``max_bytes``.
+
+    Returns the rows to keep and what they cost, so a caller tracking the total
+    across calls does not have to re-measure the rows it kept. ``queued_bytes``
+    is that running total for ``rows``; only the rows actually dropped are
+    measured here, which is what keeps an append off an O(queue) path.
+
+    A queue is bounded by bytes rather than by row count because a row's size
+    swings by orders of magnitude with ``store_prompts_in_spend_logs``, so any
+    row cap generous enough to ride out an outage of counter-only rows is an
+    OOM once prompts are stored.
+
+    The newest row is kept whatever it costs, for the same reason a statement
+    over budget is still written: the budget is a memory guardrail, not an
+    admission filter, and losing spend data to protect RSS is the worse failure.
+    """
+    if queued_bytes <= max_bytes or len(rows) <= 1:
+        return rows, queued_bytes
+    droppable: Final = rows[:-1]
+    remaining_by_drops: Final = (
+        queued_bytes - freed for freed in accumulate(_row_payload_bytes(row) for row in droppable)
+    )
+    fits: Final = next(
+        ((drops, remaining) for drops, remaining in enumerate(remaining_by_drops, start=1) if remaining <= max_bytes),
+        (len(droppable), _row_payload_bytes(rows[-1])),
+    )
+    return rows[fits[0] :], fits[1]
+
+
 def spend_log_write_batches(
     rows: Sequence[SpendLogRow],
     max_bytes: int,
@@ -74,7 +115,7 @@ def spend_log_write_batches(
     dropped: the budget is a memory guardrail, not an admission filter, and
     losing spend data to protect RSS would be the worse failure.
     """
-    sizes = tuple(_row_payload_bytes(row) for row in rows)
+    sizes: Final = tuple(_row_payload_bytes(row) for row in rows)
     start = 0
     while start < len(rows):
         end = start + 1

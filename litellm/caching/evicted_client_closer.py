@@ -34,6 +34,7 @@ alive anything the collector would have reclaimed first.
 """
 
 import asyncio
+import contextlib
 import inspect
 import threading
 import time
@@ -41,14 +42,15 @@ import weakref
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, replace
+from typing import Final
 
 from litellm.constants import (
     EVICTED_LLM_CLIENT_CLOSE_GRACE_SECONDS,
     EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING,
 )
 
-_CLOSABLE_ANYWHERE = "closable-anywhere"
-_CLOSABLE_ON_ANY_LOOP = "closable-on-any-loop"
+_CLOSABLE_ANYWHERE: Final = "closable-anywhere"
+_CLOSABLE_ON_ANY_LOOP: Final = "closable-on-any-loop"
 
 _BucketKey = str | int
 
@@ -88,7 +90,7 @@ def _running_loop_id() -> int | None:
 
 
 def _close_function(client: object) -> Callable[[], object] | None:
-    close_fn: Callable[[], object] | None = getattr(client, "aclose", None) or getattr(client, "close", None)
+    close_fn: Final[Callable[[], object] | None] = getattr(client, "aclose", None) or getattr(client, "close", None)
     return close_fn
 
 
@@ -103,7 +105,7 @@ def _transport_of(client: object) -> object:
 
 def _connection_is_idle(connection: object) -> bool:
     """A pooled connection is idle unless it is servicing a request."""
-    is_idle: object = getattr(connection, "is_idle", None)
+    is_idle: Final[object] = getattr(connection, "is_idle", None)
     return bool(is_idle()) if callable(is_idle) else True
 
 
@@ -112,7 +114,7 @@ def _pool_has_busy_connection(transport: object) -> bool | None:
 
     ``None`` when there is no such pool, so the caller can ask the other backend.
     """
-    pooled: object = getattr(getattr(transport, "_pool", None), "connections", None)
+    pooled: Final[object] = getattr(getattr(transport, "_pool", None), "connections", None)
     if not isinstance(pooled, (list, tuple)):
         return None
     return any(
@@ -134,21 +136,19 @@ def _has_connection_in_flight(client: object) -> bool:
     window as the only guard, exactly as it was before this check existed.
     """
     try:
-        transport = _transport_of(client)
-        pooled_busy = _pool_has_busy_connection(transport)
+        transport: Final = _transport_of(client)
+        pooled_busy: Final = _pool_has_busy_connection(transport)
         if pooled_busy is not None:
             return pooled_busy
-        session: object = getattr(transport, "client", None)
+        session: Final[object] = getattr(transport, "client", None)
         return bool(getattr(getattr(session, "connector", None), "_acquired", None))
     except Exception:  # noqa: BLE001 - a client that cannot report its state is treated as idle
         return False
 
 
 async def _close_quietly(closing: Awaitable[object]) -> None:
-    try:
+    with contextlib.suppress(Exception):
         await closing
-    except Exception:  # noqa: BLE001 - a discarded client's close must never surface to callers
-        pass
 
 
 class EvictedClientCloser:
@@ -192,7 +192,7 @@ class EvictedClientCloser:
         """
         if client is None or not self._is_owned(client):
             return
-        close_fn = _close_function(client)
+        close_fn: Final = _close_function(client)
         if close_fn is None:
             return
         if self._pending_count >= self._max_pending:
@@ -214,7 +214,7 @@ class EvictedClientCloser:
         """
         if not self._pending_count:
             return
-        now = self._clock()
+        now: Final = self._clock()
         for pending in self._take_due(_running_loop_id(), now):
             client = pending.client_ref()
             if client is None:
@@ -236,7 +236,7 @@ class EvictedClientCloser:
         the front rather than having to be searched for.
         """
         with self._queue_lock:
-            bucket = self._buckets.setdefault(_bucket_key(pending), deque())  # mutable-ok: FIFO by design
+            bucket: Final = self._buckets.setdefault(_bucket_key(pending), deque())  # mutable-ok: FIFO by design
             while bucket and bucket[0].client_ref() is None:
                 bucket.popleft()
                 self._pending_count -= 1
@@ -249,7 +249,7 @@ class EvictedClientCloser:
             return tuple(pending for key in buckets for pending in self._drain_locked(key, now))
 
     def _drain_locked(self, key: _BucketKey, now: float) -> Iterator[_PendingClose]:
-        bucket = self._buckets.get(key)
+        bucket: Final = self._buckets.get(key)
         if bucket is None:
             return
         while bucket and bucket[0].close_after <= now:
@@ -259,18 +259,18 @@ class EvictedClientCloser:
             del self._buckets[key]
 
     def _close(self, client: object) -> None:
-        close_fn = _close_function(client)
+        close_fn: Final = _close_function(client)
         if close_fn is None:
             return
         try:
-            closing = close_fn()
+            closing: Final = close_fn()
         except Exception:  # noqa: BLE001 - a discarded client's close must never surface to callers
             return
         if not inspect.isawaitable(closing):
             return
-        task = asyncio.get_running_loop().create_task(_close_quietly(closing))
+        task: Final = asyncio.get_running_loop().create_task(_close_quietly(closing))
         self._close_tasks.add(task)
         task.add_done_callback(self._close_tasks.discard)
 
 
-default_evicted_client_closer = EvictedClientCloser()
+default_evicted_client_closer: Final = EvictedClientCloser()

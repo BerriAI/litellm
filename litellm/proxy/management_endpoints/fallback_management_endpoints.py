@@ -11,7 +11,7 @@ DELETE /fallback/{model} - Delete fallbacks for a specific model
 # pyright: reportMissingImports=false
 
 import json
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -35,7 +35,7 @@ from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackResponse,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 @router.post(
@@ -85,7 +85,7 @@ async def create_fallback(
             )
 
         # Validate that the model exists in the router
-        model_names = llm_router.model_names
+        model_names: Final = llm_router.model_names
         if data.model not in model_names:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -96,7 +96,7 @@ async def create_fallback(
             )
 
         # Validate that all fallback models exist in the router
-        invalid_fallback_models = [m for m in data.fallback_models if m not in model_names]
+        invalid_fallback_models: Final = [m for m in data.fallback_models if m not in model_names]
         if invalid_fallback_models:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -123,8 +123,8 @@ async def create_fallback(
             )
 
         # Load existing config
-        config = await proxy_config.get_config()
-        router_settings = config.get("router_settings", {})
+        config: Final = await proxy_config.get_config()
+        router_settings: Final = config.get("router_settings", {})
 
         # Get the appropriate fallback list based on type
         fallback_key = "fallbacks"
@@ -134,7 +134,7 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: list[dict[str, list[str]]] = router_settings.get(fallback_key, [])
+        existing_fallbacks: Final[list[dict[str, list[str]]]] = router_settings.get(fallback_key, [])
 
         # Update or add the fallback configuration
         fallback_updated = False
@@ -153,7 +153,7 @@ async def create_fallback(
         router_settings[fallback_key] = existing_fallbacks
 
         # Save to database - convert router_settings to JSON string
-        router_settings_json = json.dumps(router_settings)
+        router_settings_json: Final = json.dumps(router_settings)
         await ConfigRepository(prisma_client).table.upsert(
             where={"param_name": "router_settings"},
             data={
@@ -222,7 +222,7 @@ async def get_fallback(
             )
 
         # Get fallbacks using the existing utility function
-        fallback_models = get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
+        fallback_models: Final = get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
 
         if not fallback_models:
             raise HTTPException(
@@ -292,8 +292,8 @@ async def delete_fallback(
             )
 
         # Load existing config
-        config = await proxy_config.get_config()
-        router_settings = config.get("router_settings", {})
+        config: Final = await proxy_config.get_config()
+        router_settings: Final = config.get("router_settings", {})
 
         # Get the appropriate fallback list based on type
         fallback_key = "fallbacks"
@@ -303,11 +303,11 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: list[dict[str, list[str]]] = router_settings.get(fallback_key, [])
+        existing_fallbacks: Final[list[dict[str, list[str]]]] = router_settings.get(fallback_key, [])
 
         # Find and remove the fallback configuration
         fallback_found = False
-        updated_fallbacks = []
+        updated_fallbacks: Final = []
         for fallback_dict in existing_fallbacks:
             if model not in fallback_dict:
                 updated_fallbacks.append(fallback_dict)
@@ -324,7 +324,7 @@ async def delete_fallback(
         router_settings[fallback_key] = updated_fallbacks
 
         # Save to database - convert router_settings to JSON string
-        router_settings_json = json.dumps(router_settings)
+        router_settings_json: Final = json.dumps(router_settings)
         await ConfigRepository(prisma_client).table.upsert(
             where={"param_name": "router_settings"},
             data={

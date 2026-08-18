@@ -4,6 +4,7 @@ Base class across routing strategies to abstract commmon functions like batch in
 
 import asyncio
 from abc import ABC
+from typing import Final
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -53,7 +54,7 @@ class BaseRoutingStrategy(ABC):
         """
         Increment a list of values in the current window
         """
-        results = []
+        results: Final = []
         for key, value in increment_list:
             result = await self._increment_value_in_current_window(key=key, value=value, ttl=ttl)
             results.append(result)
@@ -68,12 +69,12 @@ class BaseRoutingStrategy(ABC):
         - Increments the spend in memory cache (so spend instantly updated in memory)
         - Queues the increment operation to Redis Pipeline (using batched pipeline to optimize performance. Using Redis for multi instance environment of LiteLLM)
         """
-        result = await self.dual_cache.in_memory_cache.async_increment(
+        result: Final = await self.dual_cache.in_memory_cache.async_increment(
             key=key,
             value=value,
             ttl=ttl,
         )
-        increment_op = RedisPipelineIncrementOperation(
+        increment_op: Final = RedisPipelineIncrementOperation(
             key=key,
             increment_value=value,
             ttl=ttl,
@@ -117,8 +118,8 @@ class BaseRoutingStrategy(ABC):
 
             if len(self.redis_increment_operation_queue) > 0:
                 # Compress operations for the same key
-                compressed_ops: dict[str, RedisPipelineIncrementOperation] = {}
-                ops_to_remove = []
+                compressed_ops: Final[dict[str, RedisPipelineIncrementOperation]] = {}
+                ops_to_remove: Final = []
                 for idx, op in enumerate(self.redis_increment_operation_queue):
                     if op["key"] in compressed_ops:
                         # Add to existing increment
@@ -129,9 +130,9 @@ class BaseRoutingStrategy(ABC):
                     ops_to_remove.append(idx)
 
                 # Convert back to list
-                compressed_queue = list(compressed_ops.values())
+                compressed_queue: Final = list(compressed_ops.values())
 
-                increment_result = await self.dual_cache.redis_cache.async_increment_pipeline(
+                increment_result: Final = await self.dual_cache.redis_cache.async_increment_pipeline(
                     increment_list=compressed_queue,
                 )
 
@@ -163,7 +164,7 @@ class BaseRoutingStrategy(ABC):
 
     def get_and_reset_in_memory_keys_to_update(self) -> set[str]:
         """Atomic get and reset in-memory keys to update"""
-        keys = self.in_memory_keys_to_update
+        keys: Final = self.in_memory_keys_to_update
         self.in_memory_keys_to_update = set()
         return keys
 
@@ -189,20 +190,20 @@ class BaseRoutingStrategy(ABC):
                 return
 
             # 2. Fetch all current provider spend from Redis to update in-memory cache
-            cache_keys = (
+            cache_keys: Final = (
                 self.get_in_memory_keys_to_update()
             )  # if no pattern OR redis cache does not support scan_iter, use in-memory keys
 
-            cache_keys_list = list(cache_keys)
+            cache_keys_list: Final = list(cache_keys)
 
             # 1. Snapshot in-memory before
-            in_memory_before_dict = {}
-            in_memory_before = await self.dual_cache.in_memory_cache.async_batch_get_cache(keys=cache_keys_list)
+            in_memory_before_dict: Final = {}
+            in_memory_before: Final = await self.dual_cache.in_memory_cache.async_batch_get_cache(keys=cache_keys_list)
             for k, v in zip(cache_keys_list, in_memory_before):
                 in_memory_before_dict[k] = float(v or 0)
 
             # 1. Push all provider spend increments to Redis
-            redis_values = await self._push_in_memory_increments_to_redis()
+            redis_values: Final = await self._push_in_memory_increments_to_redis()
             if redis_values is None:
                 return
 

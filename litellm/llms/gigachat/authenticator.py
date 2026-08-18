@@ -7,6 +7,7 @@ Based on official GigaChat SDK authentication flow.
 
 import time
 import uuid
+from typing import Final
 
 import httpx
 
@@ -22,16 +23,16 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import LlmProviders
 
 # GigaChat OAuth endpoint
-GIGACHAT_AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+GIGACHAT_AUTH_URL: Final = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 
 # Default scope for personal API access
-GIGACHAT_SCOPE = "GIGACHAT_API_PERS"
+GIGACHAT_SCOPE: Final = "GIGACHAT_API_PERS"
 
 # Token expiry buffer in milliseconds (refresh token 60s before expiry)
-TOKEN_EXPIRY_BUFFER_MS = 60000
+TOKEN_EXPIRY_BUFFER_MS: Final = 60000
 
 # Cache for access tokens
-_token_cache = InMemoryCache()
+_token_cache: Final = InMemoryCache()
 
 
 class GigaChatAuthError(BaseLLMException):
@@ -88,8 +89,8 @@ def get_access_token(
     auth_url = auth_url or _get_auth_url()
 
     # Check cache
-    cache_key = f"gigachat_token:{credentials[:16]}"
-    cached = _token_cache.get_cache(cache_key)
+    cache_key: Final = f"gigachat_token:{credentials[:16]}"
+    cached: Final = _token_cache.get_cache(cache_key)
     if cached:
         token, expires_at = cached
         # Check if token is still valid (with buffer)
@@ -101,7 +102,7 @@ def get_access_token(
     token, expires_at = _request_token_sync(credentials, scope, auth_url)
 
     # Cache token
-    ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+    ttl_seconds: Final = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
     if ttl_seconds > 0:
         _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
 
@@ -125,8 +126,8 @@ async def get_access_token_async(
     auth_url = auth_url or _get_auth_url()
 
     # Check cache
-    cache_key = f"gigachat_token:{credentials[:16]}"
-    cached = _token_cache.get_cache(cache_key)
+    cache_key: Final = f"gigachat_token:{credentials[:16]}"
+    cached: Final = _token_cache.get_cache(cache_key)
     if cached:
         token, expires_at = cached
         if time.time() * 1000 < expires_at - TOKEN_EXPIRY_BUFFER_MS:
@@ -137,7 +138,7 @@ async def get_access_token_async(
     token, expires_at = await _request_token_async(credentials, scope, auth_url)
 
     # Cache token
-    ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+    ttl_seconds: Final = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
     if ttl_seconds > 0:
         _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
 
@@ -155,18 +156,18 @@ def _request_token_sync(
     Returns:
         Tuple of (access_token, expires_at_ms)
     """
-    headers = {
+    headers: Final = {
         "Authorization": f"Basic {credentials}",
         "RqUID": str(uuid.uuid4()),
         "Content-Type": "application/x-www-form-urlencoded",
     }
-    data = {"scope": scope}
+    data: Final = {"scope": scope}
 
     verbose_logger.debug("Requesting GigaChat access token from %s", auth_url)
 
     try:
-        client = _get_http_client()
-        response = client.post(auth_url, headers=headers, data=data, timeout=30)
+        client: Final = _get_http_client()
+        response: Final = client.post(auth_url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
         return _parse_token_response(response)
     except httpx.HTTPStatusError as e:
@@ -187,21 +188,21 @@ async def _request_token_async(
     auth_url: str,
 ) -> tuple[str, int]:
     """Async version of _request_token_sync."""
-    headers = {
+    headers: Final = {
         "Authorization": f"Basic {credentials}",
         "RqUID": str(uuid.uuid4()),
         "Content-Type": "application/x-www-form-urlencoded",
     }
-    data = {"scope": scope}
+    data: Final = {"scope": scope}
 
     verbose_logger.debug("Requesting GigaChat access token from %s", auth_url)
 
     try:
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=LlmProviders.GIGACHAT,
             params={"ssl_verify": False},
         )
-        response = await client.post(auth_url, headers=headers, data=data, timeout=30)
+        response: Final = await client.post(auth_url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
         return _parse_token_response(response)
     except httpx.HTTPStatusError as e:
@@ -218,10 +219,10 @@ async def _request_token_async(
 
 def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
     """Parse OAuth token response."""
-    data = response.json()
+    data: Final = response.json()
 
     # GigaChat returns either 'tok'/'exp' or 'access_token'/'expires_at'
-    access_token = data.get("tok") or data.get("access_token")
+    access_token: Final = data.get("tok") or data.get("access_token")
     expires_at = data.get("exp") or data.get("expires_at")
 
     if not access_token:
