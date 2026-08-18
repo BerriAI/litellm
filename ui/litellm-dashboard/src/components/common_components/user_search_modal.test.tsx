@@ -98,8 +98,7 @@ describe("UserSearchModal submit payload", () => {
     await user.click(input);
     await user.type(input, text);
     await waitFor(() => expect(userFilterUICall).toHaveBeenCalled(), { timeout: 3000 });
-    const matches = await screen.findAllByText("picked@example.com");
-    await user.click(matches[matches.length - 1]);
+    await user.click(await screen.findByRole("option", { name: "picked@example.com" }));
   };
 
   it("submits every registered field, with the untouched identity fields undefined", async () => {
@@ -132,8 +131,7 @@ describe("UserSearchModal submit payload", () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
     await user.click(screen.getByLabelText("Member Role"));
-    const options = await screen.findAllByText("admin");
-    await user.click(options[options.length - 1]);
+    await user.click(await screen.findByRole("option", { name: /^admin/ }));
     await user.click(save());
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));

@@ -209,6 +209,41 @@ const createMockTeamData = (overrides = {}) => ({
   team_memberships: [],
 });
 
+const seedDefaultMocks = () => {
+  mockUseAllProxyModels.mockReturnValue({
+    data: { data: [] },
+    isLoading: false,
+  } as any);
+  mockUseTeam.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+  } as any);
+  mockUseOrganization.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+  } as any);
+  mockUseCurrentUser.mockReturnValue({
+    data: { models: [] },
+    isLoading: false,
+  } as any);
+  mockUseKeys.mockReturnValue({
+    data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+  vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: [], isLoading: false } as any);
+
+  can.mockReturnValue(true);
+  vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
+  vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
+  vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+  vi.mocked(networking.getTeamPermissionsCall).mockResolvedValue({
+    all_available_permissions: [],
+    team_member_permissions: [],
+  });
+};
+
 describe("TeamInfoView", () => {
   const defaultProps = {
     teamId: "123",
@@ -222,40 +257,7 @@ describe("TeamInfoView", () => {
     premiumUser: false,
   };
 
-  beforeEach(() => {
-    mockUseAllProxyModels.mockReturnValue({
-      data: { data: [] },
-      isLoading: false,
-    } as any);
-    mockUseTeam.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-    } as any);
-    mockUseOrganization.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-    } as any);
-    mockUseCurrentUser.mockReturnValue({
-      data: { models: [] },
-      isLoading: false,
-    } as any);
-    mockUseKeys.mockReturnValue({
-      data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
-    vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: [], isLoading: false } as any);
-
-    can.mockReturnValue(true);
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
-    vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
-    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
-    vi.mocked(networking.getTeamPermissionsCall).mockResolvedValue({
-      all_available_permissions: [],
-      team_member_permissions: [],
-    });
-  });
+  beforeEach(seedDefaultMocks);
 
   afterEach(() => {
     vi.clearAllMocks();
@@ -1563,5 +1565,98 @@ describe("TeamInfoView", () => {
         );
       });
     });
+  });
+});
+
+describe("TeamInfoView - which team member fields reach the update payload depends on the open sections", () => {
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4"],
+    editTeam: false,
+  };
+
+  beforeEach(seedDefaultMocks);
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        team_member_budget_table: { max_budget: 42, budget_duration: "30d", tpm_limit: 11, rpm_limit: 22 },
+        default_team_member_models: ["gpt-4"],
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  const save = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    return vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+  };
+
+  it("omits every stored team member field when Team Member Settings is left closed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    const payload = await save(user);
+
+    expect(payload.team_member_budget_duration).toBeUndefined();
+    expect(payload).not.toHaveProperty("team_member_budget");
+    expect(payload).not.toHaveProperty("team_member_tpm_limit");
+    expect(payload).not.toHaveProperty("team_member_rpm_limit");
+    expect(payload).not.toHaveProperty("default_team_member_models");
+
+    const wireBody = JSON.parse(JSON.stringify(payload));
+    expect(Object.keys(wireBody).filter((key) => key.startsWith("team_member"))).toEqual([]);
+    expect(wireBody).not.toHaveProperty("default_team_member_models");
+  });
+
+  it("resends every stored team member field once Team Member Settings is opened", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const payload = await save(user);
+
+    expect(payload.team_member_budget_duration).toBe("30d");
+    expect(payload.team_member_budget).toBe(42);
+    expect(payload.team_member_tpm_limit).toBe(11);
+    expect(payload.team_member_rpm_limit).toBe(22);
+    expect(payload.default_team_member_models).toEqual(["gpt-4"]);
+  });
+
+  it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    const payload = await save(user);
+
+    expect(payload.object_permission).not.toHaveProperty("search_tools");
+  });
+
+  it("includes object_permission.search_tools once Search Tool Settings is opened", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Search Tool Settings"));
+    await screen.findByPlaceholderText("Select search tools (optional, empty = all allowed)");
+    const payload = await save(user);
+
+    expect(payload.object_permission).toHaveProperty("search_tools");
   });
 });
