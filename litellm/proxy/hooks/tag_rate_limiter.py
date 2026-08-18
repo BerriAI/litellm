@@ -1002,24 +1002,23 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # against read_only_checks, so order must be preserved exactly.
         indices_by_partition: Final[dict[_PartitionKey, list[int]]] = {}  # mutable-ok: grouped, reassembled below
         for index, (configured_limit, _tag_value, _key) in enumerate(read_only_checks):
-            indices_by_partition.setdefault(_partition_key(configured_limit.entry), []).append(
-                index
-            )  # mutable-ok: see comment above
+            partition_key = _partition_key(configured_limit.entry)
+            indices = indices_by_partition.setdefault(partition_key, [])  # mutable-ok: see above
+            indices.append(index)  # mutable-ok: see comment above
 
         values_by_index: Final[dict[int, float | None]] = {}  # mutable-ok: see comment above
         for partition_key, indices in indices_by_partition.items():
             # not `Final`: rebound each loop iteration, which basedpyright's
             # LIT010/Final-in-loop check forbids
             partition = await self._partition_for(partition_key)
-            keys = [
-                read_only_checks[i][2] for i in indices
-            ]  # mutable-ok: async_batch_get_cache requires a real list; converted only at this boundary
+            keys = [read_only_checks[i][2] for i in indices]  # mutable-ok: async_batch_get_cache needs a real list
             current_values = await partition.internal_usage_cache.async_batch_get_cache(
                 keys=keys,
                 parent_otel_span=parent_otel_span,
                 local_only=False,
             )
-            resolved = current_values if current_values is not None else [None] * len(keys)
+            missing = [None] * len(keys)  # mutable-ok: async_batch_get_cache requires a real list; see above
+            resolved = current_values if current_values is not None else missing
             for i, value in zip(indices, resolved):
                 values_by_index[i] = value  # mutable-ok: see comment above
 
@@ -1196,9 +1195,9 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         # pipelined through that partition's own handler.
         operations_by_partition: Final[_PartitionOperations] = {}  # mutable-ok: see comment above
         for configured_limit, operation in operation_by_limit:
-            operations_by_partition.setdefault(_partition_key(configured_limit.entry), []).append(
-                operation
-            )  # mutable-ok: see comment above
+            partition_key = _partition_key(configured_limit.entry)
+            operations = operations_by_partition.setdefault(partition_key, [])  # mutable-ok: see above
+            operations.append(operation)  # mutable-ok: see comment above
 
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
         for partition_key, group_operations in operations_by_partition.items():
