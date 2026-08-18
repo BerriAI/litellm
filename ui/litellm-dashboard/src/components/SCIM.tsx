@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Text, Grid, Button as TremorButton, Callout, TextInput, Divider } from "@tremor/react";
-import { Form } from "antd";
+import { Card, Title, Text, Grid, Callout, Divider } from "@tremor/react";
+import { z } from "zod/v4";
 import { keyCreateCall } from "./networking";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import {
@@ -12,6 +12,12 @@ import {
 } from "@ant-design/icons";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { toast } from "@/lib/toast";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
 
 interface SCIMConfigProps {
   accessToken: string | null;
@@ -19,8 +25,14 @@ interface SCIMConfigProps {
   proxySettings: any;
 }
 
+const scimTokenSchema = z.object({
+  key_alias: z.string().min(1, "Please enter a name for your token"),
+});
+
+type SCIMTokenFormValues = z.infer<typeof scimTokenSchema>;
+
 const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySettings }) => {
-  const [form] = Form.useForm();
+  const form = useZodForm(scimTokenSchema, { defaultValues: { key_alias: "" } });
   const [isCreatingToken, setIsCreatingToken] = useState(false);
   const [tokenData, setTokenData] = useState<any>(null);
   const [baseUrl, setBaseUrl] = useState("<your_proxy_base_url>");
@@ -40,7 +52,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
 
   const scimBaseUrl = `${baseUrl}/scim/v2`;
 
-  const handleCreateSCIMToken = async (values: any) => {
+  const handleCreateSCIMToken = async (values: SCIMTokenFormValues) => {
     if (!accessToken || !userID) {
       toast.fromError("You need to be logged in to create a SCIM token");
       return;
@@ -73,7 +85,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
         <div className="flex items-center mb-4">
           <Title>SCIM Configuration</Title>
         </div>
-        <Text className="text-gray-600">
+        <Text className="text-muted-foreground">
           System for Cross-domain Identity Management (SCIM) allows you to automatically provision and manage users and
           groups in LiteLLM.
         </Text>
@@ -84,7 +96,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
           {/* Step 1: SCIM URL */}
           <div>
             <div className="flex items-center mb-2">
-              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 mr-2">
+              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 mr-2">
                 1
               </div>
               <Title className="text-lg flex items-center">
@@ -92,16 +104,16 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
                 SCIM Tenant URL
               </Title>
             </div>
-            <Text className="text-gray-600 mb-3">
+            <Text className="text-muted-foreground mb-3">
               Use this URL in your identity provider SCIM integration settings.
             </Text>
             <div className="flex items-center">
-              <TextInput value={scimBaseUrl} disabled={true} className="grow" />
+              <Input value={scimBaseUrl} disabled={true} readOnly className="grow" />
               <CopyToClipboard text={scimBaseUrl} onCopy={() => toast.success("URL copied to clipboard")}>
-                <TremorButton variant="primary" className="ml-2 flex items-center">
+                <Button type="button" className="ml-2 flex items-center">
                   <CopyOutlined className="h-4 w-4 mr-1" />
                   Copy
-                </TremorButton>
+                </Button>
               </CopyToClipboard>
             </div>
           </div>
@@ -109,7 +121,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
           {/* Step 2: SCIM Token */}
           <div>
             <div className="flex items-center mb-2">
-              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 mr-2">
+              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 mr-2">
                 2
               </div>
               <Title className="text-lg flex items-center">
@@ -124,50 +136,52 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
             </Callout>
 
             {!tokenData ? (
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <Form form={form} onFinish={handleCreateSCIMToken} layout="vertical">
-                  <Form.Item
-                    name="key_alias"
-                    label="Token Name"
-                    rules={[{ required: true, message: "Please enter a name for your token" }]}
-                  >
-                    <TextInput placeholder="SCIM Access Token" />
-                  </Form.Item>
-                  <Form.Item>
-                    <TremorButton
-                      variant="primary"
-                      type="submit"
-                      loading={isCreatingToken}
-                      className="flex items-center"
-                    >
-                      <KeyOutlined className="h-4 w-4 mr-1" />
-                      Create SCIM Token
-                    </TremorButton>
-                  </Form.Item>
-                </Form>
+              <div className="bg-muted p-4 rounded-lg">
+                <form onSubmit={form.handleSubmit(handleCreateSCIMToken)}>
+                  <FieldGroup>
+                    <FormField control={form.control} name="key_alias" label="Token Name">
+                      {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="SCIM Access Token" />}
+                    </FormField>
+                    <div>
+                      <Button type="submit" disabled={isCreatingToken} className="flex items-center">
+                        {isCreatingToken ? (
+                          <UiLoadingSpinner className="size-4 mr-1" />
+                        ) : (
+                          <KeyOutlined className="h-4 w-4 mr-1" />
+                        )}
+                        Create SCIM Token
+                      </Button>
+                    </div>
+                  </FieldGroup>
+                </form>
               </div>
             ) : (
-              <Card className="border border-yellow-300 bg-yellow-50">
-                <div className="flex items-center mb-2 text-yellow-800">
+              <Card className="border border-yellow-300 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950">
+                <div className="flex items-center mb-2 text-yellow-800 dark:text-yellow-300">
                   <ExclamationCircleOutlined className="h-5 w-5 mr-2" />
-                  <Title className="text-lg text-yellow-800">Your SCIM Token</Title>
+                  <Title className="text-lg text-yellow-800 dark:text-yellow-300">Your SCIM Token</Title>
                 </div>
-                <Text className="text-yellow-800 mb-4 font-medium">
+                <Text className="text-yellow-800 dark:text-yellow-300 mb-4 font-medium">
                   Make sure to copy this token now. You will not be able to see it again.
                 </Text>
                 <div className="flex items-center">
-                  <TextInput value={tokenData.key} className="grow mr-2 bg-white" type="password" disabled={true} />
+                  <Input value={tokenData.key} className="grow mr-2" type="password" disabled={true} readOnly />
                   <CopyToClipboard text={tokenData.key} onCopy={() => toast.success("Token copied to clipboard")}>
-                    <TremorButton variant="primary" className="flex items-center">
+                    <Button type="button" className="flex items-center">
                       <CopyOutlined className="h-4 w-4 mr-1" />
                       Copy
-                    </TremorButton>
+                    </Button>
                   </CopyToClipboard>
                 </div>
-                <TremorButton className="mt-4 flex items-center" variant="secondary" onClick={() => setTokenData(null)}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="mt-4 flex items-center"
+                  onClick={() => setTokenData(null)}
+                >
                   <PlusCircleOutlined className="h-4 w-4 mr-1" />
                   Create Another Token
-                </TremorButton>
+                </Button>
               </Card>
             )}
           </div>
