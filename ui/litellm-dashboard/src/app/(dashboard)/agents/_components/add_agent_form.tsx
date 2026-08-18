@@ -33,13 +33,13 @@ import AgentFormFields from "./agent_form_fields";
 import AgentCardDiscovery, { DiscoveredAgentCardSelection } from "./agent_card_discovery";
 import { buildDiscoveryRequest, overlayDiscoveredCardParams } from "./agent_discovery_utils";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import { AGENT_FORM_CONFIG, getDefaultFormValues, buildAgentDataFromForm } from "./agent_config";
 import {
   AgentFormField,
   AgentFormValues,
   AgentMultiSelect,
   AgentNumberInput,
-  AgentPasswordInput,
   AgentRequestPayload,
   AgentTagsInput,
   McpServerSelection,
@@ -798,11 +798,11 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                     >
                       {({ value, onChange, ref, ...control }) =>
                         field.field_type === "password" ? (
-                          <AgentPasswordInput
+                          <PasswordInput
                             {...control}
-                            value={value}
+                            value={typeof value === "string" ? value : ""}
                             onChange={onChange}
-                            inputRef={ref}
+                            ref={ref}
                             placeholder={field.placeholder || ""}
                           />
                         ) : (

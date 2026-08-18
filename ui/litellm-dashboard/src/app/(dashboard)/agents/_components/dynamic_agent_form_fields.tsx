@@ -4,12 +4,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { FieldGroup } from "@/components/shared/form/field";
 import { AgentCreateInfo, AgentCredentialFieldMetadata } from "@/components/networking";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import { AGENT_FORM_CONFIG } from "./agent_config";
 import CostConfigFields, { COST_FIELD_NAMES } from "./cost_config_fields";
 import {
   AgentFormField,
   AgentFormPanel,
-  AgentPasswordInput,
   AgentRequestPayload,
   AgentFormValues,
   CollapsiblePanelsState,
@@ -35,11 +35,11 @@ const CredentialField = ({ field }: { field: AgentCredentialFieldMetadata }) => 
       const text = typeof value === "string" ? value : "";
       if (field.field_type === "password") {
         return (
-          <AgentPasswordInput
+          <PasswordInput
             {...control}
-            value={value}
+            value={typeof value === "string" ? value : ""}
             onChange={onChange}
-            inputRef={ref}
+            ref={ref}
             placeholder={field.placeholder || ""}
           />
         );

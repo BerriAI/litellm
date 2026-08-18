@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronRight, CircleHelp, Eye, EyeOff } from "lucide-react";
+import { ChevronRight, CircleHelp } from "lucide-react";
 import {
   Controller,
   useFormContext,
@@ -25,7 +25,6 @@ import {
 } from "@/components/ui/combobox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/shared/form/field";
 
@@ -248,36 +247,6 @@ export const AgentNumberInput = ({ value, onChange, onBlur, inputRef, min, ...pr
     }}
   />
 );
-
-interface AgentPasswordInputProps extends Omit<AgentFieldControlProps, "value" | "ref"> {
-  value: AgentFormFieldValue;
-  inputRef: AgentFieldControlProps["ref"];
-  placeholder?: string;
-}
-
-export const AgentPasswordInput = ({ value, inputRef, ...props }: AgentPasswordInputProps) => {
-  const [revealed, setRevealed] = React.useState(false);
-
-  return (
-    <InputGroup>
-      <InputGroupInput
-        {...props}
-        ref={inputRef}
-        type={revealed ? "text" : "password"}
-        value={typeof value === "string" ? value : ""}
-      />
-      <InputGroupAddon align="inline-end">
-        <InputGroupButton
-          size="icon-xs"
-          onClick={() => setRevealed((current) => !current)}
-          aria-label={revealed ? "Hide value" : "Show value"}
-        >
-          {revealed ? <EyeOff /> : <Eye />}
-        </InputGroupButton>
-      </InputGroupAddon>
-    </InputGroup>
-  );
-};
 
 export interface AgentSelectOption {
   label: string;
