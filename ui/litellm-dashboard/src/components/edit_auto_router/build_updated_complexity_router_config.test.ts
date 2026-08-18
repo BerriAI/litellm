@@ -314,3 +314,26 @@ describe("buildUpdatedComplexityRouterConfig scorer knobs", () => {
     expect(buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE)).not.toHaveProperty("tier_boundaries");
   });
 });
+
+describe("buildUpdatedComplexityRouterConfig plan-mode minimum tier", () => {
+  it("round-trips a stored tier through an untouched open-and-save", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, plan_mode_min_tier: "COMPLEX" },
+      { ...FORM_VALUE, plan_mode_min_tier: "COMPLEX" },
+    );
+    expect(result.plan_mode_min_tier).toBe("COMPLEX");
+  });
+
+  it("stops a stored tier from surviving a save that turned the override off", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, plan_mode_min_tier: "COMPLEX" }, FORM_VALUE);
+    expect(result).not.toHaveProperty("plan_mode_min_tier");
+  });
+
+  it("writes a newly selected tier over the stored one", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, plan_mode_min_tier: "COMPLEX" },
+      { ...FORM_VALUE, plan_mode_min_tier: "MEDIUM" },
+    );
+    expect(result.plan_mode_min_tier).toBe("MEDIUM");
+  });
+});

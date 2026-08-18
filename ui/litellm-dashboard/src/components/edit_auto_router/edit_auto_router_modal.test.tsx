@@ -748,3 +748,60 @@ describe("EditAutoRouterModal default model", () => {
     expect(savedConfig()).not.toHaveProperty("default_model");
   });
 });
+
+describe("EditAutoRouterModal plan-mode minimum tier", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const renderWithStoredTier = (plan_mode_min_tier?: string) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_CONFIG, ...(plan_mode_min_tier && { plan_mode_min_tier }) },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  const openPlanModePanel = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByText("Advanced: Plan-Mode Override"));
+  };
+
+  it("shows a stored tier as an enabled override, so the saved value is not a hidden one", async () => {
+    const user = userEvent.setup();
+    renderWithStoredTier("MEDIUM");
+    await openPlanModePanel(user);
+    expect(await screen.findByRole("switch", { name: "Route plan-mode requests to a minimum tier" })).toBeChecked();
+  });
+
+  it("preserves a stored tier through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredTier("MEDIUM");
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ plan_mode_min_tier: "MEDIUM" });
+  });
+
+  it("turning the override off removes the stored tier from the saved config", async () => {
+    const user = userEvent.setup();
+    renderWithStoredTier("MEDIUM");
+    await openPlanModePanel(user);
+    await user.click(await screen.findByRole("switch", { name: "Route plan-mode requests to a minimum tier" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("plan_mode_min_tier");
+  });
+});
