@@ -559,6 +559,15 @@ def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
     return call_id if isinstance(call_id, str) else None
 
 
+def _parse_output_cap_value(raw_value: object) -> int | None:
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float, str)):
+        return None
+    try:
+        return int(float(raw_value))
+    except (ValueError, OverflowError):
+        return None
+
+
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def __init__(
         self,
@@ -707,20 +716,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
             config: Final = data.get("config") if "config" in data else data.get("generationConfig")
             google_cap_values: Final = tuple(
-                int(raw_value)
+                parsed
                 for field in ("maxOutputTokens", "max_output_tokens")
                 if isinstance(config, dict)
-                for raw_value in (config.get(field),)
-                if isinstance(raw_value, (int, float, str))
+                for parsed in (_parse_output_cap_value(config.get(field)),)
+                if parsed is not None
             )
             return max(google_cap_values, default=None)
         if call_type in RESPONSES_API_CALL_TYPES:
-            value: Final = data.get("max_output_tokens")
-            if value is None:
+            responses_cap: Final = _parse_output_cap_value(data.get("max_output_tokens"))
+            if responses_cap is None:
                 return None
-            if not isinstance(value, (int, float, str)):
-                return None
-            return max(RESPONSES_API_MIN_OUTPUT_TOKENS, int(value))
+            return max(RESPONSES_API_MIN_OUTPUT_TOKENS, responses_cap)
         if call_type in EMBEDDING_API_CALL_TYPES:
             return None
         fields: Final = (
@@ -729,10 +736,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else ("max_tokens", "max_completion_tokens", "max_output_tokens")
         )
         output_cap_values: Final = tuple(
-            int(raw_value)
-            for field in fields
-            for raw_value in (data.get(field),)
-            if isinstance(raw_value, (int, float, str))
+            parsed for field in fields for parsed in (_parse_output_cap_value(data.get(field)),) if parsed is not None
         )
         return max(output_cap_values, default=None)
 
@@ -1209,7 +1213,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def should_rate_limit(
         self,
-        descriptors: list[RateLimitDescriptor],
+        descriptors: Sequence[RateLimitDescriptor],
         parent_otel_span: Span | None = None,
         read_only: bool = False,
         skip_tpm_check: bool = False,
@@ -1335,7 +1339,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _collect_windowed_keys_and_gauges(
         self,
-        descriptors: list[RateLimitDescriptor],
+        descriptors: Sequence[RateLimitDescriptor],
         skip_tpm_check: bool,
     ) -> tuple[list[str], dict[str, WindowKeyMetadata], list[ParallelRequestGauge]]:
         """
@@ -3456,7 +3460,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # in-flight request would pre-inflate the :tokens counter by 1,
             # shrinking the effective TPM budget by N and causing
             # false-positive 429s under bursts. When reservation is disabled,
-            # this pass enforces TPM directly from the post-call counters.
+            # this pass enforces TPM directly from the post-call counters --
+            # except for project ITPM/OTPM descriptors, which are excluded
+            # then because _reserve_project_io_tokens_or_raise below charges
+            # them unconditionally and counting them here too would
+            # double-charge every request.
             parallel_counter_keys: Final = [
                 self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
                 for d in descriptors
@@ -3464,8 +3472,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ]
             parallel_slot_id: Final = uuid.uuid4().hex if parallel_counter_keys else None
 
+            first_pass_descriptors: Final = (
+                descriptors
+                if self.tpm_reservation_enabled
+                else tuple(
+                    d for d in descriptors if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+                )
+            )
             response: Final = await self.should_rate_limit(
-                descriptors=descriptors,
+                descriptors=first_pass_descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 skip_tpm_check=self.tpm_reservation_enabled,
                 parallel_slot_id=parallel_slot_id,
