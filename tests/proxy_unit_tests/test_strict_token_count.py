@@ -169,6 +169,73 @@ async def test_strict_token_count_does_not_affect_other_models():
 
 
 @pytest.mark.asyncio
+async def test_strict_read_from_the_selected_deployment():
+    """Strictness on the *selected deployment* is honoured on its own.
+
+    The router's configured list here does not carry the flag, so only the
+    deployment returned by selection does. This pins the `model_info` branch
+    independently of the router-config fallback.
+    """
+    router = _router()  # configured without strict_token_count
+
+    original = Router.async_get_available_deployment
+
+    async def _strict_deployment(self, *args, **kwargs):
+        deployment = await original(self, *args, **kwargs)
+        deployment = dict(deployment)
+        deployment["model_info"] = {
+            **(deployment.get("model_info") or {}),
+            "strict_token_count": True,
+        }
+        return deployment
+
+    with patch.object(Router, "async_get_available_deployment", new=_strict_deployment):
+        with _unsupported_count_tokens():
+            with pytest.raises(ProxyException) as exc_info:
+                await _count_tokens(router)
+
+    assert exc_info.value.type == "token_counting_error"
+    assert UNSUPPORTED_MODEL_ERROR in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_strict_survives_deployment_selection_failure():
+    """A strict model must not fall back to an estimate when routing fails.
+
+    Deployment selection can fail for reasons unrelated to the policy - every
+    deployment cooling down, rate limited, unhealthy. The selected deployment's
+    `model_info` is unavailable then, so resolving strictness only from it would
+    hand back exactly the estimate the flag exists to refuse.
+    """
+    router = _router(model_info={"strict_token_count": True})
+
+    with patch.object(
+        Router,
+        "async_get_available_deployment",
+        new=AsyncMock(side_effect=Exception("No deployments available - cooldown")),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await _count_tokens(router)
+
+    assert exc_info.value.type == "token_counting_disabled"
+
+
+@pytest.mark.asyncio
+async def test_non_strict_model_still_estimates_when_selection_fails():
+    """The failure path stays permissive for models that never opted in."""
+    router = _router()
+
+    with patch.object(
+        Router,
+        "async_get_available_deployment",
+        new=AsyncMock(side_effect=Exception("No deployments available - cooldown")),
+    ):
+        response = await _count_tokens(router)
+
+    assert response.total_tokens > 0
+
+
+@pytest.mark.asyncio
 async def test_disable_token_counter_still_applies_proxy_wide():
     """The existing proxy-wide flag must keep working for unmarked models."""
     router = _router()
