@@ -108,6 +108,58 @@ def test_merge_preserves_existing_litellm_metadata_guardrails():
         "model-level guardrails should be merged into litellm_metadata"
 
 
+def test_caller_metadata_guardrails_does_not_shadow_litellm_metadata():
+    """veria-ai HIGH on #36085: a caller sending
+    ``metadata: {"guardrails": []}`` on /v1/messages must not shadow the
+    admin-authoritative guardrails merged into ``litellm_metadata``.
+
+    ``get_guardrail_from_metadata`` checks ``metadata`` before
+    ``litellm_metadata``. Without stripping ``guardrails`` from caller-supplied
+    ``metadata``, the empty list would be returned and all model-level /
+    key-team guardrails silently bypassed.
+
+    This test simulates the post-strip state: ``metadata`` no longer has a
+    ``guardrails`` key, so ``get_guardrail_from_metadata`` falls through to
+    ``litellm_metadata`` where the admin-merged list lives.
+    """
+    data = {
+        "model": "my-model",
+        # Caller tried to inject guardrails: [] but it was stripped.
+        "metadata": {"user_id": "user_abc"},
+        "litellm_metadata": {"guardrails": ["pii-mask-presidio", "key-guardrail"]},
+    }
+    requested = _simulate_get_guardrail_from_metadata(data)
+    assert "pii-mask-presidio" in requested, \
+        f"admin guardrails must not be shadowed by caller metadata, got: {requested}"
+    assert "key-guardrail" in requested, \
+        f"key/team guardrails must not be shadowed by caller metadata, got: {requested}"
+
+
+def test_caller_cannot_empty_list_bypass_guardrails():
+    """Directly test the attack vector: caller sends
+    ``metadata: {"guardrails": []}`` to bypass all guardrails.
+
+    After the strip in ``add_litellm_data_to_request``, the ``guardrails`` key
+    is removed from ``metadata``. The admin-merged guardrails in
+    ``litellm_metadata`` are the only source ``get_guardrail_from_metadata``
+    can read.
+    """
+    # Simulate the state AFTER add_litellm_data_to_request has stripped
+    # guardrails from caller metadata AND move_guardrails_to_metadata +
+    # _check_and_merge_model_level_guardrails have written admin guardrails
+    # to litellm_metadata.
+    data = {
+        "model": "my-model",
+        "metadata": {"user_id": "user_abc"},  # guardrails stripped by pre-call
+        "litellm_metadata": {"guardrails": ["model-guardrail", "key-guardrail"]},
+    }
+    requested = _simulate_get_guardrail_from_metadata(data)
+    assert len(requested) == 2, \
+        f"expected 2 admin guardrails, got: {requested}"
+    assert "model-guardrail" in requested
+    assert "key-guardrail" in requested
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])
