@@ -109,7 +109,6 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
     name: ["search_provider", "api_key"],
   });
 
-  // Fetch available search providers
   const { data: providersResponse, isLoading: isLoadingProviders } = useQuery({
     queryKey: ["searchProviders"],
     queryFn: () => {
@@ -164,9 +163,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
     }
 
     setIsTestingConnection(true);
-    // Generate a new test ID (using timestamp for uniqueness)
     setConnectionTestId(`test-${Date.now()}`);
-    // Show the modal with the fresh test
     setIsTestModalVisible(true);
   };
 
@@ -319,7 +316,6 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
         </TooltipProvider>
       </div>
 
-      {/* Test Connection Results Modal */}
       <Modal
         title="Connection Test Results"
         open={isTestModalVisible}
@@ -342,7 +338,6 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
         ]}
         width={700}
       >
-        {/* Only render the SearchConnectionTest when modal is visible and we have a test ID */}
         {isTestModalVisible && accessToken && (
           <SearchConnectionTest
             key={connectionTestId}

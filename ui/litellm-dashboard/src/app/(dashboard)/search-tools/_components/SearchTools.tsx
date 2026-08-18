@@ -70,7 +70,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
 
   const availableProviders = providersResponse?.providers || [];
 
-  // State
   const [toolIdToDelete, setToolToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -285,7 +284,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         setModalVisible={setCreateModalVisible}
       />
 
-      {/* Edit Modal */}
       <Modal
         title="Edit Search Tool"
         open={isEditModalVisible}
