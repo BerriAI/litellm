@@ -555,6 +555,23 @@ variable "log_retention_days" {
   default     = 30
 }
 
+# ---------- Bedrock ----------
+
+variable "bedrock_model_arns" {
+  description = <<-EOT
+    Bedrock inference-profile and foundation-model ARNs the proxy may invoke.
+    Non-empty attaches a policy to the task role granting
+    `bedrock:InvokeModel` + `bedrock:InvokeModelWithResponseStream` on exactly
+    these resources, so Bedrock entries in `proxy_config` authenticate with the
+    task role and need no API key in `gateway_extra_secrets`. Wildcards are
+    allowed. Invoking a cross-region inference profile (`us.anthropic.…`)
+    requires both the profile ARN and the underlying foundation-model ARN in
+    every region the profile can route to.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 # ---------- OpenTelemetry v2 ----------
 #
 # https://docs.litellm.ai/docs/observability/opentelemetry_v2

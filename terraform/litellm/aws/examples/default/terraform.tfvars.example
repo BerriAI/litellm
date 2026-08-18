@@ -125,6 +125,16 @@ env    = "stage"
 #   ANTHROPIC_API_KEY = "arn:aws:secretsmanager:us-west-2:111122223333:secret:anthropic-api-key-GhIjKl"
 # }
 
+# ---------- Bedrock ----------
+# Bedrock models authenticate with the ECS task role, so they need no API key
+# and no gateway_extra_secrets entry: list the ARNs the proxy may invoke and
+# reference them in proxy_config as `bedrock/<model id>`. A cross-region
+# inference profile needs both the profile ARN and the foundation-model ARN.
+# bedrock_model_arns = [
+#   "arn:aws:bedrock:*:111122223333:inference-profile/us.anthropic.*",
+#   "arn:aws:bedrock:*::foundation-model/anthropic.*",
+# ]
+
 # ---------- OpenTelemetry v2 ----------
 # OTel is gated on otel_endpoint: empty (default) and nothing is added to
 # the container env; set it and both gateway and backend gain

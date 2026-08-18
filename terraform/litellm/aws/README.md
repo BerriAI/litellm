@@ -174,6 +174,41 @@ aws secretsmanager create-secret \
   --secret-string "sk-proj-..."
 ```
 
+### Bedrock (no API key)
+
+Bedrock is the one provider that needs no secret. List the model ARNs the proxy
+may invoke in `bedrock_model_arns` and the module attaches a policy to the ECS
+task role granting `bedrock:InvokeModel` and
+`bedrock:InvokeModelWithResponseStream` on exactly those resources. boto3 inside
+the proxy picks the task role up from the container credential provider, so the
+`proxy_config` entry carries no `api_key` field at all. The region comes from the
+`AWS_REGION` / `AWS_REGION_NAME` vars the module already injects into every task
+(see `ecs.tf`), which means it follows `var.region` unless you override it
+through `gateway_extra_env`
+
+```hcl
+bedrock_model_arns = [
+  "arn:aws:bedrock:*:111122223333:inference-profile/us.anthropic.*",
+  "arn:aws:bedrock:*::foundation-model/anthropic.*",
+]
+
+proxy_config = {
+  model_list = [
+    {
+      model_name = "claude-sonnet-5"
+      litellm_params = {
+        model = "bedrock/us.anthropic.claude-sonnet-5"
+      }
+    },
+  ]
+}
+```
+
+A cross-region inference profile (the `us.` prefix) forwards the request to a
+foundation model in whichever region has capacity, so it needs both ARNs above:
+the profile itself, and the foundation model wildcarded across every region the
+profile can route to
+
 ### Observability (OpenTelemetry v2)
 
 OTel v2 (https://docs.litellm.ai/docs/observability/opentelemetry_v2) is
@@ -426,6 +461,7 @@ losing the contents.
 | `redis.tf`        | ElastiCache Redis                                                     |
 | `s3.tf`           | S3 bucket + task-role policy scoped to it                             |
 | `iam.tf`          | Task execution + task roles, including `rds-db:connect`               |
+| `bedrock.tf`      | Task-role policy for Bedrock invoke, gated on `bedrock_model_arns`     |
 | `ecs.tf`          | ECS cluster, task definitions, services for the three components     |
 | `alb.tf`          | ALB, listener, target groups, path-routing rules                      |
 | `migrations.tf`   | One-off migration task definition                                     |

@@ -158,3 +158,12 @@ variable "backend_extra_secrets" {
   type        = map(string)
   default     = {}
 }
+
+# Bedrock models authenticate with the task role, so they need no API key.
+# Non-empty grants InvokeModel + InvokeModelWithResponseStream on exactly
+# these ARNs.
+variable "bedrock_model_arns" {
+  description = "Bedrock inference-profile and foundation-model ARNs the proxy may invoke. Empty disables Bedrock access."
+  type        = list(string)
+  default     = []
+}
