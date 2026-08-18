@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/cva.config";
 import { makeMCPPublicCall } from "../../networking";
-import NotificationsManager from "../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 
 const STEP_TITLES = ["Select Servers", "Confirm"];
@@ -49,7 +49,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   const handleNext = () => {
     if (currentStep === 0) {
       if (selectedServers.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one MCP server to make public");
+        toast.fromError("Please select at least one MCP server to make public");
         return;
       }
       setCurrentStep(1);
@@ -96,7 +96,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedServers.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one MCP server to make public");
+      toast.fromError("Please select at least one MCP server to make public");
       return;
     }
 
@@ -107,12 +107,12 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
       // Make batch API call for all servers
       await makeMCPPublicCall(accessToken, serverIdsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${serverIdsToMakePublic.length} MCP server(s) public!`);
+      toast.success(`Successfully made ${serverIdsToMakePublic.length} MCP server(s) public!`);
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error making MCP servers public:", error);
-      NotificationsManager.fromBackend("Failed to make MCP servers public. Please try again.");
+      toast.fromError("Failed to make MCP servers public. Please try again.");
     } finally {
       setLoading(false);
     }

@@ -4,7 +4,7 @@ import { TextInput } from "@tremor/react";
 import { UploadOutlined } from "@ant-design/icons";
 import type { UploadFile, UploadProps } from "antd";
 import { convertPromptFileToJson, createPromptCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 const { Option } = Select;
 
@@ -33,12 +33,12 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
       const values = await form.validateFields();
 
       if (!accessToken) {
-        NotificationsManager.fromBackend("Access token is required");
+        toast.fromError("Access token is required");
         return;
       }
 
       if (promptIntegration === "dotprompt" && fileList.length === 0) {
-        NotificationsManager.fromBackend("Please upload a .prompt file");
+        toast.fromError("Please upload a .prompt file");
         return;
       }
 
@@ -67,7 +67,7 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
           };
         } catch (conversionError) {
           console.error("Error converting prompt file:", conversionError);
-          NotificationsManager.fromBackend("Failed to convert prompt file to JSON");
+          toast.fromError("Failed to convert prompt file to JSON");
           setLoading(false);
           return;
         }
@@ -76,12 +76,12 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
       // Create the prompt
       try {
         await createPromptCall(accessToken, promptData);
-        NotificationsManager.success("Prompt created successfully!");
+        toast.success("Prompt created successfully!");
         handleCancel();
         onSuccess();
       } catch (createError) {
         console.error("Error creating prompt:", createError);
-        NotificationsManager.fromBackend("Failed to create prompt");
+        toast.fromError("Failed to create prompt");
       }
     } catch (error) {
       console.error("Form validation error:", error);
@@ -93,7 +93,7 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
   const uploadProps: UploadProps = {
     beforeUpload: (file) => {
       if (!file.name.endsWith(".prompt")) {
-        NotificationsManager.fromBackend("Please upload a .prompt file");
+        toast.fromError("Please upload a .prompt file");
         return false;
       }
       return false; // Prevent automatic upload

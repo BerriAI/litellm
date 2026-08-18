@@ -14,7 +14,7 @@ import { Providers, provider_map } from "@/components/provider_info_helpers";
 import { getVectorStoreProviderLogoAndName } from "@/components/vector_store_providers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import VectorStoreTester from "./VectorStoreTester";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 interface VectorStoreInfoViewProps {
   vectorStoreId: string;
@@ -68,7 +68,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       }
     } catch (error) {
       console.error("Error fetching vector store details:", error);
-      NotificationsManager.fromBackend("Error fetching vector store details: " + error);
+      toast.fromError("Error fetching vector store details: " + error);
       setLoadFailed(true);
     }
   };
@@ -96,7 +96,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       try {
         metadata = metadataString ? JSON.parse(metadataString) : {};
       } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in metadata field");
+        toast.fromError("Invalid JSON in metadata field");
         return;
       }
 
@@ -109,12 +109,12 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       };
 
       await vectorStoreUpdateCall(accessToken, updateData);
-      NotificationsManager.success("Vector store updated successfully");
+      toast.success("Vector store updated successfully");
       setIsEditing(false);
       fetchVectorStoreDetails();
     } catch (error) {
       console.error("Error updating vector store:", error);
-      NotificationsManager.fromBackend("Error updating vector store: " + error);
+      toast.fromError("Error updating vector store: " + error);
     }
   };
 
