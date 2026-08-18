@@ -1004,7 +1004,7 @@ def _has_legacy_defs(schema: object) -> bool:
     return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
 
 
-# Schema-bomb budget for ``unpack_legacy_defs``: cap the cumulative JSON-byte
+# Schema-bomb budget for ``$ref`` inlining: cap the cumulative JSON-byte
 # size of every inlined target. A byte cap is the universal measure of
 # expansion -- it simultaneously bounds ref-count fan-out, node-count
 # amplification, and scalar-byte amplification (large ``description`` /
@@ -1012,14 +1012,14 @@ def _has_legacy_defs(schema: object) -> bool:
 # inline well under 1MB; 10MB sits two orders of magnitude above that, well
 # below memory-pressure territory, and rejects request-supplied bombs before
 # the proxy materialises them.
-_LEGACY_DEFS_MAX_INLINED_BYTES: Final = 10_000_000
+DEFS_MAX_INLINED_BYTES: Final = 10_000_000
 
 
 def unpack_legacy_defs(
     schema: dict,
     *,
     copy: bool = False,
-    max_inlined_bytes: int = _LEGACY_DEFS_MAX_INLINED_BYTES,
+    max_inlined_bytes: int = DEFS_MAX_INLINED_BYTES,
 ) -> dict:
     """Inline ``$ref``s backed by draft-04 ``definitions`` / OpenAPI
     ``components.schemas``. ``$defs`` is left untouched.

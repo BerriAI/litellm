@@ -1493,9 +1493,6 @@
     "max-lines": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 1
-    },
     "react-hooks/purity": {
       "count": 1
     },
@@ -2947,9 +2944,6 @@
     "max-lines": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -2970,6 +2964,11 @@
     }
   },
   "src/components/ui/breadcrumb.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/ui/button-group.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }

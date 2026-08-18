@@ -2,6 +2,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeft } from "lucide-react";
@@ -10,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EntityLink } from "@/components/shared/EntityLink";
+import { teamDetailHref } from "@/utils/entityLinks";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
@@ -33,6 +36,7 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
+import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
@@ -78,6 +82,7 @@ export default function KeyInfoView({
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
+  const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const { data: allMcpServers } = useMCPServers();
@@ -453,13 +458,12 @@ export default function KeyInfoView({
   const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
 
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
+  const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
+  const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
 
-  const budgetDisplay =
-    currentKeyData.max_budget !== null
-      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
-      : parentTeam?.max_budget != null
-        ? `$${formatNumberWithCommas(parentTeam.max_budget, 2)} (Team: ${parentTeam.team_alias || parentTeam.team_id}${parentTeam.budget_duration ? ` / ${parentTeam.budget_duration}` : ""})`
-        : "Unlimited";
+  const hasOwnBudget = currentKeyData.max_budget !== null;
+  const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -470,11 +474,16 @@ export default function KeyInfoView({
           userId: currentKeyData.user_id || "",
           userEmail: currentKeyData.user_email || "",
           userAlias: currentKeyData.user?.user_alias ?? null,
+          teamId: currentKeyData.team_id || "",
+          teamAlias: parentTeam?.team_alias ?? null,
+          orgId,
+          orgAlias: parentOrg?.organization_alias ?? null,
           createdBy:
             currentKeyData.created_by_user?.user_alias ||
             currentKeyData.created_by_user?.user_email ||
             currentKeyData.created_by ||
             "",
+          createdById: currentKeyData.created_by_user?.user_id || currentKeyData.created_by || "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
           lastUpdated: lastConfiguredAt ? formatTimestamp(lastConfiguredAt) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
@@ -605,7 +614,10 @@ export default function KeyInfoView({
                 <p className="text-sm">Spend</p>
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
-                  <p className="text-sm">of {budgetDisplay}</p>
+                  <p className="text-sm">
+                    of {budgetDisplay}
+                    <InheritedBudgetHint gates={inheritedGates} />
+                  </p>
                   {currentKeyData.budget_reset_at && (
                     <p className="text-sm">Resets {formatTimestamp(currentKeyData.budget_reset_at)}</p>
                   )}
@@ -766,7 +778,15 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Team ID</p>
-                    <p className="text-sm">{currentKeyData.team_id || "Not Set"}</p>
+                    <p className="text-sm">
+                      {currentKeyData.team_id ? (
+                        <EntityLink href={teamDetailHref(currentKeyData.team_id)} className="font-normal">
+                          {currentKeyData.team_id}
+                        </EntityLink>
+                      ) : (
+                        "Not Set"
+                      )}
+                    </p>
                   </div>
 
                   {enableProjectsUI && (

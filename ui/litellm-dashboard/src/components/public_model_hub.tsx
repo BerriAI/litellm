@@ -637,7 +637,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           <ComboboxChipsInput
                             placeholder="Select providers"
                             aria-label="Select providers"
-                            className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
+                            className="min-w-24"
                           />
                         </ComboboxChips>
                         <ComboboxContent anchor={anchor}>

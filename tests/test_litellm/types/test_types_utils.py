@@ -5,7 +5,11 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm.types.utils import HiddenParams
+from litellm.types.utils import HiddenParams, all_litellm_params
+
+
+def test_rust_is_a_known_litellm_param():
+    assert "rust" in all_litellm_params
 
 
 def test_hidden_params_response_ms():

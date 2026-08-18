@@ -2064,6 +2064,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/comprehendmedical": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Comprehend Medical Sdk Proxy Route
+         * @description AWS-SDK-shaped pass-through for Amazon Comprehend Medical: point the SDK's
+         *     `endpoint_url` at `/comprehendmedical` and the operation is read from the
+         *     `X-Amz-Target` header, per the AWS JSON 1.1 protocol.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+         */
+        post: operations["comprehend_medical_sdk_proxy_route_comprehendmedical_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/comprehendmedical/{operation}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Comprehend Medical Proxy Route
+         * @description Pass-through for Amazon Comprehend Medical, e.g. `POST /comprehendmedical/DetectEntitiesV2`.
+         *
+         *     The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
+         *     using the proxy's AWS credentials.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+         */
+        post: operations["comprehend_medical_proxy_route_comprehendmedical__operation__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/callback/delete": {
         parameters: {
             query?: never;
@@ -7622,6 +7671,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/spend_logs/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spend Log Users
+         * @description The distinct internal users appearing in spend logs the caller can read.
+         */
+        get: operations["list_spend_log_users_management_v1_spend_logs_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp": {
         parameters: {
             query?: never;
@@ -8605,6 +8674,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_ocr_post"];
         delete?: never;
@@ -8657,6 +8731,26 @@ export interface paths {
          *     - Pass in user_email if set
          */
         get: operations["onboarding_onboarding_get_token_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openai/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: openai_websocket_proxy_route
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_openai_websocket_proxy_route_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9163,6 +9257,26 @@ export interface paths {
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
         patch: operations["openai_proxy_route_openai__endpoint__patch"];
+        trace?: never;
+    };
+    "/openai_passthrough/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: openai_websocket_proxy_route
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_openai_websocket_proxy_route_get_2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/openai_passthrough/{endpoint}": {
@@ -17719,6 +17833,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_v1_ocr_post"];
         delete?: never;
@@ -23613,6 +23732,11 @@ export interface components {
              * @description proxy level default model for all chat completion calls
              */
             completion_model?: string | null;
+            /**
+             * Control Plane Url
+             * @description Global Control Plane: URL of the control plane whose admin UI manages this instance. Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate against it cross-origin, and restricts the SSO return_to origin to that URL. No state is shared with the control plane
+             */
+            control_plane_url?: string | null;
             /** @description standalone Redis for cross-pod coordination (tpm/rpm rate limits, spend tracking, pod lock manager, shared health checks), configured independently of the response-cache backend; takes precedence over borrowing the `cache_params` Redis and over the REDIS_* env fallback */
             coordination_redis?: components["schemas"]["CoordinationRedisParams"] | null;
             /**
@@ -23966,6 +24090,11 @@ export interface components {
             model_list?: components["schemas"]["ModelParams"][] | null;
             /** @description litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5 */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
+            /**
+             * Worker Registry
+             * @description Global Control Plane: the independent proxy instances this instance's admin UI manages. Setting it makes this a control plane, which serves the UI and does not route LLM requests. Enterprise-only
+             */
+            worker_registry?: components["schemas"]["WorkerRegistryEntry"][] | null;
         };
         /** ConfigurableClientsideParamsCustomAuth */
         "ConfigurableClientsideParamsCustomAuth-Input": {
@@ -27002,6 +27131,8 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Bedrock Tags */
+            bedrock_tags?: unknown[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -27227,6 +27358,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
             /** Search Context Cost Per Query */
@@ -32783,6 +32916,16 @@ export interface components {
              */
             judged_count?: number | null;
             /**
+             * Key Alias
+             * @description Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted
+             */
+            key_alias?: string | null;
+            /**
+             * Key Name
+             * @description Masked display name (sk-...) of the shadowed key, resolved at read time like key_alias
+             */
+            key_name?: string | null;
+            /**
              * Last Error
              * @description Most recent attempt error; detail endpoint only
              */
@@ -35911,6 +36054,8 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Bedrock Tags */
+            bedrock_tags?: unknown[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -36136,6 +36281,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
             /** Search Context Cost Per Query */
@@ -39355,6 +39502,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ComplianceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    comprehend_medical_sdk_proxy_route_comprehendmedical_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    comprehend_medical_proxy_route_comprehendmedical__operation__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -45883,6 +46081,46 @@ export interface operations {
             };
         };
     };
+    list_spend_log_users_management_v1_spend_logs_users_get: {
+        parameters: {
+            query: {
+                /** @description Window start (UTC when no offset is given) */
+                "filter[startTime][gte]": string;
+                /** @description Window end (UTC when no offset is given) */
+                "filter[startTime][lte]": string;
+                /** @description Case-insensitive partial match on the internal user id */
+                q?: string | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     aggregate_mcp_route_mcp_get: {
         parameters: {
             query?: never;
@@ -47278,6 +47516,24 @@ export interface operations {
             };
         };
     };
+    websocket_openai_websocket_proxy_route_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     chat_completion_openai_deployments__model__chat_completions_post: {
         parameters: {
             query?: never;
@@ -48134,6 +48390,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_openai_websocket_proxy_route_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

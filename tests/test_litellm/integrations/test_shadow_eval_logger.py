@@ -12,14 +12,17 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.shadow_eval_logger import (
     _MAX_CONCURRENT_SHADOW_TASKS,
+    _MAX_ERROR_CHARS,
     _MAX_JUDGE_PROMPT_CHARS,
     JUDGE_MAX_OUTPUT_TOKENS,
     ActiveShadowEvalJob,
     ShadowEvalLogger,
+    _failure_detail,
     _judge_user_prompt,
     _sample_hits,
     _unmask_preference,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN, ModelResponse
 
 
@@ -123,6 +126,32 @@ def _success_kwargs(
 
 RESPONSE = {"choices": [{"message": {"content": "real answer"}}]}
 
+RESPONSES_API_RESPONSE = {
+    "id": "resp_1",
+    "created_at": 1,
+    "model": "gpt-5",
+    "object": "response",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "real answer", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "error": None,
+    "incomplete_details": None,
+    "instructions": None,
+    "metadata": None,
+    "temperature": None,
+    "tool_choice": "auto",
+    "tools": [],
+    "top_p": None,
+    "status": "completed",
+}
+
 
 async def _drain(logger: ShadowEvalLogger, target: int = 0):
     for _ in range(100):
@@ -130,6 +159,251 @@ async def _drain(logger: ShadowEvalLogger, target: int = 0):
             return
         await asyncio.sleep(0.01)
     raise AssertionError("shadow tasks never drained")
+
+
+@pytest.mark.asyncio
+class TestSurfaceNormalization:
+    """/v1/messages and /v1/responses arms: the hook normalizes each surface's logged
+    request through litellm's own transformations and judges only text-final turns."""
+
+    async def _drive(self, hook_kwargs, response_obj):
+        prisma = _prisma()
+        router = _router()
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+        await logger.async_log_success_event(hook_kwargs, response_obj, None, None)
+        await _drain(logger)
+        return prisma, router
+
+    async def test_anthropic_messages_arm_normalizes_blocks_and_system(self):
+        hook_kwargs = _success_kwargs(call_type="anthropic_messages")
+        hook_kwargs["messages"] = [{"role": "user", "content": [{"type": "text", "text": "what is 2+2"}]}]
+        hook_kwargs["system"] = "you are terse"
+
+        prisma, router = await self._drive(hook_kwargs, RESPONSE)
+
+        shadow_messages = router.acompletion.call_args_list[0].kwargs["messages"]
+        assert shadow_messages[0]["role"] == "system"
+        assert shadow_messages[0]["content"] == "you are terse"
+        assert shadow_messages[1]["role"] == "user"
+        prisma.db.litellm_shadowevalattempt.create.assert_called_once()
+
+    async def test_anthropic_bridge_path_recovers_system_from_proxy_wire_body(self):
+        """On the openai-compatible bridge path kwargs carry no system (live-probed:
+        kwargs["system"] is None and complete_input_dict is empty); the proxy's snapshot
+        of the client's wire body is the only remaining source."""
+        hook_kwargs = _success_kwargs(call_type="anthropic_messages")
+        hook_kwargs["messages"] = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        hook_kwargs["litellm_params"]["proxy_server_request"] = {
+            "body": {"model": "gpt-5", "max_tokens": 100, "system": "from the wire body", "messages": []}
+        }
+
+        _, router = await self._drive(hook_kwargs, RESPONSE)
+
+        shadow_messages = router.acompletion.call_args_list[0].kwargs["messages"]
+        assert shadow_messages[0] == {"role": "system", "content": "from the wire body"}
+
+    async def test_anthropic_arm_translates_wire_body_params_not_logged_optional_params(self):
+        """The wire body is the only surface-native param source on both provider paths
+        (the bridge's inner completion rewrites the logged optional_params to chat
+        shape); anthropic tools and stop_sequences reach the shadow call translated,
+        transport and litellm keys never do."""
+        hook_kwargs = _success_kwargs(call_type="anthropic_messages")
+        hook_kwargs["messages"] = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        hook_kwargs["standard_logging_object"]["model_parameters"] = {"temperature": 0.9}
+        hook_kwargs["litellm_params"]["proxy_server_request"] = {
+            "body": {
+                "model": "claude-x",
+                "messages": [],
+                "system": "you are terse",
+                "max_tokens": 100,
+                "temperature": 0.1,
+                "top_k": 5,
+                "stop_sequences": ["END"],
+                "stream": True,
+                "tools": [
+                    {"name": "get_weather", "description": "d", "input_schema": {"type": "object", "properties": {}}}
+                ],
+                "litellm_metadata": {"user_api_key_hash": "key-hash"},
+            }
+        }
+
+        _, router = await self._drive(hook_kwargs, RESPONSE)
+
+        shadow_call = router.acompletion.call_args_list[0].kwargs
+        assert shadow_call["max_tokens"] == 100
+        assert shadow_call["temperature"] == 0.1
+        assert shadow_call["top_k"] == 5
+        assert shadow_call["stop"] == ["END"]
+        assert shadow_call["tools"][0]["type"] == "function"
+        assert shadow_call["tools"][0]["function"]["name"] == "get_weather"
+        assert "stop_sequences" not in shadow_call
+        assert "stream" not in shadow_call
+        assert shadow_call["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_ROUTER_CALL_ORIGIN
+
+    async def test_responses_arm_translates_wire_body_params_and_drops_surface_only_keys(self):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        hook_kwargs = _success_kwargs(call_type="aresponses")
+        hook_kwargs["messages"] = "what is 8+8"
+        hook_kwargs["litellm_params"]["proxy_server_request"] = {
+            "body": {
+                "model": "gpt-5",
+                "input": "what is 8+8",
+                "instructions": "you are terse",
+                "max_output_tokens": 128,
+                "temperature": 0.3,
+                "previous_response_id": "resp_0",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_weather",
+                        "description": "d",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            }
+        }
+        response = ResponsesAPIResponse.model_validate(RESPONSES_API_RESPONSE)
+
+        _, router = await self._drive(hook_kwargs, response)
+
+        shadow_call = router.acompletion.call_args_list[0].kwargs
+        assert shadow_call["messages"][0] == {"role": "system", "content": "you are terse"}
+        assert shadow_call["max_tokens"] == 128
+        assert shadow_call["temperature"] == 0.3
+        assert shadow_call["tools"][0]["function"]["name"] == "get_weather"
+        assert "max_output_tokens" not in shadow_call
+        assert "previous_response_id" not in shadow_call
+        assert "instructions" not in shadow_call
+
+    @pytest.mark.parametrize("payload_shape", ["typed", "dict"])
+    @pytest.mark.parametrize("call_type", ["aresponses", "responses"])
+    async def test_responses_arms_normalize_bare_string_input_and_instructions(self, call_type, payload_shape):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        hook_kwargs = _success_kwargs(call_type=call_type)
+        hook_kwargs["messages"] = "what is 8+8"
+        hook_kwargs["instructions"] = "you are terse"
+        response = (
+            ResponsesAPIResponse.model_validate(RESPONSES_API_RESPONSE)
+            if payload_shape == "typed"
+            else RESPONSES_API_RESPONSE
+        )
+
+        prisma, router = await self._drive(hook_kwargs, response)
+
+        shadow_call = router.acompletion.call_args_list[0].kwargs
+        shadow_messages = shadow_call["messages"]
+        assert shadow_messages[0]["role"] == "system"
+        assert shadow_messages[1]["role"] == "user"
+        assert shadow_messages[1]["content"] == "what is 8+8"
+        assert "tools" not in shadow_call
+        prisma.db.litellm_shadowevalattempt.create.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "response_mutation,kwargs_mutation",
+        [
+            ("chat-tool-calls", {}),
+            ("responses-function-call", {"call_type": "aresponses"}),
+        ],
+        ids=["tool-final-chat-turn", "tool-final-responses-turn"],
+    )
+    async def test_unjudgeable_turns_are_skipped_without_consuming_budget(self, response_mutation, kwargs_mutation):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        hook_kwargs = _success_kwargs(**({"call_type": "acompletion"} | kwargs_mutation))
+        response = RESPONSE
+        if response_mutation == "chat-tool-calls":
+            response = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "let me check",
+                            "tool_calls": [
+                                {"id": "t1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                            ],
+                        }
+                    }
+                ]
+            }
+        elif response_mutation == "responses-function-call":
+            hook_kwargs["messages"] = "do the thing"
+            response = ResponsesAPIResponse.model_validate(
+                RESPONSES_API_RESPONSE
+                | {
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "name": "f",
+                            "arguments": "{}",
+                            "call_id": "c1",
+                            "id": "fc1",
+                            "status": "completed",
+                        }
+                    ]
+                }
+            )
+
+        prisma, router = await self._drive(hook_kwargs, response)
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "call_type,guardrail_mode,sampled",
+        [
+            ("anthropic_messages", ["logging_only", "pre_call"], False),
+            ("aresponses", GuardrailEventHooks.pre_call, False),
+            ("anthropic_messages", "post_call", True),
+            ("acompletion", "pre_call", True),
+        ],
+        ids=["anthropic-pre-call-list", "responses-pre-call-enum", "anthropic-post-call-only", "chat-pre-call"],
+    )
+    async def test_guardrail_rewritten_requests_never_replay_the_wire_body(self, call_type, guardrail_mode, sampled):
+        """The proxy snapshots the wire body before the guardrail pre-call hook, so the
+        wire-sourced surfaces skip requests a request-mutating guardrail ran on rather
+        than replay stripped tools or unmasked content; chat sources the dispatched
+        call and keeps sampling, as do requests only response-mode guardrails touched."""
+        hook_kwargs = _success_kwargs(
+            call_type=call_type,
+            request_metadata={
+                "standard_logging_guardrail_information": [{"guardrail_name": "g", "guardrail_mode": guardrail_mode}]
+            },
+        )
+        response = RESPONSE
+        if call_type == "anthropic_messages":
+            hook_kwargs["messages"] = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        elif call_type == "aresponses":
+            hook_kwargs["messages"] = "hi"
+            response = RESPONSES_API_RESPONSE
+
+        prisma, router = await self._drive(hook_kwargs, response)
+
+        if sampled:
+            prisma.db.litellm_shadowevalattempt.create.assert_called_once()
+        else:
+            router.acompletion.assert_not_called()
+            prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "call_type,messages,response_obj",
+        [
+            ("anthropic_messages", "not-a-message-list", RESPONSE),
+            ("acompletion", [{"role": "user", "content": "hi"}], {"unexpected": "shape"}),
+            ("aresponses", "hi", RESPONSE),
+        ],
+        ids=["rejected-request-shape", "malformed-chat-response", "responses-response-without-output"],
+    )
+    async def test_unsampleable_shapes_fail_closed(self, call_type, messages, response_obj):
+        """A request or response shape the normalizers reject is skipped without a
+        provider call or an attempt row, never raised."""
+        hook_kwargs = _success_kwargs(call_type=call_type)
+        hook_kwargs["messages"] = messages
+
+        prisma, router = await self._drive(hook_kwargs, response_obj)
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
 
 
 class TestSampling:
@@ -166,6 +440,21 @@ def test_unmask_preference(raw, real_is_a, expected):
     assert _unmask_preference(raw, real_is_a) == expected
 
 
+def test_failure_detail_names_the_raising_frame():
+    try:
+        raise TypeError("'tuple' object does not support item assignment")
+    except TypeError as e:
+        detail = _failure_detail(e)
+        lineno = e.__traceback__.tb_lineno
+    assert detail == f"TypeError at test_shadow_eval_logger.py:{lineno}: 'tuple' object does not support item assignment"
+
+    try:
+        raise ValueError("p" * 5 * _MAX_ERROR_CHARS)
+    except ValueError as long_e:
+        truncated_row_error = _failure_detail(long_e)[:_MAX_ERROR_CHARS]
+    assert "ValueError at test_shadow_eval_logger.py:" in truncated_row_error
+
+
 def test_judge_prompt_is_bounded_however_large_the_inputs():
     prompt = _judge_user_prompt("c" * 200_000, "a" * 200_000, "b" * 200_000)
     assert len(prompt) < _MAX_JUDGE_PROMPT_CHARS + 100
@@ -187,6 +476,9 @@ class TestSuccessHookSkipChain:
         await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
         await _drain(logger)
 
+        shadow_call = router.acompletion.call_args_list[0].kwargs
+        assert shadow_call["temperature"] == 0.5
+        assert "stream" not in shadow_call
         create = prisma.db.litellm_shadowevalattempt.create
         create.assert_awaited_once()
         row = create.call_args.kwargs["data"]
@@ -200,6 +492,61 @@ class TestSuccessHookSkipChain:
         assert row["judge_cost"] == 0.005
         assert row["error"] is None
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 0
+
+    async def test_shadow_call_messages_survive_in_place_provider_rewrites(self, monkeypatch: pytest.MonkeyPatch):
+        """Provider transforms (anthropic factory, cache-control hook) rewrite messages with
+        `messages[i] = ...`; the logger's immutable snapshot must never reach them directly."""
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        router = _router()
+        inner = router.acompletion.side_effect
+
+        async def mutating_acompletion(**kwargs):
+            kwargs["messages"][0] = dict(kwargs["messages"][0])
+            return await inner(**kwargs)
+
+        router.acompletion = MagicMock(side_effect=mutating_acompletion)
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["error"] is None
+        assert row["outcome"] in ("real", "shadow", "tie")
+
+    async def test_pipeline_continues_judging_after_a_failed_attempt(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        router = _router()
+        inner = router.acompletion.side_effect
+        shadow_calls = {"count": 0}
+
+        async def flaky_acompletion(**kwargs):
+            if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+                shadow_calls["count"] += 1
+                if shadow_calls["count"] == 1:
+                    raise RuntimeError("provider exploded")
+            return await inner(**kwargs)
+
+        router.acompletion = MagicMock(side_effect=flaky_acompletion)
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+        await logger.async_log_success_event(_success_kwargs(request_id="req-2"), RESPONSE, None, None)
+        await _drain(logger)
+
+        rows = [c.kwargs["data"] for c in prisma.db.litellm_shadowevalattempt.create.call_args_list]
+        assert [rows[0]["outcome"], rows[1]["outcome"] in ("real", "shadow")] == ["error", True]
+        assert "provider exploded" in rows[0]["error"]
+        assert rows[1]["request_id"] == "req-2"
+        assert rows[1]["error"] is None
+        assert logger._inflight_shadow_tasks == 0
 
     @pytest.mark.parametrize(
         "kwargs_mutation,job_mutation",
@@ -369,10 +716,10 @@ class TestShadowPipeline:
             job=_job(),
             request_id="req-1",
             messages=({"role": "user", "content": "hi"},),
-            response_obj=RESPONSE,
+            real_text="real answer",
             real_model="claude-opus",
             control_tier=None,
-            model_parameters={},
+            shadow_params={},
             parent_metadata={},
         )
 
@@ -398,10 +745,10 @@ class TestShadowPipeline:
             job=_job(),
             request_id="req-1",
             messages=({"role": "user", "content": "hi"},),
-            response_obj=RESPONSE,
+            real_text="real answer",
             real_model="claude-opus",
             control_tier=None,
-            model_parameters={},
+            shadow_params={},
             parent_metadata={"user_api_key_auth": UserAPIKeyAuth(api_key="sk-abc", max_budget=10.0)},
         )
 
@@ -429,10 +776,10 @@ class TestShadowPipeline:
             job=_job(),
             request_id="req-1",
             messages=({"role": "user", "content": "hi"},),
-            response_obj=RESPONSE,
+            real_text="real answer",
             real_model="claude-opus",
             control_tier=None,
-            model_parameters={},
+            shadow_params={},
             parent_metadata={},
         )
 
@@ -457,10 +804,10 @@ class TestShadowPipeline:
             job=_job(),
             request_id="req-1",
             messages=({"role": "user", "content": "hi"},),
-            response_obj=RESPONSE,
+            real_text="real answer",
             real_model="claude-opus",
             control_tier=None,
-            model_parameters={"stream": True, "temperature": 0.2, "metadata": {"x": 1}},
+            shadow_params={"temperature": 0.2},
             parent_metadata=parent_metadata,
         )
 
@@ -475,7 +822,6 @@ class TestShadowPipeline:
         assert shadow_call["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_ROUTER_CALL_ORIGIN
         assert judge_call["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_JUDGE_CALL_ORIGIN
         assert "routing_decision" not in judge_call["metadata"]
-        assert "stream" not in shadow_call
         assert shadow_call["temperature"] == 0.2
         assert judge_call["max_tokens"] == JUDGE_MAX_OUTPUT_TOKENS
 

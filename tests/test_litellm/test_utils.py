@@ -29,7 +29,8 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import all_litellm_params, bedrock_batch_litellm_params
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
@@ -4752,3 +4753,91 @@ def test_websearch_interception_control_fields_never_reach_the_provider():
         f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
     )
     assert set(WEBSEARCH_INTERNAL_CONTROL_FIELDS) <= set(all_litellm_params)
+
+
+def test_bedrock_batch_params_never_reach_the_provider():
+    """A Bedrock managed-batch deployment carries aws_batch_role_arn / s3_* /
+    bedrock_tags in its litellm_params, and the same deployment also serves chat.
+    Anything the param builder does not recognize is swept into extra_body, so
+    Bedrock rejects the whole call: `aws_batch_role_arn: Extra inputs are not
+    permitted` (Anthropic models) or `extraneous key [aws_batch_role_arn] is not
+    permitted` (Nova/Llama/Titan), turning every non-batch request to that
+    deployment into a 400.
+
+    The batch path is unaffected by registering them, because GenericLiteLLMParams
+    is extra="allow" and preserves them into litellm_params for the batch and files
+    transformations that read them.
+    """
+    configured = {
+        field: ([{"key": "team", "value": "configured-value"}] if field == "bedrock_tags" else "configured-value")
+        for field in bedrock_batch_litellm_params
+    }
+    kwargs = {"a_real_provider_specific_param": 1, **configured}
+
+    non_default = get_non_default_completion_params(dict(kwargs))
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "bedrock batch params leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+    assert set(bedrock_batch_litellm_params) <= set(all_litellm_params)
+
+    batch_params = dict(GenericLiteLLMParams(**kwargs))
+    assert all(batch_params.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
+        "registering these must not strip them from the batch path: "
+        f"{sorted(f for f in bedrock_batch_litellm_params if batch_params.get(f) != configured[f])}"
+    )
+
+    normalized = CredentialLiteLLMParams.model_validate(
+        GenericLiteLLMParams(**kwargs).model_dump(exclude_none=True)
+    ).model_dump(exclude_none=True)
+    assert all(normalized.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
+        "credential normalization dropped batch params before the transformation: "
+        f"{sorted(f for f in bedrock_batch_litellm_params if normalized.get(f) != configured[f])}"
+    )
+
+
+def test_rust_flag_not_forwarded_as_provider_param():
+    forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
+    assert "rust" not in forwarded
+
+
+def test_completion_does_not_leak_rust_flag_into_provider_request_body():
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    mock_raw_response = MagicMock()
+    mock_raw_response.headers = {}
+    mock_raw_response.parse.return_value = mock_response
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
+
+    litellm.completion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        rust=True,
+        api_key="sk-test",
+        client=mock_client,
+    )
+
+    create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
+    assert "rust" not in create_kwargs
+    assert "rust" not in (create_kwargs.get("extra_body") or {})

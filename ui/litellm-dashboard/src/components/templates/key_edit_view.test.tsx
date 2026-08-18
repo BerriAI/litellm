@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -107,6 +107,25 @@ vi.mock("../common_components/AccessGroupSelector", () => ({
     />
   ),
 }));
+
+/* eslint-disable local/no-antd-class-selectors -- the "Key Type" and "Models" Form.Items wrap a noStyle nested item, so antd renders a label with no associated control and there is no accessible query for these selects */
+const antdSelectorFor = (label: HTMLElement): Element =>
+  label.closest(".ant-form-item")!.querySelector(".ant-select-selector")!;
+/* eslint-enable local/no-antd-class-selectors */
+
+const visibleOptions = (): HTMLElement[] =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd puts role="option" only on a hidden mirror list; the visible, clickable options carry no role or accessible name
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option"));
+
+const isOptionDisabled = (option: HTMLElement): boolean =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd signals option disabled state only through this class; the rendered options carry no aria-disabled
+  option.classList.contains("ant-select-item-option-disabled");
+
+const optionByContent = (label: string): HTMLElement | undefined =>
+  visibleOptions().find(
+    // eslint-disable-next-line local/no-antd-class-selectors -- the option's own label text lives in this child node, with no accessible equivalent
+    (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
+  );
 
 describe("KeyEditView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
@@ -879,10 +898,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item");
-    expect(resetBudgetItem).not.toBeNull();
-    const combobox = within(resetBudgetItem as HTMLElement).getByRole("combobox");
-    await userEvent.click(combobox);
+    await userEvent.click(await screen.findByLabelText("Reset Budget"));
 
     const weeklyOption = await screen.findByText("weekly");
     await userEvent.click(weeklyOption);
@@ -960,12 +976,12 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    await userEvent.click(within(resetBudgetItem).getByRole("combobox"));
+    const resetBudget = await screen.findByLabelText("Reset Budget");
+    await userEvent.click(resetBudget);
     await userEvent.click(await screen.findByText("Never resets"));
 
     await waitFor(() => {
-      expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
+      expect(resetBudget).toHaveTextContent("Never resets");
     });
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
@@ -993,8 +1009,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    await userEvent.click(within(resetBudgetItem).getByRole("combobox"));
+    await userEvent.click(await screen.findByLabelText("Reset Budget"));
     await userEvent.click(await screen.findByText("Never resets"));
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
@@ -1149,17 +1164,11 @@ describe("KeyEditView", () => {
     });
 
     // The selected key type label should show "AI APIs" (not "LLM API")
-    const keyTypeSection = screen.getByText("Key Type").closest(".ant-form-item")!;
-    expect(keyTypeSection).toBeInTheDocument();
-
-    // Open the dropdown to see all options
-    const selectElement = keyTypeSection.querySelector(".ant-select-selector")!;
-    await userEvent.click(selectElement);
+    await userEvent.click(antdSelectorFor(screen.getByText("Key Type")));
 
     await waitFor(() => {
       // Verify "AI APIs" appears as an option label
-      const options = document.querySelectorAll(".ant-select-item-option");
-      const optionTexts = Array.from(options).map((el) => el.textContent);
+      const optionTexts = visibleOptions().map((el) => el.textContent);
       const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
       expect(hasAIAPIs).toBe(true);
 
@@ -1251,8 +1260,7 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item") as HTMLElement;
-      await userEvent.click(within(orgFormItem).getByRole("combobox"));
+      await userEvent.click(screen.getByLabelText("Organization"));
 
       expect(screen.queryByText("Engineering")).not.toBeInTheDocument();
     });
@@ -1274,8 +1282,7 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item") as HTMLElement;
-      await userEvent.click(within(orgFormItem).getByRole("combobox"));
+      await userEvent.click(screen.getByLabelText("Organization"));
 
       expect(await screen.findByText("Engineering")).toBeInTheDocument();
     });
@@ -1298,19 +1305,15 @@ describe("KeyEditView", () => {
         />,
       );
 
-      const orgFormItem = (await screen.findByText("Organization")).closest(".ant-form-item") as HTMLElement;
       await waitFor(() => {
-        expect(within(orgFormItem).getByRole("combobox")).toHaveValue("Engineering");
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
       });
     });
   });
 
   describe("models dropdown team gating", () => {
     const openModelsDropdown = () => {
-      const modelsFormItem = screen.getByText("Models", { selector: "label" }).closest(".ant-form-item");
-      const selector = modelsFormItem?.querySelector(".ant-select-selector");
-      expect(selector).toBeTruthy();
-      fireEvent.mouseDown(selector as Element);
+      fireEvent.mouseDown(antdSelectorFor(screen.getByText("Models", { selector: "label" })));
     };
 
     it("should offer all-proxy-models but not all-team-models for a teamless key", async () => {
@@ -1456,9 +1459,7 @@ describe("KeyEditView", () => {
 
       const clickOption = async (label: string) => {
         const option = await waitFor(() => {
-          const match = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
-            (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
-          );
+          const match = optionByContent(label);
           expect(match).toBeTruthy();
           return match as HTMLElement;
         });
@@ -1495,17 +1496,14 @@ describe("KeyEditView", () => {
 
       openModelsDropdown();
 
-      const findOption = (label: string) =>
-        Array.from(document.querySelectorAll(".ant-select-item-option")).find(
-          (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
-        ) as HTMLElement | undefined;
+      const findOption = (label: string) => optionByContent(label);
 
       const gpt4Before = await waitFor(() => {
         const match = findOption("gpt-4");
         expect(match).toBeTruthy();
         return match!;
       });
-      expect(gpt4Before.classList.contains("ant-select-item-option-disabled")).toBe(false);
+      expect(isOptionDisabled(gpt4Before)).toBe(false);
 
       fireEvent.click(
         await waitFor(() => {
@@ -1516,7 +1514,7 @@ describe("KeyEditView", () => {
       );
 
       await waitFor(() => {
-        expect(findOption("gpt-4")?.classList.contains("ant-select-item-option-disabled")).toBe(true);
+        expect(isOptionDisabled(findOption("gpt-4")!)).toBe(true);
       });
     });
   });

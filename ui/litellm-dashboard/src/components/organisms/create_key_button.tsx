@@ -1069,7 +1069,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     <BudgetDurationDropdown
                       showNeverResets
-                      placeholder="Never resets"
+                      placeholder="Not set"
                       onChange={(value) => form.setFieldValue("budget_duration", value)}
                     />
                   </Form.Item>
@@ -1718,7 +1718,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
           <CreateUserButton
             userID={userID}
             accessToken={accessToken}
-            teams={teams}
             possibleUIRoles={possibleUIRoles}
             onUserCreated={handleUserCreated}
             isEmbedded={true}

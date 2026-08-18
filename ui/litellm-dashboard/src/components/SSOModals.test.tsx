@@ -67,10 +67,8 @@ describe("SSOModals", () => {
     const ssoProviderSelect = screen.getByLabelText("SSO Provider");
     fireEvent.mouseDown(ssoProviderSelect);
     // Wait for dropdown and select Google
-    await waitFor(() => {
-      const googleOption = screen.getByText("Google SSO");
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText("Google SSO");
+    fireEvent.click(googleOption);
 
     // Fill in the email field
     const emailInput = screen.getByLabelText("Proxy Admin Email");
@@ -119,10 +117,8 @@ describe("SSOModals", () => {
     const ssoProviderSelect = screen.getByLabelText("SSO Provider");
     fireEvent.mouseDown(ssoProviderSelect);
     // Wait for dropdown and select Google
-    await waitFor(() => {
-      const googleOption = screen.getByText("Google SSO");
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText("Google SSO");
+    fireEvent.click(googleOption);
 
     // Fill in the email field
     const emailInput = screen.getByLabelText("Proxy Admin Email");
@@ -216,10 +212,8 @@ describe("SSOModals", () => {
     const ssoProviderSelect = screen.getByLabelText("SSO Provider");
     fireEvent.mouseDown(ssoProviderSelect);
     // Wait for dropdown and select Google
-    await waitFor(() => {
-      const googleOption = screen.getByText("Google SSO");
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText("Google SSO");
+    fireEvent.click(googleOption);
 
     // Fill in the email field
     const emailInput = screen.getByLabelText("Proxy Admin Email");

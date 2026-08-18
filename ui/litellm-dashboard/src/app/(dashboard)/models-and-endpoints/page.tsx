@@ -175,7 +175,7 @@ export default function ModelsAndEndpointsPage() {
         ) : (
           <Tabs value={activeKey} onValueChange={setActiveKey}>
             <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
-              <div className="-mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
+              <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
                 <TabsList variant="line" className="w-max justify-start">
                   {visibleSlugs.map((slug) => {
                     const key = slug || BASE_TAB_KEY;
