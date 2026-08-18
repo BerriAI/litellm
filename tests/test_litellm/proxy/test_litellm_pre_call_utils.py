@@ -230,6 +230,43 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_stamped_auth_object_reflects_header_derived_identity():
+    """
+    Regression (LIT-5487): the stamped object is a copy taken partway through request setup,
+    so it only carries header-derived identity if the stamp still runs after those fields are
+    resolved. Moving the stamp earlier would silently misattribute spend.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", "user": "end-user-from-header"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"user_header_name": "user"},
+        version="test-version",
+    )
+
+    # precondition: the header was actually resolved onto the live object
+    assert user_api_key_dict.end_user_id == "end-user-from-header"
+
+    stamped = updated_data["metadata"]["user_api_key_auth"]
+    assert stamped.end_user_id == "end-user-from-header"
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_admin_injection_slots():
     """User-supplied user_api_key_metadata / user_api_key_team_metadata /
     _pipeline_managed_guardrails must be stripped from both metadata keys
