@@ -265,3 +265,32 @@ def test_anthropic_format_returns_public_team_model_name(
     assert response.status_code == 200
     assert [m["id"] for m in response.json()["data"]] == ["gpt-4-team"]
     assert internal_name not in response.text
+
+
+@pytest.mark.parametrize("prefix", ["/v1/models", "/models"])
+def test_get_model_by_id_accepts_slash_in_model_name(
+    client, auth_as, patched_models, monkeypatch, prefix
+):
+    """Regression: a model group named ``provider/model`` is listed under that id,
+    so retrieve has to match the whole id rather than its first path segment."""
+    from litellm.proxy import utils as proxy_utils
+
+    model_id = "mistralai/mistral-7b-instruct"
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return [model_id]
+
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        _fake_get_available_models_for_user,
+    )
+    patched_models.get_model_names = MagicMock(return_value=[model_id])
+
+    with auth_as():
+        listed = client.get(prefix)
+        retrieved = client.get(f"{prefix}/{model_id}")
+
+    assert [entry["id"] for entry in listed.json()["data"]] == [model_id]
+    assert retrieved.status_code == 200
+    assert retrieved.json()["id"] == model_id

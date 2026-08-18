@@ -9694,12 +9694,12 @@ async def model_list(
 
 
 @router.get(
-    "/v1/models/{model_id}",
+    "/v1/models/{model_id:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["model management"],
 )
 @router.get(
-    "/models/{model_id}",
+    "/models/{model_id:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["model management"],
 )
