@@ -6,7 +6,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
 import { z } from "zod/v4";
 import { Logo } from "@/components/molecules/logo/Logo";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { FieldGroup } from "@/components/shared/form/field";
@@ -139,13 +139,13 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
       if (accessToken != null) {
         const response = await createSearchTool(accessToken, payload);
 
-        NotificationsManager.success("Search tool created successfully");
+        toast.success("Search tool created successfully");
         form.reset(EMPTY_VALUES);
         setModalVisible(false);
         onCreateSuccess(response);
       }
     } catch (error) {
-      NotificationsManager.error("Error creating search tool: " + error);
+      toast.error("Error creating search tool: " + error);
     } finally {
       setIsLoading(false);
     }
@@ -157,10 +157,9 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
   };
 
   const handleTestConnection = async () => {
-    // Validate required fields for testing
     const isValid = await form.trigger(["search_provider", "api_key"]);
     if (!isValid) {
-      NotificationsManager.error("Please fill in Search Provider and API Key before testing");
+      toast.error("Please fill in Search Provider and API Key before testing");
       return;
     }
 

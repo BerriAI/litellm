@@ -12,10 +12,6 @@ vi.mock("./networking", async () => {
   };
 });
 
-vi.mock("./molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const mockModelPatchUpdateCall = vi.mocked(networking.modelPatchUpdateCall);
 
 beforeAll(() => {

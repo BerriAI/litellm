@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CreateUserButton } from "./CreateUserButton";
 import * as networking from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("./networking", () => ({
   userCreateCall: vi.fn(),
@@ -28,7 +28,7 @@ const mockUserCreateCall = vi.mocked(networking.userCreateCall);
 const mockInvitationCreateCall = vi.mocked(networking.invitationCreateCall);
 const mockGetProxyUISettings = vi.mocked(networking.getProxyUISettings);
 const mockOrganizationMemberAddCall = vi.mocked(networking.organizationMemberAddCall);
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 
 const createQueryClient = () =>
   new QueryClient({
@@ -199,7 +199,7 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
-        expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Email already exists");
+        expect(mockToast.fromError).toHaveBeenCalledWith("Email already exists");
       });
     });
 
@@ -226,7 +226,7 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
-        expect(mockNotificationsManager.info).toHaveBeenCalledWith("Making API Call");
+        expect(mockToast.info).toHaveBeenCalledWith("Making API Call");
       });
     });
   });
@@ -257,7 +257,7 @@ describe("CreateUserButton", () => {
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("API user Created");
+        expect(mockToast.success).toHaveBeenCalledWith("API user Created");
       });
     });
 
@@ -289,7 +289,7 @@ describe("CreateUserButton", () => {
         expect(mockInvitationCreateCall).toHaveBeenCalledWith("token", "sso-user");
       });
       await waitFor(() => {
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("API user Created");
+        expect(mockToast.success).toHaveBeenCalledWith("API user Created");
       });
     });
   });
@@ -522,6 +522,224 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       expect(within(dialog).getByRole("checkbox", { name: /send invitation email/i })).toBeChecked();
+    });
+  });
+  describe("submit payload parity", () => {
+    const ROLES = {
+      proxy_user: { ui_label: "User", description: "" },
+      proxy_admin: { ui_label: "Admin", description: "" },
+    };
+
+    const openStandaloneModal = async (user: ReturnType<typeof userEvent.setup>) => {
+      expect(await screen.findByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+      return screen.getByRole("dialog", { name: /invite user/i });
+    };
+
+    const submittedPayload = () => mockUserCreateCall.mock.calls[0][2];
+
+    it("should send exactly seven keys from the standalone modal, with the untouched ones undefined", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "u1" } });
+      mockInvitationCreateCall.mockResolvedValue({ id: "i1", user_id: "u1", has_user_setup_sso: false } as any);
+
+      renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} />);
+      const dialog = await openStandaloneModal(user);
+
+      await user.type(within(dialog).getByLabelText(/user email/i), "parity@example.com");
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(Object.keys(submittedPayload()).sort()).toEqual([
+        "metadata",
+        "models",
+        "organization_ids",
+        "send_invite_email",
+        "team_id",
+        "user_email",
+        "user_role",
+      ]);
+      expect(submittedPayload()).toStrictEqual({
+        user_email: "parity@example.com",
+        user_role: "proxy_user",
+        team_id: undefined,
+        organization_ids: undefined,
+        metadata: undefined,
+        send_invite_email: true,
+        models: ["no-default-models"],
+      });
+    });
+
+    it("should send exactly six keys from the embedded form, with no organization_ids", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "u2" } });
+
+      renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} isEmbedded />);
+
+      await user.type(screen.getByLabelText(/user email/i), "embedded-parity@example.com");
+      await user.click(screen.getByRole("combobox", { name: /user role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("button", { name: /create user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(Object.keys(submittedPayload()).sort()).toEqual([
+        "metadata",
+        "models",
+        "send_invite_email",
+        "team_id",
+        "user_email",
+        "user_role",
+      ]);
+      expect(submittedPayload()).toStrictEqual({
+        user_email: "embedded-parity@example.com",
+        user_role: "proxy_user",
+        team_id: undefined,
+        metadata: undefined,
+        send_invite_email: true,
+        models: ["no-default-models"],
+      });
+    });
+
+    it("should not default models to no-default-models for a proxy admin", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "u3" } });
+
+      renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} isEmbedded />);
+
+      await user.type(screen.getByLabelText(/user email/i), "admin-parity@example.com");
+      await user.click(screen.getByRole("combobox", { name: /user role/i }));
+      await user.click(screen.getByText("Admin"));
+      await user.click(screen.getByRole("button", { name: /create user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(submittedPayload()).not.toHaveProperty("models");
+      expect(Object.keys(submittedPayload()).sort()).toEqual([
+        "metadata",
+        "send_invite_email",
+        "team_id",
+        "user_email",
+        "user_role",
+      ]);
+    });
+
+    it("should rename organization_ids to organizations and drop the original key", async () => {
+      const { useOrganizations } = await import("@/app/(dashboard)/hooks/organizations/useOrganizations");
+      vi.mocked(useOrganizations).mockReturnValue({
+        data: [{ organization_id: "org-1", organization_alias: "My Org" }],
+        isLoading: false,
+      } as any);
+
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "u4" } });
+      mockInvitationCreateCall.mockResolvedValue({ id: "i4", user_id: "u4", has_user_setup_sso: false } as any);
+
+      renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} />);
+      const dialog = await openStandaloneModal(user);
+
+      await user.type(within(dialog).getByLabelText(/user email/i), "org-parity@example.com");
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(within(dialog).getByRole("combobox", { name: /organization/i }));
+      await user.click(screen.getByText("My Org (org-1)"));
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(submittedPayload()).not.toHaveProperty("organization_ids");
+      expect(submittedPayload().organizations).toEqual(["org-1"]);
+      expect(Object.keys(submittedPayload()).sort()).toEqual([
+        "metadata",
+        "models",
+        "organizations",
+        "send_invite_email",
+        "team_id",
+        "user_email",
+        "user_role",
+      ]);
+    });
+
+    it("should send metadata as the raw string the user typed", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "u5" } });
+
+      renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} isEmbedded />);
+
+      await user.type(screen.getByLabelText(/user email/i), "meta-parity@example.com");
+      await user.click(screen.getByRole("combobox", { name: /user role/i }));
+      await user.click(screen.getByText("User"));
+      await user.type(screen.getByLabelText(/metadata/i), '{{"a":1}');
+      await user.click(screen.getByRole("button", { name: /create user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(submittedPayload().metadata).toBe('{"a":1}');
+    });
+    it("should leave models out entirely for a proxy admin created from the standalone modal", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "u6" } });
+      mockInvitationCreateCall.mockResolvedValue({ id: "i6", user_id: "u6", has_user_setup_sso: false } as any);
+
+      renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} />);
+      const dialog = await openStandaloneModal(user);
+
+      await user.type(within(dialog).getByLabelText(/user email/i), "standalone-admin@example.com");
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("Admin"));
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(Object.keys(submittedPayload()).sort()).toEqual([
+        "metadata",
+        "organization_ids",
+        "send_invite_email",
+        "team_id",
+        "user_email",
+        "user_role",
+      ]);
+    });
+
+    it("should discard models picked in the personal key section once it is collapsed again", async () => {
+      // antd paints its Select placeholder with pointer-events: none, so the
+      // default check would reject the very click a real user makes on it.
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      mockUserCreateCall.mockResolvedValue({ data: { u: "u7" } });
+      mockInvitationCreateCall.mockResolvedValue({ id: "i7", user_id: "u7", has_user_setup_sso: false } as any);
+
+      renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} />);
+      const dialog = await openStandaloneModal(user);
+
+      await user.type(within(dialog).getByLabelText(/user email/i), "collapsed@example.com");
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("User"));
+
+      await user.click(within(dialog).getByText("Personal Key Creation"));
+      // antd Select exposes no accessible name here, the migrated combobox does,
+      // so the same test has to reach the control either way.
+      const modelsSelect =
+        within(dialog).queryByRole("combobox", { name: /select models/i }) ??
+        (await within(dialog).findByText("Select models"));
+      await user.click(modelsSelect);
+      await user.click(await screen.findByText("All Proxy Models"));
+      await user.click(within(dialog).getByText("Personal Key Creation"));
+
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(submittedPayload().models).toEqual(["no-default-models"]);
     });
   });
 });

@@ -16,8 +16,8 @@ vi.mock("@/components/networking", () => ({
 
 vi.mock("@/utils/roles", () => ({ isAdminRole: vi.fn() }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn() },
+vi.mock("@/lib/toast", () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock("./SearchToolView", () => ({ SearchToolView: () => <div data-testid="search-tool-view" /> }));

@@ -10,8 +10,8 @@ vi.mock("@/components/networking", () => ({
   fetchAvailableSearchProviders: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn() },
+vi.mock("@/lib/toast", () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock("./SearchConnectionTest", () => ({

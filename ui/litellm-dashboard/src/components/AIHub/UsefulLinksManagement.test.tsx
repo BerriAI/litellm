@@ -1,4 +1,4 @@
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getProxyBaseUrl, getPublicModelHubInfo, updateUsefulLinksCall } from "@/components/networking";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -11,18 +11,10 @@ vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const mockedGetPublicModelHubInfo = vi.mocked(getPublicModelHubInfo);
 const mockedUpdateUsefulLinksCall = vi.mocked(updateUsefulLinksCall);
 const mockedGetProxyBaseUrl = vi.mocked(getProxyBaseUrl);
-const mockedNotifications = vi.mocked(NotificationsManager);
+const mockedNotifications = vi.mocked(toast);
 
 describe("UsefulLinksManagement", () => {
   beforeEach(() => {
