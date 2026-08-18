@@ -265,8 +265,6 @@ class InMemoryCache(BaseCache):
 
     async def async_get_ttl(self, key: str) -> int | None:
         """Get the remaining TTL of a key in in-memory cache"""
-        Get the remaining TTL of a key in in-memory cache
-        """
         expiry = self.ttl_dict.get(key, None)
         if expiry is None:
             return None
