@@ -145,6 +145,19 @@ describe("TeamGuardrailsTab submit payload", () => {
     expect(registeredPayload().litellm_params.mode).toBe("during_call");
   });
 
+  it("shows the mode by its human label on the trigger", async () => {
+    const user = userEvent.setup();
+    await openSubmitModal(user);
+
+    const mode = screen.getAllByRole("combobox")[1];
+    expect(mode).toHaveTextContent("Pre Call");
+
+    await user.click(mode);
+    await user.click(await screen.findByRole("option", { name: "During Call" }));
+
+    expect(screen.getAllByRole("combobox")[1]).toHaveTextContent("During Call");
+  });
+
   it("blocks an empty submit and reports every required field", async () => {
     const user = userEvent.setup();
     await openSubmitModal(user);

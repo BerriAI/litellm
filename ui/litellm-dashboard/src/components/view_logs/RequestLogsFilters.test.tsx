@@ -249,4 +249,14 @@ describe("RequestLogsFilters", () => {
 
     await waitFor(() => expect(useInfiniteSpendLogEndUsers).toHaveBeenCalledWith(otherWindow, 50, undefined));
   });
+
+  it.each([
+    ["", "All Statuses"],
+    ["success", "Success"],
+    ["failure", "Failure"],
+  ])("shows the human label on the Status trigger for %s", async (status, label) => {
+    renderFilters(status === "" ? {} : { [LOG_FILTER_IDS.STATUS]: status });
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  });
 });

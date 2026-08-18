@@ -42,8 +42,7 @@ const lastConfig = (): CompetitorIntentConfig => onChange.mock.calls[onChange.mo
 
 const chooseOption = async (user: ReturnType<typeof userEvent.setup>, index: number, optionText: string) => {
   await user.click(screen.getAllByRole("combobox")[index]);
-  const options = await screen.findAllByText(optionText);
-  await user.click(options[options.length - 1]);
+  await user.click(await screen.findByRole("option", { name: optionText }));
 };
 
 describe("CompetitorIntentConfiguration reported config", () => {
@@ -174,5 +173,25 @@ describe("CompetitorIntentConfiguration reported config", () => {
     ).toBeInTheDocument();
     expect(screen.queryAllByRole("combobox")).toHaveLength(0);
     expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
+  });
+
+  it.each([
+    ["Type", "Airline (auto-load competitors from IATA)"],
+    ["Policy: Competitor comparison", "Refuse (block request)"],
+    ["Policy: Possible competitor comparison", "Reframe (suggest alternative to backend LLM)"],
+  ])("shows the human label on the %s trigger", (name, label) => {
+    render(<Harness />);
+
+    expect(screen.getByRole("combobox", { name })).toHaveTextContent(label);
+  });
+
+  it("shows the human label on the Type trigger after switching to generic", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.click(screen.getByRole("combobox", { name: "Type" }));
+    await user.click(await screen.findByRole("option", { name: "Generic (specify competitors manually)" }));
+
+    expect(screen.getByRole("combobox", { name: "Type" })).toHaveTextContent("Generic (specify competitors manually)");
   });
 });

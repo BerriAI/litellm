@@ -1090,7 +1090,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
               </FormField>
               <FormField control={submitForm.control} name="mode" label="Mode">
                 {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <Select value={value} onValueChange={onChange}>
+                  <Select items={GUARDRAIL_MODES} value={value} onValueChange={onChange}>
                     <SelectTrigger
                       id={id}
                       aria-invalid={ariaInvalid}

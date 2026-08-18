@@ -142,6 +142,20 @@ describe("ToolPoliciesTable filters", () => {
     expect(screen.getByTestId("filter-chip-team_id")).toHaveTextContent("Team Name:");
   });
 
+  it.each([
+    ["filter-input-policy", "All Input Policies"],
+    ["filter-output-policy", "All Output Policies"],
+    ["filter-team", "All Teams"],
+    ["filter-key-alias", "All Keys"],
+  ])("should show the human label on the %s trigger while unfiltered", async (testId, label) => {
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+
+    expect(await screen.findByTestId(testId)).toHaveTextContent(label);
+  });
+
   it("should offer only the teams and keys present in the loaded rows", async () => {
     const user = userEvent.setup();
     renderTable();
