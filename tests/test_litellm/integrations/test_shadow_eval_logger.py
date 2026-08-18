@@ -12,10 +12,12 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.shadow_eval_logger import (
     _MAX_CONCURRENT_SHADOW_TASKS,
+    _MAX_ERROR_CHARS,
     _MAX_JUDGE_PROMPT_CHARS,
     JUDGE_MAX_OUTPUT_TOKENS,
     ActiveShadowEvalJob,
     ShadowEvalLogger,
+    _failure_detail,
     _judge_user_prompt,
     _sample_hits,
     _unmask_preference,
@@ -438,6 +440,21 @@ def test_unmask_preference(raw, real_is_a, expected):
     assert _unmask_preference(raw, real_is_a) == expected
 
 
+def test_failure_detail_names_the_raising_frame():
+    try:
+        raise TypeError("'tuple' object does not support item assignment")
+    except TypeError as e:
+        detail = _failure_detail(e)
+        lineno = e.__traceback__.tb_lineno
+    assert detail == f"TypeError at test_shadow_eval_logger.py:{lineno}: 'tuple' object does not support item assignment"
+
+    try:
+        raise ValueError("p" * 5 * _MAX_ERROR_CHARS)
+    except ValueError as long_e:
+        truncated_row_error = _failure_detail(long_e)[:_MAX_ERROR_CHARS]
+    assert "ValueError at test_shadow_eval_logger.py:" in truncated_row_error
+
+
 def test_judge_prompt_is_bounded_however_large_the_inputs():
     prompt = _judge_user_prompt("c" * 200_000, "a" * 200_000, "b" * 200_000)
     assert len(prompt) < _MAX_JUDGE_PROMPT_CHARS + 100
@@ -475,6 +492,61 @@ class TestSuccessHookSkipChain:
         assert row["judge_cost"] == 0.005
         assert row["error"] is None
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 0
+
+    async def test_shadow_call_messages_survive_in_place_provider_rewrites(self, monkeypatch: pytest.MonkeyPatch):
+        """Provider transforms (anthropic factory, cache-control hook) rewrite messages with
+        `messages[i] = ...`; the logger's immutable snapshot must never reach them directly."""
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        router = _router()
+        inner = router.acompletion.side_effect
+
+        async def mutating_acompletion(**kwargs):
+            kwargs["messages"][0] = dict(kwargs["messages"][0])
+            return await inner(**kwargs)
+
+        router.acompletion = MagicMock(side_effect=mutating_acompletion)
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["error"] is None
+        assert row["outcome"] in ("real", "shadow", "tie")
+
+    async def test_pipeline_continues_judging_after_a_failed_attempt(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        router = _router()
+        inner = router.acompletion.side_effect
+        shadow_calls = {"count": 0}
+
+        async def flaky_acompletion(**kwargs):
+            if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+                shadow_calls["count"] += 1
+                if shadow_calls["count"] == 1:
+                    raise RuntimeError("provider exploded")
+            return await inner(**kwargs)
+
+        router.acompletion = MagicMock(side_effect=flaky_acompletion)
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+        await logger.async_log_success_event(_success_kwargs(request_id="req-2"), RESPONSE, None, None)
+        await _drain(logger)
+
+        rows = [c.kwargs["data"] for c in prisma.db.litellm_shadowevalattempt.create.call_args_list]
+        assert [rows[0]["outcome"], rows[1]["outcome"] in ("real", "shadow")] == ["error", True]
+        assert "provider exploded" in rows[0]["error"]
+        assert rows[1]["request_id"] == "req-2"
+        assert rows[1]["error"] is None
+        assert logger._inflight_shadow_tasks == 0
 
     @pytest.mark.parametrize(
         "kwargs_mutation,job_mutation",
