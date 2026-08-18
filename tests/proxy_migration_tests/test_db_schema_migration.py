@@ -95,16 +95,79 @@ def test_spend_logs_declares_api_key_index(schema_path: Path):
     )
 
 
-def test_spend_logs_api_key_index_has_a_migration():
-    """A schema-only index never reaches deployments that run ``prisma migrate deploy``."""
-    migrations = Path("./litellm-proxy-extras/litellm_proxy_extras/migrations")
+MIGRATIONS_DIR = Path("./litellm-proxy-extras/litellm_proxy_extras/migrations")
+
+PARTITION_PROBE_SCHEMA = "litellm_spendlogs_partition_probe"
+
+
+def _api_key_index_migration() -> str:
     creating = [
         sql
-        for sql in (path.read_text() for path in migrations.glob("*/migration.sql"))
+        for sql in (path.read_text() for path in MIGRATIONS_DIR.glob("*/migration.sql"))
         if SPEND_LOGS_API_KEY_INDEX in sql
     ]
     assert len(creating) == 1, f"expected exactly one migration creating {SPEND_LOGS_API_KEY_INDEX}, found {len(creating)}"
-    assert 'ON "LiteLLM_SpendLogs"("api_key", "startTime" DESC)' in creating[0]
-    assert "CONCURRENTLY" in creating[0], (
-        "LiteLLM_SpendLogs is the largest table on most deployments; a blocking build stalls spend-log inserts"
-    )
+    return creating[0]
+
+
+def test_spend_logs_api_key_index_has_a_migration():
+    """A schema-only index never reaches deployments that run ``prisma migrate deploy``."""
+    assert 'ON "LiteLLM_SpendLogs"("api_key", "startTime" DESC)' in _api_key_index_migration()
+
+
+@pytest.mark.skipif(
+    "DATABASE_URL" not in os.environ,
+    reason="requires a postgres database (DATABASE_URL)",
+)
+def test_spend_logs_api_key_index_migration_applies_to_a_partitioned_table():
+    """``db_scripts/partition_spend_logs.sql`` leaves ``LiteLLM_SpendLogs`` a partitioned parent,
+    and Postgres rejects both a concurrent index build on a partitioned parent and any concurrent
+    build inside a transaction, so a ``CONCURRENTLY`` migration would abort the rollout of every
+    partitioned deployment. This applies the shipped statement against that shape for real.
+    """
+    probe_sql = f"""
+DROP SCHEMA IF EXISTS "{PARTITION_PROBE_SCHEMA}" CASCADE;
+CREATE SCHEMA "{PARTITION_PROBE_SCHEMA}";
+SET search_path TO "{PARTITION_PROBE_SCHEMA}";
+
+CREATE TABLE "LiteLLM_SpendLogs" (
+    request_id TEXT NOT NULL,
+    api_key TEXT,
+    "startTime" TIMESTAMP NOT NULL,
+    PRIMARY KEY (request_id, "startTime")
+) PARTITION BY RANGE ("startTime");
+CREATE TABLE "LiteLLM_SpendLogs_pdefault" PARTITION OF "LiteLLM_SpendLogs" DEFAULT;
+
+{_api_key_index_migration()}
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = '{PARTITION_PROBE_SCHEMA}'
+          AND tablename = 'LiteLLM_SpendLogs'
+          AND indexname = '{SPEND_LOGS_API_KEY_INDEX}'
+    ) THEN
+        RAISE EXCEPTION 'migration did not create {SPEND_LOGS_API_KEY_INDEX} on the partitioned parent';
+    END IF;
+END
+$$;
+
+DROP SCHEMA "{PARTITION_PROBE_SCHEMA}" CASCADE;
+"""
+
+    temp_base = Path(tempfile.mkdtemp(prefix="litellm_partition_probe_"))
+    try:
+        sql_path = temp_base / "probe.sql"
+        sql_path.write_text(probe_sql)
+        applied = subprocess.run(
+            ["prisma", "db", "execute", "--url", os.environ["DATABASE_URL"], "--file", str(sql_path)],
+            capture_output=True,
+            text=True,
+        )
+        assert applied.returncode == 0, (
+            f"migration for {SPEND_LOGS_API_KEY_INDEX} failed on a partitioned LiteLLM_SpendLogs:\n"
+            f"{applied.stdout}\n{applied.stderr}"
+        )
+    finally:
+        shutil.rmtree(temp_base, ignore_errors=True)
