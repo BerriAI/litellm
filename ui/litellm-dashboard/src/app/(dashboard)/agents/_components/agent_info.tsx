@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Form, Input, InputNumber, Button as AntButton, Spin, Descriptions, Divider } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { ArrowLeft } from "lucide-react";
 import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "@/components/networking";
 import { Agent } from "@/components/agents/types";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
@@ -185,9 +188,9 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
     return (
       <div className="p-4">
         <div className="text-center">Agent not found</div>
-        <TremorButton onClick={onClose} className="mt-4">
+        <Button onClick={onClose} className="mt-4">
           Back to Agents List
-        </TremorButton>
+        </Button>
       </div>
     );
   }
@@ -218,22 +221,29 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   return (
     <div className="p-4">
       <div>
-        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft className="size-4" />
           Back to Agents
-        </TremorButton>
-        <Title>{agent.agent_name || "Unnamed Agent"}</Title>
-        <Text className="text-gray-500 font-mono">{agent.agent_id}</Text>
+        </Button>
+        <h1 className="text-2xl font-semibold">{agent.agent_name || "Unnamed Agent"}</h1>
+        <p className="text-sm text-gray-500 font-mono">{agent.agent_id}</p>
       </div>
 
-      <TabGroup>
-        <TabList className="mb-4">
-          <Tab key="overview">Overview</Tab>
-          {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
-        </TabList>
+      <Tabs defaultValue="overview">
+        <TabsList className="mb-4">
+          <TabsTrigger value="overview" className="flex-none">
+            Overview
+          </TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="settings" className="flex-none">
+              Settings
+            </TabsTrigger>
+          )}
+        </TabsList>
 
-        <TabPanels>
+        <div>
           {/* Overview Panel */}
-          <TabPanel>
+          <TabsContent value="overview" keepMounted>
             <Descriptions bordered column={1}>
               <Descriptions.Item label="Agent ID">{agent.agent_id}</Descriptions.Item>
               <Descriptions.Item label="Agent Name">{agent.agent_name}</Descriptions.Item>
@@ -288,7 +298,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                 (agent.object_permission.mcp_tool_permissions &&
                   Object.keys(agent.object_permission.mcp_tool_permissions).length > 0)) && (
                 <div style={{ marginTop: 24 }}>
-                  <Title>MCP Tool Permissions</Title>
+                  <h3 className="text-lg font-medium">MCP Tool Permissions</h3>
                   <Descriptions bordered column={1} style={{ marginTop: 16 }}>
                     {agent.object_permission.mcp_servers && agent.object_permission.mcp_servers.length > 0 && (
                       <Descriptions.Item label="MCP Servers">
@@ -322,7 +332,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
 
             {agent.agent_card_params?.skills && agent.agent_card_params.skills.length > 0 && (
               <div style={{ marginTop: 24 }}>
-                <Title>Skills</Title>
+                <h3 className="text-lg font-medium">Skills</h3>
                 <Descriptions bordered column={1} style={{ marginTop: 16 }}>
                   {agent.agent_card_params.skills.map((skill: any, index: number) => (
                     <Descriptions.Item label={skill.name || `Skill ${index + 1}`} key={index}>
@@ -348,23 +358,23 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                 </Descriptions>
               </div>
             )}
-          </TabPanel>
+          </TabsContent>
 
           {/* Settings Panel (only for admins) */}
           {isAdmin && (
-            <TabPanel>
-              <Card>
+            <TabsContent value="settings" keepMounted>
+              <Card className="block p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <Title>Agent Settings</Title>
+                  <h3 className="text-lg font-medium">Agent Settings</h3>
                   {!isEditing && (
-                    <TremorButton
+                    <Button
                       onClick={() => {
                         setAppliedDiscoveredSelection(null);
                         setIsEditing(true);
                       }}
                     >
                       Edit Settings
-                    </TremorButton>
+                    </Button>
                   )}
                 </div>
 
@@ -394,7 +404,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                     )}
 
                     <Divider />
-                    <Title className="mb-4">Rate Limits</Title>
+                    <h3 className="text-lg font-medium mb-4">Rate Limits</h3>
                     <div className="grid grid-cols-2 gap-4">
                       <Form.Item label="TPM Limit" name="tpm_limit">
                         <InputNumber className="w-full" min={0} placeholder="Unlimited" />
@@ -422,17 +432,20 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                       >
                         Cancel
                       </AntButton>
-                      <TremorButton loading={isSaving}>Save Changes</TremorButton>
+                      <Button type="submit" disabled={isSaving} aria-busy={isSaving}>
+                        {isSaving && <UiLoadingSpinner className="size-4" />}
+                        Save Changes
+                      </Button>
                     </div>
                   </Form>
                 ) : (
-                  <Text>Click &quot;Edit Settings&quot; to modify agent configuration.</Text>
+                  <p>Click &quot;Edit Settings&quot; to modify agent configuration.</p>
                 )}
               </Card>
-            </TabPanel>
+            </TabsContent>
           )}
-        </TabPanels>
-      </TabGroup>
+        </div>
+      </Tabs>
     </div>
   );
 };

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Modal, Form, Select, Upload, Button, Divider } from "antd";
-import { TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { UploadOutlined } from "@ant-design/icons";
 import type { UploadFile, UploadProps } from "antd";
 import { convertPromptFileToJson, createPromptCall } from "@/components/networking";
@@ -134,7 +134,7 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
             },
           ]}
         >
-          <TextInput placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
+          <Input placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
         </Form.Item>
 
         <Form.Item label="Prompt Integration" name="prompt_integration" initialValue="dotprompt">

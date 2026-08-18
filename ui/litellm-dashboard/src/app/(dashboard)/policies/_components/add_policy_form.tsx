@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Modal, Divider, Typography, Tag, Alert, Radio } from "antd";
-import { Button, TextInput, Textarea } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "@/components/policies/types";
 import { Guardrail } from "@/components/guardrails/types";
 import { getResolvedGuardrails, modelAvailableCall } from "@/components/networking";
@@ -419,11 +422,11 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             },
           ]}
         >
-          <TextInput placeholder="e.g., global-baseline, healthcare-compliance" disabled={isEditing} />
+          <Input placeholder="e.g., global-baseline, healthcare-compliance" disabled={isEditing} />
         </Form.Item>
 
         <Form.Item name="description" label="Description">
-          <Textarea rows={2} placeholder="Describe what this policy does..." />
+          <Textarea rows={2} placeholder="Describe what this policy does..." className="field-sizing-fixed" />
         </Form.Item>
 
         <Divider orientation="left">
@@ -545,7 +548,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
               style={{ width: "100%" }}
             />
           ) : (
-            <TextInput placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)" />
+            <Input placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)" />
           )}
         </Form.Item>
 
@@ -553,7 +556,8 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
           <Button variant="secondary" onClick={handleClose}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} loading={isSubmitting}>
+          <Button onClick={handleSubmit} disabled={isSubmitting} aria-busy={isSubmitting}>
+            {isSubmitting && <UiLoadingSpinner className="size-4" />}
             {isEditing ? "Update Policy" : "Create Policy"}
           </Button>
         </div>

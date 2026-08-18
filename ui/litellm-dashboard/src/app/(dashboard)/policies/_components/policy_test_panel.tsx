@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Alert, Tag, Empty, Typography } from "antd";
-import { Button } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
@@ -147,7 +148,8 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
             </Form.Item>
           </div>
           <div className="flex space-x-2">
-            <Button onClick={handleTest} loading={isLoading} disabled={!accessToken}>
+            <Button onClick={handleTest} disabled={!accessToken || isLoading} aria-busy={isLoading}>
+              {isLoading && <UiLoadingSpinner className="size-4" />}
               Simulate
             </Button>
             <Button variant="secondary" onClick={handleReset}>

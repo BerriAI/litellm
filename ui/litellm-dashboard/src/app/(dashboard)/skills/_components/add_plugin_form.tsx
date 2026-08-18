@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { Modal, Form, Input, Select } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import { Button } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { registerClaudeCodePlugin } from "@/components/networking";
 import {
   validatePluginName,
@@ -298,7 +299,8 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
             <Button variant="secondary" onClick={handleCancel} disabled={isSubmitting}>
               Cancel
             </Button>
-            <Button type="submit" loading={isSubmitting}>
+            <Button type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
+              {isSubmitting && <UiLoadingSpinner className="size-4" />}
               {isSubmitting ? "Adding..." : "Add Skill"}
             </Button>
           </div>

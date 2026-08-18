@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Form, Select, Radio, Divider, Typography } from "antd";
-import { Button } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Policy } from "@/components/policies/types";
 import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -334,11 +335,13 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
             Cancel
           </Button>
           {scopeType === "specific" && (
-            <Button variant="secondary" onClick={handlePreviewImpact} loading={isEstimating}>
+            <Button variant="secondary" onClick={handlePreviewImpact} disabled={isEstimating} aria-busy={isEstimating}>
+              {isEstimating && <UiLoadingSpinner className="size-4" />}
               Estimate Impact
             </Button>
           )}
-          <Button onClick={handleSubmit} loading={isSubmitting}>
+          <Button onClick={handleSubmit} disabled={isSubmitting} aria-busy={isSubmitting}>
+            {isSubmitting && <UiLoadingSpinner className="size-4" />}
             Create Attachment
           </Button>
         </div>
