@@ -282,15 +282,18 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
       {label && <p className="text-sm font-medium text-gray-700 whitespace-nowrap">{label}</p>}
       <div className="relative" ref={dropdownRef}>
         {/* Main input display */}
-        <div
-          className="w-[300px] px-3 py-2 text-sm border border-gray-300 rounded-md bg-white cursor-pointer hover:border-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+        <button
+          type="button"
+          data-slot="advanced-date-picker-trigger"
+          aria-expanded={isOpen}
+          className="w-[300px] px-3 py-2 text-sm text-left border border-gray-300 rounded-md bg-white cursor-pointer hover:border-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           onClick={() => setIsOpen(!isOpen)}
         >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+          <span className="flex items-center justify-between">
+            <span className="flex items-center gap-2">
               <ClockCircleOutlined className="text-gray-600" />
               <span className="text-gray-900">{formatDisplayRange(value.from, value.to)}</span>
-            </div>
+            </span>
             <svg
               className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
               fill="none"
@@ -299,13 +302,14 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
             >
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
-          </div>
-        </div>
+          </span>
+        </button>
 
         {/* Dropdown panel */}
         {isOpen && (
           <div
             data-slot="advanced-date-picker-panel"
+            data-align={align}
             className={cn(
               "absolute top-full z-9999 min-w-[600px] mt-1 bg-white border border-gray-200 rounded-lg shadow-xl",
               align === "left" ? "left-0" : "right-0",

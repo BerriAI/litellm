@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import AdvancedDatePicker from "./advanced_date_picker";
 
@@ -28,9 +29,10 @@ describe("AdvancedDatePicker", () => {
     mockOnValueChange.mockClear();
   });
 
+  const getTrigger = (container: HTMLElement) => container.querySelector('[data-slot="advanced-date-picker-trigger"]');
+
   const openDropdown = (container: HTMLElement) => {
-    // Find the clickable div that contains the clock icon
-    const trigger = container.querySelector('[role="img"][aria-label="clock-circle"]')?.closest("div.cursor-pointer");
+    const trigger = getTrigger(container);
     if (trigger) {
       fireEvent.click(trigger);
     }
@@ -82,8 +84,7 @@ describe("AdvancedDatePicker", () => {
     );
     openDropdown(container);
     const leftPanel = container.querySelector('[data-slot="advanced-date-picker-panel"]');
-    expect(leftPanel).toHaveClass("left-0");
-    expect(leftPanel).not.toHaveClass("right-0");
+    expect(leftPanel).toHaveAttribute("data-align", "left");
     unmount();
 
     const { container: defaultContainer } = render(
@@ -91,8 +92,23 @@ describe("AdvancedDatePicker", () => {
     );
     openDropdown(defaultContainer);
     const rightPanel = defaultContainer.querySelector('[data-slot="advanced-date-picker-panel"]');
-    expect(rightPanel).toHaveClass("right-0");
-    expect(rightPanel).not.toHaveClass("left-0");
+    expect(rightPanel).toHaveAttribute("data-align", "right");
+  });
+
+  it("opens the dropdown from the keyboard alone", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+    await user.tab();
+
+    const trigger = getTrigger(container);
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByText("Relative time")).toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
   it("should show date inputs in dropdown", () => {
