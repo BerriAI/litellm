@@ -175,6 +175,15 @@ def test_update_settings_get_settings_round_trip_for_retry_policy():
     assert post.RateLimitErrorRetries == 7
 
 
+def test_update_settings_round_trip_for_notfound_retries():
+    """NotFoundErrorRetries must round-trip through update_settings/get_settings."""
+    router = _build_router()
+    router.update_settings(retry_policy={"NotFoundErrorRetries": 0})
+    post = router.get_settings().get("retry_policy")
+    assert post is not None
+    assert post.NotFoundErrorRetries == 0
+
+
 def test_update_settings_unrelated_kwargs_still_skipped():
     """Regression guard: the new branch must not relax the
     ``_allowed_settings`` allowlist for unrelated keys. An unknown
