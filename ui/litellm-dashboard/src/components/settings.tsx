@@ -19,7 +19,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmailSettings from "./email_settings";
 import { Logo } from "@/components/molecules/logo/Logo";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
@@ -264,7 +264,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         setCallbackConfigs(data || []);
       })
       .catch((error) => {
-        NotificationsManager.fromBackend("Failed to load callback configs: " + parseErrorMessage(error));
+        toast.fromError("Failed to load callback configs: " + parseErrorMessage(error));
       });
   }, [accessToken]);
 
@@ -296,6 +296,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     daily_reports: "Weekly/Monthly Spend Reports",
     outage_alerts: "Outage Alerts",
     region_outage_alerts: "Region Outage Alerts",
+    model_deprecation_warnings: "Model Deprecation Warnings",
   };
 
   useEffect(() => {
@@ -350,9 +351,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
     try {
       await setCallbacksCall(accessToken, payload);
-      NotificationsManager.success(
-        isEdit ? "Callback updated successfully" : `Callback ${callbackName} added successfully`,
-      );
+      toast.success(isEdit ? "Callback updated successfully" : `Callback ${callbackName} added successfully`);
 
       if (isEdit) {
         setShowEditCallback(false);
@@ -371,7 +370,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         setCallbacks(updatedData.callbacks);
       }
     } catch (error) {
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       if (isEdit) {
         setIsUpdatingCallback(false);
@@ -441,9 +440,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     try {
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     }
-    NotificationsManager.success("Alerts updated successfully");
+    toast.success("Alerts updated successfully");
   };
 
   const handleDeleteCallback = (callback: any) => {
@@ -459,7 +458,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     try {
       setIsDeletingCallback(true);
       await deleteCallback(accessToken, callbackToDelete.name);
-      NotificationsManager.success(`Callback ${callbackToDelete.name} deleted successfully`);
+      toast.success(`Callback ${callbackToDelete.name} deleted successfully`);
 
       // Refresh the callbacks list
       if (userID && userRole) {
@@ -471,7 +470,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setCallbackToDelete(null);
     } catch (error) {
       console.error("Failed to delete callback:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setIsDeletingCallback(false);
     }
@@ -506,9 +505,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               onTest={async (cb) => {
                 try {
                   await serviceHealthCheck(accessToken, cb.name);
-                  NotificationsManager.success("Health check triggered");
+                  toast.success("Health check triggered");
                 } catch (error) {
-                  NotificationsManager.fromBackend(parseErrorMessage(error));
+                  toast.fromError(parseErrorMessage(error));
                 }
               }}
             />
@@ -589,11 +588,11 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 onClick={async () => {
                   try {
                     await serviceHealthCheck(accessToken, "slack");
-                    NotificationsManager.success(
+                    toast.success(
                       "Alert test triggered. Test request to slack made - check logs/alerts on slack to verify",
                     );
                   } catch (error) {
-                    NotificationsManager.fromBackend(parseErrorMessage(error));
+                    toast.fromError(parseErrorMessage(error));
                   }
                 }}
                 className="mx-2"

@@ -14,7 +14,7 @@ vi.mock("./shared/errorUtils", () => ({
   parseErrorMessage: vi.fn((error) => error?.message || "An error occurred"),
 }));
 
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 
 describe("SSOModals", () => {
@@ -67,10 +67,8 @@ describe("SSOModals", () => {
     const ssoProviderSelect = screen.getByLabelText("SSO Provider");
     fireEvent.mouseDown(ssoProviderSelect);
     // Wait for dropdown and select Google
-    await waitFor(() => {
-      const googleOption = screen.getByText("Google SSO");
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText("Google SSO");
+    fireEvent.click(googleOption);
 
     // Fill in the email field
     const emailInput = screen.getByLabelText("Proxy Admin Email");
@@ -119,10 +117,8 @@ describe("SSOModals", () => {
     const ssoProviderSelect = screen.getByLabelText("SSO Provider");
     fireEvent.mouseDown(ssoProviderSelect);
     // Wait for dropdown and select Google
-    await waitFor(() => {
-      const googleOption = screen.getByText("Google SSO");
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText("Google SSO");
+    fireEvent.click(googleOption);
 
     // Fill in the email field
     const emailInput = screen.getByLabelText("Proxy Admin Email");
@@ -216,10 +212,8 @@ describe("SSOModals", () => {
     const ssoProviderSelect = screen.getByLabelText("SSO Provider");
     fireEvent.mouseDown(ssoProviderSelect);
     // Wait for dropdown and select Google
-    await waitFor(() => {
-      const googleOption = screen.getByText("Google SSO");
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText("Google SSO");
+    fireEvent.click(googleOption);
 
     // Fill in the email field
     const emailInput = screen.getByLabelText("Proxy Admin Email");
@@ -485,7 +479,7 @@ describe("SSOModals", () => {
   it("should show Clear button and clear SSO settings when configured", async () => {
     const mockHandleAddSSOOk = vi.fn();
     (updateSSOSettings as any).mockResolvedValue({});
-    (NotificationsManager.success as any).mockImplementation(() => {});
+    (toast.success as any).mockImplementation(() => {});
 
     const TestWrapper = () => {
       const [form] = Form.useForm();
@@ -544,7 +538,7 @@ describe("SSOModals", () => {
       });
     });
 
-    expect(NotificationsManager.success).toHaveBeenCalledWith("SSO settings cleared successfully");
+    expect(toast.success).toHaveBeenCalledWith("SSO settings cleared successfully");
     expect(mockHandleAddSSOOk).toHaveBeenCalled();
   });
 

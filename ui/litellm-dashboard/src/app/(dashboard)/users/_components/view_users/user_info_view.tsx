@@ -40,7 +40,7 @@ import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CopyIcon, CheckIcon } from "lucide-react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import MCPServerPermissions from "@/components/permissions/MCPServerPermissions";
@@ -139,7 +139,7 @@ export default function UserInfoView({
         setUserModels(availableModels);
       } catch (error) {
         console.error("Error fetching user data:", error);
-        NotificationsManager.fromBackend("Failed to fetch user data");
+        toast.fromError("Failed to fetch user data");
       } finally {
         setIsLoading(false);
       }
@@ -184,7 +184,7 @@ export default function UserInfoView({
         user_id: userId,
       };
       await teamMemberAddCall(accessToken, selectedTeamId, member);
-      NotificationsManager.success("User added to team successfully");
+      toast.success("User added to team successfully");
       setIsAddTeamModalOpen(false);
       // Re-fetch user data to refresh teams
       const data = await userGetInfoV2(accessToken, userId);
@@ -204,7 +204,7 @@ export default function UserInfoView({
       }
     } catch (error: any) {
       console.error("Error adding user to team:", error);
-      NotificationsManager.fromBackend(error?.message || "Failed to add user to team");
+      toast.fromError(error?.message || "Failed to add user to team");
     } finally {
       setIsAddingTeam(false);
     }
@@ -224,7 +224,7 @@ export default function UserInfoView({
         user_id: userId,
       };
       await teamMemberDeleteCall(accessToken, teamToRemove.team_id, member);
-      NotificationsManager.success("User removed from team successfully");
+      toast.success("User removed from team successfully");
       setIsRemoveTeamModalOpen(false);
       setTeamToRemove(null);
       // Re-fetch user data to refresh teams
@@ -245,7 +245,7 @@ export default function UserInfoView({
       }
     } catch (error: any) {
       console.error("Error removing user from team:", error);
-      NotificationsManager.fromBackend(error?.message || "Failed to remove user from team");
+      toast.fromError(error?.message || "Failed to remove user from team");
     } finally {
       setIsRemovingTeam(false);
     }
@@ -260,16 +260,16 @@ export default function UserInfoView({
 
   const handleResetPassword = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("Access token not found");
+      toast.fromError("Access token not found");
       return;
     }
     try {
-      NotificationsManager.success("Generating password reset link...");
+      toast.success("Generating password reset link...");
       const data = await invitationCreateCall(accessToken, userId);
       setInvitationLinkData(data);
       setIsInvitationLinkModalVisible(true);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to generate password reset link");
+      toast.fromError("Failed to generate password reset link");
     }
   };
 
@@ -278,14 +278,14 @@ export default function UserInfoView({
       if (!accessToken) return;
       setIsDeletingUser(true);
       await userDeleteCall(accessToken, [userId]);
-      NotificationsManager.success("User deleted successfully");
+      toast.success("User deleted successfully");
       if (onDelete) {
         onDelete();
       }
       onClose();
     } catch (error) {
       console.error("Error deleting user:", error);
-      NotificationsManager.fromBackend("Failed to delete user");
+      toast.fromError("Failed to delete user");
     } finally {
       setIsDeleteModalOpen(false);
       setIsDeletingUser(false);
@@ -327,11 +327,11 @@ export default function UserInfoView({
           : userData.object_permission,
       });
 
-      NotificationsManager.success("User updated successfully");
+      toast.success("User updated successfully");
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating user:", error);
-      NotificationsManager.fromBackend("Failed to update user");
+      toast.fromError("Failed to update user");
     }
   };
 

@@ -574,6 +574,33 @@ def _slices(rows: Sequence[_AttemptAggRow]) -> tuple[ShadowEvalSlice, ...]:
     )
 
 
+_NO_KEY_LABELS: Final[tuple[str | None, str | None]] = (None, None)
+
+
+async def _with_key_labels(
+    prisma_client: "PrismaClient", responses: Sequence[ShadowEvalJobResponse]
+) -> tuple[ShadowEvalJobResponse, ...]:
+    """Resolve each job's key hash to the key's alias and masked name in one batched read,
+    so the UI can say whose traffic a job shadows. Deleted keys resolve to None."""
+    if not responses:
+        return ()
+    key_rows: Final = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"token": {"in": sorted({response.api_key_id for response in responses})}}  # mutable-ok: Prisma filter
+    )
+    labels: Final[Mapping[str, tuple[str | None, str | None]]] = {
+        row.token: (row.key_alias, row.key_name) for row in key_rows or ()
+    }
+    return tuple(
+        response.model_copy(
+            update={  # mutable-ok: pydantic update payload
+                "key_alias": labels.get(response.api_key_id, _NO_KEY_LABELS)[0],
+                "key_name": labels.get(response.api_key_id, _NO_KEY_LABELS)[1],
+            }
+        )
+        for response in responses
+    )
+
+
 async def _shadow_eval_results(prisma_client: "PrismaClient", job_id: str) -> ShadowEvalResult | None:
     """Both stratifications of one job's verdicts. Tier answers "where does the router do
     well"; the model stratification groups by whichever model served the real arm, so it
@@ -686,7 +713,9 @@ async def start_shadow_eval(
                 f"Key already has an active {data.direction} shadow eval job (started concurrently). Stop it first."
             ),
         ) from e
-    return ShadowEvalJobResponse.model_validate(job, from_attributes=True)
+    return ShadowEvalJobResponse.model_validate(job, from_attributes=True).model_copy(
+        update={"key_alias": key_row.key_alias, "key_name": key_row.key_name}  # mutable-ok: pydantic update payload
+    )
 
 
 @router.get(
@@ -711,7 +740,10 @@ async def list_shadow_eval_jobs(
         order={"created_at": "desc"},  # mutable-ok: Prisma order
         take=limit,
     )
-    return tuple(ShadowEvalJobResponse.model_validate(record, from_attributes=True) for record in records or ())
+    return await _with_key_labels(
+        prisma_client,
+        tuple(ShadowEvalJobResponse.model_validate(record, from_attributes=True) for record in records or ()),
+    )
 
 
 @router.get(
@@ -742,7 +774,10 @@ async def get_shadow_eval_job(
         where={"job_id": job_id, "outcome": "error"},  # mutable-ok: Prisma filter
         order={"created_at": "desc"},  # mutable-ok: Prisma order
     )
-    return ShadowEvalJobResponse.model_validate(record, from_attributes=True).model_copy(
+    labeled: Final = await _with_key_labels(
+        prisma_client, (ShadowEvalJobResponse.model_validate(record, from_attributes=True),)
+    )
+    return labeled[0].model_copy(
         update={  # mutable-ok: pydantic update payload
             "judged_count": totals[0].judged_count if totals else 0,
             "error_count": totals[0].error_count if totals else 0,
@@ -781,4 +816,7 @@ async def stop_shadow_eval_job(
         where={"id": job_id},  # mutable-ok: Prisma filter
         data={"stopped_at": datetime.now(timezone.utc)},  # mutable-ok: Prisma payload
     )
-    return ShadowEvalJobResponse.model_validate(updated, from_attributes=True)
+    labeled: Final = await _with_key_labels(
+        prisma_client, (ShadowEvalJobResponse.model_validate(updated, from_attributes=True),)
+    )
+    return labeled[0]

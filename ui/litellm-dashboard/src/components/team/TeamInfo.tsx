@@ -31,7 +31,7 @@ import {
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Accordion, AccordionBody, AccordionHeader, Badge, Card, Grid, Text, TextInput, Title } from "@tremor/react";
 import { Button, Form, Input, InputNumber, Select, Space, Switch, Tabs, Tag, Tooltip } from "antd";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
@@ -59,7 +59,6 @@ import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
-import NotificationsManager from "../molecules/notifications_manager";
 import { estimateRules, estimateTooltips } from "../templates/estimatedOutputTokens";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
@@ -258,7 +257,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const response = await teamInfoCall(accessToken, teamId);
       setTeamData(response);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to load team information");
+      toast.fromError("Failed to load team information");
       console.error("Error fetching team info:", error);
     } finally {
       setLoading(false);
@@ -349,7 +348,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       await teamMemberAddCall(accessToken, teamId, member);
 
-      NotificationsManager.success("Team member added successfully");
+      toast.success("Team member added successfully");
       setIsAddMemberModalVisible(false);
       form.resetFields();
 
@@ -368,7 +367,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         errMsg = error.message;
       }
 
-      NotificationsManager.fromBackend(errMsg);
+      toast.fromError(errMsg);
       console.error("Error adding team member:", error);
     }
   };
@@ -389,11 +388,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         allowed_models: values.allowed_models,
       };
-      MessageManager.destroy(); // Remove all existing toasts
+      toast.dismiss(); // Remove all existing toasts
 
       await teamMemberUpdateCall(accessToken, teamId, member);
 
-      NotificationsManager.success("Team member updated successfully");
+      toast.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
 
       // Fetch updated team info
@@ -411,9 +410,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       setIsEditMemberModalVisible(false);
 
-      MessageManager.destroy(); // Remove all existing toasts
+      toast.dismiss(); // Remove all existing toasts
 
-      NotificationsManager.fromBackend(errMsg);
+      toast.fromError(errMsg);
       console.error("Error updating team member:", error);
     }
   };
@@ -430,7 +429,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     try {
       await teamMemberDeleteCall(accessToken, teamId, memberToDelete);
 
-      NotificationsManager.success("Team member removed successfully");
+      toast.success("Team member removed successfully");
 
       // Fetch updated team info
       const updatedTeamData = await teamInfoCall(accessToken, teamId);
@@ -439,7 +438,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Notify parent component of the update
       onUpdate(updatedTeamData);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to remove team member");
+      toast.fromError("Failed to remove team member");
       console.error("Error removing team member:", error);
     } finally {
       setIsDeleting(false);
@@ -467,7 +466,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           try {
             secretManagerSettings = JSON.parse(values.secret_manager_settings);
           } catch (e) {
-            NotificationsManager.fromBackend("Invalid JSON in secret manager settings");
+            toast.fromError("Invalid JSON in secret manager settings");
             return;
           }
         }
@@ -489,7 +488,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           try {
             estimatedOutputTokensPerModel = JSON.parse(trimmedEstimates);
           } catch (e) {
-            NotificationsManager.fromBackend("Invalid JSON in estimated output tokens per model");
+            toast.fromError("Invalid JSON in estimated output tokens per model");
             return;
           }
         }
@@ -654,7 +653,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       await teamUpdateCall(accessToken, updateData);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
-      NotificationsManager.success("Team settings updated successfully");
+      toast.success("Team settings updated successfully");
       setIsEditing(false);
       fetchTeamInfo();
     } catch (error) {

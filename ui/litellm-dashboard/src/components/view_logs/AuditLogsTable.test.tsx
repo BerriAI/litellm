@@ -95,7 +95,7 @@ describe("AuditLogsTable", () => {
     renderTable({ isLoading: true, data: [] });
 
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
-    expect(screen.queryByText("No audit logs yet")).toBeNull();
+    expect(screen.queryByText("No audit logs yet")).not.toBeInTheDocument();
   });
 
   it("uses a distinct empty state for unfiltered vs filtered-empty results", () => {

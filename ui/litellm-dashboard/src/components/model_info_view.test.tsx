@@ -4,21 +4,15 @@ import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../tests/mocks/complexityScorerDefaults"),
+);
 
 vi.mock("../../utils/dataUtils", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 vi.mock("./networking", () => ({
@@ -52,7 +46,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
   usePtuCostAttributionEnabled: () => mockUsePtuCostAttributionEnabled(),
 }));
 
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 const mockModelInfoV1Call = vi.mocked(networking.modelInfoV1Call);
 const mockCredentialGetCall = vi.mocked(networking.credentialGetCall);
 const mockCredentialListCall = vi.mocked(networking.credentialListCall);
@@ -255,7 +249,7 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockTestConnectionRequest).toHaveBeenCalled();
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Connection test successful!");
+      expect(mockToast.success).toHaveBeenCalledWith("Connection test successful!");
     });
   });
 
@@ -300,7 +294,7 @@ describe("ModelInfoView", () => {
     await user.click(testButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.error).toHaveBeenCalled();
+      expect(mockToast.error).toHaveBeenCalled();
     });
   });
 
@@ -518,7 +512,7 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockModelPatchUpdateCall).toHaveBeenCalled();
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Model settings updated successfully");
+      expect(mockToast.success).toHaveBeenCalledWith("Model settings updated successfully");
       expect(mockOnModelUpdate).toHaveBeenCalled();
     });
   });
@@ -955,8 +949,8 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
-      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
     });
+    expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
     expect(mockTestConnectionRequest).not.toHaveBeenCalled();
   });
 
@@ -988,8 +982,8 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
-      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
     });
+    expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
   });
 
   it("does not duplicate the default model as a test target when it is already covered by a configured tier", async () => {
@@ -1049,11 +1043,49 @@ describe("ModelInfoView", () => {
     await userEvent.click(testConnectionButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.warning).toHaveBeenCalledWith(
+      expect(mockToast.warning).toHaveBeenCalledWith(
         "No complexity tiers are configured yet, so there is nothing to test.",
       );
     });
     expect(mockTestModelGroupConnection).not.toHaveBeenCalled();
+  });
+
+  // Bugbot finding on #36615: complexity_router_config.default_model is a UI-only bookkeeping
+  // marker — init_complexity_router_deployment (litellm/router.py) never reads it, falling back
+  // to tier-derivation instead when litellm_params.complexity_router_default_model is absent.
+  // Probing the blob field here would test a model the running router never calls.
+  it("ignores an unused config blob pin when litellm_params has no default, matching the backend's own tier-derivation fallback", async () => {
+    const complexityRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        model: "auto_router/complexity_router",
+        complexity_router_config: {
+          tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          default_model: "unused-blob-pin",
+        },
+        // no complexity_router_default_model
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [complexityRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+    mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const testConnectionButton = await screen.findByTestId("test-connection-button");
+    await userEvent.click(testConnectionButton);
+
+    await waitFor(() => {
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
+    });
+    expect(mockTestModelGroupConnection).not.toHaveBeenCalledWith("test-token", "unused-blob-pin", "chat");
+    expect(mockTestModelGroupConnection).toHaveBeenCalledTimes(1);
   });
 
   it("should display model access groups field", async () => {
@@ -1090,7 +1122,7 @@ describe("ModelInfoView", () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
     const logo = await screen.findByAltText("openai logo");
-    expect(logo.getAttribute("src")).toContain("openai_small");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("openai_small"));
   });
 
   it("renders a letter avatar instead of an img for an unknown provider slug", async () => {

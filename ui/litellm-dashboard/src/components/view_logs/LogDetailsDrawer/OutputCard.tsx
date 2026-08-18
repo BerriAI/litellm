@@ -4,7 +4,7 @@
  */
 
 import { useState } from "react";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { COLOR_BORDER } from "./constants";
 import { ParsedMessage } from "./prettyMessagesTypes";
 import { SectionHeader } from "./SectionHeader";
@@ -23,7 +23,7 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
     if (!message) return;
 
     navigator.clipboard.writeText(message.content || "");
-    MessageManager.success("Output copied");
+    toast.success("Output copied");
   };
 
   return (

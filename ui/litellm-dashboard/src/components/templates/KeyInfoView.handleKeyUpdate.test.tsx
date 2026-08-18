@@ -17,22 +17,17 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: mockUseAuthorized,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => ({ data: [] }),
+}));
+
 // Networking: wire the hoisted fns so we can assert calls later
 vi.mock("../networking", () => {
   return {
+    serverRootPath: "",
     keyUpdateCall: (...args: any[]) => keyUpdateCallMock(...args),
     keyDeleteCall: (...args: any[]) => keyDeleteCallMock(...args),
   };
-});
-
-// Notifications
-vi.mock("../molecules/notifications_manager", () => {
-  const Notifications = {
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  };
-  return { default: Notifications };
 });
 
 // Roles: ensure 'Admin' has write access and include all role helper functions

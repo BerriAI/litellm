@@ -60,7 +60,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   })),
 }));
 
-import ShadowEvalSection from "./ShadowEvalSection";
+import ShadowEvalSection, { shadowedKeyLabel } from "./ShadowEvalSection";
 import {
   useShadowEvalJob,
   useShadowEvalJobs,
@@ -117,6 +117,8 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   ends_at: "2026-09-07T00:00:00Z",
   stopped_at: null,
   api_key_id: "hashed-key-abc",
+  key_alias: "prod-alpha",
+  key_name: "sk-...alpha",
   last_error: null,
   ...overrides,
 });
@@ -411,7 +413,11 @@ describe("ShadowEvalSection", () => {
     mockHooks({ jobs: [j], detailsById: { "job-1": j } });
     render(<ShadowEvalSection />);
 
-    expect(screen.getByText(/on 10% of its traffic/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) => element?.textContent === "Comparing claude-auto to openai/gpt-4o on 10% of prod-alpha traffic",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("Router matched or beat the baseline")).toBeInTheDocument();
     expect(screen.getByText("52.0%")).toBeInTheDocument();
     expect(screen.getByText(/Router won 30.0%/)).toBeInTheDocument();
@@ -420,6 +426,12 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("Router pick")).toBeInTheDocument();
     expect(screen.queryByText(/Current model/)).not.toBeInTheDocument();
     expect(screen.queryByText("Compared against")).not.toBeInTheDocument();
+  });
+
+  it("labels the shadowed key by alias, then masked name, then truncated hash", () => {
+    expect(shadowedKeyLabel(job())).toBe("prod-alpha");
+    expect(shadowedKeyLabel(job({ key_alias: null }))).toBe("sk-...alpha");
+    expect(shadowedKeyLabel(job({ key_alias: null, key_name: null }))).toBe("hashed-key…");
   });
 
   it("keeps an older job's verdicts reachable through the previous evaluations list", async () => {
@@ -440,7 +452,7 @@ describe("ShadowEvalSection", () => {
 
     await user.click(screen.getByRole("button", { name: /Previous evaluations \(1\)/ }));
     expect(screen.getByText("view results")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /10% via claude-auto/ }));
+    await user.click(screen.getByRole("button", { name: /10% of prod-alpha traffic via claude-auto/ }));
 
     expect(await screen.findByText("SIMPLE")).toBeInTheDocument();
     expect(screen.getByText("REASONING")).toBeInTheDocument();

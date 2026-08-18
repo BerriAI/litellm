@@ -39,10 +39,8 @@ describe("BaseSSOSettingsForm", () => {
       fireEvent.mouseDown(providerSelect);
     });
 
-    await waitFor(() => {
-      const googleOption = screen.getByText(/google sso/i);
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText(/google sso/i);
+    fireEvent.click(googleOption);
 
     await waitFor(() => {
       expect(screen.getByText("Google Client ID")).toBeInTheDocument();
@@ -65,10 +63,8 @@ describe("BaseSSOSettingsForm", () => {
       fireEvent.mouseDown(providerSelect);
     });
 
-    await waitFor(() => {
-      const oktaOption = screen.getByText(/okta/i);
-      fireEvent.click(oktaOption);
-    });
+    const oktaOption = await screen.findByText(/okta/i);
+    fireEvent.click(oktaOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Role Mappings")).toBeInTheDocument();
@@ -132,10 +128,8 @@ describe("BaseSSOSettingsForm", () => {
       fireEvent.mouseDown(providerSelect);
     });
 
-    await waitFor(() => {
-      const genericOption = screen.getByText(/generic sso/i);
-      fireEvent.click(genericOption);
-    });
+    const genericOption = await screen.findByText(/generic sso/i);
+    fireEvent.click(genericOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Role Mappings")).toBeInTheDocument();
@@ -167,10 +161,8 @@ describe("BaseSSOSettingsForm", () => {
       fireEvent.mouseDown(providerSelect);
     });
 
-    await waitFor(() => {
-      const oktaOption = screen.getByText(/okta/i);
-      fireEvent.click(oktaOption);
-    });
+    const oktaOption = await screen.findByText(/okta/i);
+    fireEvent.click(oktaOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
@@ -192,10 +184,8 @@ describe("BaseSSOSettingsForm", () => {
       fireEvent.mouseDown(providerSelect);
     });
 
-    await waitFor(() => {
-      const genericOption = screen.getByText(/generic sso/i);
-      fireEvent.click(genericOption);
-    });
+    const genericOption = await screen.findByText(/generic sso/i);
+    fireEvent.click(genericOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
@@ -217,10 +207,8 @@ describe("BaseSSOSettingsForm", () => {
       fireEvent.mouseDown(providerSelect);
     });
 
-    await waitFor(() => {
-      const oktaOption = screen.getByText(/okta/i);
-      fireEvent.click(oktaOption);
-    });
+    const oktaOption = await screen.findByText(/okta/i);
+    fireEvent.click(oktaOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
@@ -251,10 +239,8 @@ describe("BaseSSOSettingsForm", () => {
       fireEvent.mouseDown(providerSelect);
     });
 
-    await waitFor(() => {
-      const googleOption = screen.getByText(/google sso/i);
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText(/google sso/i);
+    fireEvent.click(googleOption);
 
     await waitFor(() => {
       expect(screen.getByText("Google Client ID")).toBeInTheDocument();

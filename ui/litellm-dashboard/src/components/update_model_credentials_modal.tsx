@@ -1,7 +1,7 @@
 import { Alert, Button, Form, Input, Modal, Typography } from "antd";
 import { useState } from "react";
 import { modelPatchUpdateCall } from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 const { Text } = Typography;
 
@@ -31,7 +31,7 @@ export default function UpdateModelCredentialsModal({
   const handleSubmit = async (values: { api_key?: string }) => {
     const apiKey = values.api_key?.trim();
     if (!apiKey) {
-      NotificationsManager.fromBackend("Enter a new API key");
+      toast.fromError("Enter a new API key");
       return;
     }
     setIsSaving(true);
@@ -41,13 +41,13 @@ export default function UpdateModelCredentialsModal({
         { litellm_params: { api_key: apiKey }, model_info: { id: modelId } },
         modelId,
       );
-      NotificationsManager.success("API key updated");
+      toast.success("API key updated");
       form.resetFields();
       onUpdated();
       onCancel();
     } catch (error) {
       console.error("Error updating API key:", error);
-      NotificationsManager.fromBackend("Failed to update API key");
+      toast.fromError("Failed to update API key");
     } finally {
       setIsSaving(false);
     }

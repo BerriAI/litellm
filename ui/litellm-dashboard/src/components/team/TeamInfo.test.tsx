@@ -816,7 +816,7 @@ describe("TeamInfoView", () => {
       const secretField = await screen.findByPlaceholderText(
         '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
       );
-      expect(secretField).not.toBeDisabled();
+      expect(secretField).toBeEnabled();
     });
 
     it("should add team member when form is submitted", async () => {
@@ -982,18 +982,18 @@ describe("TeamInfoView", () => {
         expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
       });
 
-      return screen.getByText("Reset Budget").closest(".ant-form-item") as HTMLElement;
+      return screen.getByLabelText("Reset Budget");
     };
 
     it("should send an explicit null budget_duration when a stored Reset Budget is cleared", async () => {
       const user = userEvent.setup({ delay: null });
-      const resetBudgetItem = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
+      const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
 
-      await user.click(within(resetBudgetItem).getByRole("combobox"));
+      await user.click(resetBudgetSelect);
       await user.click(await screen.findByText("Never resets"));
 
       await waitFor(() => {
-        expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
+        expect(resetBudgetSelect).toHaveTextContent("Never resets");
       });
 
       await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -1022,9 +1022,9 @@ describe("TeamInfoView", () => {
 
     it("should send the newly picked budget_duration when one is selected", async () => {
       const user = userEvent.setup({ delay: null });
-      const resetBudgetItem = await openSettingsEditorForTeam(user, { budget_duration: null });
+      const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: null });
 
-      await user.click(within(resetBudgetItem).getByRole("combobox"));
+      await user.click(resetBudgetSelect);
       await user.click(await screen.findByText("weekly"));
 
       await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -1457,20 +1457,11 @@ describe("TeamInfoView", () => {
         expect(screen.getByLabelText(/^Guardrails/)).toBeInTheDocument();
       });
 
-      const dropdownsBefore = new Set(document.querySelectorAll(".ant-select-dropdown"));
-
       await user.click(screen.getByLabelText(/^Guardrails/));
 
-      return waitFor(
-        () => {
-          const opened = Array.from(document.querySelectorAll(".ant-select-dropdown")).find(
-            (el) => !dropdownsBefore.has(el),
-          );
-          expect(opened).toBeDefined();
-          return opened as HTMLElement;
-        },
-        { timeout: 5000 },
-      );
+      const listbox = await screen.findByRole("listbox", {}, { timeout: 5000 });
+      // eslint-disable-next-line local/no-antd-class-selectors -- antd renders group headers outside the listbox and its popup container exposes no role or accessible name
+      return listbox.closest(".ant-select-dropdown") as HTMLElement;
     };
 
     beforeEach(() => {
@@ -1548,19 +1539,16 @@ describe("TeamInfoView", () => {
       await user.click(screen.getByRole("tab", { name: "Settings" }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      const routesLabel = await screen.findByText("Allowed Pass Through Routes");
-      const routesFormItem = routesLabel.closest(".ant-form-item") as HTMLElement;
-
-      await user.click(within(routesFormItem).getByRole("combobox"));
+      await user.click(await screen.findByRole("combobox", { name: "Select pass through routes" }));
 
       const option = await screen.findByText("POST /bedrock-passthrough");
       await user.click(option);
 
-      await waitFor(() => {
-        expect(within(routesFormItem).getByText(/\/bedrock-passthrough/)).toBeInTheDocument();
-      });
-
       await user.keyboard("{Escape}");
+
+      await waitFor(() => {
+        expect(screen.getByText("POST /bedrock-passthrough")).toBeInTheDocument();
+      });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

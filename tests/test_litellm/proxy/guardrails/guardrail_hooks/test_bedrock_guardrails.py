@@ -5077,3 +5077,26 @@ async def test_apply_guardrail_failure_logs_a_dict_not_a_bare_string():
     logged = mock_log.call_args.kwargs["guardrail_json_response"]
     assert isinstance(logged, dict), f"expected a dict, got {type(logged).__name__}"
     assert "error" in logged
+
+
+def test_build_tracing_detail_surfaces_usage_counters():
+    """LIT-5650: the billable usage block Bedrock returns per ApplyGuardrail call must
+    land on the tracing detail as guardrail_usage so it reaches spend logs as a
+    sibling of guardrail_response (which default redaction replaces wholesale)."""
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    detail = guardrail._build_tracing_detail(
+        {
+            "action": "GUARDRAIL_INTERVENED",
+            "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0, "oddball": "not-an-int"},
+        }
+    )
+
+    assert detail["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0}
+
+
+def test_build_tracing_detail_omits_guardrail_usage_when_bedrock_reports_none():
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    assert "guardrail_usage" not in guardrail._build_tracing_detail({"action": "NONE"})
+    assert "guardrail_usage" not in guardrail._build_tracing_detail({"action": "NONE", "usage": {}})
