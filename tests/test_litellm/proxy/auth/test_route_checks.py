@@ -1,7 +1,8 @@
 import os
 import sys
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -3566,3 +3567,46 @@ def test_agent_registry_route_gate_open_to_non_admin_roles(user_role, method, ro
         valid_token=valid_token,
         request_data={},
     )
+
+
+@pytest.mark.parametrize("route", ["/policies/list", "/prompts/list"])
+def test_admin_only_denial_reaches_the_client_as_403(route):
+    """Drives a real request so the status the caller sees is asserted, not just the
+    status the check raises. A regression that swallowed it and re-raised 401 would
+    leave the direct-call tests above green.
+    """
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import app
+
+    key: Final = "sk-non-admin-1234"
+    valid_token: Final = UserAPIKeyAuth(
+        token=key, key_name=key, user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="test_user", user_email="test@example.com", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+
+    class _StubIdentityStore:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def resolve(self, *args, **kwargs):
+            return MagicMock(source_key=valid_token)
+
+        @staticmethod
+        def key_from_principal(principal):
+            return valid_token
+
+    with (
+        patch.object(ps, "master_key", "sk-master-1234"),
+        patch.object(ps, "prisma_client", MagicMock()),
+        patch("litellm.proxy.auth.user_api_key_auth.IdentityStore", _StubIdentityStore),
+        patch("litellm.proxy.auth.user_api_key_auth.get_user_object", new=AsyncMock(return_value=user_obj)),
+    ):
+        response: Final = TestClient(app, raise_server_exceptions=False).get(
+            route, headers={"Authorization": f"Bearer {key}"}
+        )
+
+    assert response.status_code == 403, f"{route} returned {response.status_code}: {response.text[:200]}"
