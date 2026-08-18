@@ -2776,6 +2776,11 @@ RoutingDecisionCause = Literal[
     "default_model_fallback",
     "literal_keyword_match",
     "semantic_keyword_match",
+    # A plan-mode sentinel (Claude Code / Copilot plan mode) was detected on the request and
+    # plan_mode_min_tier decided the tier: either it raised what the pipeline chose (classifier,
+    # keyword rule, or session pin), or the floor was already the top configured tier and the
+    # classifier was skipped. The matched sentinel rides in matched_keyword.
+    "plan_mode",
     "session_affinity_pin",
     "session_affinity_escalation",
     "default_fallback",
