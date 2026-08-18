@@ -6,6 +6,7 @@ GET /guardrails/usage/overview, /guardrails/usage/detail/:id, /guardrails/usage/
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, overload
 
@@ -113,11 +114,14 @@ async def _find_daily_guardrail_usage_units(
     return await _daily_guardrail_usage_units_table(prisma_client).find_many(where=where)
 
 
+def _counter_name(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
+    return row.usage_unit
+
+
 def _sum_counter_units(rows: "Iterable[prisma_models.LiteLLM_DailyGuardrailUsageUnits]") -> Mapping[str, int]:
-    materialized: Final = tuple(rows)
-    counter_names: Final = frozenset(r.usage_unit for r in materialized)
+    ordered: Final = sorted(rows, key=_counter_name)
     return MappingProxyType(
-        {name: sum(int(r.units) for r in materialized if r.usage_unit == name) for name in counter_names}
+        {name: sum(int(r.units) for r in group) for name, group in groupby(ordered, key=_counter_name)}
     )
 
 
@@ -125,8 +129,8 @@ def _units_by(
     rows: "Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]",
     key_of: "Callable[[prisma_models.LiteLLM_DailyGuardrailUsageUnits], str]",
 ) -> Mapping[str, Mapping[str, int]]:
-    keys: Final = frozenset(key_of(r) for r in rows)
-    return MappingProxyType({key: _sum_counter_units(r for r in rows if key_of(r) == key) for key in keys})
+    ordered: Final = sorted(rows, key=key_of)
+    return MappingProxyType({key: _sum_counter_units(group) for key, group in groupby(ordered, key=key_of)})
 
 
 # --- Response models ---

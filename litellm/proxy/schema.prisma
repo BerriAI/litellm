@@ -1082,7 +1082,6 @@ model LiteLLM_DailyGuardrailUsageUnits {
 
   @@id([guardrail_id, date, team_id, api_key, usage_unit])
   @@index([date])
-  @@index([guardrail_id, date])
 }
 
 // Daily policy metrics for usage dashboard (one row per policy per day)
