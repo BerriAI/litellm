@@ -5217,8 +5217,9 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
             custom_llm_provider == "litellm_proxy"
         ):  # litellm_proxy is a special case, it's not a provider, it's a proxy for the provider
             return True
-        elif custom_llm_provider == "azure_ai" and model_info["litellm_provider"] in (
+        elif custom_llm_provider in ("azure_ai", "azure") and model_info["litellm_provider"] in (
             "azure",
+            "azure_ai",
             "openai",
         ):
             # Azure AI also works with azure models
