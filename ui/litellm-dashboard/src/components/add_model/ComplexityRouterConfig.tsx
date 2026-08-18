@@ -4,9 +4,9 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
-import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
+import { resolveComplexityDefaultModel, tierOptions } from "./complexity_router_tiers";
 import EscalationKeywords from "./EscalationKeywords";
-import KeywordTierRules, { KeywordTierRule, tierOptions } from "./KeywordTierRules";
+import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
 
