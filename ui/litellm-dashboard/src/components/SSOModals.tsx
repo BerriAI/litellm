@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 import { Modal } from "antd";
-import { Text } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
@@ -317,10 +316,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         onCancel={handleInstructionsCancel}
       >
         <p>Follow these steps to complete the SSO setup:</p>
-        <Text className="mt-2">1. DO NOT Exit this TAB</Text>
-        <Text className="mt-2">2. Open a new tab, visit your proxy base url</Text>
-        <Text className="mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</Text>
-        <Text className="mt-2">4. If Step 3 is successful, you can close this tab</Text>
+        <p className="text-sm mt-2">1. DO NOT Exit this TAB</p>
+        <p className="text-sm mt-2">2. Open a new tab, visit your proxy base url</p>
+        <p className="text-sm mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</p>
+        <p className="text-sm mt-2">4. If Step 3 is successful, you can close this tab</p>
         <div style={{ textAlign: "right", marginTop: "10px" }}>
           <Button type="button" onClick={handleInstructionsOk}>
             Done

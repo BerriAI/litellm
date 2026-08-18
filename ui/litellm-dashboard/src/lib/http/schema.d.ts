@@ -27356,6 +27356,8 @@ export interface components {
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
             cache_creation_input_token_cost_priority?: number | null;
+            /** Cache Creation Input Token Cost Ultrafast */
+            cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -27376,6 +27378,8 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Cache Read Input Token Cost Ultrafast */
+            cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -27440,6 +27444,8 @@ export interface components {
             input_cost_per_token_flex?: number | null;
             /** Input Cost Per Token Priority */
             input_cost_per_token_priority?: number | null;
+            /** Input Cost Per Token Ultrafast */
+            input_cost_per_token_ultrafast?: number | null;
             /** Input Cost Per Video Per Second */
             input_cost_per_video_per_second?: number | null;
             /** Input Cost Per Video Per Second Above 128K Tokens */
@@ -27537,6 +27543,8 @@ export interface components {
             output_cost_per_token_flex?: number | null;
             /** Output Cost Per Token Priority */
             output_cost_per_token_priority?: number | null;
+            /** Output Cost Per Token Ultrafast */
+            output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -36458,6 +36466,8 @@ export interface components {
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
             cache_creation_input_token_cost_priority?: number | null;
+            /** Cache Creation Input Token Cost Ultrafast */
+            cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -36478,6 +36488,8 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Cache Read Input Token Cost Ultrafast */
+            cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -36542,6 +36554,8 @@ export interface components {
             input_cost_per_token_flex?: number | null;
             /** Input Cost Per Token Priority */
             input_cost_per_token_priority?: number | null;
+            /** Input Cost Per Token Ultrafast */
+            input_cost_per_token_ultrafast?: number | null;
             /** Input Cost Per Video Per Second */
             input_cost_per_video_per_second?: number | null;
             /** Input Cost Per Video Per Second Above 128K Tokens */
@@ -36639,6 +36653,8 @@ export interface components {
             output_cost_per_token_flex?: number | null;
             /** Output Cost Per Token Priority */
             output_cost_per_token_priority?: number | null;
+            /** Output Cost Per Token Ultrafast */
+            output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
