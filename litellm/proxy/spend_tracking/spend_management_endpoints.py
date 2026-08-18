@@ -4077,6 +4077,12 @@ async def _build_ui_spend_logs_response(
                 """
                 SELECT session_id,
                        COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
+                       COALESCE(SUM(
+                           COALESCE(
+                               request_duration_ms,
+                               (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER
+                           )
+                       ), 0)::double precision AS session_total_duration_ms,
                        COUNT(*) FILTER (
                            WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
                        )::int AS mcp_tool_call_count,
@@ -4094,6 +4100,7 @@ async def _build_ui_spend_logs_response(
             session_spend_map = {
                 row["session_id"]: {
                     "session_total_spend": float(row.get("session_total_spend") or 0.0),
+                    "session_total_duration_ms": int(row.get("session_total_duration_ms") or 0),
                     "mcp_tool_call_count": int(row.get("mcp_tool_call_count") or 0),
                     "mcp_tool_call_spend": float(row.get("mcp_tool_call_spend") or 0.0),
                 }
@@ -4115,6 +4122,7 @@ async def _build_ui_spend_logs_response(
             session_stats = session_spend_map.get(sid) if sid else None
             if session_stats:
                 row_dict["session_total_spend"] = session_stats["session_total_spend"]
+                row_dict["session_total_duration_ms"] = session_stats["session_total_duration_ms"]
                 if session_stats["mcp_tool_call_count"]:
                     row_dict["mcp_tool_call_count"] = session_stats["mcp_tool_call_count"]
                     row_dict["mcp_tool_call_spend"] = session_stats["mcp_tool_call_spend"]
