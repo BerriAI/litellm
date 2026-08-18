@@ -859,8 +859,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                               },
                             ]}
                           >
-                            <Input
-                              type="password"
+                            <AntdInput.Password
                               placeholder="Enter token or secret"
                               className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                             />

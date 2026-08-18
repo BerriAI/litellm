@@ -94,11 +94,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name={["credentials", "client_id"]}
             rules={requiredWhenCreating("Client ID is required for M2M OAuth")}
           >
-            <Input
-              type="password"
-              placeholder={`Enter OAuth client ID${placeholderSuffix}`}
-              className={fieldClassName}
-            />
+            <AntdInput.Password placeholder={`Enter OAuth client ID${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={
@@ -107,8 +103,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name={["credentials", "client_secret"]}
             rules={requiredWhenCreating("Client Secret is required for M2M OAuth")}
           >
-            <Input
-              type="password"
+            <AntdInput.Password
               placeholder={`Enter OAuth client secret${placeholderSuffix}`}
               className={fieldClassName}
             />
@@ -158,7 +153,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name={["credentials", "client_id"]}
           >
-            <Input type="password" placeholder={`Enter client ID${placeholderSuffix}`} className={fieldClassName} />
+            <AntdInput.Password placeholder={`Enter client ID${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={
@@ -169,7 +164,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name={["credentials", "client_secret"]}
           >
-            <Input type="password" placeholder={`Enter client secret${placeholderSuffix}`} className={fieldClassName} />
+            <AntdInput.Password placeholder={`Enter client secret${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={
