@@ -128,13 +128,14 @@ class AutoRouter(CustomLogger):
         """
         from semantic_router.routers import SemanticRouter
 
+        from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
         from litellm.router_strategy.auto_router.litellm_encoder import (
             LiteLLMRouterEncoder,
         )
         from litellm.types.router import PreRoutingHookResponse
 
-        if messages is None:
-            # do nothing, return same inputs
+        resolved_messages: Final = resolve_structured_messages(messages=messages, request_kwargs=request_kwargs)
+        if resolved_messages is None:
             return None
 
         routelayer = self.routelayer
@@ -153,7 +154,7 @@ class AutoRouter(CustomLogger):
             )
             self.routelayer = routelayer
 
-        message_content: Final = self._extract_text_from_messages(messages)
+        message_content: Final = self._extract_text_from_messages(resolved_messages)
         route_name: Final = self._matched_route_name(routelayer, message_content)
 
         return PreRoutingHookResponse(
