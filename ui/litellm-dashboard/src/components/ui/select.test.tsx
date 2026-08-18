@@ -7,11 +7,15 @@ const ENVIRONMENTS = [
   { value: "staging", label: "Staging" },
 ] as const;
 
-function renderSelect(props: { value: string | null; items?: React.ComponentProps<typeof Select>["items"] }) {
+function renderSelect(props: {
+  value: string | null;
+  items?: React.ComponentProps<typeof Select>["items"];
+  placeholder?: string;
+}) {
   return render(
     <Select value={props.value} items={props.items}>
       <SelectTrigger data-testid="trigger">
-        <SelectValue />
+        <SelectValue placeholder={props.placeholder} />
       </SelectTrigger>
       <SelectContent>
         {ENVIRONMENTS.map((environment) => (
@@ -41,5 +45,21 @@ describe("SelectValue label resolution", () => {
     renderSelect({ value: "production", items: ENVIRONMENTS });
 
     expect(screen.getByTestId("trigger")).toHaveTextContent("production");
+  });
+
+  it("still renders the placeholder when nothing is selected", () => {
+    renderSelect({ value: null, items: ENVIRONMENTS, placeholder: "Pick an environment" });
+
+    expect(screen.getByTestId("trigger")).toHaveTextContent("Pick an environment");
+  });
+
+  it("lets a null-valued item's label win over the placeholder", () => {
+    renderSelect({
+      value: null,
+      items: [{ value: null, label: "Any environment" }, ...ENVIRONMENTS],
+      placeholder: "Pick an environment",
+    });
+
+    expect(screen.getByTestId("trigger")).toHaveTextContent("Any environment");
   });
 });
