@@ -5311,6 +5311,32 @@ class ProxyConfig:
             router_params["health_check_staleness_threshold"] = _hc_staleness
         if _hc_ignore_transient:
             router_params["health_check_ignore_transient_errors"] = True
+        ## CLASSIFIER PLUGINS (complexity-router custom classifiers, picked by name in the Admin UI).
+        ## Registered before the model list resolves, so config-file routers can reference names.
+        classifier_plugins_config: Final = config.get("classifier_plugins", None)
+        if classifier_plugins_config is not None and not isinstance(classifier_plugins_config, dict):
+            raise TypeError("classifier_plugins must map plugin names to dotted paths")
+        for plugin_name, plugin_path in (classifier_plugins_config or _EMPTY_MAPPING).items():
+            if not isinstance(plugin_path, str):
+                raise TypeError(f"classifier_plugins.{plugin_name} must be a dotted-path string")
+        resolved_classifier_entries: Final = tuple(
+            (
+                str(plugin_name),
+                resolve_classifier_plugin(
+                    plugin_path=plugin_path,
+                    config_file_path=config_file_path,
+                    source_label=f"classifier_plugins.{plugin_name}",
+                ),
+            )
+            for plugin_name, plugin_path in (classifier_plugins_config or _EMPTY_MAPPING).items()
+        )
+        # Replace, never merge: a reload that drops a name, empties the block, or removes it
+        # entirely must evict the stale entries, or a deleted plugin stays selectable until
+        # the next restart. Resolution runs before the clear, so a module broken at reload
+        # time keeps the old registry intact.
+        litellm.classifier_plugin_registry.clear()
+        litellm.classifier_plugin_registry.update(resolved_classifier_entries)
+
         ## MODEL LIST
         model_list: Final = config.get("model_list", None)
         if model_list:
@@ -5491,31 +5517,6 @@ class ProxyConfig:
 
             # Load vector stores from config
             litellm.vector_store_registry.load_vector_stores_from_config(vector_store_registry_config)
-
-        ## CLASSIFIER PLUGINS (complexity-router custom classifiers, picked by name in the Admin UI)
-        classifier_plugins_config: Final = config.get("classifier_plugins", None)
-        if classifier_plugins_config:
-            if not isinstance(classifier_plugins_config, dict):
-                raise TypeError("classifier_plugins must map plugin names to dotted paths")
-            for plugin_name, plugin_path in classifier_plugins_config.items():
-                if not isinstance(plugin_path, str):
-                    raise TypeError(f"classifier_plugins.{plugin_name} must be a dotted-path string")
-            resolved_entries: Final = tuple(
-                (
-                    str(plugin_name),
-                    resolve_classifier_plugin(
-                        plugin_path=plugin_path,
-                        config_file_path=config_file_path,
-                        source_label=f"classifier_plugins.{plugin_name}",
-                    ),
-                )
-                for plugin_name, plugin_path in classifier_plugins_config.items()
-            )
-            # Replace, never merge: a config reload that drops a name must evict it, or a
-            # deleted plugin stays selectable until the next restart. Resolution runs before
-            # the clear, so a module broken at reload time keeps the old registry intact.
-            litellm.classifier_plugin_registry.clear()
-            litellm.classifier_plugin_registry.update(resolved_entries)
 
         ## WORKER REGISTRY (Global Control Plane)
         worker_registry_config: Final = config.get("worker_registry", None)

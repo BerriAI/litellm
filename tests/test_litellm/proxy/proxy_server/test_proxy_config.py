@@ -297,6 +297,63 @@ def test_classifier_plugins_config_key_replaces_the_registry_on_reload(monkeypat
     assert set(litellm.classifier_plugin_registry) == {"fresh-name"}
 
 
+def test_config_file_router_can_reference_a_registry_name(monkeypatch, tmp_path):
+    """The registry registers before the model list resolves, so a config.yaml router may
+    set classifier_plugin to a registry name; regression for the ordering bug where the
+    registry filled after plugin resolution and names failed as dotted imports."""
+    import asyncio
+
+    import litellm
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    (tmp_path / "reg_classifier.py").write_text(
+        "class _Classifier:\n"
+        "    async def classify(self, context):\n"
+        "        return 'SIMPLE'\n"
+        "\n"
+        "instance = _Classifier()\n"
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "classifier_plugins:\n"
+        "  tier-by-team: reg_classifier.instance\n"
+        "model_list:\n"
+        "  - model_name: smart-router\n"
+        "    litellm_params:\n"
+        "      model: auto_router/complexity_router\n"
+        "      complexity_router_default_model: gpt-4o-mini\n"
+        "      complexity_router_config:\n"
+        "        classifier_type: custom\n"
+        "        classifier_plugin: tier-by-team\n"
+        "        tiers:\n"
+        "          SIMPLE: gpt-4o-mini\n"
+    )
+    monkeypatch.setattr(litellm, "classifier_plugin_registry", {}, raising=True)
+    proxy_config = ProxyConfig()
+    router, _, _ = asyncio.run(proxy_config.load_config(router=None, config_file_path=str(config_path)))
+    assert "smart-router" in router.model_names
+    assert list(router.complexity_routers) == ["smart-router"]
+
+
+def test_registry_clears_when_the_config_key_is_removed(monkeypatch, tmp_path):
+    """Removing the classifier_plugins block on reload must evict every stale entry."""
+    import asyncio
+
+    import litellm
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    class _Classifier:
+        async def classify(self, context):
+            return "SIMPLE"
+
+    monkeypatch.setattr(litellm, "classifier_plugin_registry", {"stale-name": _Classifier()}, raising=True)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("model_list:\n  - model_name: gpt-4o-mini\n    litellm_params:\n      model: gpt-4o-mini\n")
+    proxy_config = ProxyConfig()
+    asyncio.run(proxy_config.load_config(router=None, config_file_path=str(config_path)))
+    assert litellm.classifier_plugin_registry == {}
+
+
 def test_resolve_complexity_router_plugins_leaves_live_classifier_instance_alone():
     class _Classifier:
         async def classify(self, context):
