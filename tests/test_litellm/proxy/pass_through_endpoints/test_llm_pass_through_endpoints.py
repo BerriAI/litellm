@@ -1735,9 +1735,6 @@ class TestBedrockLLMProxyRoute:
 
 
 class TestBedrockAgentRuntimePassthroughToggle:
-    """`general_settings.disable_bedrock_agent_runtime_passthrough` gates only the
-    bedrock-agent-runtime branch of `/bedrock/{endpoint:path}`."""
-
     AGENT_RUNTIME_ENDPOINT: Final = "knowledgebases/KB1234567/retrieve"
     MODEL_ENDPOINT: Final = "model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse"
     DISABLED: Final = MappingProxyType({"disable_bedrock_agent_runtime_passthrough": True})
@@ -1752,7 +1749,6 @@ class TestBedrockAgentRuntimePassthroughToggle:
 
     @contextlib.contextmanager
     def _patched_dispatch(self, general_settings: Mapping[str, object]):
-        """Patch out signing + forwarding so the routing decision is observable."""
         from botocore.credentials import Credentials
 
         bedrock_llm: Final = Mock()
@@ -1776,7 +1772,6 @@ class TestBedrockAgentRuntimePassthroughToggle:
 
     @pytest.mark.asyncio
     async def test_agent_runtime_dispatch_allowed_by_default(self):
-        """Default config must keep forwarding to bedrock-agent-runtime."""
         with self._patched_dispatch(MappingProxyType({})) as (create_route, forwarder):
             result: Final = await bedrock_proxy_route(
                 endpoint=self.AGENT_RUNTIME_ENDPOINT,
@@ -1792,11 +1787,6 @@ class TestBedrockAgentRuntimePassthroughToggle:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("value", (True, "true", "True"))
     async def test_agent_runtime_dispatch_rejected_when_disabled(self, value: bool | str):
-        """With the setting on, the request is rejected before it is signed or sent.
-
-        The string forms matter: /config/field/update persists the raw value, so the
-        setting can reach general_settings as a string rather than a bool.
-        """
         settings: Final = MappingProxyType({"disable_bedrock_agent_runtime_passthrough": value})
 
         with self._patched_dispatch(settings) as (create_route, forwarder):
@@ -1815,7 +1805,6 @@ class TestBedrockAgentRuntimePassthroughToggle:
 
     @pytest.mark.asyncio
     async def test_model_invoke_still_routed_when_agent_runtime_disabled(self):
-        """The setting must not touch plain bedrock-runtime model pass-through."""
         with (
             patch("litellm.proxy.proxy_server.general_settings", self.DISABLED),
             patch("litellm.utils.get_secret", return_value="us-east-1"),
@@ -1841,7 +1830,6 @@ class TestBedrockAgentRuntimePassthroughToggle:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("value", (False, "false", None, "", "yes"))
     async def test_agent_runtime_dispatch_allowed_for_non_true_values(self, value: object):
-        """Anything that is not a recognised true value leaves dispatch untouched."""
         settings: Final = MappingProxyType({"disable_bedrock_agent_runtime_passthrough": value})
 
         with self._patched_dispatch(settings) as (create_route, forwarder):

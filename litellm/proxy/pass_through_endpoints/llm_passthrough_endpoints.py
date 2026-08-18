@@ -1299,9 +1299,6 @@ def _is_bedrock_agent_runtime_route(endpoint: str) -> bool:
 
 
 def _is_bedrock_agent_runtime_passthrough_disabled() -> bool:
-    """
-    Return True, if `general_settings.disable_bedrock_agent_runtime_passthrough` is set.
-    """
     from litellm.proxy.proxy_server import general_settings
 
     setting: Final = general_settings.get("disable_bedrock_agent_runtime_passthrough")
