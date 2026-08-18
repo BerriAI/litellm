@@ -2,7 +2,7 @@
 
 import { ConfigType, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { StoreModelInDBParams, useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { Button, Form, Modal, Skeleton, Space, Switch, Typography } from "antd";
 import React, { useEffect, useMemo } from "react";
@@ -44,16 +44,16 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
     try {
       await mutateAsync(formValues, {
         onSuccess: () => {
-          NotificationsManager.success("Model storage settings updated successfully");
+          toast.success("Model storage settings updated successfully");
           refetch();
           onSuccess?.();
         },
         onError: (error) => {
-          NotificationsManager.fromBackend("Failed to save model storage settings: " + parseErrorMessage(error));
+          toast.fromError("Failed to save model storage settings: " + parseErrorMessage(error));
         },
       });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to save model storage settings: " + parseErrorMessage(error));
+      toast.fromError("Failed to save model storage settings: " + parseErrorMessage(error));
     }
   };
 

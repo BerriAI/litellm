@@ -3,7 +3,7 @@ import { Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react
 import { Form } from "antd";
 import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import RedisTypeSelector from "./RedisTypeSelector";
 import CacheFieldSection from "./CacheFieldSection";
 import { EmbeddingModelOption } from "./CacheFormField";
@@ -39,7 +39,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
       setRedisType(toRedisType(currentValues.redis_type));
     } catch (error) {
       console.error("Failed to load cache settings:", error);
-      NotificationsManager.fromBackend("Failed to load cache settings");
+      toast.fromError("Failed to load cache settings");
     }
   }, [accessToken, form]);
 
@@ -86,15 +86,13 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
         buildCachePayload(redisType, values, { forTesting: true }),
       );
       if (result.status === "success") {
-        NotificationsManager.success("Cache connection test successful!");
+        toast.success("Cache connection test successful!");
       } else {
-        NotificationsManager.fromBackend(`Connection test failed: ${result.message || result.error}`);
+        toast.fromError(`Connection test failed: ${result.message || result.error}`);
       }
     } catch (error) {
       console.error("Test connection error:", error);
-      NotificationsManager.fromBackend(
-        `Connection test failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-      );
+      toast.fromError(`Connection test failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setIsTesting(false);
     }
@@ -112,11 +110,11 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
     setIsSaving(true);
     try {
       await updateCacheSettingsCall(accessToken, buildCachePayload(redisType, values, { forTesting: false }));
-      NotificationsManager.success("Cache settings updated successfully");
+      toast.success("Cache settings updated successfully");
       await loadCacheSettings();
     } catch (error) {
       console.error("Failed to save cache settings:", error);
-      NotificationsManager.fromBackend("Failed to update cache settings");
+      toast.fromError("Failed to update cache settings");
     } finally {
       setIsSaving(false);
     }

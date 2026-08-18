@@ -1,13 +1,9 @@
 import { waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 import { vertexCredentialsUploadProps } from "./vertexCredentialsUpload";
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
 
 const makeForm = () => ({ setFieldsValue: vi.fn() });
 
@@ -45,7 +41,7 @@ describe("vertexCredentialsUploadProps", () => {
     props.onChange?.({ file: { name: "vertex.json", status: "done" } } as never);
     props.onChange?.({ file: { name: "vertex.json", status: "error" } } as never);
 
-    expect(NotificationsManager.success).toHaveBeenCalledWith("vertex.json file uploaded successfully");
-    expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("vertex.json file upload failed.");
+    expect(toast.success).toHaveBeenCalledWith("vertex.json file uploaded successfully");
+    expect(toast.fromError).toHaveBeenCalledWith("vertex.json file upload failed.");
   });
 });
