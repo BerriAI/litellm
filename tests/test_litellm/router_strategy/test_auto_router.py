@@ -546,3 +546,18 @@ class TestAutoRouterRoutesResponsesApiInput:
 
         assert result is None
         assert layer.seen_text is None
+
+    @pytest.mark.asyncio
+    async def test_should_keep_routing_an_empty_messages_list_to_the_default_model(self):
+        layer: Final = FixedRouteLayer(None)
+        auto_router: Final = _auto_router(layer)
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={"messages": [], "litellm_metadata": {"user_api_key_request_route": "/v1/chat/completions"}},
+            messages=[],
+        )
+
+        assert result is not None
+        assert result.model == "fallback-model"
+        assert layer.seen_text == ""

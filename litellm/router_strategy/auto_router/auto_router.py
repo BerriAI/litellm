@@ -134,7 +134,11 @@ class AutoRouter(CustomLogger):
         )
         from litellm.types.router import PreRoutingHookResponse
 
-        resolved_messages: Final = resolve_structured_messages(messages=messages, request_kwargs=request_kwargs)
+        resolved_messages: Final = (
+            messages
+            if messages is not None
+            else resolve_structured_messages(messages=None, request_kwargs=request_kwargs)
+        )
         if resolved_messages is None:
             return None
 
