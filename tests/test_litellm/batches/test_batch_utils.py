@@ -1126,11 +1126,13 @@ async def test_handle_completed_batch_no_output_file_is_zero(monkeypatch):
 
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", _must_not_fetch)
 
-    cost, usage, models = await bu._handle_completed_batch(_batch(None), custom_llm_provider="openai")
+    result = await bu._handle_completed_batch(_batch(None), custom_llm_provider="openai")
 
-    assert cost == 0.0
-    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (0, 0, 0)
-    assert models == []
+    assert result.cost == 0.0
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (0, 0, 0)
+    assert result.models == []
+    assert result.successful_requests == 0
+    assert result.failed_requests == 0
 
 
 @pytest.mark.asyncio
