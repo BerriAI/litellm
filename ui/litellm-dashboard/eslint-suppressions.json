@@ -1107,10 +1107,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
-    },
-    "prefer-const": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/immutability": {
       "count": 2
@@ -1516,9 +1513,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1678,7 +1672,7 @@
   },
   "src/components/CreateUserButton.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
