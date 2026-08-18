@@ -5,7 +5,9 @@ Responds to OpenAI-format endpoints with canned responses.
 
 import os
 import time
+import asyncio
 import json
+import re
 import uuid
 
 import uvicorn
@@ -40,12 +42,33 @@ async def list_models():
     }
 
 
+HOLD_MARKER = re.compile(r"e2e-hold-(\d+)s")
+
+
+def _hold_seconds(body: dict) -> float:
+    """Let a test keep a request in flight by putting `e2e-hold-<n>s` in the prompt.
+
+    The active-requests page only shows requests that have not finished, so a
+    browser test needs a completion that is still running while it asserts.
+    """
+    messages = body.get("messages") or []
+    for message in reversed(messages):
+        content = message.get("content")
+        match = HOLD_MARKER.search(content) if isinstance(content, str) else None
+        if match:
+            return min(float(match.group(1)), 60.0)
+    return 0.0
+
+
 @app.post("/v1/chat/completions")
 @app.post("/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
     model = body.get("model", "mock-model")
     stream = body.get("stream", False)
+    hold_seconds = _hold_seconds(body)
+    if hold_seconds:
+        await asyncio.sleep(hold_seconds)
 
     response_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())

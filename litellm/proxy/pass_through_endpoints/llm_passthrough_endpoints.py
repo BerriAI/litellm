@@ -9,6 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
+import uuid
 from types import MappingProxyType
 from typing import Annotated, Any, Final, cast
 
@@ -99,6 +100,36 @@ def is_passthrough_request_streaming(request_body: object) -> bool:
     if not isinstance(request_body, dict):
         return False
     return bool(request_body.get("stream", False))
+
+
+async def _register_router_passthrough(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str | None,
+    stream: bool,
+) -> str:
+    """Register the router branch, which returns without ever reaching pass_through_request.
+
+    Returns the call id it registered under, so the caller can hand the same one to the
+    router and keep the active request row and the log entry on a single id.
+    """
+    from litellm.proxy.hooks.active_request_registry import ActiveRequestCall, register_http_request
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    litellm_call_id: Final[str] = request.headers.get("x-litellm-call-id") or str(uuid.uuid4())
+    call_data: Final[ActiveRequestCall] = {
+        "litellm_call_id": litellm_call_id,
+        "model": model or "unknown",
+        "stream": stream,
+    }
+    await register_http_request(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
+        data=call_data,
+        call_type="allm_passthrough_route",
+    )
+    return litellm_call_id
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -325,6 +356,12 @@ async def vllm_proxy_route(
     is_router_model: Final = is_passthrough_request_using_router_model(request_body, llm_router)
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
     if is_router_model and llm_router:
+        litellm_call_id: Final = await _register_router_passthrough(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            model=request_body.get("model"),
+            stream=bool(is_streaming_request),
+        )
         result: Final = cast(
             httpx.Response,
             await llm_router.allm_passthrough_route(
@@ -341,6 +378,7 @@ async def vllm_proxy_route(
                 params=None,
                 headers=None,
                 cookies=None,
+                litellm_call_id=litellm_call_id,
             ),
         )
 
@@ -1441,6 +1479,12 @@ async def azure_proxy_route(
             if is_router_model:
                 request_body = await get_request_body(request)
                 is_streaming_request = is_passthrough_request_streaming(request_body)
+                azure_litellm_call_id = await _register_router_passthrough(
+                    request=request,
+                    user_api_key_dict=user_api_key_dict,
+                    model=part,
+                    stream=bool(is_streaming_request),
+                )
                 result = await llm_router.allm_passthrough_route(
                     model=part,
                     method=request.method,
@@ -1455,6 +1499,7 @@ async def azure_proxy_route(
                     params=None,
                     headers=None,
                     cookies=None,
+                    litellm_call_id=azure_litellm_call_id,
                 )
 
                 if is_streaming_request:

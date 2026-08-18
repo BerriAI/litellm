@@ -6,9 +6,15 @@ Prometheus gauge `litellm_in_flight_requests`.
 """
 
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from litellm._logging import verbose_proxy_logger
+
+EMPTY_STATE: Final[Mapping[str, object]] = MappingProxyType({})  # mutable-ok: MappingProxyType needs a dict to wrap
 
 
 class InFlightRequestsMiddleware:
@@ -45,9 +51,17 @@ class InFlightRequestsMiddleware:
         try:
             await self.app(scope, receive, send)
         finally:
-            InFlightRequestsMiddleware._in_flight -= 1
-            if gauge is not None:
-                gauge.dec()
+            state: Final = scope.get("state", EMPTY_STATE)
+            registry: Final = state.get("active_request_registry")
+            try:
+                if registry is not None:
+                    await registry.remove(state.get("active_request_registry_id"))
+            except BaseException:  # noqa: BLE001  # not Exception: CancelledError must still hit the finally below
+                verbose_proxy_logger.exception("Failed to deregister an active request")
+            finally:
+                InFlightRequestsMiddleware._in_flight -= 1
+                if gauge is not None:
+                    gauge.dec()
 
     @staticmethod
     def get_count() -> int:

@@ -74,6 +74,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     reject_url_valued_destination,
 )
 from litellm.types.utils import (
+    CallTypesLiteral,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
@@ -1258,6 +1259,23 @@ class ProxyBaseLLMRequestProcessing:
 
         return custom_headers
 
+    async def _register_active_request(
+        self,
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: ProxyLogging,
+        route_type: CallTypesLiteral,
+    ) -> None:
+        from litellm.proxy.hooks.active_request_registry import register_http_request
+
+        await register_http_request(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            data=self.data,
+            call_type=route_type,
+        )
+
     async def common_processing_pre_call_logic(
         self,
         request: Request,
@@ -1468,6 +1486,12 @@ class ProxyBaseLLMRequestProcessing:
                     self.data["model"] = alias_target
 
         self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        await self._register_active_request(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            route_type=route_type,
+        )
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,

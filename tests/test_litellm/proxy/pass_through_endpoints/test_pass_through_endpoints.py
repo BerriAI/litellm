@@ -1130,7 +1130,10 @@ async def test_pass_through_request_uses_resolved_timeout():
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         with patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
-        ) as mock_get_client:
+        ) as mock_get_client, patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.register_http_request",
+            new_callable=AsyncMock,
+        ) as register_active:
             mock_proxy_logging.pre_call_hook = AsyncMock(
                 side_effect=lambda **kwargs: kwargs["data"]
             )
@@ -1161,6 +1164,9 @@ async def test_pass_through_request_uses_resolved_timeout():
 
             mock_get_client.assert_called_once()
             assert mock_get_client.call_args[1]["params"]["timeout"] == 1500
+            register_active.assert_awaited_once()
+            assert register_active.await_args.kwargs["request"] is mock_request
+            assert register_active.await_args.kwargs["call_type"] == "pass_through_endpoint"
 
 
 @pytest.mark.asyncio
