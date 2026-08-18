@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber, Alert } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AUTH_TYPE,
   isClientForwardedTokenMode,
@@ -994,13 +995,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   };
 
   return (
-    <TabGroup>
-      <TabList className="grid w-full grid-cols-2">
-        <Tab>Server Configuration</Tab>
-        <Tab>Cost Configuration</Tab>
-      </TabList>
-      <TabPanels className="mt-6">
-        <TabPanel>
+    <Tabs defaultValue="server">
+      <TabsList variant="line" className="grid h-auto w-full grid-cols-2 rounded-none border-b p-0">
+        <TabsTrigger value="server" className="rounded-none py-2">
+          Server Configuration
+        </TabsTrigger>
+        <TabsTrigger value="cost" className="rounded-none py-2">
+          Cost Configuration
+        </TabsTrigger>
+      </TabsList>
+      <div className="mt-6">
+        <TabsContent value="server" keepMounted>
           <Form
             form={form}
             onFinish={handleSave}
@@ -1447,9 +1452,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               <Button type="submit">Save Changes</Button>
             </div>
           </Form>
-        </TabPanel>
+        </TabsContent>
 
-        <TabPanel>
+        <TabsContent value="cost" keepMounted>
           <div className="space-y-6">
             <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={isLoadingTools} />
 
@@ -1458,9 +1463,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               <Button onClick={() => form.submit()}>Save Changes</Button>
             </div>
           </div>
-        </TabPanel>
-      </TabPanels>
-    </TabGroup>
+        </TabsContent>
+      </div>
+    </Tabs>
   );
 };
 
