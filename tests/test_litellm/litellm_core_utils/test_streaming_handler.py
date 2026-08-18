@@ -3203,6 +3203,35 @@ def test_chunk_creator_drops_empty_finish_chunk(
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
 
 
+@pytest.mark.parametrize(
+    ("chunk_model", "expected_model"),
+    [(None, "azure/request-model"), ("azure/chunk-model", "azure/chunk-model")],
+)
+def test_azure_chunk_model_preserves_or_updates_request_model(
+    chunk_model: str | None, expected_model: str
+):
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="azure/request-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="azure",
+    )
+    chunk = ModelResponseStream(
+        model=chunk_model,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+
+    wrapper.chunk_creator(chunk=chunk)
+
+    assert wrapper.model == expected_model
+
+
 def test_chunk_creator_stops_iteration_on_trailing_chunk(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
