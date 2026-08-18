@@ -1,10 +1,15 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { Spin, Descriptions } from "antd";
+import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { Form, Input, InputNumber, Button as AntButton, Spin, Descriptions, Divider } from "antd";
-import MessageManager from "@/components/molecules/message_manager";
+import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { toast } from "@/lib/toast";
 import { ArrowLeft } from "lucide-react";
 import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "@/components/networking";
 import { Agent } from "@/components/agents/types";
@@ -12,9 +17,17 @@ import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import KeyInfoView from "@/components/templates/key_info_view";
 import AgentVirtualKeys from "./agent_virtual_keys";
-import AgentFormFields from "./agent_form_fields";
-import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
-import { buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
+import AgentFormFields, { unmountedA2AFieldNames } from "./agent_form_fields";
+import DynamicAgentFormFields, { buildDynamicAgentData, unmountedDynamicFieldNames } from "./dynamic_agent_form_fields";
+import { AGENT_FORM_CONFIG, buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
+import {
+  AgentFormField,
+  AgentFormValues,
+  AgentNumberInput,
+  AgentRequestPayload,
+  omitFieldValues,
+  useCollapsiblePanels,
+} from "./AgentFormKit";
 import AgentCostView from "./agent_cost_view";
 import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
 import AgentCardDiscovery, { DiscoveredAgentCardSelection } from "./agent_card_discovery";
@@ -34,8 +47,10 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   const agentKeys = keysData?.keys ?? [];
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
+  const [activeTab, setActiveTab] = useState("overview");
   const [isSaving, setIsSaving] = useState(false);
-  const [form] = Form.useForm();
+  const form = useForm<AgentFormValues>({ defaultValues: {} });
+  const panels = useCollapsiblePanels([AGENT_FORM_CONFIG.basic.key]);
   const [agentTypeMetadata, setAgentTypeMetadata] = useState<AgentCreateInfo[]>([]);
   const [detectedAgentType, setDetectedAgentType] = useState<string>("a2a");
   const [appliedDiscoveredSelection, setAppliedDiscoveredSelection] = useState<DiscoveredAgentCardSelection | null>(
@@ -72,18 +87,18 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
 
       // Parse form values based on agent type
       if (agentType === "a2a") {
-        form.setFieldsValue(parseAgentForForm(data));
+        form.reset(parseAgentForForm(data));
       } else {
         const typeInfo = agentTypeMetadata.find((t) => t.agent_type === agentType);
         if (typeInfo) {
-          form.setFieldsValue(parseDynamicAgentForForm(data, typeInfo));
+          form.reset(parseDynamicAgentForForm(data, typeInfo));
         } else {
-          form.setFieldsValue(parseAgentForForm(data));
+          form.reset(parseAgentForForm(data));
         }
       }
     } catch (error) {
       console.error("Error fetching agent info:", error);
-      MessageManager.error("Failed to load agent information");
+      toast.error("Failed to load agent information");
     } finally {
       setIsLoading(false);
     }
@@ -96,14 +111,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       if (agentType !== "a2a") {
         const typeInfo = agentTypeMetadata.find((t) => t.agent_type === agentType);
         if (typeInfo) {
-          form.setFieldsValue(parseDynamicAgentForForm(agent, typeInfo));
+          form.reset(parseDynamicAgentForForm(agent, typeInfo));
         }
       }
     }
   }, [agentTypeMetadata, agent]);
 
   const selectedAgentTypeInfo = agentTypeMetadata.find((t) => t.agent_type === detectedAgentType);
-  const watchedFormValues = Form.useWatch([], form);
+  const watchedFormValues = useWatch({ control: form.control });
 
   const discoveryRequest = useMemo(
     () => buildDiscoveryRequest(detectedAgentType, watchedFormValues || {}, selectedAgentTypeInfo),
@@ -122,7 +137,11 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       examples: s.examples ?? [],
     }));
 
-    const fieldsToSet: Record<string, any> = {
+    const urlCredentialKeys = (selectedAgentTypeInfo?.credential_fields ?? [])
+      .map((f) => f.key)
+      .filter((key) => /(^|_)(url|api_base|endpoint)$/i.test(key));
+
+    const fieldsToSet: AgentFormValues = {
       name: selected_card.name,
       description: selected_card.description,
       url: selection.upstream_url,
@@ -130,45 +149,43 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       skills,
       iconUrl: selected_card.iconUrl,
       documentationUrl: selected_card.documentationUrl,
+      ...Object.fromEntries(urlCredentialKeys.map((key) => [key, selection.upstream_url])),
     };
 
-    const urlCredentialKeys = (selectedAgentTypeInfo?.credential_fields ?? [])
-      .map((f) => f.key)
-      .filter((key) => /(^|_)(url|api_base|endpoint)$/i.test(key));
-    for (const key of urlCredentialKeys) {
-      fieldsToSet[key] = selection.upstream_url;
+    for (const [key, value] of Object.entries(fieldsToSet)) {
+      form.setValue(key, value);
     }
-
-    form.setFieldsValue(fieldsToSet);
   };
 
-  const handleUpdate = async (values: any) => {
+  const usesDynamicFields = detectedAgentType !== "a2a" && selectedAgentTypeInfo !== undefined;
+
+  const handleUpdate = async (submitted: AgentFormValues) => {
     if (!accessToken || !agent) return;
 
     setIsSaving(true);
     try {
-      let updateData: any;
+      const values = omitFieldValues(
+        submitted,
+        usesDynamicFields
+          ? unmountedDynamicFieldNames(panels.mountedPanels)
+          : unmountedA2AFieldNames(panels.mountedPanels),
+      );
 
-      if (detectedAgentType === "a2a") {
-        updateData = buildAgentDataFromForm(values, agent);
-      } else if (selectedAgentTypeInfo) {
-        updateData = buildDynamicAgentData(values, selectedAgentTypeInfo);
-        updateData.agent_name = values.agent_name;
-      } else {
-        updateData = buildAgentDataFromForm(values, agent);
-      }
+      const built: AgentRequestPayload = usesDynamicFields
+        ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo), agent_name: values.agent_name }
+        : buildAgentDataFromForm(values, agent);
 
-      if (appliedDiscoveredSelection) {
-        updateData = overlayDiscoveredCardParams(updateData, appliedDiscoveredSelection.selected_card);
-      }
+      const updateData = appliedDiscoveredSelection
+        ? overlayDiscoveredCardParams(built, appliedDiscoveredSelection.selected_card)
+        : built;
 
       await patchAgentCall(accessToken, agentId, updateData);
-      MessageManager.success("Agent updated successfully");
+      toast.success("Agent updated successfully");
       setIsEditing(false);
       fetchAgentInfo();
     } catch (error) {
       console.error("Error updating agent:", error);
-      MessageManager.error("Failed to update agent");
+      toast.error("Failed to update agent");
     } finally {
       setIsSaving(false);
     }
@@ -202,6 +219,21 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
     return date.toLocaleString();
   };
 
+  const rateLimitField = (name: keyof AgentFormValues & string, label: string) => (
+    <AgentFormField name={name} label={label}>
+      {({ value, onChange, ref, ...control }) => (
+        <AgentNumberInput
+          {...control}
+          value={value}
+          onChange={onChange}
+          inputRef={ref}
+          min={0}
+          placeholder="Unlimited"
+        />
+      )}
+    </AgentFormField>
+  );
+
   if (selectedKey) {
     return (
       <KeyInfoView
@@ -229,7 +261,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         <p className="text-sm text-gray-500 font-mono">{agent.agent_id}</p>
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
@@ -379,65 +411,64 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                 </div>
 
                 {isEditing ? (
-                  <Form form={form} layout="vertical" onFinish={handleUpdate}>
-                    <Form.Item label="Agent ID">
-                      <Input value={agent.agent_id} disabled />
-                    </Form.Item>
+                  <TooltipProvider>
+                    <FormProvider {...form}>
+                      <form onSubmit={form.handleSubmit(handleUpdate)}>
+                        <FieldGroup className="mb-4">
+                          <Field>
+                            <FieldLabel htmlFor="agent-id">Agent ID</FieldLabel>
+                            <Input id="agent-id" value={agent.agent_id} disabled readOnly />
+                          </Field>
+                        </FieldGroup>
 
-                    {detectedAgentType === "a2a" ? (
-                      <AgentFormFields showAgentName={true} />
-                    ) : selectedAgentTypeInfo ? (
-                      <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
-                    ) : (
-                      <AgentFormFields showAgentName={true} />
-                    )}
+                        {usesDynamicFields && selectedAgentTypeInfo ? (
+                          <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} panels={panels} />
+                        ) : (
+                          <AgentFormFields showAgentName={true} panels={panels} />
+                        )}
 
-                    {discoveryRequest && (
-                      <div className="mt-4">
-                        <AgentCardDiscovery
-                          accessToken={accessToken}
-                          onApply={handleApplyDiscoveredCard}
-                          discoveryRequest={discoveryRequest}
-                          savedAgentCard={agent.agent_card_params ?? null}
-                        />
-                      </div>
-                    )}
+                        {discoveryRequest && (
+                          <div className="mt-4">
+                            <AgentCardDiscovery
+                              accessToken={accessToken}
+                              onApply={handleApplyDiscoveredCard}
+                              discoveryRequest={discoveryRequest}
+                              savedAgentCard={agent.agent_card_params ?? null}
+                            />
+                          </div>
+                        )}
 
-                    <Divider />
-                    <h3 className="text-lg font-medium mb-4">Rate Limits</h3>
-                    <div className="grid grid-cols-2 gap-4">
-                      <Form.Item label="TPM Limit" name="tpm_limit">
-                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
-                      </Form.Item>
-                      <Form.Item label="RPM Limit" name="rpm_limit">
-                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
-                      </Form.Item>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <Form.Item label="Session TPM Limit" name="session_tpm_limit">
-                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
-                      </Form.Item>
-                      <Form.Item label="Session RPM Limit" name="session_rpm_limit">
-                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
-                      </Form.Item>
-                    </div>
+                        <Separator className="my-6" />
+                        <h3 className="text-lg font-medium mb-4">Rate Limits</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                          {rateLimitField("tpm_limit", "TPM Limit")}
+                          {rateLimitField("rpm_limit", "RPM Limit")}
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 gap-4">
+                          {rateLimitField("session_tpm_limit", "Session TPM Limit")}
+                          {rateLimitField("session_rpm_limit", "Session RPM Limit")}
+                        </div>
 
-                    <div className="flex justify-end gap-2 mt-6">
-                      <AntButton
-                        onClick={() => {
-                          setAppliedDiscoveredSelection(null);
-                          setIsEditing(false);
-                          fetchAgentInfo();
-                        }}
-                      >
-                        Cancel
-                      </AntButton>
-                      <Button type="submit" disabled={isSaving} aria-busy={isSaving}>
-                        {isSaving && <UiLoadingSpinner className="size-4" />}
-                        Save Changes
-                      </Button>
-                    </div>
-                  </Form>
+                        <div className="mt-6 flex justify-end gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              setAppliedDiscoveredSelection(null);
+                              setIsEditing(false);
+                              fetchAgentInfo();
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                          <Button type="submit" disabled={isSaving} aria-busy={isSaving}>
+                            {isSaving && <UiLoadingSpinner className="size-4" />}
+                            Save Changes
+                          </Button>
+                        </div>
+                      </form>
+                    </FormProvider>
+                  </TooltipProvider>
                 ) : (
                   <p>Click &quot;Edit Settings&quot; to modify agent configuration.</p>
                 )}

@@ -5,7 +5,7 @@ import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import {
   fetchMCPAccessGroups,
@@ -51,15 +51,6 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
   useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    info: vi.fn(),
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
@@ -918,7 +909,7 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
 
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
+      expect(toast.fromError).toHaveBeenCalledWith(
         "Error creating the team: Cost center CC-9999 is not recognized. Contact the FinOps team.",
       );
     });

@@ -19,6 +19,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import HTTPException
+from prisma.errors import TableNotFoundError
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
@@ -26,6 +27,7 @@ from litellm.proxy.guardrails.usage_endpoints import (
     guardrails_usage_detail,
     guardrails_usage_logs,
     guardrails_usage_overview,
+    policies_usage_overview,
 )
 from litellm.types.guardrails import Guardrail, LitellmParams
 
@@ -295,6 +297,44 @@ async def test_detail_breaks_units_down_by_day_team_and_key():
     assert units_where == {"guardrail_id": {"in": ["yaml-pii", "yaml-1"]}, "date": {"gte": START, "lte": END}}
 
 
+def _units_table_missing() -> TableNotFoundError:
+    return TableNotFoundError(
+        data={"user_facing_error": {"meta": {"table": "public.LiteLLM_DailyGuardrailUsageUnits"}}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_overview_degrades_units_to_empty_when_units_table_is_missing():
+    prisma = _prisma(metrics=[_metric("yaml-pii", requests=4, passed=3, blocked=1)])
+    prisma.db.litellm_dailyguardrailusageunits.find_many = AsyncMock(side_effect=_units_table_missing())
+    handler = _config_handler(_yaml_guardrail(guardrail_id="yaml-uuid", name="yaml-pii"))
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_overview(start_date=START, end_date=END, user_api_key_dict=ADMIN)
+    row = next(r for r in resp.rows if r.id == "yaml-uuid")
+    assert (row.requestsEvaluated, row.usageUnits) == (4, {})
+    assert (resp.totalRequests, resp.totalBlocked, resp.totalUsageUnits) == (4, 1, {})
+
+
+@pytest.mark.asyncio
+async def test_detail_degrades_units_to_empty_when_units_table_is_missing():
+    prisma = _prisma(metrics=[_metric("yaml-pii", requests=4, passed=3, blocked=1)])
+    prisma.db.litellm_dailyguardrailusageunits.find_many = AsyncMock(side_effect=_units_table_missing())
+    handler = _config_handler(_yaml_guardrail())
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_detail(
+            guardrail_id="yaml-1", start_date=START, end_date=END, user_api_key_dict=ADMIN
+        )
+    assert (resp.requestsEvaluated, resp.failRate) == (4, 25.0)
+    assert (resp.usage_units, list(resp.usage_units_daily), resp.usage_units_by_team, resp.usage_units_by_key) == (
+        {},
+        [],
+        {},
+        {},
+    )
+
+
 # ---- logs -------------------------------------------------------------------
 
 
@@ -317,3 +357,82 @@ async def test_logs_resolves_config_guardrail_logical_name():
         )
     where = prisma.db.litellm_spendlogguardrailindex.find_many.call_args.kwargs["where"]
     assert where["guardrail_id"] == {"in": ["yaml-uuid", "yaml-pii"]}
+
+
+# ---- date window cap (LIT-5762) ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_overview_rejects_range_over_max_days():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_overview(start_date="2020-01-01", end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+    assert "366" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_overview_accepts_range_at_exactly_max_days():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_overview(start_date="2025-04-26", end_date="2026-04-27", user_api_key_dict=ADMIN)
+    assert resp.totalRequests == 0
+
+
+@pytest.mark.asyncio
+async def test_overview_rejects_malformed_dates():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_overview(start_date="not-a-date", end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_overview_rejects_non_canonical_date_format():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_overview(start_date="20260420", end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+    assert "YYYY-MM-DD" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_detail_rejects_reversed_dates():
+    prisma = _prisma(find_unique=_db_row())
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_detail(guardrail_id="db-1", start_date=END, end_date=START, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_policies_overview_rejects_range_over_max_days():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await policies_usage_overview(start_date="2020-01-01", end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_detail_prev_trend_query_is_bounded():
+    """Regression: the trend query scanned every metrics row before start_date."""
+    prisma = _prisma(find_unique=_db_row())
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        await guardrails_usage_detail(guardrail_id="db-1", start_date=START, end_date=END, user_api_key_dict=ADMIN)
+    wheres = [c.kwargs["where"] for c in prisma.db.litellm_dailyguardrailmetrics.find_many.await_args_list]
+    prev_wheres = [w for w in wheres if "lt" in w.get("date", {})]
+    assert prev_wheres
+    assert all("gte" in w["date"] for w in prev_wheres)

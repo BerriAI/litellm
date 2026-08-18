@@ -5,7 +5,7 @@ GET /guardrails/usage/overview, /guardrails/usage/detail/:id, /guardrails/usage/
 
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, overload
@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.table_repositories import (
@@ -46,6 +47,40 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 _EMPTY_UNITS: Final[Mapping[str, int]] = MappingProxyType({})
+
+_USAGE_MAX_RANGE_DAYS: Final = 366
+
+
+def _resolve_usage_window(start_date: str | None, end_date: str | None) -> tuple[str, str]:
+    from fastapi import HTTPException, status
+
+    now: Final = datetime.now(timezone.utc)
+    end: Final = end_date or now.strftime("%Y-%m-%d")
+    start: Final = start_date or (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    try:
+        parsed: Final = (date.fromisoformat(start), date.fromisoformat(end))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date and end_date must be in YYYY-MM-DD format",
+        )
+    start_obj, end_obj = parsed
+    if (start_obj.isoformat(), end_obj.isoformat()) != (start, end):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date and end_date must be in YYYY-MM-DD format",
+        )
+    if end_obj < start_obj:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date must be on or before end_date",
+        )
+    if end_obj - start_obj > timedelta(days=_USAGE_MAX_RANGE_DAYS):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date range too large; maximum is {_USAGE_MAX_RANGE_DAYS} days",
+        )
+    return start, end
 
 
 def _guardrails_table(
@@ -111,7 +146,16 @@ async def _find_daily_guardrail_usage_units(
     prisma_client: "PrismaClient",
     where: "prisma_types.LiteLLM_DailyGuardrailUsageUnitsWhereInput",
 ) -> "Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]":
-    return await _daily_guardrail_usage_units_table(prisma_client).find_many(where=where)
+    from prisma.errors import TableNotFoundError
+
+    try:
+        return await _daily_guardrail_usage_units_table(prisma_client).find_many(where=where)
+    except TableNotFoundError as e:
+        verbose_proxy_logger.warning(
+            "Guardrail usage units are unavailable until the LiteLLM_DailyGuardrailUsageUnits migration is applied: %s",
+            e,
+        )
+        return ()
 
 
 def _counter_name(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
@@ -447,9 +491,7 @@ async def guardrails_usage_overview(
             rows=[], chart=[], totalRequests=0, totalBlocked=0, passRate=100.0, totalUsageUnits=_EMPTY_UNITS
         )
 
-    now: Final = datetime.now(timezone.utc)
-    end: Final = end_date or now.strftime("%Y-%m-%d")
-    start: Final = start_date or (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    start, end = _resolve_usage_window(start_date, end_date)
 
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
@@ -467,7 +509,7 @@ async def guardrails_usage_overview(
         )
 
         # Previous period for trend
-        start_prev: Final = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+        start_prev: Final = (date.fromisoformat(start) - timedelta(days=7)).isoformat()
         metrics_prev: Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics] = await _find_daily_guardrail_metrics(
             prisma_client, where={"date": {"gte": start_prev, "lt": start}}
         )
@@ -521,9 +563,7 @@ async def guardrails_usage_detail(
 
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
-    now: Final = datetime.now(timezone.utc)
-    end: Final = end_date or now.strftime("%Y-%m-%d")
-    start: Final = start_date or (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    start, end = _resolve_usage_window(start_date, end_date)
 
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
@@ -546,11 +586,12 @@ async def guardrails_usage_detail(
             "date": {"gte": start, "lte": end},
         },
     )
+    start_prev: Final = (date.fromisoformat(start) - timedelta(days=7)).isoformat()
     metrics_prev: Final[Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics]] = await _find_daily_guardrail_metrics(
         prisma_client,
         where={
             "guardrail_id": {"in": metric_ids},
-            "date": {"lt": start},
+            "date": {"gte": start_prev, "lt": start},
         },
     )
     units_where: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsWhereInput] = {
@@ -828,9 +869,7 @@ async def policies_usage_overview(
             rows=[], chart=[], totalRequests=0, totalBlocked=0, passRate=100.0, totalUsageUnits=_EMPTY_UNITS
         )
 
-    now: Final = datetime.now(timezone.utc)
-    end: Final = end_date or now.strftime("%Y-%m-%d")
-    start: Final = start_date or (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    start, end = _resolve_usage_window(start_date, end_date)
 
     try:
         policies: Final = await _policies_table(prisma_client).find_many()
@@ -841,7 +880,7 @@ async def policies_usage_overview(
             prisma_client,
             where={
                 "date": {
-                    "gte": (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d"),
+                    "gte": (date.fromisoformat(start) - timedelta(days=7)).isoformat(),
                     "lt": start,
                 }
             },

@@ -1,12 +1,17 @@
 import React, { useState } from "react";
-import { Modal, Form, Select, Upload, Button, Divider } from "antd";
-import { Input } from "@/components/ui/input";
-import { UploadOutlined } from "@ant-design/icons";
+import { Modal, Upload } from "antd";
 import type { UploadFile, UploadProps } from "antd";
+import { Upload as UploadIcon } from "lucide-react";
+import { z } from "zod/v4";
 import { convertPromptFileToJson, createPromptCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-
-const { Option } = Select;
+import { toast } from "@/lib/toast";
+import { Field, FieldDescription, FieldGroup, FieldSeparator, FieldTitle } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
 
 interface AddPromptFormProps {
   visible: boolean;
@@ -15,76 +20,107 @@ interface AddPromptFormProps {
   onSuccess: () => void;
 }
 
+interface CreatePromptRequest {
+  prompt_id: string;
+  litellm_params: {
+    prompt_integration: string;
+    prompt_id: string;
+    prompt_data: unknown;
+  };
+  prompt_info: {
+    prompt_type: string;
+  };
+}
+
+const PROMPT_INTEGRATION_OPTIONS = [{ label: "dotprompt", value: "dotprompt" }];
+
+const addPromptSchema = z.object({
+  prompt_id: z
+    .string()
+    .min(1, "Please enter a prompt ID")
+    .regex(/^[a-zA-Z0-9_-]+$/, "Prompt ID can only contain letters, numbers, underscores, and hyphens"),
+  prompt_integration: z.string(),
+});
+
+type AddPromptFormValues = z.infer<typeof addPromptSchema>;
+
+const EMPTY_VALUES: AddPromptFormValues = { prompt_id: "", prompt_integration: "dotprompt" };
+
 const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
-  const [form] = Form.useForm();
+  const form = useZodForm(addPromptSchema, { defaultValues: EMPTY_VALUES });
   const [loading, setLoading] = useState(false);
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [promptIntegration, setPromptIntegration] = useState<string>("dotprompt");
 
   const handleCancel = () => {
-    form.resetFields();
+    form.reset(EMPTY_VALUES);
     setFileList([]);
     setPromptIntegration("dotprompt");
     onClose();
   };
 
-  const handleSubmit = async () => {
+  const handleIntegrationChange = (selected: string | null) => {
+    if (selected === null) return;
+    form.setValue("prompt_integration", selected);
+    setPromptIntegration(selected);
+  };
+
+  const convertUploadedFile = async (token: string, promptId: string): Promise<CreatePromptRequest | null> => {
+    const file = fileList[0].originFileObj as File;
+
     try {
-      const values = await form.validateFields();
+      const conversionResult = await convertPromptFileToJson(token, file);
 
-      if (!accessToken) {
-        NotificationsManager.fromBackend("Access token is required");
-        return;
-      }
+      return {
+        prompt_id: promptId,
+        litellm_params: {
+          prompt_integration: "dotprompt",
+          prompt_id: conversionResult.prompt_id,
+          prompt_data: conversionResult.json_data,
+        },
+        prompt_info: {
+          prompt_type: "db",
+        },
+      };
+    } catch (conversionError) {
+      console.error("Error converting prompt file:", conversionError);
+      toast.fromError("Failed to convert prompt file to JSON");
+      return null;
+    }
+  };
 
-      if (promptIntegration === "dotprompt" && fileList.length === 0) {
-        NotificationsManager.fromBackend("Please upload a .prompt file");
-        return;
-      }
+  const handleSubmit = async (values: AddPromptFormValues) => {
+    if (!accessToken) {
+      toast.fromError("Access token is required");
+      return;
+    }
 
-      setLoading(true);
+    const isDotprompt = promptIntegration === "dotprompt";
 
-      let promptData: any = {};
+    if (isDotprompt && fileList.length === 0) {
+      toast.fromError("Please upload a .prompt file");
+      return;
+    }
 
-      if (promptIntegration === "dotprompt" && fileList.length > 0) {
-        // Convert the uploaded file to JSON
-        const file = fileList[0].originFileObj as File;
+    setLoading(true);
 
-        try {
-          const conversionResult = await convertPromptFileToJson(accessToken, file);
+    const promptData: CreatePromptRequest | Record<string, never> | null = isDotprompt
+      ? await convertUploadedFile(accessToken, values.prompt_id)
+      : {};
 
-          // Prepare prompt data for creation
-          promptData = {
-            prompt_id: values.prompt_id,
-            litellm_params: {
-              prompt_integration: "dotprompt",
-              prompt_id: conversionResult.prompt_id,
-              prompt_data: conversionResult.json_data,
-            },
-            prompt_info: {
-              prompt_type: "db",
-            },
-          };
-        } catch (conversionError) {
-          console.error("Error converting prompt file:", conversionError);
-          NotificationsManager.fromBackend("Failed to convert prompt file to JSON");
-          setLoading(false);
-          return;
-        }
-      }
+    if (promptData === null) {
+      setLoading(false);
+      return;
+    }
 
-      // Create the prompt
-      try {
-        await createPromptCall(accessToken, promptData);
-        NotificationsManager.success("Prompt created successfully!");
-        handleCancel();
-        onSuccess();
-      } catch (createError) {
-        console.error("Error creating prompt:", createError);
-        NotificationsManager.fromBackend("Failed to create prompt");
-      }
-    } catch (error) {
-      console.error("Form validation error:", error);
+    try {
+      await createPromptCall(accessToken, promptData);
+      toast.success("Prompt created successfully!");
+      handleCancel();
+      onSuccess();
+    } catch (createError) {
+      console.error("Error creating prompt:", createError);
+      toast.fromError("Failed to create prompt");
     } finally {
       setLoading(false);
     }
@@ -93,7 +129,7 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
   const uploadProps: UploadProps = {
     beforeUpload: (file) => {
       if (!file.name.endsWith(".prompt")) {
-        NotificationsManager.fromBackend("Please upload a .prompt file");
+        toast.fromError("Please upload a .prompt file");
         return false;
       }
       return false; // Prevent automatic upload
@@ -113,48 +149,61 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
       open={visible}
       onCancel={handleCancel}
       footer={[
-        <Button key="cancel" onClick={handleCancel}>
+        <Button key="cancel" type="button" variant="outline" onClick={handleCancel}>
           Cancel
         </Button>,
-        <Button key="submit" loading={loading} onClick={handleSubmit}>
+        <Button key="submit" type="button" disabled={loading} onClick={() => void form.handleSubmit(handleSubmit)()}>
+          {loading && <UiLoadingSpinner className="size-4" />}
           Create Prompt
         </Button>,
       ]}
       width={600}
     >
-      <Form form={form} layout="vertical" requiredMark={false}>
-        <Form.Item
-          label="Prompt ID"
-          name="prompt_id"
-          rules={[
-            { required: true, message: "Please enter a prompt ID" },
-            {
-              pattern: /^[a-zA-Z0-9_-]+$/,
-              message: "Prompt ID can only contain letters, numbers, underscores, and hyphens",
-            },
-          ]}
-        >
-          <Input placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
-        </Form.Item>
+      <form onSubmit={(event) => event.preventDefault()} noValidate>
+        <FieldGroup>
+          <FormField control={form.control} name="prompt_id" label="Prompt ID">
+            {({ ref, ...field }) => (
+              <Input {...field} ref={ref} placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
+            )}
+          </FormField>
 
-        <Form.Item label="Prompt Integration" name="prompt_integration" initialValue="dotprompt">
-          <Select value={promptIntegration} onChange={setPromptIntegration}>
-            <Option value="dotprompt">dotprompt</Option>
-          </Select>
-        </Form.Item>
+          <FormField control={form.control} name="prompt_integration" label="Prompt Integration">
+            {({ id, value, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+              <Select items={PROMPT_INTEGRATION_OPTIONS} value={value} onValueChange={handleIntegrationChange}>
+                <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PROMPT_INTEGRATION_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </FormField>
 
-        {promptIntegration === "dotprompt" && (
-          <>
-            <Divider />
-            <Form.Item label="Prompt File" extra="Upload a .prompt file that follows the Dotprompt specification">
-              <Upload {...uploadProps}>
-                <Button icon={<UploadOutlined />}>Select .prompt File</Button>
-              </Upload>
-              {fileList.length > 0 && <div className="mt-2 text-sm text-gray-600">Selected: {fileList[0].name}</div>}
-            </Form.Item>
-          </>
-        )}
-      </Form>
+          {promptIntegration === "dotprompt" && (
+            <>
+              <FieldSeparator />
+              <Field>
+                <FieldTitle>Prompt File</FieldTitle>
+                <Upload {...uploadProps}>
+                  <Button type="button" variant="outline">
+                    <UploadIcon />
+                    Select .prompt File
+                  </Button>
+                </Upload>
+                {fileList.length > 0 && (
+                  <div className="mt-2 text-sm text-muted-foreground">Selected: {fileList[0].name}</div>
+                )}
+                <FieldDescription>Upload a .prompt file that follows the Dotprompt specification</FieldDescription>
+              </Field>
+            </>
+          )}
+        </FieldGroup>
+      </form>
     </Modal>
   );
 };

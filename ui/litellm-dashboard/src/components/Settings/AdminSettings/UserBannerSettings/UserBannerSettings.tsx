@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUpdateUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUpdateUserBanner";
 import { useUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUserBanner";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { UserBanner, UserBannerSeverity, UserBannerUpdate } from "@/components/networking";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
@@ -60,10 +60,10 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
   const handleSave = () => {
     saveBanner(draft, {
       onSuccess: () => {
-        NotificationManager.success("User banner updated successfully");
+        toast.success("User banner updated successfully");
       },
       onError: (error) => {
-        NotificationManager.fromBackend(error);
+        toast.fromError(error);
       },
     });
   };

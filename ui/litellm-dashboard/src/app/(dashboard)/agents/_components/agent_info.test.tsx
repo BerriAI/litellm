@@ -21,6 +21,7 @@ vi.mock("./agent_card_discovery", () => ({
 
 vi.mock("./agent_form_fields", () => ({
   default: () => <div data-testid="agent-form-fields" />,
+  unmountedA2AFieldNames: () => [],
 }));
 
 const agent = {
