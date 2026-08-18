@@ -8385,29 +8385,36 @@ async def ahealth_check(
         api_base_from_params: Final = model_params.get("api_base", None)
         api_key_from_params: Final = model_params.get("api_key", None)
 
-        model, custom_llm_provider, _, _ = get_llm_provider(
+        model, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
+        resolved_model_params: Final = dict(  # mutable-ok: health-check handlers require mutable request parameters
+            model_params
+        )
+        if dynamic_api_base is not None:
+            resolved_model_params["api_base"] = dynamic_api_base
+        if dynamic_api_key is not None:
+            resolved_model_params["api_key"] = dynamic_api_key
+        resolved_model_params["cache"] = {"no-cache": True}
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls
         mode = mode or "chat"
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                model_params=model_params,
+                model_params=resolved_model_params,
                 litellm_logging_obj=litellm_logging_obj,
             )
 
         mode_handlers: Final = HealthCheckHelpers.get_mode_handlers(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            model_params=model_params,
+            model_params=resolved_model_params,
             prompt=prompt,
             input=input,
         )

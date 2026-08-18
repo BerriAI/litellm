@@ -16,6 +16,38 @@ import litellm
 
 
 @pytest.mark.asyncio
+async def test_hosted_vllm_health_check_uses_resolved_provider_credentials(
+    monkeypatch,
+):
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "https://env.example/v1")
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "env-key")
+
+    mock_response = litellm.ModelResponse(
+        choices=[{"message": {"role": "assistant", "content": "ok"}}]
+    )
+    with (
+        patch(
+            "litellm.litellm_core_utils.health_check_helpers.HealthCheckHelpers."
+            "_update_model_params_with_health_check_tracking_information",
+            side_effect=lambda model_params: model_params,
+        ),
+        patch(
+            "litellm.acompletion",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_acompletion,
+    ):
+        response = await litellm.ahealth_check(
+            model_params={"model": "hosted_vllm/org/model"},
+            mode="chat",
+        )
+
+    assert "error" not in response
+    assert mock_acompletion.await_args.kwargs["api_base"] == "https://env.example/v1"
+    assert mock_acompletion.await_args.kwargs["api_key"] == "env-key"
+
+
+@pytest.mark.asyncio
 async def test_azure_health_check():
     response = await litellm.ahealth_check(
         model_params={
