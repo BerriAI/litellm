@@ -190,7 +190,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               Metrics&quot; on the Usage page or individual requests in the Logs page.
             </p>
 
-            <div className="mt-4 grid grid-cols-1 items-center gap-4 md:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 items-center gap-4 md:grid-cols-[1fr_1fr_auto]">
               <Combobox
                 multiple
                 items={uniqueApiKeys}

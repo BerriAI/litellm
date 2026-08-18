@@ -797,6 +797,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           <div className="grid grid-cols-2">
             <div>
               <AdvancedDatePicker
+                align="left"
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
@@ -863,6 +864,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           <div className="grid grid-cols-2">
             <div className="col-span-1">
               <AdvancedDatePicker
+                align="left"
                 className="mb-4"
                 value={dateValue}
                 onValueChange={(value) => {

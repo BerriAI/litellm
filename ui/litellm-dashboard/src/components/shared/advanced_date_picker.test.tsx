@@ -76,6 +76,25 @@ describe("AdvancedDatePicker", () => {
     expect(screen.getByText("Year to date")).toBeInTheDocument();
   });
 
+  it("anchors the panel to the trigger edge named by align", () => {
+    const { container, unmount } = render(
+      <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} align="left" />,
+    );
+    openDropdown(container);
+    const leftPanel = container.querySelector('[data-slot="advanced-date-picker-panel"]');
+    expect(leftPanel).toHaveClass("left-0");
+    expect(leftPanel).not.toHaveClass("right-0");
+    unmount();
+
+    const { container: defaultContainer } = render(
+      <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />,
+    );
+    openDropdown(defaultContainer);
+    const rightPanel = defaultContainer.querySelector('[data-slot="advanced-date-picker-panel"]');
+    expect(rightPanel).toHaveClass("right-0");
+    expect(rightPanel).not.toHaveClass("left-0");
+  });
+
   it("should show date inputs in dropdown", () => {
     const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
 

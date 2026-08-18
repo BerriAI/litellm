@@ -11,6 +11,7 @@ interface AdvancedDatePickerProps {
   label?: string;
   className?: string;
   showTimeRange?: boolean;
+  align?: "left" | "right";
 }
 
 interface RelativeTimeOption {
@@ -71,6 +72,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   label = "Select Time Range",
   className,
   showTimeRange = true,
+  align = "right",
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
@@ -302,7 +304,13 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
         {/* Dropdown panel */}
         {isOpen && (
-          <div className="absolute top-full right-0 z-9999 min-w-[600px] mt-1 bg-white border border-gray-200 rounded-lg shadow-xl">
+          <div
+            data-slot="advanced-date-picker-panel"
+            className={cn(
+              "absolute top-full z-9999 min-w-[600px] mt-1 bg-white border border-gray-200 rounded-lg shadow-xl",
+              align === "left" ? "left-0" : "right-0",
+            )}
+          >
             <div className="flex">
               {/* Left side - Relative time options */}
               <div className="w-1/2 border-r border-gray-200">
