@@ -31,7 +31,7 @@ describe("KeyModelUsageView", () => {
 
   it("should return null when topModels is empty", () => {
     const { container } = render(<KeyModelUsageView topModels={[]} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should display Model Usage title", () => {

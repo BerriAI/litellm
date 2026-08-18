@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import CreateVectorStore from "./CreateVectorStore";
 import * as networking from "@/components/networking";
@@ -8,14 +9,6 @@ vi.mock("@/components/networking", () => ({
   ragIngestCall: vi.fn(),
 }));
 
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 // Mock vector_store_providers
 vi.mock("@/components/vector_store_providers", () => ({
   VectorStoreProviders: {
@@ -23,18 +16,21 @@ vi.mock("@/components/vector_store_providers", () => ({
     OPENAI: "OpenAI",
     AZURE_OPENAI: "Azure OpenAI",
     S3Vectors: "AWS S3 Vectors",
+    Valkey: "Valkey",
   },
   vectorStoreProviderMap: {
     BEDROCK: "bedrock",
     OPENAI: "openai",
     AZURE_OPENAI: "azure_openai",
     S3Vectors: "s3_vectors",
+    Valkey: "valkey",
   },
   vectorStoreProviderLogoMap: {
     "Amazon Bedrock": "https://example.com/bedrock.png",
     OpenAI: "https://example.com/openai.png",
     "Azure OpenAI": "https://example.com/azure.png",
     "AWS S3 Vectors": "https://example.com/aws.png",
+    Valkey: "https://example.com/valkey.svg",
   },
   getProviderSpecificFields: vi.fn((provider: string) => {
     if (provider === "s3_vectors") {
@@ -206,29 +202,37 @@ describe("CreateVectorStore", () => {
     });
   });
 
-  it("should display S3 Vectors provider-specific fields when selected", async () => {
+  it("should exclude valkey from the provider dropdown since it has no RAG ingestion", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
 
-    // Find and click the provider dropdown
     const providerSelect = screen.getByRole("combobox");
 
     await act(async () => {
       fireEvent.mouseDown(providerSelect);
     });
 
-    // Wait for dropdown options to appear
     await waitFor(() => {
-      const s3Option = screen.queryByText("AWS S3 Vectors");
-      if (s3Option) {
-        fireEvent.click(s3Option);
-      }
+      expect(screen.getByText("AWS S3 Vectors")).toBeInTheDocument();
     });
+    expect(screen.queryByText("Valkey")).not.toBeInTheDocument();
+  });
+
+  it("should display S3 Vectors provider-specific fields when selected", async () => {
+    render(<CreateVectorStore accessToken="test-token" />);
+
+    // Find and click the provider dropdown
+    const providerSelect = screen.getByRole("combobox");
+
+    await userEvent.click(providerSelect);
+
+    // Wait for dropdown options to appear
+    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
 
     // Check if S3-specific fields are displayed
     await waitFor(() => {
-      expect(screen.queryByText("Vector Bucket Name")).toBeInTheDocument();
-      expect(screen.queryByText("AWS Region")).toBeInTheDocument();
-      expect(screen.queryByText("Embedding Model")).toBeInTheDocument();
+      expect(screen.getByText("Vector Bucket Name")).toBeInTheDocument();
+      expect(screen.getByText("AWS Region")).toBeInTheDocument();
+      expect(screen.getByText("Embedding Model")).toBeInTheDocument();
     });
   });
 
@@ -252,16 +256,9 @@ describe("CreateVectorStore", () => {
     // Select S3 Vectors provider
     const providerSelect = screen.getByRole("combobox");
 
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await userEvent.click(providerSelect);
 
-    await waitFor(() => {
-      const s3Option = screen.queryByText("AWS S3 Vectors");
-      if (s3Option) {
-        fireEvent.click(s3Option);
-      }
-    });
+    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
 
     // Try to create without filling required fields
     const createButton = screen.getByRole("button", { name: /Create Vector Store/i });
