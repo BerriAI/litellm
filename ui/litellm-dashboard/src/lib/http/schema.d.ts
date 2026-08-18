@@ -8036,6 +8036,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/info": {
         parameters: {
             query?: never;
@@ -17674,6 +17716,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_v1_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/model/info": {
         parameters: {
             query?: never;
@@ -21540,7 +21624,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -29122,6 +29206,70 @@ export interface components {
             tags: {
                 [key: string]: string | string[];
             };
+        };
+        /** ModelDeprecationInfo */
+        ModelDeprecationInfo: {
+            /**
+             * Days Until Deprecation
+             * @description Days remaining until the deprecation date. Negative if the model is already deprecated.
+             */
+            days_until_deprecation: number;
+            /**
+             * Deprecation Date
+             * Format: date
+             * @description The date (UTC) when the model becomes deprecated.
+             */
+            deprecation_date: string;
+            /**
+             * Litellm Model
+             * @description The underlying litellm model string the deprecation date is sourced from.
+             */
+            litellm_model?: string | null;
+            /**
+             * Litellm Provider
+             * @description The provider this model belongs to.
+             */
+            litellm_provider?: string | null;
+            /**
+             * Model Name
+             * @description The public name of the model on the proxy (model_group).
+             */
+            model_name: string;
+            /**
+             * Status
+             * @description 'deprecated' if the date has passed, 'imminent' if it falls within warn_within_days, 'upcoming' otherwise.
+             * @enum {string}
+             */
+            status: "upcoming" | "imminent" | "deprecated";
+        };
+        /** ModelDeprecationResponse */
+        ModelDeprecationResponse: {
+            /**
+             * Checked At
+             * Format: date-time
+             * @description UTC timestamp when the deprecation snapshot was generated.
+             */
+            checked_at: string;
+            /**
+             * Deprecated
+             * @description Models whose deprecation date has already passed.
+             */
+            deprecated?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Imminent
+             * @description Models whose deprecation date is within warn_within_days from today and require immediate migration planning.
+             */
+            imminent?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Upcoming
+             * @description Models with a future deprecation date outside the warn window.
+             */
+            upcoming?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Warn Within Days
+             * @description The window (in days) used to bucket 'imminent' models.
+             */
+            warn_within_days: number;
         };
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
@@ -46893,6 +47041,37 @@ export interface operations {
             };
         };
     };
+    model_deprecations_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     model_info_v1_model_info_get: {
         parameters: {
             query?: {
@@ -58726,6 +58905,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    model_deprecations_v1_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

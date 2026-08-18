@@ -475,6 +475,7 @@ class ProxyLogging:
         # Guard flags to prevent duplicate background tasks
         self.daily_report_started: bool = False
         self.hanging_requests_check_started: bool = False
+        self.deprecation_check_started: bool = False
 
     def startup_event(
         self,
@@ -517,6 +518,25 @@ class ProxyLogging:
             )  # RUN HANGING REQUEST CHECK (if user wants to alert on hanging requests)
             self.hanging_requests_check_started = True
 
+        self._ensure_deprecation_check_scheduled()
+
+    def _ensure_deprecation_check_scheduled(self) -> None:
+        """Alerting can be configured at startup or by a later config reload, so schedule from either path"""
+        if self.alerting is None or self.deprecation_check_started:
+            return
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        asyncio.create_task(
+            self.slack_alerting_instance.run_scheduled_deprecation_check(
+                pod_lock_manager=self.db_spend_update_writer.pod_lock_manager
+            )
+        )
+        self.deprecation_check_started = True
+
     def update_values(
         self,
         alerting: list | None = None,
@@ -544,6 +564,7 @@ class ProxyLogging:
             updated_slack_alerting = True
 
         if updated_slack_alerting is True:
+            self._ensure_deprecation_check_scheduled()
             self.slack_alerting_instance.update_values(
                 alerting=self.alerting,
                 alerting_threshold=self.alerting_threshold,
