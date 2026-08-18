@@ -432,12 +432,12 @@ export default function UserInfoView({
         confirmLoading={isDeletingUser}
       />
 
-      <Tabs value={activeTab} onValueChange={(v: unknown) => setActiveTab(String(v))}>
-        <TabsList className="mb-4">
-          <TabsTrigger value="overview" className="flex-none">
+      <Tabs value={activeTab} onValueChange={(v: unknown) => setActiveTab(String(v))} className="gap-0">
+        <TabsList variant="line" className="mb-4">
+          <TabsTrigger value="overview" className="flex-none data-active:text-primary after:bg-primary">
             Overview
           </TabsTrigger>
-          <TabsTrigger value="details" className="flex-none">
+          <TabsTrigger value="details" className="flex-none data-active:text-primary after:bg-primary">
             Details
           </TabsTrigger>
         </TabsList>

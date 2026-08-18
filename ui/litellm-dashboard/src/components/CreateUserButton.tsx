@@ -204,7 +204,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           className="mb-4"
         />
         <Form.Item label="User Email" name="user_email">
-          <Input placeholder="" />
+          <Input />
         </Form.Item>
         <Form.Item label="User Role" name="user_role">
           <Select2>
