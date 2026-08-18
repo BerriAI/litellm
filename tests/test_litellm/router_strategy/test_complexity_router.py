@@ -4280,6 +4280,16 @@ class TestClassifierPlugin:
         ]
 
     @pytest.mark.asyncio
+    async def test_plugin_runs_without_messages(self, mock_router_instance):
+        """A prompt-only call (no message list) still reaches the plugin with an empty context."""
+        plugin = _FixedTierClassifier("COMPLEX")
+        router = _plugin_router(mock_router_instance, plugin)
+        outcome = await router.aclassify("hello", raw_messages=None)
+        assert outcome.cause == "classifier_plugin"
+        assert plugin.seen_context.raw_messages == []
+        assert plugin.seen_context.structured_messages == []
+
+    @pytest.mark.asyncio
     async def test_plugin_decline_falls_back_to_heuristic(self, mock_router_instance):
         router = _plugin_router(mock_router_instance, _FixedTierClassifier(None))
         outcome = await router.aclassify("what is 2+2?")

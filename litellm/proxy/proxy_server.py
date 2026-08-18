@@ -4072,7 +4072,7 @@ def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-para
         model_info = {}  # mutable-ok: fresh model_info stamped onto the raw yaml model dict
         model["model_info"] = model_info  # rebind-ok: out-param, stamped in place
     if model_info.get("id") is None:
-        model_info["id"] = litellm.Router._generate_model_id(  # pyright: ignore[reportPrivateUsage]  # _delete_deployment hashes with the same private helper; the ids must match
+        model_info["id"] = litellm.Router.generate_model_id(
             model_group=model.get("model_name", ""),
             litellm_params=litellm_params,
         )
@@ -5718,7 +5718,7 @@ class ProxyConfig:
                 model_id = model.get("model_info", {}).get("id", None)
                 if model_id is None:
                     ## else - generate stable id's ##
-                    model_id = llm_router._generate_model_id(
+                    model_id = llm_router.generate_model_id(
                         model_group=model["model_name"],
                         litellm_params=model["litellm_params"],
                     )

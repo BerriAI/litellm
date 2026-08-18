@@ -1184,16 +1184,16 @@ class ComplexityRouter(CustomLogger):
             return self._classifier_failure_outcome("classifier_plugin is not set", prompt, system_prompt)
         kwargs: Final = request_kwargs if request_kwargs is not None else EMPTY_MAPPING
         pools: Final = self._tier_pools()
-        context: Final = RoutingContext(
-            raw_messages=raw_messages or (),
-            structured_messages=resolve_structured_messages(
-                messages=raw_messages, request_kwargs=request_kwargs or EMPTY_MAPPING
-            )
-            or (),
-            candidate_models=tuple(model for pool in pools.values() for model in pool),
-            metadata=kwargs.get(get_metadata_variable_name_from_kwargs(kwargs)) or EMPTY_MAPPING,
-        )
         try:
+            context: Final = RoutingContext(
+                raw_messages=raw_messages or (),
+                structured_messages=resolve_structured_messages(
+                    messages=raw_messages, request_kwargs=request_kwargs or EMPTY_MAPPING
+                )
+                or (),
+                candidate_models=tuple(model for pool in pools.values() for model in pool),
+                metadata=kwargs.get(get_metadata_variable_name_from_kwargs(kwargs)) or EMPTY_MAPPING,
+            )
             verdict: Final = await asyncio.wait_for(
                 plugin.classify(context), timeout=self.config.classifier_plugin_timeout_ms / 1000
             )
