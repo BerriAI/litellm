@@ -901,6 +901,7 @@ def test_redis_get_embedding_routes_through_router(monkeypatch):
     cache.embedding_model = "sem-embed"
 
     router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
     fake_proxy.llm_router = router
@@ -1145,6 +1146,7 @@ async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
     cache.embedding_model = "sem-embed"
 
     router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
     fake_proxy.llm_router = router
@@ -1160,6 +1162,99 @@ async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
     assert md["user_api_key"] == "sk-x"
     assert md["user_api_key_team_id"] == "team-1"  # FAILS today: team_id is dropped
     assert md["semantic-cache-embedding"] is True
+
+
+LONG_PROMPT = " ".join(f"token{i}" for i in range(300))
+
+
+def _proxy_with_router(monkeypatch, router, model_name):
+    import sys
+    import types
+
+    fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
+    fake_proxy.llm_router = router
+    fake_proxy.llm_model_list = [{"model_name": model_name}]
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
+
+
+def _token_count(model, text):
+    import litellm
+
+    return len(litellm.encode(model=model, text=text))
+
+
+def test_redis_get_embedding_truncates_to_deployment_max_input_tokens(monkeypatch):
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    cache.embedding_model = "sem-embed"
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (5, None)
+    router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
+    _proxy_with_router(monkeypatch, router, "sem-embed")
+
+    assert cache._get_embedding(LONG_PROMPT) == [0.5, 0.6]
+
+    sent_input = router.embedding.call_args.kwargs["input"]
+    assert LONG_PROMPT.startswith(sent_input)
+    assert _token_count("sem-embed", sent_input) == 5
+    assert _token_count("sem-embed", LONG_PROMPT) > 5
+
+
+@pytest.mark.asyncio
+async def test_redis_async_embedding_explicit_limit_beats_deployment_limit(monkeypatch):
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    cache.embedding_model = "sem-embed"
+    cache.embedding_max_input_tokens = 3
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (8191, None)
+    router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
+    _proxy_with_router(monkeypatch, router, "sem-embed")
+
+    assert await cache._get_async_embedding(LONG_PROMPT) == [0.1, 0.2]
+
+    sent_input = router.aembedding.call_args.kwargs["input"]
+    assert _token_count("sem-embed", sent_input) == 3
+
+
+def test_redis_get_embedding_truncates_direct_path_with_explicit_limit(monkeypatch):
+    import sys
+    import types
+
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    cache.embedding_model = "text-embedding-3-small"
+    cache.embedding_max_input_tokens = 4
+
+    fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
+    fake_proxy.llm_router = None
+    fake_proxy.llm_model_list = None
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
+
+    with patch(
+        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2]}]}
+    ) as direct_embed:
+        cache._get_embedding(LONG_PROMPT)
+
+    sent_input = direct_embed.call_args.kwargs["input"]
+    assert _token_count("text-embedding-3-small", sent_input) == 4
+
+
+def test_redis_semantic_cache_init_stores_embedding_max_input_tokens(monkeypatch):
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache(
+        redis_url="redis://localhost:6379",
+        similarity_threshold=0.8,
+        embedding_max_input_tokens=512,
+    )
+    assert cache.embedding_max_input_tokens == 512
+    assert RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8).embedding_max_input_tokens is None
 
 
 def test_redis_init_defers_redisvl_construction(monkeypatch):
