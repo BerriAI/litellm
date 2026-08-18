@@ -1,6 +1,6 @@
 import { Form, Input, Modal, Select, Tag, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   createGuardrailCall,
   getGuardrailProviderSpecificParams,
@@ -214,7 +214,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         populateGuardrailProviderMap(providerParamsResp);
       } catch (error) {
         console.error("Error fetching guardrail data:", error);
-        NotificationsManager.fromBackend("Failed to load guardrail configuration");
+        toast.fromError("Failed to load guardrail configuration");
       }
     };
 
@@ -344,7 +344,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       // Validate configuration steps
       if (currentStep === 1) {
         if (shouldRenderPIIConfigSettings(selectedProvider) && selectedEntities.length === 0) {
-          NotificationsManager.fromBackend("Please select at least one PII entity to continue");
+          toast.fromError("Please select at least one PII entity to continue");
           return;
         }
       }
@@ -449,7 +449,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         const hasContentFilterSelections =
           selectedPatterns.length > 0 || blockedWords.length > 0 || selectedContentCategories.length > 0;
         if (!hasContentFilterSelections && !hasCompetitorIntent) {
-          NotificationsManager.fromBackend(
+          toast.fromError(
             "Please configure at least one content filter setting (category, pattern, keyword, or competitor intent)",
           );
           setLoading(false);
@@ -505,7 +505,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           // For some guardrails, the config values need to be in litellm_params
           guardrailData.guardrail_info = configObj;
         } catch (error) {
-          NotificationsManager.fromBackend("Invalid JSON in configuration");
+          toast.fromError("Invalid JSON in configuration");
           setLoading(false);
           return;
         }
@@ -514,13 +514,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       if (guardrailProvider === "llm_as_a_judge") {
         const criteria: JudgeCriterion[] = values.criteria || [];
         if (criteria.length === 0) {
-          NotificationsManager.fromBackend("Add at least one evaluation criterion");
+          toast.fromError("Add at least one evaluation criterion");
           setLoading(false);
           return;
         }
         const weightTotal = criteria.reduce((sum, c) => sum + (Number(c?.weight) || 0), 0);
         if (weightTotal !== 100) {
-          NotificationsManager.fromBackend(`Criterion weights must sum to 100% (currently ${weightTotal}%)`);
+          toast.fromError(`Criterion weights must sum to 100% (currently ${weightTotal}%)`);
           setLoading(false);
           return;
         }
@@ -536,7 +536,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
       if (guardrailProvider === "tool_permission") {
         if (toolPermissionConfig.rules.length === 0) {
-          NotificationsManager.fromBackend("Add at least one tool permission rule");
+          toast.fromError("Add at least one tool permission rule");
           setLoading(false);
           return;
         }
@@ -611,7 +611,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
       await createGuardrailCall(accessToken, guardrailData);
 
-      NotificationsManager.success("Guardrail created successfully");
+      toast.success("Guardrail created successfully");
 
       // Reset form and close modal
       resetForm();
@@ -619,9 +619,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       onClose();
     } catch (error) {
       console.error("Failed to create guardrail:", error);
-      NotificationsManager.fromBackend(
-        "Failed to create guardrail: " + (error instanceof Error ? error.message : String(error)),
-      );
+      toast.fromError("Failed to create guardrail: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setLoading(false);
     }

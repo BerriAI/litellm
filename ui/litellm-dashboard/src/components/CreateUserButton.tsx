@@ -16,7 +16,7 @@ import React, { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   getProxyBaseUrl,
   getProxyUISettings,
@@ -204,7 +204,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
   const handleCreate = async (formValues: CreateUserFormValues) => {
     try {
-      NotificationsManager.info("Making API Call");
+      toast.info("Making API Call");
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
@@ -231,12 +231,12 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         setIsInvitationLinkModalVisible(true);
       }
 
-      NotificationsManager.success("API user Created");
+      toast.success("API user Created");
       form.reset(defaultValues);
       localStorage.removeItem("userData" + userID);
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
-      NotificationsManager.fromBackend(errorMessage);
+      toast.fromError(errorMessage);
       console.error("Error creating the user:", error);
     }
   };

@@ -1,6 +1,6 @@
 import { Modal, Form, Button, Typography } from "antd";
 import { FolderAddOutlined } from "@ant-design/icons";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { useCreateProject, ProjectCreateParams } from "@/app/(dashboard)/hooks/projects/useCreateProject";
 import { ProjectBaseForm, ProjectFormValues } from "./ProjectBaseForm";
 import { buildProjectApiParams } from "./projectFormUtils";
@@ -24,12 +24,12 @@ export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps)
 
       createMutation.mutate(params, {
         onSuccess: () => {
-          MessageManager.success("Project created successfully");
+          toast.success("Project created successfully");
           form.resetFields();
           onClose();
         },
         onError: (error) => {
-          MessageManager.error(error.message || "Failed to create project");
+          toast.error(error.message || "Failed to create project");
         },
       });
     } catch (error) {
