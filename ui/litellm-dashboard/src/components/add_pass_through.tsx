@@ -13,7 +13,7 @@ import KeyValueInput from "./key_value_input";
 import QueryParamInput from "./query_param_input";
 import { passThroughItem } from "./PassThroughSettings/PassThroughSettings";
 import RoutePreview from "./route_preview";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
 import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 const { Option } = Select2;
@@ -91,7 +91,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       const updatedPassThroughSettings = [...passThroughItems, createdEndpoint];
       setPassThroughItems(updatedPassThroughSettings);
 
-      NotificationsManager.success("Pass-through endpoint created successfully");
+      toast.success("Pass-through endpoint created successfully");
       form.resetFields();
       setPathValue("");
       setTargetValue("");
@@ -100,7 +100,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       setGuardrails({});
       setIsModalVisible(false);
     } catch (error) {
-      NotificationsManager.fromBackend("Error creating pass-through endpoint: " + error);
+      toast.fromError("Error creating pass-through endpoint: " + error);
     } finally {
       setIsLoading(false);
     }

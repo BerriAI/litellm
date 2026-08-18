@@ -2,8 +2,7 @@ import React, { useState } from "react";
 import { Modal, Typography, Divider, Table, Select, InputNumber, Card, Space, Checkbox } from "antd";
 import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "@/components/networking";
 import { UserEditView } from "./user_edit_view";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { MoneyCell } from "@/components/shared/table_cells";
 
 const { Text, Title } = Typography;
@@ -71,7 +70,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
 
   const handleSubmit = async (formValues: any) => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("Access token not found");
+      toast.fromError("Access token not found");
       return;
     }
 
@@ -107,7 +106,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       const hasTeamAdditions = addToTeams && selectedTeams.length > 0;
 
       if (!hasUserUpdates && !hasTeamAdditions) {
-        NotificationsManager.fromBackend("Please modify at least one field or select teams to add users to");
+        toast.fromError("Please modify at least one field or select teams to add users to");
         return;
       }
 
@@ -176,12 +175,12 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         }
 
         if (failedTeams.length > 0) {
-          MessageManager.warning(`Failed to add users to ${failedTeams.length} team(s)`);
+          toast.warning(`Failed to add users to ${failedTeams.length} team(s)`);
         }
       }
 
       if (successMessages.length > 0) {
-        NotificationsManager.success(successMessages.join(". "));
+        toast.success(successMessages.join(". "));
       }
 
       // Reset team management state
@@ -194,7 +193,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       onCancel();
     } catch (error) {
       console.error("Bulk operation failed:", error);
-      NotificationsManager.fromBackend("Failed to perform bulk operations");
+      toast.fromError("Failed to perform bulk operations");
     } finally {
       setLoading(false);
     }

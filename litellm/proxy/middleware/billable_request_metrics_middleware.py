@@ -92,6 +92,7 @@ _LLM_ROUTE_EXACT: Final[tuple[str, ...]] = (
     "/v1/messages",
     "/interactions",  # Google Interactions create; /{id} reads and /cancel do not match
     "/v1beta/interactions",
+    "/comprehendmedical",  # AWS-SDK-shaped passthrough: the operation rides in the X-Amz-Target header
 )
 
 # Provider passthrough prefixes (e.g. /bedrock/..., /vertex-ai/...) carry real

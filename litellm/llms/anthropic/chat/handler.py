@@ -58,6 +58,7 @@ from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
@@ -206,7 +207,7 @@ class AnthropicChatCompletion(BaseLLM):
         client: AsyncHTTPHandler | None,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: "LiteLLMLoggingObj",
         stream,
         _is_function_call,
         data: dict,
@@ -324,7 +325,7 @@ class AnthropicChatCompletion(BaseLLM):
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         timeout: float | httpx.Timeout,
         litellm_params: dict,

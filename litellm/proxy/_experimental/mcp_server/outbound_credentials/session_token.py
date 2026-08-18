@@ -85,11 +85,18 @@ class SessionPrincipal(BaseModel):
     enforced at use time rather than frozen at mint time. ``client_id`` is the (stateless,
     gateway-sealed) DCR client identifier the token was issued to; the token endpoint
     requires it to match on the refresh grant.
+
+    ``resource_server_id`` is the single MCP server this session was authorized for when
+    the client requested a per-server RFC 8707 resource at authorize time, or ``None`` for
+    the aggregate scope. It is a RESTRICTION carried for admission to intersect against
+    the live grant resolution, never a grant by itself; the refresh grant re-mints from
+    this principal so the restriction survives rotation.
     """
 
     model_config = ConfigDict(frozen=True)
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
+    resource_server_id: str | None = None
 
 
 class SessionKeys(BaseModel):
@@ -186,6 +193,7 @@ class _SessionClaims(BaseModel):
     kind: SessionTokenKind
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
+    resource_server_id: str | None = None
 
 
 def is_session_token(candidate: str) -> bool:
@@ -286,9 +294,10 @@ def _mint(
         kind=kind,
         user_id=principal.user_id,
         client_id=principal.client_id,
+        resource_server_id=principal.resource_server_id,
     )
     token: Final = prefix + jwt.encode(
-        claims.model_dump(), keys.signing_key.get_secret_value(), algorithm=_SESSION_JWT_ALGORITHM
+        claims.model_dump(exclude_none=True), keys.signing_key.get_secret_value(), algorithm=_SESSION_JWT_ALGORITHM
     )
     size_bytes: Final = len(token.encode("utf-8"))
     if size_bytes > MAX_SESSION_TOKEN_BYTES:
@@ -323,7 +332,10 @@ def _open(
     if now.timestamp() >= claims.exp:
         return SessionExpired()
     return OpenedSessionToken(
-        principal=SessionPrincipal(user_id=claims.user_id, client_id=claims.client_id), jti=claims.jti
+        principal=SessionPrincipal(
+            user_id=claims.user_id, client_id=claims.client_id, resource_server_id=claims.resource_server_id
+        ),
+        jti=claims.jti,
     )
 
 

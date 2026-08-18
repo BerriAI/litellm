@@ -30,9 +30,10 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     pass_through_request,
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
+    websocket_passthrough_request,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
@@ -363,6 +364,39 @@ async def test_pass_through_request_failure_handler():
                     call_args["original_exception"], TypeError
                 )  # Now expecting TypeError
                 assert "traceback_str" in call_args
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_preserves_proxy_exception_status():
+    original = ProxyException(
+        message="Invalid 'limit': integer above maximum value. Expected a value <= 100, but got 101 instead.",
+        type="invalid_request_error",
+        param="limit",
+        code=400,
+        openai_code="integer_above_max_value",
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=original)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.body = AsyncMock(return_value=b"")
+        mock_request.headers = Headers({})
+        mock_request.query_params = QueryParams({"limit": "101"})
+
+        with pytest.raises(ProxyException) as exc:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com/v1/batches",
+                custom_headers={},
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert exc.value is original
+        assert exc.value.code == "400"
+        assert exc.value.param == "limit"
 
 
 def test_is_langfuse_route():
@@ -4877,3 +4911,196 @@ async def test_unusable_upstream_cost_records_zero_not_the_flat_estimate():
     assert len(payloads) == 1
     assert payloads[0]["response_cost"] == 0.0
     assert payloads[0]["total_tokens"] == 1874
+
+
+class FakeUpstreamWebSocket:
+    def __init__(self, first_frame: bytes):
+        self._first_frame = first_frame
+        self.close = AsyncMock()
+
+    async def recv(self, decode: bool = True):
+        return self._first_frame
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+class FakeUpstreamConnect:
+    def __init__(self, upstream_ws: FakeUpstreamWebSocket):
+        self._upstream_ws = upstream_ws
+
+    async def __aenter__(self):
+        return self._upstream_ws
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_forwards_non_ascii_first_frame():
+    from starlette.websockets import WebSocketState
+
+    first_frame = json.dumps(
+        {"type": "session.created", "session": {"instructions": "Hablas español, ¿sí?"}},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    upstream_ws = FakeUpstreamWebSocket(first_frame)
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_text = AsyncMock()
+    websocket.send_bytes = AsyncMock()
+    websocket.close = AsyncMock()
+    websocket.receive = AsyncMock(return_value={"type": "websocket.disconnect"})
+    websocket.headers = {}
+    websocket.client_state = WebSocketState.CONNECTED
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+            return_value=FakeUpstreamConnect(upstream_ws),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER"
+        ) as mock_worker,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock()
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: async_coroutine.close()
+        )
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://api.openai.com/v1/realtime?model=gpt-realtime",
+            custom_headers={"Authorization": "Bearer sk-test"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/openai/v1/realtime",
+            accept_websocket=True,
+        )
+
+    websocket.send_text.assert_awaited_once()
+    forwarded = json.loads(websocket.send_text.await_args.args[0])
+    assert forwarded["session"]["instructions"] == "Hablas español, ¿sí?"
+    assert all(call.kwargs.get("code") != 1011 for call in websocket.close.await_args_list)
+
+
+def _passthrough_kwargs_for_reservation(
+    user_api_key_dict: UserAPIKeyAuth, parsed_body: Optional[dict] = None
+) -> dict:
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = (
+        "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    )
+    mock_request.headers = Headers({})
+
+    return HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=user_api_key_dict,
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body=parsed_body if parsed_body is not None else {},
+        litellm_call_id="lit-5425-call-id",
+    )
+
+
+async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
+    from datetime import datetime
+
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
+    callback_kwargs = {
+        **kwargs,
+        "stream": False,
+        "standard_logging_object": {
+            "response_cost": 0.002,
+            "request_tags": None,
+        },
+    }
+
+    increment_spend_counters = AsyncMock()
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            increment_spend_counters,
+        ),
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await _ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=callback_kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    return increment_spend_counters
+
+
+@pytest.mark.asyncio
+async def test_passthrough_success_reconciles_budget_reservation():
+    """
+    A successful pass-through request must hand its pre-call budget reservation
+    to the spend-counter update so the reserved amount is reconciled down to the
+    actual cost. Without it the reservation stays in the shared Redis counter and
+    the actual cost is added on top, so the counter drifts above real spend until
+    the key falsely trips BudgetExceededError.
+    """
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:hashed-token", "reserved_cost": 0.5}],
+    }
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-token",
+        user_id="u1",
+        budget_reservation=budget_reservation,
+    )
+
+    reservation = user_api_key_dict.budget_reservation
+    kwargs = _passthrough_kwargs_for_reservation(user_api_key_dict)
+    assert (
+        kwargs["litellm_params"]["metadata"]["user_api_key_budget_reservation"]
+        is reservation
+    )
+
+    increment_spend_counters = await _track_cost_for_passthrough_kwargs(kwargs)
+
+    increment_spend_counters.assert_awaited_once()
+    assert increment_spend_counters.await_args.kwargs["budget_reservation"] is reservation
+    assert increment_spend_counters.await_args.kwargs["budget_reservation"] == budget_reservation
+
+
+@pytest.mark.asyncio
+async def test_passthrough_body_cannot_forge_budget_reservation():
+    """
+    The reservation is an internal counter handle: a client-supplied metadata
+    field naming arbitrary counter keys must never reach the spend-counter
+    update, or a caller could decrement another entity's Redis counter.
+    """
+    forged = {
+        "reserved_cost": 99.0,
+        "entries": [{"counter_key": "spend:team:victim", "reserved_cost": 99.0}],
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-token", user_id="u1")
+
+    kwargs = _passthrough_kwargs_for_reservation(
+        user_api_key_dict,
+        parsed_body={"litellm_metadata": {"user_api_key_budget_reservation": forged}},
+    )
+    assert (
+        kwargs["litellm_params"]["metadata"]["user_api_key_budget_reservation"] is None
+    )
+
+    increment_spend_counters = await _track_cost_for_passthrough_kwargs(kwargs)
+
+    increment_spend_counters.assert_awaited_once()
+    assert increment_spend_counters.await_args.kwargs["budget_reservation"] is None

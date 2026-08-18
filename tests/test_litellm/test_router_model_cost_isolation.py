@@ -1471,3 +1471,116 @@ def test_replay_live_router_model_cost_rebuilds_every_live_router():
     finally:
         litellm.model_cost = saved_model_cost
         _invalidate_model_cost_lowercase_map()
+
+
+def test_strategy_router_alias_pricing_never_enters_model_cost(monkeypatch):
+    """
+    A strategy-router alias is never the deployment actually called or billed,
+    so custom pricing configured on it must not be registered under its
+    model_id - an explicit zero there makes the budget check treat the alias
+    as a genuinely free model while requests bill as a real deployment. The
+    strip must also survive a price-data reload, which rebuilds entries by
+    walking the live routers.
+    """
+    from litellm import utils as litellm_utils
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router/smart-router",
+                    "complexity_router_default_model": "paid-model",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "complexity_router_config": {"tiers": {"simple": "paid-model"}},
+                },
+                "model_info": {"id": "strategy-alias-id", "max_input_tokens": 128000},
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                "model_info": {"id": "strategy-alias-paid-id"},
+            },
+        ],
+    )
+
+    def _assert_alias_unpriced():
+        entry = litellm.model_cost.get("strategy-alias-id")
+        assert entry is not None, "Alias metadata should still be registered"
+        assert entry["max_input_tokens"] == 128000
+        assert "input_cost_per_token" not in entry
+        assert "output_cost_per_token" not in entry
+
+    _assert_alias_unpriced()
+
+    saved_model_cost = litellm.model_cost
+    try:
+        _simulate_price_data_reload(
+            {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}},
+        )
+        _assert_alias_unpriced()
+        assert router.model_list
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_inherit_builtin_tiered_output_rate_fills_the_backend_flat_rate():
+    """
+    A deployment entry whose custom tiers publish only input rates would bill
+    completions at 0, so the backend model's flat output rate is copied in at
+    registration.
+    """
+    model_info = {"tiered_pricing": [{"range": [0, 3000], "input_cost_per_token": 3.25e-07}]}
+
+    Router._inherit_builtin_tiered_output_rate(
+        model_info=model_info,
+        backend_model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+    )
+
+    backend_rate = litellm.get_model_info(model="claude-haiku-4-5", custom_llm_provider="anthropic")[
+        "output_cost_per_token"
+    ]
+    assert backend_rate > 0
+    assert model_info["output_cost_per_token"] == backend_rate
+
+
+def test_inherit_builtin_tiered_output_rate_never_stores_a_synthesized_zero():
+    """
+    Regression: get_model_info reports output_cost_per_token 0 for a backend that
+    only publishes tiered rates (e.g. dashscope/qwen-flash), and storing that zero
+    would mark the deployment as explicitly priced free.
+    """
+    backend_info = litellm.get_model_info(model="qwen-flash", custom_llm_provider="dashscope")
+    assert backend_info["output_cost_per_token"] == 0
+
+    model_info = {"tiered_pricing": [{"range": [0, 3000], "input_cost_per_token": 3.25e-07}]}
+    Router._inherit_builtin_tiered_output_rate(
+        model_info=model_info,
+        backend_model="qwen-flash",
+        custom_llm_provider="dashscope",
+    )
+
+    assert "output_cost_per_token" not in model_info
+
+
+def test_inherit_builtin_tiered_output_rate_leaves_a_user_rate_alone():
+    model_info = {
+        "tiered_pricing": [{"range": [0, 3000], "input_cost_per_token": 3.25e-07}],
+        "output_cost_per_token": 9e-07,
+    }
+
+    Router._inherit_builtin_tiered_output_rate(
+        model_info=model_info,
+        backend_model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+    )
+
+    assert model_info["output_cost_per_token"] == 9e-07

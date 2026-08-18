@@ -96,6 +96,7 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
                 "output_cost_per_token": NONNEG_NUMBER,
                 "output_cost_per_reasoning_token": NONNEG_NUMBER,
                 "cache_read_input_token_cost": NONNEG_NUMBER,
+                "cache_creation_input_token_cost": NONNEG_NUMBER,
                 "input_cost_per_query": NONNEG_NUMBER,
             },
             "additionalProperties": False,

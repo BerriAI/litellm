@@ -1,5 +1,3 @@
-import hashlib
-import json
 import os
 import re
 import secrets
@@ -28,6 +26,7 @@ from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    CallTypes,
     CostBreakdown,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
@@ -144,36 +143,22 @@ def _get_spend_logs_metadata(
     return clean_metadata
 
 
-def generate_hash_from_response(response_obj: Any) -> str:
-    """
-    Generate a stable hash from a response object.
-
-    Args:
-        response_obj: The response object to hash (can be dict, list, etc.)
-
-    Returns:
-        A hex string representation of the MD5 hash
-    """
-    try:
-        # Create a stable JSON string of the entire response object
-        # Sort keys to ensure consistent ordering
-        json_str: Final = json.dumps(response_obj, sort_keys=True)
-
-        # Generate a hash of the response object
-        unique_hash: Final = hashlib.md5(json_str.encode()).hexdigest()
-        return unique_hash
-    except Exception:
-        # Return a fallback hash if serialization fails
-        return hashlib.md5(str(response_obj).encode()).hexdigest()
+BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 
 
 def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str | None:
-    if call_type == "aretrieve_batch" or call_type == "acreate_file":
-        # Generate a hash from the response object
-        id: str | None = generate_hash_from_response(response_obj)
-    else:
-        id = cast(str | None, response_obj.get("id")) or cast(str | None, kwargs.get("litellm_call_id"))
-    return id
+    standard_logging_payload = kwargs.get("standard_logging_object")
+    candidate_ids: Final = (
+        response_obj.get("id"),
+        standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
+        kwargs.get("litellm_call_id"),
+    )
+    resolved_id: Final = next(
+        (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
+    )
+    if resolved_id is not None and call_type == CallTypes.aretrieve_batch.value:
+        return f"{resolved_id}{BATCH_COST_REQUEST_ID_SUFFIX}"
+    return resolved_id
 
 
 def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> dict:

@@ -1,12 +1,12 @@
 "use client";
 
-import { AudioMutedOutlined, AudioOutlined, CloseCircleOutlined, SendOutlined, SoundOutlined } from "@ant-design/icons";
-import { Button, Input, Select, Typography } from "antd";
+import { CircleX, Mic, MicOff, Send, Volume2 } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getProxyBaseUrl } from "@/components/networking";
 import { OPEN_AI_VOICE_SELECT_OPTIONS } from "./chatConstants";
-
-const { Text } = Typography;
 
 interface RealtimeMessage {
   role: "user" | "assistant" | "system" | "status";
@@ -364,28 +364,37 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
         <div className="flex items-center gap-3">
-          <SoundOutlined className="text-lg text-blue-500" />
-          <Text className="font-semibold text-gray-800">Realtime Voice Chat</Text>
+          <Volume2 className="size-5 text-blue-500" />
+          <span className="font-semibold text-gray-800">Realtime Voice Chat</span>
           <span className={`inline-block w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-gray-300"}`} />
-          <Text className="text-xs text-gray-500">
+          <span className="text-xs text-gray-500">
             {isConnected ? "Connected" : isConnecting ? "Connecting..." : "Disconnected"}
-          </Text>
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <Select
-            size="small"
             value={selectedVoice}
-            onChange={setSelectedVoice}
-            options={OPEN_AI_VOICE_SELECT_OPTIONS}
-            style={{ width: 220 }}
+            onValueChange={(voice) => setSelectedVoice(voice ?? selectedVoice)}
             disabled={isConnected}
-          />
+          >
+            <SelectTrigger size="sm" className="w-[220px]" aria-label="Voice">
+              <SelectValue>{OPEN_AI_VOICE_SELECT_OPTIONS.find((v) => v.value === selectedVoice)?.label}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {OPEN_AI_VOICE_SELECT_OPTIONS.map((voice) => (
+                <SelectItem key={voice.value} value={voice.value}>
+                  {voice.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {!isConnected ? (
-            <Button type="primary" onClick={connect} loading={isConnecting} size="small">
+            <Button onClick={connect} disabled={isConnecting} size="sm">
               Connect
             </Button>
           ) : (
-            <Button danger onClick={disconnect} size="small" icon={<CloseCircleOutlined />}>
+            <Button variant="destructive" onClick={disconnect} size="sm">
+              <CircleX />
               Disconnect
             </Button>
           )}
@@ -396,12 +405,12 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && !isConnected && (
           <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
-            <SoundOutlined style={{ fontSize: 48 }} />
-            <Text className="text-lg text-gray-500">Realtime Voice Playground</Text>
-            <Text className="text-sm text-gray-400 text-center max-w-md">
+            <Volume2 className="size-12" />
+            <span className="text-lg text-gray-500">Realtime Voice Playground</span>
+            <p className="text-sm text-gray-400 text-center max-w-md">
               Click <b>Connect</b> to start a realtime session. You can speak using your microphone or type messages.
               The AI will respond with voice and text.
-            </Text>
+            </p>
           </div>
         )}
         {messages.map((msg, i) => (
@@ -433,30 +442,26 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
         <div className="border-t border-gray-200 p-3 bg-white">
           <div className="flex items-center gap-2">
             <Button
-              shape="circle"
-              size="large"
-              type={isRecording ? "primary" : "default"}
-              danger={isRecording}
-              icon={isRecording ? <AudioMutedOutlined /> : <AudioOutlined />}
+              size="icon-lg"
+              variant={isRecording ? "destructive" : "outline"}
               onClick={isRecording ? stopRecording : startRecording}
               title={isRecording ? "Stop recording" : "Start recording"}
-              className={isRecording ? "animate-pulse" : ""}
-            />
+              className={`rounded-full ${isRecording ? "animate-pulse" : ""}`}
+            >
+              {isRecording ? <MicOff /> : <Mic />}
+            </Button>
             <Input
               placeholder="Type a message or use the mic..."
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              onPressEnter={sendTextMessage}
-              className="flex-1"
-              size="large"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") sendTextMessage();
+              }}
+              className="h-10 flex-1"
             />
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              onClick={sendTextMessage}
-              disabled={!inputText.trim()}
-              size="large"
-            />
+            <Button size="icon-lg" onClick={sendTextMessage} disabled={!inputText.trim()} aria-label="Send">
+              <Send />
+            </Button>
           </div>
           {isRecording && (
             <div className="mt-2 flex items-center gap-2 text-red-500 text-xs">
