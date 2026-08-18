@@ -73,6 +73,7 @@ class KeyGenerateBody(BaseModel):
     allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
     object_permission: ObjectPermission | None = None
+    router_settings: "RouterSettingsOverride | None" = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -234,16 +235,18 @@ class ChatBody(BaseModel):
 
 
 class RouterSettingsOverride(BaseModel):
-    """Per-request `router_settings_override` in a /chat/completions body: the
-    reliability knobs (fallbacks by trigger, retry count) the reliability suite
-    drives per call instead of via static router config. Serialized exclude_none, so
-    an override sets only the strategies a test exercises. Each fallbacks map is
-    model_name -> the ordered fallback model_names to try."""
+    """Router settings a test scopes below the global config: sent per request as
+    `router_settings_override` in a /chat/completions body (the reliability suite's
+    fallback and retry knobs) or stored on a key as `router_settings` at
+    /key/generate (the auto-router suite's tag filtering switch). Serialized
+    exclude_none, so an override sets only the knobs a test exercises. Each
+    fallbacks map is model_name -> the ordered fallback model_names to try."""
 
     fallbacks: list[dict[str, list[str]]] | None = None
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    enable_tag_filtering: bool | None = None
 
 
 class ReliabilityChatBody(ChatBody):
