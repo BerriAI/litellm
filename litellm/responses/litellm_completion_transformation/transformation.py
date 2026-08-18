@@ -638,7 +638,7 @@ class LiteLLMCompletionResponsesConfig:
                 # Not followed by an assistant message — keep the reasoning
                 # standalone instead of dropping it.
                 merged.extend(  # mutable-ok: append reasoning messages
-                    [
+                    [  # mutable-ok: append reasoning messages
                         ChatCompletionResponseMessage(
                             role="assistant",
                             content=None,
@@ -652,7 +652,7 @@ class LiteLLMCompletionResponsesConfig:
             merged.append(msg)
 
         merged.extend(  # mutable-ok: append trailing reasoning
-            [
+            [  # mutable-ok: append trailing reasoning
                 ChatCompletionResponseMessage(
                     role="assistant",
                     content=None,
@@ -1196,6 +1196,8 @@ class LiteLLMCompletionResponsesConfig:
             if text_parts:
                 return "\n".join(text_parts)
 
+        # Guardrail traversal in litellm/proxy/guardrails/_content_utils.py
+        # inspects and rewrites these summary blocks before they are forwarded.
         summary: Final[object] = input_item.get("summary")
         if isinstance(summary, list):
             text_parts = []  # mutable-ok: text accumulator  # rebind-ok: text accumulator
