@@ -49,7 +49,7 @@ const langgraphInfo: AgentCreateInfo = {
 const renderForm = () =>
   render(<AddAgentForm visible={true} onClose={vi.fn()} accessToken="tok" onSuccess={vi.fn()} />);
 
-const panel = (name: RegExp) => screen.getByRole("button", { name });
+const panel = (name: RegExp) => screen.findByRole("button", { name });
 
 const openAgentTypeMenu = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.click(screen.getAllByRole("combobox")[0]);
@@ -102,7 +102,7 @@ describe("AddAgentForm submit payload", () => {
     await user.clear(screen.getByLabelText("Version"));
     await user.type(screen.getByLabelText("Version"), "2.0.0");
 
-    await user.click(panel(/Skills/));
+    await user.click(await panel(/Skills/));
     await user.click(screen.getByRole("button", { name: /Add Skill/ }));
     await user.type(await screen.findByLabelText("Skill ID"), "hello");
     await user.type(screen.getByLabelText("Skill Name"), "Hello");
@@ -111,22 +111,22 @@ describe("AddAgentForm submit payload", () => {
     await user.type(screen.getByLabelText("Examples"), "say hi");
     await user.click(screen.getByLabelText("Agent Name"));
 
-    await user.click(panel(/Capabilities/));
+    await user.click(await panel(/Capabilities/));
     await user.click(await screen.findByRole("switch", { name: "Streaming" }));
     await user.click(screen.getByRole("switch", { name: "Push Notifications" }));
 
-    await user.click(panel(/Optional Settings/));
+    await user.click(await panel(/Optional Settings/));
     await user.type(await screen.findByLabelText("Icon URL"), "https://example.com/icon.png");
 
-    await user.click(panel(/Cost Configuration/));
+    await user.click(await panel(/Cost Configuration/));
     await user.type(await screen.findByLabelText("Cost Per Query ($)"), "0.25");
     await user.type(screen.getByLabelText("Input Cost Per Token ($)"), "0.000002");
 
-    await user.click(panel(/LiteLLM Parameters/));
+    await user.click(await panel(/LiteLLM Parameters/));
     await user.type(await screen.findByLabelText("Model (Optional)"), "gpt-4o");
     await user.click(screen.getByRole("switch", { name: "Make Public" }));
 
-    await user.click(panel(/Authentication Headers/));
+    await user.click(await panel(/Authentication Headers/));
     await user.click(await screen.findByRole("button", { name: /Add Static Header/ }));
     await user.type(await screen.findByPlaceholderText("Header name (e.g. Authorization)"), "X-Tenant");
     await user.type(screen.getByPlaceholderText("Value (e.g. Bearer token123)"), "acme");
@@ -176,9 +176,9 @@ describe("AddAgentForm submit payload", () => {
     await user.type(screen.getByLabelText("Display Name"), "Collapsed");
     await user.type(screen.getByPlaceholderText("Describe what this agent does..."), "d");
 
-    await user.click(panel(/Cost Configuration/));
+    await user.click(await panel(/Cost Configuration/));
     await user.type(await screen.findByLabelText("Cost Per Query ($)"), "0.75");
-    await user.click(panel(/Cost Configuration/));
+    await user.click(await panel(/Cost Configuration/));
 
     await goToLastStepAndCreate(user);
 
@@ -189,10 +189,10 @@ describe("AddAgentForm submit payload", () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
     renderForm();
 
-    await user.click(panel(/Cost Configuration/));
+    await user.click(await panel(/Cost Configuration/));
     await user.type(await screen.findByLabelText("Cost Per Query ($)"), "0.75");
-    await user.click(panel(/Cost Configuration/));
-    await user.click(panel(/Cost Configuration/));
+    await user.click(await panel(/Cost Configuration/));
+    await user.click(await panel(/Cost Configuration/));
 
     expect(await screen.findByLabelText("Cost Per Query ($)")).toHaveValue(0.75);
   });

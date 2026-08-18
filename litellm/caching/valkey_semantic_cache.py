@@ -61,6 +61,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         startup_nodes: list | None = None,
         sync_client: Redis | None = None,
         async_client: AsyncRedis | None = None,
+        embedding_max_input_tokens: int | None = None,
         **kwargs: Any,
     ):
         if similarity_threshold is None:
@@ -78,6 +79,7 @@ class ValkeySemanticCache(RedisSemanticCache):
 
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
+        self.embedding_max_input_tokens = embedding_max_input_tokens
         self.index_name = index_name or self.DEFAULT_VALKEY_INDEX_NAME
         self.key_prefix = f"{self.index_name}:"
         self._index_dim: int | None = None

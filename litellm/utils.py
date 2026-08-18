@@ -2110,7 +2110,7 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
 
 def decode(
     model="",
-    tokens: list[int] = [],
+    tokens: Sequence[int] = (),
     custom_tokenizer: dict | None = None,
     skip_special_tokens: bool = True,
 ):
@@ -2132,7 +2132,7 @@ def decode(
     return dec
 
 
-def _strip_huggingface_special_token_ids(tokenizer: Tokenizer, tokens: list[int]) -> list[int]:
+def _strip_huggingface_special_token_ids(tokenizer: Tokenizer, tokens: Sequence[int]) -> Sequence[int]:
     try:
         added_tokens_decoder: Final = tokenizer.get_added_tokens_decoder()
     except Exception:

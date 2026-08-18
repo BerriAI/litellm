@@ -89,6 +89,20 @@ def _semantic_cache():
     )
 
 
+@pytest.mark.parametrize(
+    "cache_type",
+    [LiteLLMCacheType.REDIS_SEMANTIC, LiteLLMCacheType.VALKEY_SEMANTIC],
+)
+def test_semantic_cache_embedding_max_input_tokens_reaches_backend(cache_type):
+    cache = Cache(
+        type=cache_type,
+        redis_url="redis://localhost:6379",
+        similarity_threshold=0.8,
+        semantic_cache_embedding_max_input_tokens=2048,
+    )
+    assert cache.cache.embedding_max_input_tokens == 2048
+
+
 def test_semantic_cache_key_excludes_prompt_so_paraphrases_share_a_bucket():
     cache = _semantic_cache()
     tenant = {"user_api_key": "hash-abc"}
