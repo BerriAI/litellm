@@ -3,9 +3,13 @@
 One method per registry cell, each asserting the real contract against a live
 proxy: read-only inventory routes return their documented shape, stateless
 validators compute their verdict from the request, and the write routes persist
-so a read-back reflects the change. The two routes that mutate global proxy state
-(cache settings and router settings, both driven from the admin UI) are exercised
-with a benign, self-restoring change so a shared proxy is left as it was found.
+so a read-back reflects the change. Router settings, which mutate global proxy
+state, are exercised with a benign, self-restoring change so a shared proxy is left
+as it was found.
+
+Cache settings are deliberately not covered here; see the rationale on
+mgmt.cache_settings.update.happy_path in coverage_registry/mgmt.yaml before adding
+a test for that route.
 """
 
 from __future__ import annotations
@@ -122,34 +126,6 @@ class ComplianceResponse(BaseModel):
     compliant: bool
     regulation: str
     checks: list[ComplianceCheck]
-
-
-# ---- cache settings --------------------------------------------------------
-
-
-class CacheSettingsValue(BaseModel):
-    type: str
-    host: str = ""
-    port: str = ""
-
-
-class CacheSettingsUpdateBody(BaseModel):
-    cache_settings: CacheSettingsValue
-
-
-class CacheCurrentValues(BaseModel):
-    type: str | None = None
-    host: str | None = None
-    port: str | None = None
-
-
-class CacheGetResponse(BaseModel):
-    current_values: CacheCurrentValues
-
-
-class CacheUpdateResponse(BaseModel):
-    status: str
-    settings: CacheSettingsValue
 
 
 # ---- fallback management ---------------------------------------------------
@@ -366,70 +342,6 @@ class TestComplianceRoutes:
         )
         assert all(check.check_name and check.detail for check in result.checks), (
             "every compliance check must carry a name and a human-readable detail"
-        )
-
-
-class TestCacheSettings:
-    @pytest.mark.covers("mgmt.cache_settings.update.happy_path")
-    def test_update_persists_cache_backend_to_get(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
-        """Exercise the update route without changing global state: capture the live
-        cache backend and write exactly that back, so the config the proxy ends on is
-        byte-for-byte the one it started with. A teardown restore of the same captured
-        settings is the safety net if the body fails partway. The update route is only
-        meaningful against a configured cache, so an unconfigured proxy fails loudly
-        here rather than being silently switched to redis."""
-        before = self._read_settings(client)
-        assert before.type is not None, (
-            "GET /cache/settings reported no cache type; refusing to invent one and mutate the shared proxy"
-        )
-        captured = CacheSettingsValue(type=before.type, host=before.host or "", port=before.port or "")
-        resources.defer(lambda: self._write_settings(client, captured))
-
-        updated = unwrap(
-            client.proxy.transport.post(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                json=CacheSettingsUpdateBody(cache_settings=captured),
-                response_type=CacheUpdateResponse,
-            )
-        )
-        assert updated.status == "success", f"/cache/settings update status {updated.status!r}, expected 'success'"
-        assert updated.settings.type == captured.type, (
-            f"/cache/settings echoed type {updated.settings.type!r}, wrote {captured.type!r}"
-        )
-
-        def reflected() -> CacheCurrentValues | None:
-            current = self._read_settings(client)
-            return current if current.type == captured.type else None
-
-        after = _poll(client, reflected, f"/cache/settings never reported type {captured.type!r} after the update")
-        assert after.host == captured.host and after.port == captured.port, (
-            f"/cache/settings persisted host/port {after.host!r}/{after.port!r}, "
-            f"wrote {captured.host!r}/{captured.port!r}"
-        )
-
-    @staticmethod
-    def _read_settings(client: ManagementClient) -> CacheCurrentValues:
-        return unwrap(
-            client.proxy.transport.get(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                params=NoBody(),
-                response_type=CacheGetResponse,
-            )
-        ).current_values
-
-    @staticmethod
-    def _write_settings(client: ManagementClient, settings: CacheSettingsValue) -> None:
-        _ = unwrap(
-            client.proxy.transport.post(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                json=CacheSettingsUpdateBody(cache_settings=settings),
-                response_type=CacheUpdateResponse,
-            )
         )
 
 

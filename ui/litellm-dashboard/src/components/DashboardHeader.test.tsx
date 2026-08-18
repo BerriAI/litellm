@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { DashboardHeader } from "./DashboardHeader";
 
 const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
@@ -44,7 +44,7 @@ describe("DashboardHeader breadcrumb", () => {
     act(() => {
       fireEvent.click(selector);
     });
-    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
+    expect(await screen.findByText("Chat")).toBeInTheDocument();
   });
 
   it("keeps the AI Gateway selector at the root even when there is nothing to switch to (discovery)", () => {
@@ -53,5 +53,14 @@ describe("DashboardHeader breadcrumb", () => {
     expect(screen.getByRole("button", { name: /AI Gateway/i })).toBeInTheDocument();
     expect(screen.getByText("Logs")).toBeInTheDocument();
     expect(screen.queryByText("Observability")).not.toBeInTheDocument();
+  });
+
+  it("renders the tools divider centered rather than stretched to the top of the row", () => {
+    const { container } = render(<DashboardHeader page="logs" />);
+
+    const separators = container.querySelectorAll('[data-slot="separator"][data-orientation="vertical"]');
+    expect(separators).toHaveLength(1);
+    expect(separators[0].className).not.toMatch(/self-stretch/);
+    expect(separators[0].className).toContain("data-vertical:self-center");
   });
 });

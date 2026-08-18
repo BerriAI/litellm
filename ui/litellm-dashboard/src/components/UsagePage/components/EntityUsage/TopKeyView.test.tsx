@@ -152,7 +152,7 @@ describe("TopKeyView", () => {
 
     const bars = container.querySelectorAll("path.recharts-rectangle");
     expect(bars).toHaveLength(1);
-    expect(bars[0].getAttribute("fill")).toBe("var(--color-cyan-500, #06b6d4)");
+    expect(bars[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
     expect(screen.getAllByText("A Very Lon...").length).toBeGreaterThan(0);
 
     fireEvent.click(bars[0]);

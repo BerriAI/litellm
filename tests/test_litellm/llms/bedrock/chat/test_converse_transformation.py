@@ -30,7 +30,7 @@ def test_transform_usage():
         }
     )
     config = AmazonConverseConfig()
-    openai_usage = config._transform_usage(usage)
+    openai_usage = config.transform_usage(usage)
     assert (
         openai_usage.prompt_tokens
         == usage["inputTokens"]
@@ -62,7 +62,7 @@ def test_transform_usage_with_reasoning_content():
     )
     config = AmazonConverseConfig()
     reasoning_text = "Let me think about this step by step."
-    openai_usage = config._transform_usage(usage, reasoning_content=reasoning_text)
+    openai_usage = config.transform_usage(usage, reasoning_content=reasoning_text)
     assert openai_usage.completion_tokens_details is not None
     assert openai_usage.completion_tokens_details.reasoning_tokens > 0
     assert openai_usage.completion_tokens_details.text_tokens == (
@@ -368,6 +368,73 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
 
     additional = result.get("additionalModelRequestFields", {})
     assert additional.get("output_config") == {"effort": "high"}
+
+
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "xhigh", "max"),
+    ],
+)
+def test_explicit_output_config_effort_mapped_for_adaptive_thinking_converse(model, effort, expected_effort):
+    """Regression: Claude Code drives adaptive thinking as ``thinking: {"type":
+    "adaptive"}`` plus ``output_config: {"effort": ...}``. ``output_config`` must
+    be a supported openai param and survive ``map_openai_params`` (clamped to the
+    model's Bedrock effort ceiling), otherwise the Converse request carries
+    adaptive thinking without an effort tier and Bedrock streams zero
+    ``reasoningContent`` blocks."""
+    config = AmazonConverseConfig()
+
+    assert "output_config" in config.get_supported_openai_params(model)
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": effort},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "adaptive"}
+    assert optional_params["output_config"] == {"effort": expected_effort}
+
+
+def test_output_config_supported_param_for_arn_models_converse():
+    """ARN model ids hide the underlying Claude model, so ``output_config`` must
+    be in the blanket ARN supported-params list too."""
+    config = AmazonConverseConfig()
+    arn_model = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+    assert "output_config" in config.get_supported_openai_params(arn_model)
+
+
+def test_output_config_effort_forwarded_for_application_inference_profile_arn():
+    """Regression: opaque application inference profile ARNs cannot resolve a
+    base model, so the anthropic-only serialization gate dropped ``output_config``
+    while still sending ``thinking``: adaptive thinking with no effort tier, and
+    Bedrock streams zero ``reasoningContent`` blocks. The effort must be forwarded
+    verbatim (ceilings and capability gates are unknowable behind the alias) for
+    Bedrock to enforce."""
+    config = AmazonConverseConfig()
+    arn_model = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+
+    result = config._transform_request(
+        model=arn_model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "max"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("thinking") == {"type": "adaptive"}
+    assert additional.get("output_config") == {"effort": "max"}
 
 
 def test_output_config_format_translated_to_native_output_config_converse():
@@ -1093,53 +1160,57 @@ def test_transform_response_with_structured_response_calling_tool():
     )
 
 
+def _mock_converse_response() -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.json.return_value = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+    }
+    mock_response.text = json.dumps(mock_response.json.return_value)
+    return mock_response
+
+
+async def _acompletion_captured_request_body(tools: list, messages: list) -> dict:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=_mock_converse_response()) as mock_post:
+        response = await litellm.acompletion(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=messages,
+            tools=tools,
+            aws_access_key_id="fake-access-key",
+            aws_secret_access_key="fake-secret-key",
+            aws_region_name="us-west-2",
+            client=client,
+        )
+
+    assert response.choices[0].message.content == "ok"
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["url"].endswith("/converse")
+    return json.loads(mock_post.call_args.kwargs["data"])
+
+
 @pytest.mark.asyncio
 async def test_bedrock_bash_tool_acompletion():
-    """Test Bedrock with bash tool for ls command using acompletion."""
-
-    # Test with bash tool instead of computer tool
+    """Bash tool rides acompletion into the converse request body without any network call."""
     tools = [
         {
             "type": "bash_20241022",
             "name": "bash",
         }
     ]
-
     messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
-    try:
-        response = await litellm.acompletion(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            messages=messages,
-            tools=tools,
-            # Using dummy API key - test should fail with auth error, proving request formatting works
-            api_key="dummy-key-for-testing",
-        )
-        # If we get here, something's wrong - we expect an auth error
-        assert False, "Expected authentication error but got successful response"
-    except Exception as e:
-        error_str = str(e).lower()
+    request_body = await _acompletion_captured_request_body(tools=tools, messages=messages)
 
-        # Check if it's an expected authentication/credentials error
-        auth_error_indicators = [
-            "credentials",
-            "authentication",
-            "unauthorized",
-            "access denied",
-            "aws",
-            "region",
-            "profile",
-            "token",
-            "invalid",
-            "signature",
-        ]
-
-        if any(auth_error in error_str for auth_error in auth_error_indicators):
-            # This is expected - request formatting succeeded, auth failed as expected
-            assert True
-        else:
-            # Unexpected error - might be tool handling issue
-            pytest.fail(f"Unexpected error (might be tool handling issue): {e}")
+    additional_fields = request_body["additionalModelRequestFields"]
+    assert additional_fields["tools"] == [{"type": "bash_20241022", "name": "bash"}]
+    assert "anthropic_beta" in additional_fields
+    assert request_body["messages"][0]["content"][0]["text"] == "run ls command and find all python files"
 
 
 @pytest.mark.asyncio
@@ -1172,39 +1243,16 @@ async def test_bedrock_computer_use_acompletion():
         }
     ]
 
-    try:
-        response = await litellm.acompletion(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            messages=messages,
-            tools=tools,
-            # Using dummy API key - test should fail with auth error, proving request formatting works
-            api_key="dummy-key-for-testing",
-        )
-        # If we get here, something's wrong - we expect an auth error
-        assert False, "Expected authentication error but got successful response"
-    except Exception as e:
-        error_str = str(e).lower()
+    request_body = await _acompletion_captured_request_body(tools=tools, messages=messages)
 
-        # Check if it's an expected authentication/credentials error
-        auth_error_indicators = [
-            "credentials",
-            "authentication",
-            "unauthorized",
-            "access denied",
-            "aws",
-            "region",
-            "profile",
-            "token",
-            "invalid",
-            "signature",
-        ]
-
-        if any(auth_error in error_str for auth_error in auth_error_indicators):
-            # This is expected - request formatting succeeded, auth failed as expected
-            assert True
-        else:
-            # Unexpected error - might be tool handling issue
-            pytest.fail(f"Unexpected error (might be tool handling issue): {e}")
+    additional_fields = request_body["additionalModelRequestFields"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
+    computer_tools = [tool for tool in additional_fields["tools"] if tool.get("type") == "computer_20250124"]
+    assert computer_tools[0]["display_height_px"] == 768
+    assert computer_tools[0]["display_width_px"] == 1024
+    image_blocks = [block for block in request_body["messages"][0]["content"] if "image" in block]
+    assert image_blocks[0]["image"]["format"] == "png"
+    assert image_blocks[0]["image"]["source"]["bytes"]
 
 
 @pytest.mark.asyncio
@@ -3581,6 +3629,8 @@ def test_supports_native_structured_outputs():
         assert config._supports_native_structured_outputs("nvidia.nemotron-nano-3-30b")
         # DeepSeek: old substring "deepseek-v3.1" didn't match real ID
         assert config._supports_native_structured_outputs("deepseek.v3-v1:0")
+        assert config._supports_native_structured_outputs("deepseek.v3.2")
+        assert config._supports_native_structured_outputs("zai.glm-5")
 
         # Unsupported models -- should fall back to tool-call approach
         assert not config._supports_native_structured_outputs(
@@ -4279,6 +4329,78 @@ def test_parallel_tool_calls_emits_typed_auto_tool_choice(parallel_tool_calls, e
     assert request_data["additionalModelRequestFields"]["tool_choice"] == {
         "type": "auto",
         "disable_parallel_tool_use": expected_disable,
+    }
+
+
+@pytest.mark.parametrize(
+    "tool_choice, expected_tool_config_choice",
+    [
+        ("auto", {"auto": {}}),
+        ("required", {"any": {}}),
+        ({"type": "function", "function": {"name": "get_current_weather"}}, {"tool": {"name": "get_current_weather"}}),
+    ],
+)
+def test_parallel_tool_calls_with_explicit_tool_choice_omits_conflicting_type(tool_choice, expected_tool_config_choice):
+    config = AmazonConverseConfig()
+    model = "us.anthropic.claude-opus-4-8"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tool_choice": tool_choice, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request_data["toolConfig"]["toolChoice"] == expected_tool_config_choice
+    assert request_data["additionalModelRequestFields"]["tool_choice"] == {"disable_parallel_tool_use": True}
+
+
+def test_tool_choice_type_kept_when_no_tool_config_choice_conflicts():
+    config = AmazonConverseConfig()
+    model = "us.anthropic.claude-opus-4-8"
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "What's the weather in SF and NYC?"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolChoice" not in request_data["toolConfig"]
+    assert request_data["additionalModelRequestFields"]["tool_choice"] == {
+        "type": "auto",
+        "disable_parallel_tool_use": True,
+    }
+
+
+def test_drop_tool_choice_type_leaves_other_passthrough_fields_untouched():
+    additional_request_params = {
+        "tool_choice": {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": True},
+        "anthropic_beta": ["some-beta"],
+    }
+
+    AmazonConverseConfig._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
+
+    assert additional_request_params == {
+        "tool_choice": {"name": "get_weather", "disable_parallel_tool_use": True},
+        "anthropic_beta": ["some-beta"],
     }
 
 
@@ -5881,3 +6003,43 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
     )
 
     assert "thinking" not in optional_params
+
+
+def test_is_converse_usage_shape_distinguishes_camel_case_from_anthropic():
+    config = AmazonConverseConfig()
+    assert config.is_converse_usage_shape({"inputTokens": 1, "outputTokens": 2}) is True
+    assert config.is_converse_usage_shape({"outputTokens": 2}) is True
+    assert config.is_converse_usage_shape({"input_tokens": 1, "output_tokens": 2}) is False
+    assert config.is_converse_usage_shape({}) is False
+
+
+def test_usage_from_batch_output_completes_an_incomplete_block():
+    """Batch output omits totalTokens and the cache counts the live API always sends."""
+    usage = AmazonConverseConfig().usage_from_batch_output({"inputTokens": 2202, "outputTokens": 540})
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (2202, 540, 2742)
+
+
+def test_usage_from_batch_output_inflates_input_by_cache_counts():
+    usage = AmazonConverseConfig().usage_from_batch_output(
+        {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "totalTokens": 120,
+            "cacheReadInputTokens": 800,
+            "cacheWriteInputTokens": 200,
+        }
+    )
+    assert usage.prompt_tokens == 1100
+    assert usage.prompt_tokens_details.cached_tokens == 800
+    assert usage.prompt_tokens_details.cache_creation_tokens == 200
+
+
+def test_streaming_usage_chunk_is_transformed():
+    """The streaming decoder's usage event feeds the same public transform."""
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    decoder = AWSEventStreamDecoder(model="us.amazon.nova-lite-v1:0")
+    chunk = decoder.converse_chunk_parser({"usage": {"inputTokens": 11, "outputTokens": 4, "totalTokens": 15}})
+    assert chunk.usage.prompt_tokens == 11
+    assert chunk.usage.completion_tokens == 4
+    assert chunk.usage.total_tokens == 15

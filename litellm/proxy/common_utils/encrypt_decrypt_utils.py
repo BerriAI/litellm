@@ -1,6 +1,6 @@
 import base64
 import os
-from typing import Literal, Optional, cast
+from typing import Final, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
 
@@ -9,15 +9,15 @@ from litellm._logging import verbose_proxy_logger
 # Legacy XSalsa20-Poly1305 (nacl) values carry no marker; the colon in the
 # prefix can never appear in base64url(nacl output), so the prefix check is an
 # unambiguous discriminator between the two formats on read.
-_V2_GCM_PREFIX = "v2:gcm:"
+_V2_GCM_PREFIX: Final = "v2:gcm:"
 
 # general_settings key selecting the at-rest encryption algorithm for new writes.
 # Default preserves the legacy algorithm so existing deployments are byte-for-byte
 # unchanged until they explicitly opt in. Decrypt is always format-detecting, so
 # flipping this flag forward (or back) never strands previously-written data.
-_ENCRYPTION_ALGORITHM_SETTING = "encryption_algorithm"
-_ALGO_AES_GCM = "aes-256-gcm"
-_ALGO_XSALSA20 = "xsalsa20-poly1305"
+_ENCRYPTION_ALGORITHM_SETTING: Final = "encryption_algorithm"
+_ALGO_AES_GCM: Final = "aes-256-gcm"
+_ALGO_XSALSA20: Final = "xsalsa20-poly1305"
 
 
 def _get_salt_key():
@@ -42,7 +42,7 @@ def _get_encryption_algorithm() -> str:
     try:
         from litellm.proxy.proxy_server import general_settings
 
-        algo = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING, _ALGO_XSALSA20)
+        algo: Final = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING, _ALGO_XSALSA20)
     except Exception:
         # general_settings may not be importable in some contexts (e.g. SDK-only
         # use of these helpers). Fall back to the legacy algorithm.
@@ -73,9 +73,9 @@ def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string."""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-    nonce = os.urandom(12)
+    nonce: Final = os.urandom(12)
     # AESGCM.encrypt returns ciphertext || tag(16); wire format is nonce || that.
-    blob = AESGCM(_derive_key(signing_key)).encrypt(nonce, value.encode("utf-8"), None)
+    blob: Final = AESGCM(_derive_key(signing_key)).encrypt(nonce, value.encode("utf-8"), None)
     return _V2_GCM_PREFIX + base64.urlsafe_b64encode(nonce + blob).decode("utf-8")
 
 
@@ -83,7 +83,7 @@ def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Decrypt a versioned ``v2:gcm:`` string produced by :func:`_encrypt_aes_gcm`."""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-    raw = base64.urlsafe_b64decode(value[len(_V2_GCM_PREFIX) :])
+    raw: Final = base64.urlsafe_b64decode(value[len(_V2_GCM_PREFIX) :])
     # An empty plaintext still serializes to nonce(12) || tag(16) = 28 bytes, so a
     # short/empty buffer here is a corrupt value: let AESGCM.decrypt raise and be
     # swallowed by decrypt_value_helper (returns None/original), same as legacy.
@@ -91,8 +91,8 @@ def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     return AESGCM(_derive_key(signing_key)).decrypt(nonce, blob, None).decode("utf-8")
 
 
-def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
-    signing_key = new_encryption_key or _get_salt_key()
+def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
+    signing_key: Final = new_encryption_key or _get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -101,14 +101,14 @@ def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
                 # is returned directly with no extra base64 wrapper.
                 return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
 
-            encrypted_value = encrypt_value(value=value, signing_key=signing_key)  # type: ignore
+            encrypted_value = encrypt_value(value=value, signing_key=signing_key)
             # Use urlsafe_b64encode for URL-safe base64 encoding (replaces + with - and / with _)
             encrypted_value = base64.urlsafe_b64encode(encrypted_value).decode("utf-8")
 
             return encrypted_value
 
         verbose_proxy_logger.debug(
-            f"Invalid value type passed to encrypt_value: {type(value)} for Value: {value}\n Value must be a string"
+            "Invalid value type passed to encrypt_value: %s for Value: %s\n Value must be a string", type(value), value
         )
         # if it's not a string - do not encrypt it and return the value
         return value
@@ -122,7 +122,7 @@ def decrypt_value_helper(
     exception_type: Literal["debug", "error"] = "error",
     return_original_value: bool = False,
 ):
-    signing_key = _get_salt_key()
+    signing_key: Final = _get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -139,18 +139,18 @@ def decrypt_value_helper(
                 # If URL-safe decoding fails, try standard base64 decoding for backwards compatibility
                 decoded_b64 = base64.b64decode(value)
 
-            value = decrypt_value(value=decoded_b64, signing_key=signing_key)  # type: ignore
+            value = decrypt_value(value=decoded_b64, signing_key=signing_key)
             return value
 
         # if it's not str - do not decrypt it, return the value
         return value
     except Exception as e:
-        error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+        error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {e}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
         if exception_type == "debug":
             verbose_proxy_logger.debug(error_message)
             return value if return_original_value else None
 
-        verbose_proxy_logger.debug(f"Unable to decrypt value for key: {key}, returning None")
+        verbose_proxy_logger.debug("Unable to decrypt value for key: %s, returning None", key)
         if return_original_value:
             return value
         else:
@@ -166,16 +166,16 @@ def encrypt_value(value: str, signing_key: str):
     import nacl.utils
 
     # get 32 byte master key #
-    hash_object = hashlib.sha256(signing_key.encode())
-    hash_bytes = hash_object.digest()
+    hash_object: Final = hashlib.sha256(signing_key.encode())
+    hash_bytes: Final = hash_object.digest()
 
     # initialize secret box #
-    box = nacl.secret.SecretBox(hash_bytes)
+    box: Final = nacl.secret.SecretBox(hash_bytes)
 
     # encode message #
-    value_bytes = value.encode("utf-8")
+    value_bytes: Final = value.encode("utf-8")
 
-    encrypted = box.encrypt(value_bytes)
+    encrypted: Final = box.encrypt(value_bytes)
 
     return encrypted
 
@@ -187,11 +187,11 @@ def decrypt_value(value: bytes, signing_key: str) -> str:
     import nacl.utils
 
     # get 32 byte master key #
-    hash_object = hashlib.sha256(signing_key.encode())
-    hash_bytes = hash_object.digest()
+    hash_object: Final = hashlib.sha256(signing_key.encode())
+    hash_bytes: Final = hash_object.digest()
 
     # initialize secret box #
-    box = nacl.secret.SecretBox(hash_bytes)
+    box: Final = nacl.secret.SecretBox(hash_bytes)
 
     # Convert the bytes object to a string
     try:
@@ -199,7 +199,7 @@ def decrypt_value(value: bytes, signing_key: str) -> str:
             return ""
 
         plaintext = box.decrypt(value)
-        plaintext = plaintext.decode("utf-8")  # type: ignore
-        return plaintext  # type: ignore
+        plaintext = plaintext.decode("utf-8")
+        return plaintext
     except Exception as e:
         raise e

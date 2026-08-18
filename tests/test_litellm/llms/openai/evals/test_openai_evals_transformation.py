@@ -252,9 +252,7 @@ def test_transform_cancel_eval_response(config: OpenAIEvalsConfig):
             "object": "eval",
             "status": "cancelled",
         },
-        request=httpx.Request(
-            "POST", "https://api.openai.com/v1/evals/eval_123/cancel"
-        ),
+        request=httpx.Request("POST", "https://api.openai.com/v1/evals/eval_123/cancel"),
     )
 
     result = config.transform_cancel_eval_response(
@@ -276,8 +274,169 @@ def test_transform_run_requests_encode_eval_and_run_ids(config: OpenAIEvalsConfi
         headers={},
     )
 
-    assert (
-        url
-        == "https://api.openai.com/v1/evals/..%2F..%2Fevals%3Fx%3D1%23frag/runs/..%2Fruns%23other/cancel"
-    )
+    assert url == "https://api.openai.com/v1/evals/..%2F..%2Fevals%3Fx%3D1%23frag/runs/..%2Fruns%23other/cancel"
     assert request_body == {}
+
+
+def _eval_json_response(url: str, method: str = "GET") -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        json={
+            "id": "eval_123",
+            "object": "eval",
+            "created_at": 1234567890,
+            "name": "Test Eval",
+            "data_source_config": {"type": "stored_completions"},
+            "testing_criteria": [],
+        },
+        request=httpx.Request(method, url),
+    )
+
+
+def _run_json(run_id: str = "evalrun_123", status: str = "queued") -> dict:
+    return {
+        "id": run_id,
+        "object": "eval.run",
+        "created_at": 1234567890,
+        "status": status,
+        "data_source": {"type": "completions"},
+        "eval_id": "eval_123",
+    }
+
+
+def test_transform_get_eval_response(config: OpenAIEvalsConfig):
+    result = config.transform_get_eval_response(
+        raw_response=_eval_json_response("https://api.openai.com/v1/evals/eval_123"),
+        logging_obj=None,
+    )
+
+    assert result.id == "eval_123"
+    assert result.object == "eval"
+    assert result.name == "Test Eval"
+
+
+def test_transform_update_eval_response(config: OpenAIEvalsConfig):
+    result = config.transform_update_eval_response(
+        raw_response=_eval_json_response("https://api.openai.com/v1/evals/eval_123", method="POST"),
+        logging_obj=None,
+    )
+
+    assert result.id == "eval_123"
+    assert result.name == "Test Eval"
+
+
+def test_transform_create_run_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json=_run_json(),
+        request=httpx.Request("POST", "https://api.openai.com/v1/evals/eval_123/runs"),
+    )
+
+    result = config.transform_create_run_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.id == "evalrun_123"
+    assert result.status == "queued"
+    assert result.eval_id == "eval_123"
+
+
+def test_transform_list_runs_request(config: OpenAIEvalsConfig):
+    url, query_params = config.transform_list_runs_request(
+        eval_id="eval_123",
+        list_params={"limit": 5, "after": "evalrun_1", "order": "asc"},
+        litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com"),
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/evals/eval_123/runs"
+    assert query_params == {"limit": 5, "after": "evalrun_1", "order": "asc"}
+
+
+def test_transform_list_runs_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json={
+            "object": "list",
+            "data": [_run_json()],
+            "first_id": "evalrun_123",
+            "last_id": "evalrun_123",
+            "has_more": False,
+        },
+        request=httpx.Request("GET", "https://api.openai.com/v1/evals/eval_123/runs"),
+    )
+
+    result = config.transform_list_runs_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.object == "list"
+    assert len(result.data) == 1
+    assert result.data[0].id == "evalrun_123"
+    assert result.has_more is False
+
+
+def test_transform_get_run_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json=_run_json(status="completed"),
+        request=httpx.Request("GET", "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123"),
+    )
+
+    result = config.transform_get_run_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.id == "evalrun_123"
+    assert result.status == "completed"
+
+
+def test_transform_cancel_run_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json={"id": "evalrun_123", "object": "eval.run", "status": "cancelled"},
+        request=httpx.Request(
+            "POST",
+            "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123/cancel",
+        ),
+    )
+
+    result = config.transform_cancel_run_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.id == "evalrun_123"
+    assert result.status == "cancelled"
+
+
+def test_transform_delete_run_request(config: OpenAIEvalsConfig):
+    url, headers, request_body = config.transform_delete_run_request(
+        eval_id="eval_123",
+        run_id="evalrun_123",
+        api_base="https://api.openai.com",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123"
+    assert request_body == {}
+
+
+def test_transform_delete_run_response(config: OpenAIEvalsConfig):
+    response = httpx.Response(
+        status_code=200,
+        json={"run_id": "evalrun_123", "object": "eval.run.deleted", "deleted": True},
+        request=httpx.Request("DELETE", "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123"),
+    )
+
+    result = config.transform_delete_run_response(
+        raw_response=response,
+        logging_obj=None,
+    )
+
+    assert result.run_id == "evalrun_123"
+    assert result.deleted is True
