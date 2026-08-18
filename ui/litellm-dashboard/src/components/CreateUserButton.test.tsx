@@ -20,10 +20,6 @@ vi.mock("./networking", () => ({
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost"),
 }));
 
-vi.mock("./bulk_create_users_button", () => ({
-  default: () => <div data-testid="bulk-create-users">Bulk Create Users</div>,
-}));
-
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: vi.fn().mockReturnValue({ data: [], isLoading: false }),
 }));
@@ -42,7 +38,6 @@ const createQueryClient = () =>
 const defaultProps = {
   userID: "123",
   accessToken: "token",
-  teams: [],
   possibleUIRoles: null as Record<string, Record<string, string>> | null,
 };
 
@@ -73,6 +68,14 @@ describe("CreateUserButton", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
       });
+    });
+
+    it("should not render the bulk invite button", async () => {
+      renderWithProviders(<CreateUserButton {...defaultProps} />);
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("button", { name: /bulk invite users/i })).not.toBeInTheDocument();
     });
 
     it("should open the invite modal when invite user button is clicked", async () => {

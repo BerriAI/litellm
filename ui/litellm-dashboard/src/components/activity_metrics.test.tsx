@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { ActivityMetrics, formatKeyLabel, processActivityData } from "./activity_metrics";
@@ -15,44 +15,21 @@ beforeAll(() => {
   }
 });
 
-vi.mock("@tremor/react", () => ({
-  Card: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  Grid: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  Text: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
-  Title: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
-  AreaChart: () => <div>AreaChart</div>,
-  BarChart: () => <div>BarChart</div>,
-}));
+// Panel order is a contract; which element the label lands in is not, so compare document order.
+const precedes = (firstLabel: string, secondLabel: string): boolean => {
+  const first = screen.getAllByText(firstLabel)[0];
+  const second = screen.getAllByText(secondLabel)[0];
+  return Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+};
 
-vi.mock("antd", () => {
-  const CollapseComponent = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
-  const PanelComponent = ({ children, header }: { children: React.ReactNode; header: React.ReactNode }) => (
-    <div>
-      <div>{header}</div>
-      <div>{children}</div>
-    </div>
-  );
-  PanelComponent.displayName = "Collapse.Panel";
-  CollapseComponent.Panel = PanelComponent;
-  const TableComponent = ({ dataSource, columns }: { dataSource?: unknown[]; columns?: { title: string }[] }) => (
-    <table>
-      <thead>
-        <tr>{columns?.map((col, i) => <th key={i}>{col.title}</th>)}</tr>
-      </thead>
-      <tbody>{dataSource?.map((_, i) => <tr key={i} />)}</tbody>
-    </table>
-  );
+vi.mock("@/utils/dataUtils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/dataUtils")>();
+
   return {
-    Collapse: CollapseComponent,
-    Table: TableComponent,
+    ...actual,
+    formatNumberWithCommas: (value: number, decimals?: number) => value.toFixed(decimals || 0),
   };
 });
-
-vi.mock("@/utils/dataUtils", () => ({
-  formatNumberWithCommas: (value: number, decimals?: number) => {
-    return value.toFixed(decimals || 0);
-  },
-}));
 
 vi.mock("@/utils/teamUtils", () => ({
   resolveTeamAliasFromTeamID: (teamID: string, teams: any[]) => {
@@ -253,10 +230,7 @@ describe("ActivityMetrics", () => {
     };
 
     render(<ActivityMetrics modelMetrics={multipleModels} />);
-    const headers = screen.getAllByRole("heading", { level: 2 });
-    const gpt4Index = headers.findIndex((h) => h.textContent?.includes("GPT-4"));
-    const gpt35Index = headers.findIndex((h) => h.textContent?.includes("GPT-3.5"));
-    expect(gpt4Index).toBeLessThan(gpt35Index);
+    expect(precedes("GPT-4", "GPT-3.5")).toBe(true);
   });
 
   it("should display model summary cards with correct values", () => {
@@ -384,10 +358,27 @@ describe("ActivityMetrics", () => {
     };
 
     render(<ActivityMetrics modelMetrics={modelsWithEmptyKey} />);
-    const headings = screen.getAllByRole("heading", { level: 2 });
-    const gpt4Index = headings.findIndex((h) => h.textContent?.includes("GPT-4"));
-    const unknownIndex = headings.findIndex((h) => h.textContent?.includes("Unknown"));
-    expect(gpt4Index).toBeLessThan(unknownIndex);
+    expect(precedes("GPT-4", "Unknown")).toBe(true);
+  });
+
+  // A model section owns view-mode state, so collapsing one must not throw its subtree away.
+  it("keeps a model section mounted once it has been expanded", () => {
+    const multipleModels: Record<string, ModelActivityData> = {
+      "gpt-3.5": GPT_35_MODEL_DATA,
+      "gpt-4": { ...mockModelMetrics["gpt-4"], total_spend: 100.5 },
+    };
+
+    render(<ActivityMetrics modelMetrics={multipleModels} />);
+
+    // Only the highest-spend section is expanded initially, so only its body is mounted.
+    const sectionsMounted = () => screen.getAllByText("Spend per day").length;
+    expect(sectionsMounted()).toBe(1);
+
+    fireEvent.click(screen.getAllByText("GPT-3.5")[0]);
+    expect(sectionsMounted()).toBe(2);
+
+    fireEvent.click(screen.getAllByText("GPT-3.5")[0]);
+    expect(sectionsMounted()).toBe(2);
   });
 
   it("should display average tokens per successful request", () => {
@@ -714,6 +705,60 @@ describe("processActivityData", () => {
     expect(result["gpt-4"].label).toBe("gpt-4");
     expect(result["gpt-4"].total_requests).toBe(100);
     expect(result["gpt-4"].total_spend).toBe(100.5);
+  });
+
+  it("should process model_groups data keyed by public model name including fallback entries", () => {
+    const upstreamModelMetrics = {
+      ...EMPTY_SPEND_METRICS,
+      spend: 10,
+      api_requests: 10,
+      successful_requests: 10,
+    };
+    const dailyActivityWithModelGroups: { results: DailyData[] } = {
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: upstreamModelMetrics,
+          breakdown: {
+            ...EMPTY_BREAKDOWN,
+            models: {
+              "gpt-5.2": {
+                metrics: upstreamModelMetrics,
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+            model_groups: {
+              "gpt-5.2-eu": {
+                metrics: { ...EMPTY_SPEND_METRICS, spend: 7, api_requests: 7, successful_requests: 7 },
+                metadata: {},
+                api_key_breakdown: {
+                  "key-1": {
+                    metrics: { ...EMPTY_SPEND_METRICS, spend: 7, api_requests: 7, total_tokens: 700 },
+                    metadata: { key_alias: "eu-key", team_id: "team1" },
+                  },
+                },
+              },
+              "gpt-5.2": {
+                metrics: { ...EMPTY_SPEND_METRICS, spend: 3, api_requests: 3, successful_requests: 3 },
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const result = processActivityData(dailyActivityWithModelGroups, "model_groups");
+
+    expect(Object.keys(result).sort()).toEqual(["gpt-5.2", "gpt-5.2-eu"]);
+    expect(result["gpt-5.2-eu"].label).toBe("gpt-5.2-eu");
+    expect(result["gpt-5.2-eu"].total_spend).toBe(7);
+    expect(result["gpt-5.2-eu"].top_api_keys).toHaveLength(1);
+    expect(result["gpt-5.2-eu"].top_api_keys[0].key_alias).toBe("eu-key");
+    expect(result["gpt-5.2"].total_spend).toBe(3);
+    expect(result["gpt-5.2"].total_requests).toBe(3);
   });
 
   it("should process data for mcp_servers key", () => {

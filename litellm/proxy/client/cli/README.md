@@ -10,10 +10,42 @@ uv tool install 'litellm[proxy]'
 
 ## Configuration
 
-The CLI can be configured using environment variables or command-line options:
+The CLI can be configured using environment variables, command-line options, or a persistent config file:
 
 - `LITELLM_PROXY_URL`: Base URL of the LiteLLM proxy server (default: http://localhost:4000)
 - `LITELLM_PROXY_API_KEY`: API key for authentication
+
+To stop exporting `LITELLM_PROXY_URL` in every shell session, store the proxy URL once in `~/.litellm/config.json`:
+
+```bash
+lite config set base_url https://your-proxy.example.com
+```
+
+Manage the stored config with:
+
+```bash
+lite config get base_url    # print the stored value
+lite config get             # print all stored config
+lite config unset base_url  # remove the stored value
+```
+
+The base URL is resolved in this order of precedence:
+
+1. `--base-url` command-line option
+2. `LITELLM_PROXY_URL` environment variable
+3. `base_url` from `~/.litellm/config.json`
+4. `http://localhost:4000`
+
+### Hiding commands from the listings
+
+Deployments that hand `lite` to end users often want to advertise only part of it. Store the commands to keep out of the listings, comma separated:
+
+```bash
+lite config set hidden_commands codex,opencode
+lite config unset hidden_commands   # list everything again
+```
+
+Hidden commands drop out of both `lite --help` and the interactive shell's "Available commands" block, and stay runnable so existing scripts keep working
 
 ## Global Options
 
@@ -580,6 +612,8 @@ The CLI respects the following environment variables:
 
 - `LITELLM_PROXY_URL`: Base URL of the proxy server
 - `LITELLM_PROXY_API_KEY`: API key for authentication
+
+`LITELLM_PROXY_URL` takes precedence over a `base_url` stored via `lite config set`, and the `--base-url` option overrides both. See the Configuration section for the full precedence order.
 
 ## Examples
 

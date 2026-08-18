@@ -4,7 +4,7 @@ import json
 import os
 import sys
 from datetime import timezone
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,6 +37,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
+    get_spend_logs_id,
 )
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
@@ -107,6 +108,143 @@ def test_get_logging_payload_does_not_map_missing_or_zero_cached_tokens(prompt_t
     )
 
     assert "cache_read_input_tokens" not in additional_usage_values
+
+
+def test_get_logging_payload_maps_openai_cache_write_tokens_to_cache_creation_input_tokens():
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=1000,
+            completion_tokens=2,
+            total_tokens=1002,
+            prompt_tokens_details={"cached_tokens": 0, "cache_write_tokens": 800},
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 800
+    assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 800
+
+
+def test_get_logging_payload_preserves_anthropic_cache_creation_input_tokens():
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=1000,
+            completion_tokens=2,
+            total_tokens=1002,
+            cache_creation_input_tokens=300,
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 300
+
+
+@pytest.mark.parametrize(
+    "prompt_tokens_details",
+    [None, {"cached_tokens": 100}, {"cached_tokens": 100, "cache_write_tokens": 0}],
+)
+def test_get_logging_payload_does_not_map_missing_or_zero_cache_write_tokens(prompt_tokens_details):
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=10,
+            completion_tokens=2,
+            total_tokens=12,
+            prompt_tokens_details=prompt_tokens_details,
+        )
+    )
+
+    assert "cache_creation_input_tokens" not in additional_usage_values
+
+
+def _make_standard_logging_payload_with_usage_object(usage_object: dict) -> StandardLoggingPayload:
+    return StandardLoggingPayload(
+        id="test-id-responses",
+        call_type="responses",
+        stream=False,
+        response_cost=0.02,
+        status="success",
+        total_tokens=1010,
+        prompt_tokens=1000,
+        completion_tokens=10,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=None,
+        model_map_information=StandardLoggingModelInformation(model_map_key="gpt-5.6", model_map_value=None),
+        model="gpt-5.6",
+        model_id="model-123",
+        model_group="openai",
+        custom_llm_provider="openai",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_org_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            requester_metadata=None,
+            user_api_key_end_user_id=None,
+            usage_object=usage_object,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address=None,
+        messages=[],
+        response={},
+        error_str=None,
+        model_parameters={},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.02",
+            litellm_overhead_time_ms=None,
+            additional_headers=None,
+            batch_models=None,
+            litellm_model_name=None,
+            usage_object=None,
+        ),
+    )
+
+
+def test_get_logging_payload_maps_responses_api_cache_write_tokens_from_usage_object():
+    """Responses API (/v1/responses) usage is not chat-Usage-shaped, so
+    additional_usage_values can't derive cache tokens from response_obj.usage.
+    The Admin UI Logs "Cache Creation Tokens" row reads
+    additional_usage_values.cache_creation_input_tokens, so it must be filled
+    from the normalized standard_logging usage_object (LIT-4633)."""
+    standard_logging_payload = _make_standard_logging_payload_with_usage_object(
+        usage_object={
+            "prompt_tokens": 1000,
+            "completion_tokens": 10,
+            "total_tokens": 1010,
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 800, "cache_creation_tokens": 800},
+        }
+    )
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": standard_logging_payload,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 800},
+            },
+        },
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    additional_usage_values = json.loads(payload["metadata"])["additional_usage_values"]
+    assert additional_usage_values["cache_creation_input_tokens"] == 800
 
 
 def test_sanitize_request_body_for_spend_logs_payload_basic():
@@ -1425,6 +1563,38 @@ def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
         "evaluated_input": "Say hi in 3 words",
         "verdict": "allow",
     }
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_preserves_guardrail_usage_when_flag_false(
+    mock_should_store,
+):
+    """
+    LIT-5650 regression: provider-reported billable usage counters live in
+    guardrail_usage, a sibling of guardrail_response, precisely so the
+    default spend-log redaction cannot drop them. The response blob (which
+    also embeds a usage copy) must still be redacted wholesale.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "bedrock-guard",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": {
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "Sorry, the model cannot answer this question."}],
+                "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+            },
+            "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0},
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    entry = result[0]
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0}
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
@@ -2765,3 +2935,208 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "tokens_saved": 7000,
         "source": "compression_interception",
     }
+
+
+def test_no_routing_decision_key_defaults_to_none_in_spend_log_metadata():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-no-routing-decision", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["routing_decision"] is None
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_internal_call_origin_survives_into_spend_log_metadata(bucket):
+    """The origin is only useful if it reaches the row the Logs UI reads.
+
+    _get_spend_logs_metadata projects onto SpendLogsMetadata.__annotations__, so an
+    undeclared key is dropped silently. Both buckets are covered because the resolver
+    returns litellm_metadata when present and metadata otherwise, and the classifier
+    sub-call populates whichever the parent route used.
+    """
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {
+                bucket: {
+                    "user_api_key": "test-key",
+                    "internal_call_origin": "autorouter_classifier",
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-classifier", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["internal_call_origin"] == "autorouter_classifier"
+
+
+def test_user_traffic_carries_no_internal_call_origin():
+    """The negative class the badge depends on: an ordinary request must be
+    distinguishable from a classifier call, not merely unlabelled by accident."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-user-traffic", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["internal_call_origin"] is None
+
+
+REDACTED_RESPONSE_PLACEHOLDER: Final = {"text": "redacted-by-litellm"}
+CONSTANT_ID_FROM_HASHED_PLACEHOLDER: Final = "00fcbef15a3b0097e14b0ca016ed30a0"
+
+
+@pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
+def test_get_spend_logs_id_stays_unique_when_the_response_is_a_redaction_placeholder(call_type):
+    """request_id is the LiteLLM_SpendLogs primary key and the flush inserts with
+    skip_duplicates, so two calls must never derive the same id from identical response
+    content. Message redaction replaces every body it cannot redact with one fixed
+    placeholder, which is what a batch and a file body both become, so hashing the
+    response collapsed all of them onto a single id and silently dropped every row
+    after the first."""
+    suffix = "_batch_cost" if call_type == "aretrieve_batch" else ""
+    first = get_spend_logs_id(call_type, dict(REDACTED_RESPONSE_PLACEHOLDER), {"litellm_call_id": "call-id-1"})
+    second = get_spend_logs_id(call_type, dict(REDACTED_RESPONSE_PLACEHOLDER), {"litellm_call_id": "call-id-2"})
+
+    assert first == f"call-id-1{suffix}"
+    assert second == f"call-id-2{suffix}"
+    assert first != second
+    assert first != CONSTANT_ID_FROM_HASHED_PLACEHOLDER
+    assert second != CONSTANT_ID_FROM_HASHED_PLACEHOLDER
+
+
+@pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
+def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call_type):
+    """A batch or file response that survives redaction carries its own id, so the row
+    keys off that rather than the per-call id."""
+    expected = "batch_abc123_batch_cost" if call_type == "aretrieve_batch" else "batch_abc123"
+    assert get_spend_logs_id(call_type, {"id": "batch_abc123"}, {"litellm_call_id": "call-id-1"}) == expected
+
+
+def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():
+    """End to end at the payload level: a batch retrieve and a file create whose bodies
+    were both flattened to the same redaction placeholder must still produce two
+    insertable rows, each carrying its own spend."""
+    payloads = [
+        get_logging_payload(
+            kwargs={
+                "call_type": call_type,
+                "model": model,
+                "litellm_call_id": call_id,
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+            response_obj=dict(REDACTED_RESPONSE_PLACEHOLDER),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )
+        for call_type, model, call_id in (
+            ("aretrieve_batch", "global.anthropic.claude-haiku-4-5-20251001-v1:0", "call-id-batch"),
+            ("acreate_file", "vertex_ai/gemini-2.5-flash", "call-id-file"),
+        )
+    ]
+    request_ids = [payload["request_id"] for payload in payloads]
+
+    assert request_ids == ["call-id-batch_batch_cost", "call-id-file"]
+    assert len(set(request_ids)) == len(request_ids)
+    assert CONSTANT_ID_FROM_HASHED_PLACEHOLDER not in request_ids
+
+
+@pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
+def test_get_spend_logs_id_keys_off_batch_identity_when_the_body_was_redacted(call_type):
+    """Retrieving one batch twice must produce one row, not two. Redaction strips the id
+    off the response body, so the identity has to come from the standard logging payload,
+    which is built from the unredacted response and keeps it. Falling through to the
+    per-call id here would write a second row carrying the same batch's full cost and
+    overstate spend by a multiple of how often the caller polled."""
+    standard_logging_object = {"id": "batch_abc123"}
+    first = get_spend_logs_id(
+        call_type,
+        dict(REDACTED_RESPONSE_PLACEHOLDER),
+        {"litellm_call_id": "call-id-1", "standard_logging_object": standard_logging_object},
+    )
+    second = get_spend_logs_id(
+        call_type,
+        dict(REDACTED_RESPONSE_PLACEHOLDER),
+        {"litellm_call_id": "call-id-2", "standard_logging_object": standard_logging_object},
+    )
+
+    expected = "batch_abc123_batch_cost" if call_type == "aretrieve_batch" else "batch_abc123"
+    assert first == second == expected
+    assert first != CONSTANT_ID_FROM_HASHED_PLACEHOLDER
+
+
+def test_get_spend_logs_id_separates_distinct_batches_whose_bodies_were_both_redacted():
+    """The flip side of idempotency: two different batches must not share a row just
+    because redaction flattened both bodies to the same placeholder."""
+    ids = [
+        get_spend_logs_id(
+            "aretrieve_batch",
+            dict(REDACTED_RESPONSE_PLACEHOLDER),
+            {"litellm_call_id": f"call-id-{index}", "standard_logging_object": {"id": batch_id}},
+        )
+        for index, batch_id in enumerate(("batch_first", "batch_second"))
+    ]
+
+    assert ids == ["batch_first_batch_cost", "batch_second_batch_cost"]
+
+
+def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id():
+    """An unredacted response keeps deciding its own row key, so cache-hit ids and every
+    other call type behave exactly as they did before."""
+    assert (
+        get_spend_logs_id(
+            "acompletion",
+            {"id": "chatcmpl-from-response"},
+            {"litellm_call_id": "call-id-1", "standard_logging_object": {"id": "id-from-standard-payload"}},
+        )
+        == "chatcmpl-from-response"
+    )
+
+
+def test_batch_cost_row_does_not_collide_with_the_batch_creation_row():
+    """Creating a batch writes a row keyed by the batch's own id, so keying the cost row
+    the same way makes the insert a duplicate of it. request_id is the primary key and the
+    flush skips duplicates, so the cost row is dropped with no error and the batch is
+    billed nothing. Observed against a live proxy: the poller computed and flushed the
+    cost, and the only row carrying that id was the acreate_batch row written when the
+    batch was submitted."""
+    batch_id = "bGl0ZWxsbV9wcm94eTttb2RlbF9pZDphYmM7bGxtX2JhdGNoX2lkOnh5eg"
+
+    creation_row_id = get_spend_logs_id("acreate_batch", {"id": batch_id}, {"litellm_call_id": "call-create"})
+    cost_row_id = get_spend_logs_id(
+        "aretrieve_batch",
+        dict(REDACTED_RESPONSE_PLACEHOLDER),
+        {"litellm_call_id": "call-poller", "standard_logging_object": {"id": batch_id}},
+    )
+
+    assert creation_row_id == batch_id
+    assert cost_row_id != creation_row_id
+    assert cost_row_id == f"{batch_id}_batch_cost"
+
+
+def test_batch_cost_row_id_is_stable_across_repeated_accounting():
+    """The cost row stays keyed to the batch, so accounting the same batch twice collapses
+    to one row instead of billing it twice."""
+    standard_logging_object = {"id": "batch_same"}
+    ids = [
+        get_spend_logs_id(
+            "aretrieve_batch",
+            dict(REDACTED_RESPONSE_PLACEHOLDER),
+            {"litellm_call_id": f"call-{index}", "standard_logging_object": standard_logging_object},
+        )
+        for index in range(2)
+    ]
+
+    assert ids[0] == ids[1] == "batch_same_batch_cost"

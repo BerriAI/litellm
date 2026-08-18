@@ -17,9 +17,14 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: mockUseAuthorized,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => ({ data: [] }),
+}));
+
 // Networking: wire the hoisted fns so we can assert calls later
 vi.mock("../networking", () => {
   return {
+    serverRootPath: "",
     keyUpdateCall: (...args: any[]) => keyUpdateCallMock(...args),
     keyDeleteCall: (...args: any[]) => keyDeleteCallMock(...args),
   };
@@ -182,46 +187,29 @@ vi.mock("@heroicons/react/outline", async () => {
   return { ArrowLeftIcon, TrashIcon, RefreshIcon };
 });
 
-vi.mock("lucide-react", async () => {
-  const React = await import("react");
-  function CopyIcon() {
-    return React.createElement("span");
-  }
-  (CopyIcon as any).displayName = "CopyIcon";
-  function CheckIcon() {
-    return React.createElement("span");
-  }
-  (CheckIcon as any).displayName = "CheckIcon";
-  return { CopyIcon, CheckIcon };
-});
-
 // Heavy children -> async factories & local React
-vi.mock("../organisms/RegenerateKeyModal", async () => {
-  const React = await import("react");
+vi.mock("../organisms/RegenerateKeyModal", () => {
   function RegenerateKeyModal() {
     return null;
   }
   (RegenerateKeyModal as any).displayName = "RegenerateKeyModal";
   return { RegenerateKeyModal };
 });
-vi.mock("../object_permissions_view", async () => {
-  const React = await import("react");
+vi.mock("../object_permissions_view", () => {
   function ObjectPermissionsView() {
     return null;
   }
   (ObjectPermissionsView as any).displayName = "ObjectPermissionsView";
   return { __esModule: true, default: ObjectPermissionsView };
 });
-vi.mock("../logging_settings_view", async () => {
-  const React = await import("react");
+vi.mock("../logging_settings_view", () => {
   function LoggingSettingsView() {
     return null;
   }
   (LoggingSettingsView as any).displayName = "LoggingSettingsView";
   return { __esModule: true, default: LoggingSettingsView };
 });
-vi.mock("../common_components/AutoRotationView", async () => {
-  const React = await import("react");
+vi.mock("../common_components/AutoRotationView", () => {
   function AutoRotationView() {
     return null;
   }
@@ -257,6 +245,15 @@ vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
 // Mock useUISettings hook
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: vi.fn().mockReturnValue({ data: { values: {} }, isLoading: false }),
+}));
+
+// Mock useMCPServers hook (requires QueryClientProvider which is not available in this test)
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
+  useMCPServers: vi.fn().mockReturnValue({ data: [] }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
+  useMCPToolsets: vi.fn().mockReturnValue({ data: [] }),
 }));
 
 // Mock useResetKeySpend hook (requires QueryClientProvider which is not available in this test)
@@ -453,6 +450,28 @@ describe("KeyInfoView handleKeyUpdate guardrails guard", () => {
   });
 });
 
+describe("KeyInfoView handleKeyUpdate mcp_toolsets", () => {
+  it("should forward the toolsets the edit form supplies into object_permission", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      max_budget: 40000,
+      mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: ["ts-1"] },
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.object_permission.mcp_toolsets).toEqual(["ts-1"]);
+    expect(sentPayload.max_budget).toBe(40000);
+  });
+});
+
 describe("KeyInfoView handleKeyUpdate budget_duration", () => {
   it("should send a canonical budget_duration through unchanged", async () => {
     renderView(true);
@@ -488,6 +507,68 @@ describe("KeyInfoView handleKeyUpdate budget_duration", () => {
 
     const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
     expect(sentPayload.budget_duration).toBe("30d");
+  });
+
+  it("should forward a cleared budget_duration as an explicit null the JSON body keeps", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: null,
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBeNull();
+    expect(JSON.stringify({ ...sentPayload })).toContain('"budget_duration":null');
+  });
+
+  it("should render the cleared budget as never resetting instead of snapping back to the old interval", async () => {
+    keyUpdateCallMock.mockResolvedValueOnce({
+      ...baseKeyData,
+      budget_duration: null,
+      budget_reset_at: null,
+    });
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "access_abc",
+      userId: "user_1",
+      userRole: "Admin",
+      premiumUser: true,
+      token: "token_123",
+      userEmail: "test@example.com",
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    render(
+      <KeyInfoView
+        keyId="tok_123"
+        onClose={() => {}}
+        keyData={{ ...baseKeyData, budget_duration: "30d", budget_reset_at: "2026-09-01T00:00:00Z" } as any}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Settings"));
+    expect(screen.getByText("Budget Reset").parentElement?.textContent).toContain("Every 30d");
+
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: null,
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Budget Reset").parentElement?.textContent).toBe("Budget ResetNever");
+    });
   });
 });
 

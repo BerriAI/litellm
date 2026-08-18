@@ -156,8 +156,8 @@ describe("PoliciesPanel attachment delete", () => {
 
     await waitFor(() => {
       expect(networkingMocks.deletePolicyAttachmentCall).toHaveBeenCalledTimes(1);
-      expect(networkingMocks.deletePolicyAttachmentCall).toHaveBeenCalledWith("test-token", EXPECTED_ATTACHMENT_ID);
     });
+    expect(networkingMocks.deletePolicyAttachmentCall).toHaveBeenCalledWith("test-token", EXPECTED_ATTACHMENT_ID);
   });
 
   it("should show mutation pending state while attachment delete is in flight", async () => {

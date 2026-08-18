@@ -7,13 +7,17 @@ on:
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
+  push:
+    branches:
+      - main
+      - litellm_internal_staging
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   code-quality:
@@ -60,6 +64,12 @@ jobs:
 
       - name: check_provider_folders_documented
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
+
+      - name: check_prisma_binary_cache
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_prisma_binary_cache.py
+
+      - name: check_workflow_startup_safety
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_workflow_startup_safety.py
 
       - name: router_code_coverage
         run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py

@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -44,8 +45,6 @@ def is_valid_json(value: str) -> bool:
 class GigaChatError(BaseLLMException):
     """GigaChat API error."""
 
-    pass
-
 
 class GigaChatConfig(BaseConfig):
     """
@@ -76,7 +75,7 @@ class GigaChatConfig(BaseConfig):
         repetition_penalty: float | None = None,
         profanity_check: bool | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -94,7 +93,7 @@ class GigaChatConfig(BaseConfig):
         stream: bool | None = None,
     ) -> str:
         """Get complete API URL for chat completions."""
-        base = get_api_base(api_base)
+        base: Final = get_api_base(api_base)
         return f"{base}/chat/completions"
 
     def validate_environment(
@@ -111,10 +110,8 @@ class GigaChatConfig(BaseConfig):
         Set up headers with OAuth token.
         """
         # Get access token
-        credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
-        access_token = get_access_token(credentials=credentials)
-        credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
-        access_token = get_access_token(credentials=credentials, litellm_params=litellm_params)
+        credentials: Final = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
+        access_token: Final = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
         # Store credentials for image uploads
         self._current_credentials = credentials
@@ -201,7 +198,7 @@ class GigaChatConfig(BaseConfig):
 
     def _convert_tools_to_functions(self, tools: list[dict]) -> list[dict]:
         """Convert OpenAI tools format to GigaChat functions format."""
-        functions = []
+        functions: Final = []
         for tool in tools:
             if tool.get("type") == "function":
                 func = tool.get("function", {})
@@ -247,7 +244,7 @@ class GigaChatConfig(BaseConfig):
             # OpenAI format: {"type": "function", "function": {"name": "func_name"}}
             # GigaChat format: {"name": "func_name"}
             if tool_choice.get("type") == "function":
-                func_name = tool_choice.get("function", {}).get("name")
+                func_name: Final = tool_choice.get("function", {}).get("name")
                 if func_name:
                     return {"name": func_name}
 
@@ -271,7 +268,7 @@ class GigaChatConfig(BaseConfig):
                 api_base=self._current_api_base,
             )
         except Exception as e:
-            verbose_logger.error(f"Failed to upload image: {e}")
+            verbose_logger.error("Failed to upload image: %s", e)
             return None
 
     def _transform_list_content(self, content: list) -> tuple[str, list[str]]:
@@ -314,10 +311,10 @@ class GigaChatConfig(BaseConfig):
     ) -> dict:
         """Transform OpenAI request to GigaChat format."""
         # Transform messages
-        giga_messages = self._transform_messages(messages)
+        giga_messages: Final = self._transform_messages(messages)
 
         # Build request
-        request_data = {
+        request_data: Final = {
             "model": model.replace("gigachat/", ""),
             "messages": giga_messages,
         }
@@ -344,7 +341,7 @@ class GigaChatConfig(BaseConfig):
 
     def _transform_messages(self, messages: list[AllMessageValues]) -> list[dict]:
         """Transform OpenAI messages to GigaChat format."""
-        transformed = []
+        transformed: Final = []
 
         for i, msg in enumerate(messages):
             message = dict(msg)
@@ -413,16 +410,16 @@ class GigaChatConfig(BaseConfig):
     ) -> ModelResponse:
         """Transform GigaChat response to OpenAI format."""
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception:
             raise GigaChatError(
                 status_code=raw_response.status_code,
                 message=f"Invalid JSON response: {raw_response.text}",
             )
 
-        is_structured_output = optional_params.get("_structured_output", False)
+        is_structured_output: Final = optional_params.get("_structured_output", False)
 
-        choices = []
+        choices: Final = []
         for choice in response_json.get("choices", []):
             message_data = choice.get("message", {})
             finish_reason = choice.get("finish_reason", "stop")
@@ -475,13 +472,13 @@ class GigaChatConfig(BaseConfig):
             )
 
         # Build usage
-        usage_data = response_json.get("usage", {})
-        usage = convert_usage(usage_data)
+        usage_data: Final = response_json.get("usage", {})
+        usage: Final = convert_usage(usage_data)
 
         model_response.id = response_json.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}")
         model_response.created = response_json.get("created", int(time.time()))
         model_response.model = model
-        model_response.choices = choices  # type: ignore
+        model_response.choices = choices
         setattr(model_response, "usage", usage)
 
         return model_response

@@ -8,13 +8,14 @@ API Documentation: https://developers.sber.ru/docs/ru/gigachat/api/reference/res
 from __future__ import annotations
 
 import types
+from typing import Final
 
 import httpx
 
 from litellm import LlmProviders
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.gigachat.utils import get_api_base
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
@@ -24,8 +25,6 @@ from ..authenticator import get_access_token
 
 class GigaChatEmbeddingError(BaseLLMException):
     """GigaChat Embedding API error."""
-
-    pass
 
 
 class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
@@ -94,7 +93,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         """Get the complete URL for embeddings endpoint."""
-        base = get_api_base(api_base)
+        base: Final = get_api_base(api_base)
         return f"{base}/embeddings"
 
     def transform_embedding_request(
@@ -122,8 +121,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             input_list = [input]
 
         # Remove gigachat/ prefix from model if present
-        if model.startswith("gigachat/"):
-            model = model[9:]
+        model = model.removeprefix("gigachat/")
 
         return {
             "model": model,
@@ -151,7 +149,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             "model": "Embeddings"
         }
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Log response
         logging_obj.post_call(
@@ -193,9 +191,9 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         Set up headers with OAuth token for GigaChat.
         """
         # Get access token via OAuth
-        access_token = get_access_token(credentials=api_key, litellm_params=litellm_params)
+        access_token: Final = get_access_token(credentials=api_key, litellm_params=litellm_params)
 
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
         }

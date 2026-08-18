@@ -81,6 +81,31 @@ async def test_grant_omits_scope_and_audience_when_not_configured():
     _url, form, _headers = poster.calls[0]
     assert "scope" not in form
     assert "audience" not in form
+    assert "resource" not in form
+
+
+@pytest.mark.asyncio
+async def test_grant_sends_rfc8707_resource_indicator():
+    """HTTP/SSE M2M tool traffic resolves through this v2 arm, so the RFC 8707 resource must ride it
+    too or a strict authorization server keeps answering invalid_target on the primary M2M path."""
+    poster = _FakePoster([_success()])
+    await ClientCredentialsTokenSource(poster).get("s", _config(upstream_resource="api://finance-audience"))
+    _url, form, _headers = poster.calls[0]
+    assert form["resource"] == "api://finance-audience"
+
+
+@pytest.mark.asyncio
+async def test_changing_only_the_resource_mints_a_fresh_token():
+    """The resource is part of the mint identity: retargeting a live M2M server must not keep serving
+    the token minted for the previous audience."""
+    poster = _FakePoster([_success(access_token="tok-a", expires_in=3600), _success(access_token="tok-b", expires_in=3600)])
+    source = ClientCredentialsTokenSource(poster)
+    first = await source.get("s", _config(upstream_resource="api://one"))
+    second = await source.get("s", _config(upstream_resource="api://two"))
+    assert isinstance(first, Ok) and isinstance(second, Ok)
+    assert first.ok.access_token == "tok-a"
+    assert second.ok.access_token == "tok-b"
+    assert len(poster.calls) == 2
 
 
 @pytest.mark.asyncio

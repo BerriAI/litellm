@@ -58,6 +58,7 @@ class Transport(Protocol):
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]: ...
 
     def delete[R: BaseModel](
@@ -89,6 +90,7 @@ class Transport(Protocol):
         filename: str,
         content: bytes,
         file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]: ...
@@ -135,13 +137,16 @@ class HttpTransport:
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
+        """`timeout` overrides the transport-wide request_timeout for this call, for
+        pollers whose own deadline is shorter than it."""
         return e2e_http.get(
             self._url(path),
             headers=headers,
             params=params,
             response_type=response_type,
-            timeout=self.request_timeout,
+            timeout=self.request_timeout if timeout is None else timeout,
         )
 
     def delete[R: BaseModel](
@@ -242,6 +247,7 @@ class HttpTransport:
         filename: str,
         content: bytes,
         file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]:
@@ -252,6 +258,7 @@ class HttpTransport:
             filename=filename,
             content=content,
             file_content_type=file_content_type,
+            file_field=file_field,
             params=params,
             response_type=response_type,
             timeout=self.request_timeout,
@@ -333,9 +340,14 @@ class SplitTransport:
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return self._route(path).get(
-            path, headers=headers, params=params, response_type=response_type
+            path,
+            headers=headers,
+            params=params,
+            response_type=response_type,
+            timeout=timeout,
         )
 
     def delete[R: BaseModel](
@@ -411,6 +423,7 @@ class SplitTransport:
         filename: str,
         content: bytes,
         file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]:
@@ -421,6 +434,7 @@ class SplitTransport:
             filename=filename,
             content=content,
             file_content_type=file_content_type,
+            file_field=file_field,
             params=params,
             response_type=response_type,
         )

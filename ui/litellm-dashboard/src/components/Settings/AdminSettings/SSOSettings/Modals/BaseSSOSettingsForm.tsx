@@ -19,6 +19,7 @@ export interface SSOProviderConfig {
     name: string;
     placeholder?: string;
     required?: boolean;
+    type?: "password" | "textarea" | "checkbox";
   }>;
 }
 
@@ -90,6 +91,41 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       { label: "Scopes", name: "generic_scope", placeholder: "openid email profile", required: false },
     ],
   },
+  saml: {
+    envVarMap: {
+      saml_idp_metadata_url: "SAML_IDP_METADATA_URL",
+      saml_idp_metadata_xml: "SAML_IDP_METADATA_XML",
+      saml_sp_entity_id: "SAML_SP_ENTITY_ID",
+      saml_allow_unsolicited: "SAML_ALLOW_UNSOLICITED",
+    },
+    fields: [
+      {
+        label: "IdP Metadata URL",
+        name: "saml_idp_metadata_url",
+        required: false,
+        placeholder: "https://idp.example.com/metadata (use this or the metadata XML below)",
+      },
+      {
+        label: "IdP Metadata XML",
+        name: "saml_idp_metadata_xml",
+        required: false,
+        type: "textarea",
+        placeholder: "Paste the IdP metadata XML here if you do not have a metadata URL",
+      },
+      {
+        label: "SP Entity ID",
+        name: "saml_sp_entity_id",
+        required: false,
+        placeholder: "Defaults to <proxy base url>/sso/saml/metadata",
+      },
+      {
+        label: "Allow IdP-initiated (unsolicited) responses",
+        name: "saml_allow_unsolicited",
+        required: false,
+        type: "checkbox",
+      },
+    ],
+  },
 };
 
 // Helper function to render provider fields
@@ -97,16 +133,31 @@ export const renderProviderFields = (provider: string) => {
   const config = ssoProviderConfigs[provider];
   if (!config) return null;
 
-  return config.fields.map((field) => (
-    <Form.Item
-      key={field.name}
-      label={field.label}
-      name={field.name}
-      rules={[{ required: field.required !== false, message: `Please enter the ${field.label.toLowerCase()}` }]}
-    >
-      {field.name.includes("client") ? <Input.Password /> : <TextInput placeholder={field.placeholder} />}
-    </Form.Item>
-  ));
+  return config.fields.map((field) => {
+    const isRequired = field.required !== false;
+    const rules = isRequired ? [{ required: true, message: `Please enter the ${field.label.toLowerCase()}` }] : [];
+    let control: React.ReactNode;
+    if (field.type === "checkbox") {
+      control = <Checkbox />;
+    } else if (field.type === "textarea") {
+      control = <Input.TextArea rows={4} placeholder={field.placeholder} />;
+    } else if (field.type === "password" || field.name.includes("client")) {
+      control = <Input.Password />;
+    } else {
+      control = <TextInput placeholder={field.placeholder} />;
+    }
+    return (
+      <Form.Item
+        key={field.name}
+        label={field.label}
+        name={field.name}
+        rules={rules}
+        valuePropName={field.type === "checkbox" ? "checked" : undefined}
+      >
+        {control}
+      </Form.Item>
+    );
+  });
 };
 
 const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormSubmit }) => {

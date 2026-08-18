@@ -21,6 +21,17 @@ interface SSOModalsProps {
   ssoConfigured?: boolean; // Add optional prop to indicate if SSO is configured
 }
 
+const detectSSOProvider = (values: Record<string, unknown>): string | null => {
+  if (values.google_client_id) return "google";
+  if (values.microsoft_client_id) return "microsoft";
+  if (values.generic_client_id) {
+    const authEndpoint =
+      typeof values.generic_authorization_endpoint === "string" ? values.generic_authorization_endpoint : "";
+    return authEndpoint.includes("okta") || authEndpoint.includes("auth0") ? "okta" : "generic";
+  }
+  if (values.saml_idp_metadata_url || values.saml_idp_metadata_xml) return "saml";
+  return null;
+};
 const SSOModals: React.FC<SSOModalsProps> = ({
   isAddSSOModalVisible,
   isInstructionsModalVisible,
@@ -43,22 +54,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
           const ssoData = await getSSOSettings(accessToken);
           if (ssoData && ssoData.values) {
             // Determine which SSO provider is configured
-            let selectedProvider = null;
-            if (ssoData.values.google_client_id) {
-              selectedProvider = "google";
-            } else if (ssoData.values.microsoft_client_id) {
-              selectedProvider = "microsoft";
-            } else if (ssoData.values.generic_client_id) {
-              // Check if it looks like Okta based on endpoints
-              if (
-                ssoData.values.generic_authorization_endpoint?.includes("okta") ||
-                ssoData.values.generic_authorization_endpoint?.includes("auth0")
-              ) {
-                selectedProvider = "okta";
-              } else {
-                selectedProvider = "generic";
-              }
-            }
+            const selectedProvider = detectSSOProvider(ssoData.values);
 
             // Extract role mappings if they exist
             let roleMappingFields = {};
@@ -89,6 +85,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               user_email: ssoData.values.user_email,
               ...ssoData.values,
               ...roleMappingFields,
+              saml_allow_unsolicited: ssoData.values.saml_allow_unsolicited === "true",
             };
 
             // Clear form first, then set values with a small delay to ensure proper initialization
@@ -128,6 +125,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       const payload: any = {
         ...rest,
       };
+
+      if (typeof payload.saml_allow_unsolicited === "boolean") {
+        payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";
+      }
 
       // Add role mappings if use_role_mappings is checked
       if (use_role_mappings) {
@@ -191,6 +192,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         generic_authorization_endpoint: null,
         generic_token_endpoint: null,
         generic_userinfo_endpoint: null,
+        saml_idp_metadata_url: null,
+        saml_idp_metadata_xml: null,
+        saml_sp_entity_id: null,
+        saml_allow_unsolicited: null,
         generic_scope: null,
         proxy_base_url: null,
         user_email: null,

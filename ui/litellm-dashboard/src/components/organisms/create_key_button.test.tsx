@@ -2,7 +2,7 @@ import { act, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { Team } from "../key_team_helpers/key_list";
-import { userFilterUICall } from "../networking";
+import { getPoliciesList, getPromptsList, userFilterUICall } from "../networking";
 import CreateKey from "./create_key_button";
 
 const { formMock, setFieldsValueMock, radioGroupValueRef, formStateRef, mockKeyCreateCall, teamDropdownTeamsRef } =
@@ -249,7 +249,24 @@ vi.mock("../molecules/notifications_manager", () => ({
 }));
 
 vi.mock("../agent_management/AgentSelector", () => ({ default: () => null }));
-vi.mock("../common_components/budget_duration_dropdown", () => ({ default: () => null }));
+vi.mock("../common_components/budget_duration_dropdown", () => ({
+  NEVER_RESETS_BUDGET_DURATION: "none",
+  default: ({
+    showNeverResets,
+    placeholder,
+    onChange,
+  }: {
+    showNeverResets?: boolean;
+    placeholder?: string;
+    onChange?: (value: string) => void;
+  }) => (
+    <select data-testid="budget-duration-dropdown" onChange={(event) => onChange?.(event.target.value)}>
+      <option value="">{placeholder ?? "n/a"}</option>
+      {showNeverResets ? <option value="none">Never resets</option> : null}
+      <option value="30d">monthly</option>
+    </select>
+  ),
+}));
 vi.mock("../common_components/check_openapi_schema", () => ({ default: () => null }));
 vi.mock("../common_components/KeyLifecycleSettings", () => ({ default: () => null }));
 vi.mock("../common_components/ModelAliasManager", () => ({ default: () => null }));
@@ -443,6 +460,36 @@ describe("CreateKey", () => {
     });
   });
 
+  it("should include mcp_toolsets in keyCreateCall payload when only toolsets are selected", async () => {
+    renderWithProviders(<CreateKey {...defaultProps} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /create key/i })).toBeInTheDocument();
+    });
+
+    act(() => {
+      formMock.setFieldValue("key_alias", "Test Key");
+      formMock.setFieldValue("allowed_mcp_servers_and_groups", {
+        servers: [],
+        accessGroups: [],
+        toolsets: ["ts-1"],
+      });
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create key/i }));
+    });
+
+    await waitFor(() => {
+      expect(mockKeyCreateCall).toHaveBeenCalled();
+    });
+    expect(mockKeyCreateCall.mock.calls[0][2].object_permission?.mcp_toolsets).toEqual(["ts-1"]);
+  });
+
   it("should prefill models when provided without team_id", async () => {
     renderWithProviders(
       <CreateKey
@@ -564,7 +611,7 @@ describe("CreateKey", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByTestId("org-dropdown")).not.toBeDisabled();
+        expect(screen.getByTestId("org-dropdown")).toBeEnabled();
       });
     });
 
@@ -745,6 +792,116 @@ describe("CreateKey", () => {
         expect(screen.getByText("production")).toBeInTheDocument();
         expect(screen.getByText("staging")).toBeInTheDocument();
       });
+    });
+  });
+
+  describe("policy and prompt fields", () => {
+    const POLICIES_PLACEHOLDER = "Premium feature - Upgrade to set policies by key";
+    const PROMPTS_PLACEHOLDER = "Premium feature - Upgrade to set prompts by key";
+
+    const openModal = () => {
+      renderWithProviders(<CreateKey {...defaultProps} />);
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+    };
+
+    beforeEach(() => {
+      vi.mocked(getPoliciesList).mockResolvedValue({ policies: [{ policy_name: "policy-a" }] });
+      vi.mocked(getPromptsList).mockResolvedValue({ prompts: [{ prompt_id: "prompt-a" }] } as any);
+    });
+
+    it("should load and offer both selectors for an admin", async () => {
+      openModal();
+
+      await waitFor(() => {
+        expect(screen.getByRole("option", { name: "policy-a" })).toBeInTheDocument();
+        expect(screen.getByRole("option", { name: "prompt-a" })).toBeInTheDocument();
+      });
+      expect(getPoliciesList).toHaveBeenCalledWith("test-token");
+      expect(getPromptsList).toHaveBeenCalledWith("test-token");
+      expect(screen.getByPlaceholderText(POLICIES_PLACEHOLDER)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPTS_PLACEHOLDER)).toBeInTheDocument();
+    });
+
+    it("should omit both selectors and fire neither admin-only request for an internal user", async () => {
+      authorizedState = { ...defaultAuthorizedState, userRole: "Internal User" };
+
+      openModal();
+
+      expect(await screen.findByTestId("org-dropdown")).toBeInTheDocument();
+
+      expect(getPoliciesList).not.toHaveBeenCalled();
+      expect(getPromptsList).not.toHaveBeenCalled();
+      expect(screen.queryByPlaceholderText(POLICIES_PLACEHOLDER)).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(PROMPTS_PLACEHOLDER)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("budget reset", () => {
+    const openModal = async () => {
+      renderWithProviders(<CreateKey {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("budget-duration-dropdown")).toBeInTheDocument();
+      });
+    };
+
+    const submit = async () => {
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create key/i }));
+      });
+
+      await waitFor(() => {
+        expect(mockKeyCreateCall).toHaveBeenCalled();
+      });
+
+      return mockKeyCreateCall.mock.calls[0][2];
+    };
+
+    it("should send an explicit null budget_duration when 'Never resets' is selected", async () => {
+      await openModal();
+
+      expect(screen.getByRole("option", { name: "Never resets" })).toBeInTheDocument();
+
+      act(() => {
+        fireEvent.change(screen.getByTestId("budget-duration-dropdown"), { target: { value: "none" } });
+        formMock.setFieldValue("key_alias", "Never Resets Key");
+      });
+
+      const formValues = await submit();
+
+      expect("budget_duration" in formValues).toBe(true);
+      expect(formValues.budget_duration).toBeNull();
+    });
+
+    it("should label the omit option distinctly from 'Never resets'", async () => {
+      await openModal();
+
+      const optionLabels = Array.from(
+        screen.getByTestId("budget-duration-dropdown").querySelectorAll("option"),
+        (option) => option.textContent,
+      );
+
+      expect(optionLabels).toContain("Never resets");
+      expect(new Set(optionLabels).size).toBe(optionLabels.length);
+      expect(screen.getByRole("option", { name: "Never resets" })).toHaveValue("none");
+    });
+
+    it("should omit budget_duration entirely when the reset dropdown is untouched", async () => {
+      await openModal();
+
+      act(() => {
+        formMock.setFieldValue("key_alias", "Inherits Default Key");
+      });
+
+      const formValues = await submit();
+
+      expect("budget_duration" in formValues).toBe(false);
     });
   });
 });
